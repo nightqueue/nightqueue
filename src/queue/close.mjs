@@ -176,6 +176,70 @@ async function rerunAborted(ctx, deps, checks, head) {
   return { note: `re-ran ${workflows} (${names}) — cancelled before it ran` };
 }
 
+// The failed check entries whose details URL names a GitHub Actions run to re-run.
+function rerunnableFailed(checks) {
+  return checks.checks.filter((check) => check.bucket === "fail" && parseRunId(check.detailsUrl));
+}
+
+// The run ids the failed-check re-run of this head already re-ran; none on another head or an unreadable record.
+function spentRunIds(ctx, sha) {
+  const record = ctx.data.rerunFailed;
+  return record?.head === sha && Array.isArray(record.runIds) ? record.runIds : [];
+}
+
+// The failing Actions entries whose run this head already re-ran once.
+function failedAgain(ctx, checks, head) {
+  const spent = spentRunIds(ctx, checks.headSha ?? head);
+  return rerunnableFailed(checks).filter((check) => spent.includes(parseRunId(check.detailsUrl)));
+}
+
+// How failing checks are answered: `red` (one is not an Actions check), `twice` (one's run was already re-run on this head), `wait` (checks still run) or `rerun`.
+function failedRerunClass(ctx, checks, head) {
+  const rerunnable = rerunnableFailed(checks).map((check) => check.name);
+  if (!checks.failing.every((name) => rerunnable.includes(name))) return "red";
+  if (failedAgain(ctx, checks, head).length) return "twice";
+  if (checks.pending.length) return "wait";
+  return "rerun";
+}
+
+// The note of failed Actions checks that failed again after the one re-run of their run on this head, naming the checks still running.
+function failedTwiceNote(ctx, checks, head) {
+  const runId = parseRunId(failedAgain(ctx, checks, head)[0]?.detailsUrl) ?? "<runId>";
+  const note = `check ${namesNote(checks.failing)} failed twice on ${sha7(checks.headSha ?? head)}; re-run it by hand: gh run rerun ${runId} --failed`;
+  return checks.pending.length ? `${note}; still running: ${namesNote(checks.pending)}` : note;
+}
+
+// Adds one re-run run id and the details URLs it replaced to the failed-check re-run record of this head.
+function recordFailedRerun(ctx, sha, { runId, urls }) {
+  const record = ctx.data.rerunFailed?.head === sha ? ctx.data.rerunFailed : null;
+  const urlsBefore = Array.isArray(record?.urls) ? record.urls : [];
+  ctx.data.rerunFailed = { head: sha, runIds: [...spentRunIds(ctx, sha), runId], urls: [...urlsBefore, ...urls], at: new Date().toISOString() };
+}
+
+// Re-runs the failed jobs of the failed (and aborted) Actions checks once per run and head, recording each accepted run at once; answers the note of the re-run or the stop of a refused one.
+async function rerunFailed(ctx, deps, checks, head) {
+  const sha = checks.headSha ?? head;
+  const spent = spentRunIds(ctx, sha);
+  const targets = checks.checks.filter((check) => (check.bucket === "fail" || check.bucket === "aborted") && !spent.includes(parseRunId(check.detailsUrl)));
+  const names = namesNote(targets.map((check) => check.name));
+  const runIds = [...new Set(targets.map((check) => parseRunId(check.detailsUrl)).filter(Boolean))];
+  for (const runId of runIds) {
+    const result = await deps.gh.runRerun(runId, { failed: true, ...bounded(ctx, GH_TIMEOUT_MS) });
+    if (!result?.ok) return { problem: failed("checks-red", `gh run rerun ${runId} --failed failed for ${names} (${result?.error ?? "no answer"})`) };
+    const urls = targets.filter((check) => parseRunId(check.detailsUrl) === runId).map((check) => check.detailsUrl);
+    recordFailedRerun(ctx, sha, { runId, urls });
+  }
+  const workflows = [...new Set(targets.map((check) => check.workflowName).filter(Boolean))].join(", ") || "the workflow";
+  return { note: `re-ran ${workflows} (${names}) — failed on ${sha7(sha)}` };
+}
+
+// The re-run one checks read calls for once nothing runs: failed Actions checks, else aborted-only checks; null when none.
+async function rerunOfRead(ctx, deps, checks, head) {
+  if (!checks?.ok || checks.pending.length) return null;
+  if (checks.failing.length) return failedRerunClass(ctx, checks, head) === "rerun" ? await rerunFailed(ctx, deps, checks, head) : null;
+  return abortedOnly(checks) ? await rerunAborted(ctx, deps, checks, head) : null;
+}
+
 // What the checks of the pull request said, as a stop of the close or the note of checks that let it go on.
 function checksReading(ctx, checks) {
   if (!checks?.ok) return { problem: failed("checks-unreadable", `gh could not read the checks of ${ctx.prUrl} (${checks?.error ?? "no answer"})`) };
@@ -211,10 +275,42 @@ function staleAbortedAsPending(ctx, checks, head) {
   };
 }
 
+// The names left once each removed name is taken out of the list one time.
+function withoutEach(names, removed) {
+  const left = [...names];
+  for (const name of removed) {
+    const at = left.indexOf(name);
+    if (at >= 0) left.splice(at, 1);
+  }
+  return left;
+}
+
+// Reads the failed or aborted checks the failed-check re-run of this head already replaced (same details URL) as pending.
+function staleFailedAsPending(ctx, checks, head) {
+  const record = ctx.data.rerunFailed;
+  if (!checks?.ok || !Array.isArray(record?.urls) || record.head !== (checks.headSha ?? head)) return checks;
+  const isStale = (check) => (check.bucket === "fail" || check.bucket === "aborted") && record.urls.includes(check.detailsUrl);
+  const stale = checks.checks.filter(isStale);
+  if (!stale.length) return checks;
+  const namesIn = (bucket) => stale.filter((check) => check.bucket === bucket).map((check) => check.name);
+  return {
+    ...checks,
+    checks: checks.checks.map((check) => (isStale(check) ? { ...check, bucket: "pending" } : check)),
+    failing: withoutEach(checks.failing, namesIn("fail")),
+    pending: [...checks.pending, ...stale.map((check) => check.name)],
+    aborted: withoutEach(abortedOf(checks), namesIn("aborted")),
+  };
+}
+
+// Reads the checks a re-run of this head already replaced as pending, the aborted re-run first and the failed one next.
+function staleRerunAsPending(ctx, checks, head) {
+  return staleFailedAsPending(ctx, staleAbortedAsPending(ctx, checks, head), head);
+}
+
 // Reads the checks of the pull request; a read gh attributes to another head than the one judged is unreadable.
 async function readHeadChecks(ctx, deps, head) {
   const checks = await deps.gh.prChecks(ctx.prUrl, bounded(ctx, GH_TIMEOUT_MS));
-  if (!checks?.ok || !checks.headSha || !head || checks.headSha === head) return staleAbortedAsPending(ctx, checks, head);
+  if (!checks?.ok || !checks.headSha || !head || checks.headSha === head) return staleRerunAsPending(ctx, checks, head);
   return { ok: false, checks: [], failing: [], pending: [], aborted: [], otherHead: checks.headSha, error: `the checks gh read belong to ${sha7(checks.headSha)}, not ${sha7(head)}` };
 }
 
@@ -224,11 +320,24 @@ function ciGreenData(ctx, checks, head) {
   return green && head && !ctx.force ? { ciGreenSha: head, checksOnHead: checks.checks.length } : {};
 }
 
-// The verdict of aborted checks: the stop, or a pending stop carrying the re-run note so the caller waits for the re-run checks.
-async function abortedVerdict(ctx, deps, checks, head) {
-  const rerun = await rerunAborted(ctx, deps, checks, head);
+// The verdict of a re-run: its stop, or a pending stop carrying the re-run note so the caller waits for the re-run checks.
+function rerunThenWait(rerun) {
   if (rerun.problem) return rerun;
   return { problem: failed("checks-pending", `${rerun.note}; run again once they finish`), rerunNote: rerun.note };
+}
+
+// The verdict of aborted checks: the stop, or a pending stop carrying the re-run note so the caller waits for the re-run checks.
+async function abortedVerdict(ctx, deps, checks, head) {
+  return rerunThenWait(await rerunAborted(ctx, deps, checks, head));
+}
+
+// The verdict of failing checks: today's red stop, the "failed twice" stop, a wait while checks run, or a re-run then a wait.
+async function failedVerdict(ctx, deps, { checks, head, reading }) {
+  const kind = failedRerunClass(ctx, checks, head);
+  if (kind === "twice") return { problem: failed("checks-red", failedTwiceNote(ctx, checks, head)) };
+  if (kind === "wait") return { problem: failed("checks-pending", `checks still running: ${namesNote(checks.pending)}; run again once they finish`) };
+  if (kind === "rerun") return rerunThenWait(await rerunFailed(ctx, deps, checks, head));
+  return reading;
 }
 
 // Tells whether the checks of the pull request stop the close, and what they said; with --force they never stop it and the note names them.
@@ -236,6 +345,7 @@ async function checksVerdict(ctx, deps, head) {
   const checks = await readHeadChecks(ctx, deps, head);
   const reading = checksReading(ctx, checks);
   if (reading.problem && ctx.force) return { note: ignoredChecksNote(checks) };
+  if (reading.problem?.reason === "checks-red") return await failedVerdict(ctx, deps, { checks, head, reading });
   if (reading.problem?.reason === "checks-aborted") return await abortedVerdict(ctx, deps, checks, head);
   if (reading.problem) return reading;
   return { ...reading, data: ciGreenData(ctx, checks, head) };
@@ -326,9 +436,11 @@ async function ciVerdict(ctx, deps, { head, lead, data, reopen }) {
   const prefix = lead ? `${lead}; ` : "";
   const checks = await readHeadChecks(ctx, deps, head);
   if (!checks?.ok) return { problem: failed("checks-unreadable", `${prefix}gh could not read the checks of ${ctx.prUrl} (${checks?.error ?? "no answer"})`, { reopen }) };
-  if (checks.failing.length) return { problem: failed("checks-red", `${prefix}failing checks: ${namesNote(checks.failing)}`, { data, reopen }) };
+  const failure = checks.failing.length ? failedRerunClass(ctx, checks, head) : null;
+  if (failure === "red") return { problem: failed("checks-red", `${prefix}failing checks: ${namesNote(checks.failing)}`, { data, reopen }) };
+  if (failure === "twice") return { problem: failed("checks-red", `${prefix}${failedTwiceNote(ctx, checks, head)}`, { data, reopen }) };
   if (!checks.checks.length) return { empty: true, note: lead, data };
-  const rerun = abortedOnly(checks) && !checks.pending.length ? await rerunAborted(ctx, deps, checks, head) : null;
+  const rerun = await rerunOfRead(ctx, deps, checks, head);
   if (rerun?.problem) return { problem: { ...rerun.problem, data, reopen } };
   if (!checks.pending.length && !rerun) return { note: `${prefix}${checksGreenNote(checks, head)}`, data: { ...data, ...ciGreenData(ctx, checks, head) } };
   const waiting = { status: "done", note: [lead, rerun?.note].filter(Boolean).join("; ") || `checks waited on ${sha7(head)}`, data: { ...data, headSha: head } };
@@ -475,12 +587,20 @@ function headChangedWait(updated, checks) {
   return { ...updated, note, headChanged: true };
 }
 
+// The stop failing checks put on a wait, or null to keep waiting while a re-runnable failure waits for the other checks.
+function failedWaitStop(ctx, checks, data) {
+  const kind = failedRerunClass(ctx, checks, data.headSha);
+  if (kind === "wait") return null;
+  const note = kind === "twice" ? failedTwiceNote(ctx, checks, data.headSha) : `failing checks: ${namesNote(checks.failing)}`;
+  return failed("checks-red", note, { data, reopen: ["preflight"] });
+}
+
 // The result one checks read settles a wait with, or null to keep waiting; `noCi` marks an empty rollup that outlasted its window.
 function settledWait(ctx, { updated, checks, emptySettles, windowOut }) {
   const { data } = updated;
   if (checks?.otherHead && checks.otherHead !== data.headShaBefore) return headChangedWait(updated, checks);
   if (!checks?.ok) return null;
-  if (checks.failing.length) return failed("checks-red", `failing checks: ${namesNote(checks.failing)}`, { data, reopen: ["preflight"] });
+  if (checks.failing.length) return failedWaitStop(ctx, checks, data);
   if (checks.pending.length || abortedOf(checks).length) return null;
   if (checks.checks.length || emptySettles) {
     return { ...updated, note: `${updated.note}; ${checksGreenNote(checks, data.headSha)}`, data: { ...data, ...ciGreenData(ctx, checks, data.headSha) } };
@@ -490,13 +610,17 @@ function settledWait(ctx, { updated, checks, emptySettles, windowOut }) {
 
 // Polls the checks of the updated head with a growing gap until they are all green, one is red or the close's time is nearly out.
 // With `emptyWindowMs`, an empty rollup is polled for that long at most and then answered as `noCi`.
-async function waitForChecks(ctx, deps, updated, stillRunning, { emptySettles = false, emptyWindowMs = 0 } = {}) {
-  const { data } = updated;
+async function waitForChecks(ctx, deps, waitStart, stillRunning, { emptySettles = false, emptyWindowMs = 0 } = {}) {
+  const { data } = waitStart;
+  let updated = waitStart;
   let waitedMs = 0;
   for (let attempt = 0, gap = CHECKS_POLL_MS; ; attempt += 1, gap = Math.min(gap * 2, CHECKS_POLL_MAX_MS)) {
-    const checks = await readHeadChecks(ctx, deps, data.headSha);
-    const rerun = abortedOnly(checks) && !checks.pending.length ? await rerunAborted(ctx, deps, checks, data.headSha) : null;
+    const read = await readHeadChecks(ctx, deps, data.headSha);
+    const rerun = await rerunOfRead(ctx, deps, read, data.headSha);
     if (rerun?.problem) return { ...rerun.problem, data, reopen: ["preflight"] };
+    const failedRerun = Boolean(rerun) && read.failing.length > 0;
+    if (failedRerun) updated = { ...updated, note: `${updated.note}; ${rerun.note}` };
+    const checks = failedRerun ? staleFailedAsPending(ctx, read, data.headSha) : read;
     const settles = emptySettles || (attempt > 0 && !emptyWindowMs);
     const settled = settledWait(ctx, { updated, checks, emptySettles: settles, windowOut: emptyWindowMs > 0 && waitedMs >= emptyWindowMs });
     if (settled) return settled;

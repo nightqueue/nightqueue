@@ -32,9 +32,15 @@ function pastId(ms) {
   return `${time}${"0".repeat(16)}`;
 }
 
+// Busy-waits until the wall clock has moved at least `ms` milliseconds.
+function waitPastMs(ms) {
+  const until = Date.now() + ms;
+  while (Date.now() < until);
+}
+
 // A registered qa worktree whose id says it was born `ageMs` ago, unlocked.
-function addAgedWorktree({ env, project, ageMs }) {
-  const path = qaWorktreePath(project.id, pastId(Date.now() - ageMs), env);
+function addAgedWorktree({ env, project, ageMs, now = Date.now() }) {
+  const path = qaWorktreePath(project.id, pastId(now - ageMs), env);
   mkdirSync(dirname(path), { recursive: true });
   git(["-C", project.path, "worktree", "add", "-q", "--detach", path, "HEAD"]);
   return path;
@@ -94,7 +100,7 @@ test("dropQaWorktree removes and prunes a locked worktree, answers gone the seco
 test("sweepQaWorktrees drops the old, the dead-owned and the missing ones, and leaves a young live one and anything that is not a qa worktree", (t) => {
   const { env, checkout, project } = qaFixture(t);
   const now = Date.now();
-  const old = addAgedWorktree({ env, project, ageMs: 7 * HOUR_MS });
+  const old = addAgedWorktree({ env, project, ageMs: 7 * HOUR_MS, now });
   const dead = createQaWorktree({ project, env: { ...env, NIGHTQUEUE_OPERATOR_PID: String(deadPid()) }, now });
   const live = createQaWorktree({ project, env: { ...env, NIGHTQUEUE_OPERATOR_PID: String(process.pid) }, now });
   const missing = createQaWorktree({ project, env, now });
@@ -118,7 +124,8 @@ test("sweepQaWorktrees drops the old, the dead-owned and the missing ones, and l
 test("listQaWorktrees ages a worktree by its id and reports what is not a qa worktree as foreign, writing nothing", (t) => {
   const { env, project } = qaFixture(t);
   const now = Date.now();
-  addAgedWorktree({ env, project, ageMs: 2 * HOUR_MS });
+  waitPastMs(2);
+  addAgedWorktree({ env, project, ageMs: 2 * HOUR_MS, now });
   mkdirSync(join(qaDir(env), "not-a-project"), { recursive: true });
   const rows = listQaWorktrees({ env, projects: [project], now });
   const qa = rows.find((row) => !row.foreign);
