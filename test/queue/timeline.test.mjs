@@ -85,10 +85,19 @@ test("a trivial job that published and reported is done end to end, its orchestr
 });
 
 test("an unknown tier has no track, and no events leave every phase pending", () => {
-  assert.deepEqual(phaseTimeline([open(4, "coder", 0)], { tier: null, status: "running" }), { track: null, phases: [] });
+  assert.deepEqual(phaseTimeline([open(4, "coder", 0)], { tier: null, status: "running" }), { track: null, phases: [], clockMs: 0 });
   const empty = phaseTimeline([], { tier: "simple", status: "pending" });
   assert.deepEqual(new Set(empty.phases.map((phase) => phase.state)), new Set(["pending"]));
   assert.deepEqual(new Set(empty.phases.map((phase) => phase.tokens_label)), new Set(["-"]));
+});
+
+test("a gated job with no narrated event stops at the track's first phase", () => {
+  const timeline = phaseTimeline([], { tier: "complex", status: "gate" });
+  const gated = timeline.phases.filter((phase) => phase.state === "gate");
+  assert.deepEqual(
+    gated.map((phase) => phase.number),
+    [timeline.phases[0].number],
+  );
 });
 
 test("a lane killed by the attempt boundary counts up to that attempt's last clock reading, and a lane without usage counts its reported tokens", () => {
@@ -109,6 +118,50 @@ test("a lane killed by the attempt boundary counts up to that attempt's last clo
   assert.equal(phaseOf(snapshot, 3).state, "done");
   assert.deepEqual([phaseOf(snapshot, 1).tokens, phaseOf(snapshot, 1).tokens_label], [4200, "~4k"]);
   assert.equal(phaseOf(snapshot, 4).state, "now");
+});
+
+// Attempt 1 runs the triager and stops inside the architect at 00:10.
+const GATED_ATTEMPT = [
+  { kind: "attempt", text: "attempt 1", elapsedMs: 0 },
+  open(1, "triager", 1000, { laneId: "t" }),
+  close(1, "triager", 2000, { durationMs: 1000, laneId: "t" }),
+  open(3, "architect", 2500, { laneId: "a" }),
+  { kind: "text", indent: true, elapsedMs: 10000 },
+];
+
+test("a gated job has its stopped phase in the gate state, its time counted to the stop and the job clock at the stop", () => {
+  const timeline = phaseTimeline(GATED_ATTEMPT, { tier: "complex", status: "gate" });
+  assert.equal(states(timeline)[3], "gate");
+  const architect = phaseOf(timeline, 3);
+  assert.deepEqual([architect.startMs, architect.attempts, architect.durationMs], [2500, 1, 7500]);
+  assert.deepEqual(architect.byAttempt, [{ attempt: 1, durationMs: 7500, last: true }]);
+  assert.equal(timeline.clockMs, 10000);
+  assert.deepEqual([phaseOf(timeline, 4).startMs, phaseOf(timeline, 4).attempts, phaseOf(timeline, 4).byAttempt], [null, 0, []]);
+});
+
+test("a job resumed after a gate counts each phase's attempts, splits their time per attempt and starts later phases on the cumulative clock", () => {
+  const resumed = [
+    ...GATED_ATTEMPT,
+    { kind: "attempt", text: "attempt 2", elapsedMs: 0 },
+    open(3, "architect", 1000, { laneId: "a2" }),
+    close(3, "architect", 4000, { durationMs: 3000, laneId: "a2" }),
+    open(4, "coder", 5000, { laneId: "c" }),
+    close(4, "coder", 9000, { durationMs: 4000, laneId: "c" }),
+  ];
+  const timeline = phaseTimeline(resumed, { tier: "complex", status: "done" });
+  assert.equal(new Set(timeline.phases.map((phase) => phase.state)).has("gate"), false);
+  const architect = phaseOf(timeline, 3);
+  assert.deepEqual([architect.attempts, architect.durationMs, architect.startMs], [2, 10500, 2500]);
+  assert.deepEqual(architect.byAttempt, [
+    { attempt: 1, durationMs: 7500, last: true },
+    { attempt: 2, durationMs: 3000, last: false },
+  ]);
+  const coder = phaseOf(timeline, 4);
+  assert.deepEqual([coder.attempts, coder.startMs], [1, 15000]);
+  assert.deepEqual(coder.byAttempt, [{ attempt: 2, durationMs: 4000, last: true }]);
+  assert.equal(phaseOf(timeline, 0).attempts, 2, "every attempt passes through the brief");
+  assert.equal(phaseOf(timeline, 1).attempts, 1);
+  assert.equal(timeline.clockMs, 19000);
 });
 
 const ATTEMPT_1 = "2026-09-07T19:50:00.000Z";

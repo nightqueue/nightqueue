@@ -375,6 +375,7 @@ prompt changed a decision of yours in this task, add to the answer to the orches
 lines, outside the ≤10-line budget above. Do not cite a lesson that influenced
 nothing — no citation is a valid answer, and an uncited lesson gets no negative
 label anywhere.
+When a recalled lesson or decision shapes what you do, write its ref (`L379`, `D-58`) in your report.
 
 In both cases, the verdict line below (PASSED/PASSED-STATIC/FAILED) is
 always required in the answer.

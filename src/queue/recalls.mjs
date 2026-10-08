@@ -4,6 +4,14 @@ import { laneName, parseAttemptMarker, parseEventLine } from "./stream.mjs";
 import { eachLineYielding } from "./yielding-lines.mjs";
 
 const RECALL_TOOL_RE = /__(lesson_recall|memory_recall|decision_recall|index_recall)$/;
+const CONTEXT_TOOL_RE = /__(phase_prompt|context_for_phase)$/;
+export const LESSONS_HEADING = "Applicable lessons";
+export const MEMORY_HEADING = "Project memory";
+export const DECISIONS_HEADING = "Standing decisions";
+const CONTEXT_SECTIONS = new Set([LESSONS_HEADING, MEMORY_HEADING, DECISIONS_HEADING]);
+const SECTION_RE = /^## (.+?)\s*$/;
+const CONTEXT_HIT_RE = /^- (?:\[([LM]\d+)\]|((?:[A-Z][A-Z0-9]*\/)?D-\d+))\s+(.*?)\s*$/;
+const KIND_OF_PREFIX = { L: "lesson", M: "memory" };
 const LIST_KEYS = ["items", "hits", "results", "files", "decisions"];
 const REF_PREFIX = { lesson_recall: "L", memory_recall: "M" };
 const KIND_OF_TOOL = { decision_recall: "decision", lesson_recall: "lesson", index_recall: "index", memory_recall: "memory" };
@@ -85,20 +93,63 @@ function hitOf(tool, entry) {
   return hit;
 }
 
-// Turns a recall's tool_result into its hits, or the reason it cannot be read.
-function parseRecallResult(tool, block) {
+// The JSON answer of a tool_result, or the reason it cannot be read.
+function parsedResult(block) {
   const text = resultText(block.content);
   if (block.is_error === true) return { error: truncateByCodePoint(text || "the recall failed", ERROR_LIMIT) };
-  let value = null;
   try {
-    value = JSON.parse(text);
+    return { value: JSON.parse(text) };
   } catch {
     return { error: "unreadable result" };
   }
+}
+
+// Turns a recall's tool_result into its hits, or the reason it cannot be read.
+function parseRecallResult(tool, block) {
+  const { value, error } = parsedResult(block);
+  if (error) return { error };
   const entries = entriesOf(value);
   if (!entries) return { error: "unreadable result" };
   const hits = entries.filter((entry) => entry && typeof entry === "object").map((entry) => hitOf(tool, entry));
   return { hits };
+}
+
+// One hit of a context line `- [L5] title`, `- [M9] title` or `- D-7 title`, null for any other line.
+function contextHit(line) {
+  const match = CONTEXT_HIT_RE.exec(line);
+  if (!match) return null;
+  const ref = match[1] ?? match[2];
+  const kind = match[1] ? KIND_OF_PREFIX[match[1][0]] : "decision";
+  return { ref, title: truncateByCodePoint(match[3] || null, TITLE_LIMIT), score: null, kind };
+}
+
+// The lessons, memories and decisions a context text hands over, each ref once, from its three memory sections only.
+function contextHits(text) {
+  const hits = [];
+  const seen = new Set();
+  let counted = false;
+  for (const line of text.split("\n")) {
+    const heading = SECTION_RE.exec(line);
+    if (heading) {
+      counted = CONTEXT_SECTIONS.has(heading[1]);
+      continue;
+    }
+    const hit = counted ? contextHit(line) : null;
+    if (!hit || seen.has(hit.ref)) continue;
+    seen.add(hit.ref);
+    hits.push(hit);
+  }
+  return hits;
+}
+
+// Turns a context recall's tool_result into its hits and the phase its `check` names, or the reason it cannot be read.
+function parseContextResult(recall, block) {
+  const { value, error } = parsedResult(block);
+  if (error) return { error };
+  if (!value || typeof value !== "object") return { error: "unreadable result" };
+  const text = [value.prompt, value.block].find((field) => typeof field === "string") ?? "";
+  const checked = Number.parseInt(value.check, 10);
+  return { phase: Number.isFinite(checked) ? checked : recall.phase, hits: contextHits(text) };
 }
 
 // Seconds from the attempt's anchor to an event's instant, null when either is unknown.
@@ -119,21 +170,32 @@ function trackLane(state, event) {
   }
 }
 
-// Opens a pending recall for every recall tool call of an assistant event.
+// The tool-specific fields of a recall call: a memory recall's kind and query, or a context call's target as its agent; null for other tools.
+function callFields(block, agent) {
+  const name = String(block.name ?? "");
+  const recall = RECALL_TOOL_RE.exec(name);
+  if (recall) {
+    const query = typeof block.input?.query === "string" ? block.input.query : null;
+    return { tool: recall[1], kind: KIND_OF_TOOL[recall[1]], query, phase: PHASES.get(agent) ?? null };
+  }
+  const context = CONTEXT_TOOL_RE.exec(name);
+  if (!context) return null;
+  const target = typeof block.input?.target === "string" && block.input.target ? block.input.target : null;
+  return { tool: context[1], kind: "context", query: null, target, agent: target ?? agent, phase: PHASES.get(target) ?? null, calls: 1 };
+}
+
+// Opens a pending recall for every memory recall or context tool call of an assistant event.
 function collectCalls(state, event, stampMs) {
   if (event.type !== "assistant") return;
   const parent = typeof event.parent_tool_use_id === "string" && event.parent_tool_use_id ? event.parent_tool_use_id : null;
   const agent = parent ? (state.lanes.get(parent) ?? "subagent") : ORCHESTRATOR;
   for (const block of contentBlocks(event)) {
-    const match = block?.type === "tool_use" ? RECALL_TOOL_RE.exec(String(block.name ?? "")) : null;
-    if (!match) continue;
+    const fields = block?.type === "tool_use" ? callFields(block, agent) : null;
+    if (!fields) continue;
     const recall = {
       id: block.id ?? null,
-      tool: match[1],
-      kind: KIND_OF_TOOL[match[1]],
-      query: typeof block.input?.query === "string" ? block.input.query : null,
       agent,
-      phase: PHASES.get(agent) ?? null,
+      ...fields,
       attempt: state.attempt,
       at_s: secondsSince(state.anchorMs, stampMs),
       pending: true,
@@ -152,7 +214,8 @@ function collectResults(state, event) {
     const recall = block?.type === "tool_result" ? state.pending.get(block.tool_use_id) : null;
     if (!recall) continue;
     state.pending.delete(block.tool_use_id);
-    Object.assign(recall, { pending: false, hits: [], error: null }, parseRecallResult(recall.tool, block));
+    const parsed = recall.kind === "context" ? parseContextResult(recall, block) : parseRecallResult(recall.tool, block);
+    Object.assign(recall, { pending: false, hits: [], error: null }, parsed);
   }
 }
 
@@ -179,9 +242,50 @@ function scanLine(state, line) {
   collectResults(state, event);
 }
 
-// Every lesson/memory/decision/index recall of a job's whole log, in run order, scanned without stalling the event loop.
+// Whether a recall is a settled, readable context call, the only kind merged per phase and agent.
+function isSettledContext(recall) {
+  return recall.kind === "context" && !recall.pending && !recall.error;
+}
+
+// The hits of two context calls as one list, each ref once, the first occurrence kept.
+function unionHits(hits, more) {
+  const union = [...hits];
+  const seen = new Set(hits.map((hit) => hit.ref));
+  for (const hit of more) {
+    if (seen.has(hit.ref)) continue;
+    seen.add(hit.ref);
+    union.push(hit);
+  }
+  return union;
+}
+
+// The recalls with the settled context calls of one phase and agent merged into the first one; an empty context call is dropped.
+export function mergeContextRecalls(recalls) {
+  const groups = new Map();
+  const merged = [];
+  for (const recall of recalls) {
+    if (!isSettledContext(recall)) {
+      merged.push(recall);
+      continue;
+    }
+    if (recall.hits.length === 0) continue;
+    const key = `${recall.phase ?? `t:${recall.target}`}|${recall.agent}`;
+    const first = groups.get(key);
+    if (first) {
+      first.hits = unionHits(first.hits, recall.hits);
+      first.calls += 1;
+      continue;
+    }
+    const block = { ...recall, hits: [...recall.hits], calls: 1 };
+    groups.set(key, block);
+    merged.push(block);
+  }
+  return merged;
+}
+
+// Every memory recall and context call of a job's whole log, in run order, scanned without stalling the event loop.
 export async function jobRecalls(logText) {
   const state = { attempt: 1, anchorMs: null, lanes: new Map(), pending: new Map(), recalls: [] };
   await eachLineYielding(logText, (line) => scanLine(state, line));
-  return state.recalls;
+  return mergeContextRecalls(state.recalls);
 }

@@ -1,11 +1,12 @@
-import { existsSync } from "node:fs";
+import { closeSync, existsSync, openSync, readSync, statSync } from "node:fs";
+import { setTimeout as sleep } from "node:timers/promises";
 import { UserError } from "../config/errors.mjs";
 import { jobLogPath } from "../config/paths.mjs";
 import { jobView } from "../memory/jobs.mjs";
 import { parseJobRef } from "../memory/refs.mjs";
 import { respond } from "../mcp/transports/http-gate.mjs";
 import { readQueueStatus, refreshAnsweredPrStates } from "../mcp/tools.mjs";
-import { readAttemptTail } from "../queue/follow.mjs";
+import { ATTEMPT_MAX_BYTES } from "../queue/follow.mjs";
 import { formatElapsed, GLYPHS } from "../queue/narrate.mjs";
 import { narrateJob } from "../queue/narrated-tail.mjs";
 import { createTimeline } from "../queue/timeline.mjs";
@@ -18,6 +19,10 @@ export const QUEUE_POLL_MS = 1000;
 const KEEPALIVE_MS = 15000;
 const NARRATION_FLUSH_MS = 100;
 const QUEUE_LIMIT = 50;
+export const NARRATION_MAX_BYTES = ATTEMPT_MAX_BYTES;
+const CUT_SCAN_BYTES = 64 * 1024;
+const MEGABYTE = 1024 * 1024;
+const RESUMABLE = new Set(["pending", "gate", "failed", "cancelled"]);
 
 // Opens a server-sent events response, with the headers that keep every proxy from buffering it.
 function openStream(res) {
@@ -244,14 +249,36 @@ async function readJobWithExtras(id, env) {
   });
 }
 
-// The byte offset where the current attempt of a job's log starts, so the stream narrates that attempt alone.
-function attemptOffset(id, env) {
-  return readAttemptTail(jobLogPath(id, env))?.offset ?? 0;
+// The byte the narration of a log starts at: 0 under the cap, else the first line after its last `cap` bytes; 0 when the log cannot be read.
+export function narrationStart(path, cap = NARRATION_MAX_BYTES) {
+  try {
+    const size = statSync(path).size;
+    if (size <= cap) return 0;
+    const from = size - cap;
+    const fd = openSync(path, "r");
+    try {
+      const buffer = Buffer.alloc(Math.min(CUT_SCAN_BYTES, cap));
+      const read = readSync(fd, buffer, 0, buffer.length, from);
+      const cut = buffer.subarray(0, read).indexOf(0x0a);
+      return cut === -1 ? from + read : from + cut + 1;
+    } finally {
+      closeSync(fd);
+    }
+  } catch {
+    return 0;
+  }
+}
+
+// The studio's own first line of a log narrated from past its start: what was cut, and that the track still counts it.
+function truncatedEvent(start) {
+  const cap = `${Math.round(NARRATION_MAX_BYTES / MEGABYTE)} MB`;
+  const cut = `${(start / MEGABYTE).toFixed(1)} MB`;
+  return { kind: "truncated", text: `log over ${cap}: the first ${cut} are not narrated; the track still counts them`, elapsedMs: null };
 }
 
 // The state of one job stream: the timeline of every attempt, the touched files and the batch waiting to be flushed.
-function createJobState({ res, env, job, extras }) {
-  return { res, env, job, tier: extras.tier ?? job.tier ?? null, runDir: extras.run_dir ?? null, reported: new Set(), timeline: createTimeline(), timelineDirty: false, recordedFiles: extras.files, files: new Set(), pending: [], timer: null, flushChain: Promise.resolve(), status: job.status };
+function createJobState({ res, env, job, extras, isClosed }) {
+  return { res, env, id: job.id, isClosed, job, tier: extras.tier ?? job.tier ?? null, runDir: extras.run_dir ?? null, reported: new Set(), timeline: createTimeline(), timelineDirty: false, recordedFiles: extras.files, files: new Set(), pending: [], timer: null, flushChain: Promise.resolve(), status: job.status };
 }
 
 // Sends the timeline as it stands, re-reading the run tier while it is still unknown.
@@ -308,8 +335,8 @@ function pushJobEvent(state, event) {
   pushTimelineEvent(state, event);
 }
 
-// Ends a job stream once the follow ended: the last batch, the final timeline and the status it ended on; the response stays open for the client.
-async function endJobState(state, result) {
+// Ends one stretch of a job stream: the last batch, the final timeline and the status it ended on; only a final end lets the client close.
+async function endJobState(state, result, { final }) {
   if (state.timer) clearTimeout(state.timer);
   state.timer = null;
   await state.flushChain;
@@ -317,10 +344,92 @@ async function endJobState(state, result) {
   state.timelineDirty = false;
   await chainFlush(state);
   sendTimeline(state);
-  sendEvent(state.res, "end", { status: state.status, reason: result?.reason ?? null });
+  sendEvent(state.res, "end", { status: state.status, reason: result?.reason ?? null, final });
 }
 
-// Streams the narrated current attempt of one job, following it while it runs; the client closing the stream ends the follow.
+// Tells the client the job runs again, so the next attempt lands on the same stream.
+function resumeJobState(state) {
+  state.status = "running";
+  sendEvent(state.res, "resume", { status: "running" });
+  sendTimeline(state);
+}
+
+// Reads the job's status on a read-only store, null when its row is gone; a failed read is told on the stream and answers undefined.
+async function readParkedStatus(state) {
+  try {
+    return await withReadOnlyStore(state.env, (store) => store.jobs.status(state.id));
+  } catch (err) {
+    sendEvent(state.res, "error", { message: `status read failed: ${err?.message ?? String(err)}` });
+    return undefined;
+  }
+}
+
+// Narrates what the log gained since the stream parked, then sends the final end with the status the job stopped on.
+async function endParked(state, { status, fromOffset }) {
+  if (status && existsSync(jobLogPath(state.id, state.env))) await narrateStretch(state, { fromOffset, historyFrom: null });
+  if (state.isClosed()) return;
+  await endJobState(state, { status, reason: status ? `job ${status}` : "unknown job" }, { final: true });
+}
+
+// Polls a parked job read-only until it runs again with a log; false when the client left or the status became final, after the log is drained from `fromOffset` and the final end sent.
+async function waitForRun(state, fromOffset) {
+  const path = jobLogPath(state.id, state.env);
+  while (!state.isClosed()) {
+    await sleep(QUEUE_POLL_MS);
+    if (state.isClosed()) return false;
+    const status = await readParkedStatus(state);
+    if (status === undefined) continue;
+    if (status === "running" && existsSync(path)) return true;
+    if (status === "running" || RESUMABLE.has(status)) continue;
+    await endParked(state, { status, fromOffset });
+    return false;
+  }
+  return false;
+}
+
+// Narrates the job's log from one byte on to the stream, following it while the job runs.
+async function narrateStretch(state, { fromOffset, historyFrom }) {
+  return await narrateJob({
+    id: state.id,
+    env: state.env,
+    follow: true,
+    rich: true,
+    readArtifact: (name) => readStreamArtifact(state, name),
+    fromOffset,
+    historyFrom,
+    onHistory: (event) => pushTimelineEvent(state, event),
+    onUsage: (event) => pushTimelineEvent(state, event),
+    onEvent: (event) => pushJobEvent(state, event),
+    stopReason: () => (state.isClosed() ? "client closed" : null),
+    readJob: async (jobId) => await withReadOnlyStore(state.env, (store) => store.jobs.getJob(jobId)),
+  });
+}
+
+// Narrates every attempt of the job under the byte cap, parking between attempts and resuming on the same stream until a final end.
+async function narrateAttempts(state) {
+  const fromOffset = narrationStart(jobLogPath(state.id, state.env));
+  if (fromOffset > 0) state.pending.push(truncatedEvent(fromOffset));
+  let result = await narrateStretch(state, { fromOffset, historyFrom: 0 });
+  while (!state.isClosed()) {
+    const final = !RESUMABLE.has(result?.status);
+    await endJobState(state, result, { final });
+    if (final || !(await waitForRun(state, result.offset))) return;
+    resumeJobState(state);
+    result = await narrateStretch(state, { fromOffset: result.offset, historyFrom: null });
+  }
+  if (state.timer) clearTimeout(state.timer);
+}
+
+// Waits for the first log of a job that has none yet; true once it runs with one, false when it never will or the client left.
+async function waitForFirstLog(state) {
+  const waits = state.status === "running" || RESUMABLE.has(state.status);
+  await endJobState(state, { status: state.status, reason: "the job has no log yet" }, { final: !waits });
+  if (!waits || !(await waitForRun(state, 0))) return false;
+  resumeJobState(state);
+  return true;
+}
+
+// Streams the narrated log of one job, every attempt in order on one connection; the client closing the stream ends it.
 export async function streamJob(req, res, { env, ref }) {
   let id = null;
   try {
@@ -339,25 +448,10 @@ export async function streamJob(req, res, { env, ref }) {
   if (closed) return;
   openStream(res);
   stopKeepAlive = keepAlive(res);
-  const state = createJobState({ res, env, ...found });
+  const state = createJobState({ res, env, ...found, isClosed: () => closed });
   sendEvent(res, "meta", found.extras);
   sendTimeline(state);
   if (found.extras.files !== null) sendEvent(res, "files", found.extras.files);
-  if (!existsSync(jobLogPath(id, env))) return await endJobState(state, { status: found.job.status, reason: "the job has no log yet" });
-  const result = await narrateJob({
-    id,
-    env,
-    follow: true,
-    rich: true,
-    readArtifact: (name) => readStreamArtifact(state, name),
-    fromOffset: attemptOffset(id, env),
-    historyFrom: 0,
-    onHistory: (event) => pushTimelineEvent(state, event),
-    onUsage: (event) => pushTimelineEvent(state, event),
-    onEvent: (event) => pushJobEvent(state, event),
-    stopReason: () => (closed ? "client closed" : null),
-    readJob: async (jobId) => await withReadOnlyStore(env, (store) => store.jobs.getJob(jobId)),
-  });
-  if (!closed) await endJobState(state, result);
-  else if (state.timer) clearTimeout(state.timer);
+  if (!existsSync(jobLogPath(id, env)) && !(await waitForFirstLog(state))) return;
+  await narrateAttempts(state);
 }

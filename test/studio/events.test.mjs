@@ -3,7 +3,7 @@ import { appendFileSync, existsSync, mkdirSync, statSync, writeFileSync } from "
 import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { dbPath, jobLogPath, runDir } from "../../src/config/paths.mjs";
-import { addJob, bindRunSlug, claimJobById, countsByStatus, finishJob } from "../../src/memory/jobs.mjs";
+import { addJob, bindRunSlug, claimJobById, countsByStatus, finishJob, retryJob } from "../../src/memory/jobs.mjs";
 import { saveRunState } from "../../src/queue/resume.mjs";
 import { snapshotPatch } from "../../src/studio/events.mjs";
 import { ensureProject, makeHome, makeProject } from "../../test-support/memory.mjs";
@@ -128,7 +128,7 @@ test("a job stream narrates the current attempt with structured fields, its time
   assert.equal(timeline.phases.find((phase) => phase.number === 7).state, "done");
   assert.equal(timeline.phases.find((phase) => phase.number === 2).state, "skip");
   assert.deepEqual(events.find((event) => event.name === "files").data, ["worker.mjs"]);
-  assert.equal(events.at(-1).data.status, "done");
+  assert.deepEqual([events.at(-1).data.status, events.at(-1).data.final], ["done", true]);
 });
 
 // The log of one attempt that plans, checks its artifact and hands a coder lane's report back.
@@ -287,7 +287,7 @@ function writeTwoAttemptLog(env, id) {
   writeFileSync(path, `${attemptMarker(1)}\n${toNdjson(first)}${attemptMarker(2, SECOND_ATTEMPT_ISO)}\n${toNdjson(second)}`);
 }
 
-test("a resumed job streams only its current attempt as narration, while its timeline keeps the phases of the earlier one and the run's tier", async (t) => {
+test("a resumed job streams every attempt as narration in order, its timeline keeps both attempts' phases and the run's tier", async (t) => {
   const env = makeHome(t, "studio-events-resumed");
   makeProject(t, env, "alpha");
   const projectId = ensureProject(env, "alpha");
@@ -301,8 +301,12 @@ test("a resumed job streams only its current attempt as narration, while its tim
   const events = await readEvents(port, { path: `/events?job=J-${id}`, headers: { cookie: studioCookie(port) }, until: (list) => list.some((event) => event.name === "end") });
   assert.equal(events[0].data.tier, "complex", "the run's tier stands in for the row's null tier");
   const narration = events.filter((event) => event.name === "narration").flatMap((event) => event.data);
-  assert.deepEqual([narration[0].kind, narration[0].text], ["attempt", "attempt 2"]);
-  assert.equal(narration.some((event) => event.agent === "triager" || event.kind === "usage"), false);
+  assert.deepEqual([narration[0].kind, narration[0].text], ["attempt", "attempt 1"]);
+  const triager = narration.findIndex((event) => event.kind === "laneOpen" && event.agent === "triager");
+  const second = narration.findIndex((event) => event.kind === "attempt" && event.text === "attempt 2");
+  assert.ok(triager > 0 && second > triager, "the triager lane of attempt 1 comes before attempt 2");
+  assert.equal(narration.some((event) => event.kind === "usage"), false);
+  assert.deepEqual(events.at(-1).data, { status: "done", reason: "job done", final: true });
   const timeline = events.filter((event) => event.name === "timeline").at(-1).data;
   assert.equal(timeline.track, "Standard");
   const phase = (number) => timeline.phases.find((entry) => entry.number === number);
@@ -310,6 +314,79 @@ test("a resumed job streams only its current attempt as narration, while its tim
   assert.deepEqual([phase(2).state, phase(2).durationMs], ["done", 30000]);
   assert.deepEqual([phase(4).state, phase(4).durationMs], ["done", 60000]);
   assert.equal(phase(3).state, "skip");
+});
+
+// A claimed job whose first attempt stopped at a gate, its log holding that attempt.
+function gatedJob(t, name) {
+  const { env, id } = seededHome(t, name);
+  claimJobById(id, { worker: "host:1", cap: 4 }, env);
+  const path = jobLogPath(id, env);
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, `${attemptMarker(1)}\n${toNdjson([systemInitEvent(), assistantEvent("Need a decision.", { timestamp: secondsIntoAttempt(5) }), resultEvent()])}`);
+  finishJob(id, { worker: "host:1", status: "gate", noticeMd: "which way?" }, env);
+  return { env, id, path };
+}
+
+// Answers the gate, appends the second attempt to the log and claims the job again, the way a retried run starts.
+function resumeGatedJob({ env, id, path }) {
+  retryJob(id, { note: "go left" }, env);
+  appendFileSync(path, `${attemptMarker(2, SECOND_ATTEMPT_ISO)}\n${toNdjson([systemInitEvent(), assistantEvent("Going left.", { timestamp: secondsIntoAttempt(5, SECOND_ATTEMPT_ISO) })])}`);
+  claimJobById(id, { worker: "host:1", cap: 4 }, env);
+}
+
+test("a gated job's stream ends without closing, then carries the retried attempt on the same connection after a resume", async (t) => {
+  const job = gatedJob(t, "studio-events-gate-resume");
+  const { port } = await startStudio(t, job.env);
+  let answered = false;
+  const until = (list) => {
+    if (!answered && list.some((event) => event.name === "end")) {
+      answered = true;
+      resumeGatedJob(job);
+    }
+    return narrationOf(list).some((event) => event.text === "Going left.");
+  };
+  const events = await readEvents(port, { path: `/events?job=J-${job.id}`, headers: { cookie: studioCookie(port) }, timeoutMs: 15000, until });
+  const end = events.findIndex((event) => event.name === "end");
+  assert.deepEqual(events[end].data, { status: "gate", reason: "job gate", final: false });
+  const resume = events.findIndex((event) => event.name === "resume");
+  assert.ok(resume > end, "the resume follows the non-final end");
+  assert.deepEqual(events[resume].data, { status: "running" });
+  const afterResume = narrationOf(events.slice(resume));
+  assert.deepEqual([afterResume[0].kind, afterResume[0].text], ["attempt", "attempt 2"]);
+  assert.equal(narrationOf(events.slice(0, end)).filter((event) => event.kind === "attempt").length, 1);
+});
+
+test("a parked stream whose job reruns and finishes between two polls narrates the new attempt before the final end", async (t) => {
+  const job = gatedJob(t, "studio-events-gate-final");
+  const { port } = await startStudio(t, job.env);
+  let answered = false;
+  const until = (list) => {
+    if (!answered && list.some((event) => event.name === "end")) {
+      answered = true;
+      resumeGatedJob(job);
+      finishJob(job.id, { worker: "host:1", status: "done" }, job.env);
+    }
+    return list.some((event) => event.name === "end" && event.data.final === true);
+  };
+  const events = await readEvents(port, { path: `/events?job=J-${job.id}`, headers: { cookie: studioCookie(port) }, timeoutMs: 15000, until });
+  const finalAt = events.findIndex((event) => event.name === "end" && event.data.final === true);
+  assert.deepEqual(events[finalAt].data, { status: "done", reason: "job done", final: true });
+  const beforeFinal = narrationOf(events.slice(0, finalAt));
+  assert.ok(beforeFinal.some((event) => event.kind === "attempt" && event.text === "attempt 2"));
+  assert.ok(beforeFinal.some((event) => event.text === "Going left."));
+});
+
+test("a parked gated job's stream only reads while it waits", async (t) => {
+  const job = gatedJob(t, "studio-events-gate-read-only");
+  const { port } = await startStudio(t, job.env);
+  let before = null;
+  const until = (list) => {
+    if (before === null && list.some((event) => event.name === "end")) before = dbWitness(job.env);
+    return false;
+  };
+  const outcome = await readEvents(port, { path: `/events?job=J-${job.id}`, headers: { cookie: studioCookie(port) }, until, timeoutMs: 3500 }).catch((err) => err);
+  assert.match(String(outcome?.message ?? ""), /did not deliver in time; got: .*end/);
+  assert.deepEqual(dbWitness(job.env), before, "a parked job stream wrote to the database");
 });
 
 const LARGE_HISTORY_BYTES = 48 * 1024 * 1024;
@@ -363,6 +440,9 @@ test("a resumed job with a large earlier attempt streams its full timeline witho
   const events = await readEvents(port, { path: `/events?job=J-${id}`, headers: { cookie: studioCookie(port) }, until: (list) => list.some((event) => event.name === "end"), timeoutMs: 60000 });
   const worstGap = stopProbe();
   assert.ok(worstGap < MAX_LOOP_GAP_MS, `the event loop stalled ${Math.round(worstGap)} ms while the history replayed`);
+  const first = narrationOf(events)[0];
+  assert.equal(first.kind, "truncated");
+  assert.match(first.text, /^log over 8 MB: the first \d+\.\d MB are not narrated; the track still counts them$/);
   const timeline = events.filter((event) => event.name === "timeline").at(-1).data;
   const phase = (number) => timeline.phases.find((entry) => entry.number === number);
   assert.deepEqual([phase(1).state, phase(1).durationMs, phase(1).tokens_label], ["done", 40000, "~3k"]);

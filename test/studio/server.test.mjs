@@ -221,7 +221,7 @@ test("the recalls of a job read its whole log, and a job with no log answers no 
   writeFileSync(jobLogPath(id, env), [attemptMarker(1), JSON.stringify(call), attemptMarker(2), JSON.stringify(answer)].join("\n"));
   const full = JSON.parse((await send(port, { path: `/api/jobs/J-${id}/recalls`, headers })).body);
   assert.equal(full.recalls[0].agent, "orchestrator");
-  assert.deepEqual(full.recalls[0].hits, [{ ref: "L5", title: "Guard it", score: null }]);
+  assert.deepEqual(full.recalls[0].hits, [{ ref: "L5", title: "Guard it", score: null, applied: [] }]);
   assert.deepEqual([full.recalls[0].applied, full.applied_total], [[], 0]);
 });
 

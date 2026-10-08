@@ -59,6 +59,10 @@ export function narrationTone(event: NarrationEvent): string {
   if (event.kind === "laneOpen" || event.kind === "laneClose") return "text-log-lane";
   if (event.kind === "text") return "text-fg";
   if (event.kind === "slug") return "text-accent";
+  if (event.kind === "attempt" || event.kind === "attemptEnd") return "text-muted";
+  if (event.kind === "phase") return "text-log-dim";
+  if (event.kind === "gateQuestion" || event.kind === "operator") return "text-amber";
+  if (event.kind === "report") return "text-link";
   if (["toolError", "gate", "marker", "laneOrphan", "truncated"].includes(event.kind)) return "text-red";
   if (event.kind === "tool" || event.kind === "quiet") return "text-muted";
   return "text-log";

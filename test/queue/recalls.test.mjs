@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { jobRecalls } from "../../src/queue/recalls.mjs";
+import { STANDING_HEADING } from "../../src/memory/decisions.mjs";
+import { DECISIONS_HEADING, jobRecalls, LESSONS_HEADING, MEMORY_HEADING } from "../../src/queue/recalls.mjs";
 import { agentToolUseEvent, attemptMarker, taskStartedEvent, toolResultEvent, toolUseEvent } from "../../test-support/streams.mjs";
 
 const LESSON = "mcp__nightqueue__lesson_recall";
@@ -117,6 +118,158 @@ test("a failed recall keeps the tool's error, and other tools or an empty log gi
   assert.equal(recalls[0].error, "the store is locked");
   assert.deepEqual(await jobRecalls(""), []);
   assert.deepEqual(await jobRecalls(null), []);
+});
+
+const PHASE_PROMPT = "mcp__nightqueue__phase_prompt";
+const CONTEXT = "mcp__nightqueue__context_for_phase";
+
+// A rendered phase prompt: a brief with decision-like lines, the three memory sections, the in-full repeats and the proposed list.
+function promptText({ lessons = ["L5"], memories = ["M9"], decisions = ["D-7"] } = {}) {
+  return [
+    "## File handoff (contract — read first)",
+    "- D-99 a handoff line is never a hit",
+    "## Brief",
+    "- D-98 a decision the brief names is never a hit",
+    `## ${LESSONS_HEADING}`,
+    ...lessons.map((ref) => `- [${ref}] lesson ${ref}`),
+    `## ${MEMORY_HEADING}`,
+    ...memories.map((ref) => `- [${ref}] memory ${ref}`),
+    `## ${DECISIONS_HEADING}`,
+    ...decisions.map((ref) => `- ${ref} decision ${ref}`),
+    "### In full (the 8 closest to this Brief)",
+    ...decisions.map((ref) => `- ${ref} decision ${ref} — the whole text`),
+    "## Proposed (not binding)",
+    "- D-52 a proposal is never a hit",
+  ].join("\n");
+}
+
+// A phase_prompt call and its answer, made by the orchestrator unless a lane is named.
+function phasePrompt(id, { target, check, parentToolUseId, ...sections }) {
+  const answer = { prompt: promptText(sections), subagent_type: target, model: "opus", artifact: "x.md", check, open_items: [], contract: 5 };
+  return [toolUseEvent({ name: PHASE_PROMPT, id, input: { target }, parentToolUseId }), jsonResult(id, answer, { parentToolUseId })];
+}
+
+test("a phase_prompt is a context recall: hits from the three memory sections only, each ref once, phase from its check", async () => {
+  const log = logOf([
+    attemptMarker(1),
+    ...phasePrompt("p1", { target: "architect", check: "03", lessons: ["L5"], memories: ["M9"], decisions: ["D-7", "ACME/D-3"] }),
+    ...phasePrompt("p2", { target: "qa-analyst", check: "05a" }),
+    ...phasePrompt("p3", { target: "runtime", check: "06.5" }),
+  ]);
+  const [architect, qa, runtime] = await jobRecalls(log);
+  assert.deepEqual(
+    [architect.tool, architect.kind, architect.target, architect.agent, architect.phase, architect.calls, architect.query],
+    ["phase_prompt", "context", "architect", "architect", 3, 1, null],
+  );
+  assert.deepEqual(architect.hits, [
+    { ref: "L5", title: "lesson L5", score: null, kind: "lesson" },
+    { ref: "M9", title: "memory M9", score: null, kind: "memory" },
+    { ref: "D-7", title: "decision D-7", score: null, kind: "decision" },
+    { ref: "ACME/D-3", title: "decision ACME/D-3", score: null, kind: "decision" },
+  ]);
+  assert.deepEqual([qa.phase, runtime.phase], [5, 6]);
+});
+
+test("an org decision whose key starts with L or M is still a decision, never a lesson or a memory", async () => {
+  const log = logOf([attemptMarker(1), ...phasePrompt("p1", { target: "architect", check: "03", lessons: [], memories: [], decisions: ["MKT/D-9", "LNK/D-3"] })]);
+  const [context] = await jobRecalls(log);
+  assert.deepEqual(
+    context.hits.map((hit) => [hit.ref, hit.kind]),
+    [
+      ["MKT/D-9", "decision"],
+      ["LNK/D-3", "decision"],
+    ],
+  );
+});
+
+test("a context_for_phase recall reads its block and takes its phase and agent from its target, the caller only without one", async () => {
+  const block = `## ${LESSONS_HEADING}\n- [L4] keep it small\n## Structural index\n- [L8] not a memory section`;
+  const log = logOf([
+    attemptMarker(1),
+    agentToolUseEvent({ id: "lane1", subagentType: "nightqueue:coder" }),
+    toolUseEvent({ name: CONTEXT, id: "c1", input: { target: "explore" }, parentToolUseId: "lane1" }),
+    jsonResult("c1", { block }, { parentToolUseId: "lane1" }),
+    toolUseEvent({ name: CONTEXT, id: "c2", input: {}, parentToolUseId: "lane1" }),
+    jsonResult("c2", { block }, { parentToolUseId: "lane1" }),
+  ]);
+  const [context, untargeted] = await jobRecalls(log);
+  assert.deepEqual([context.tool, context.phase, context.agent, context.target], ["context_for_phase", 2, "explore", "explore"]);
+  assert.deepEqual(context.hits, [{ ref: "L4", title: "keep it small", score: null, kind: "lesson" }]);
+  assert.deepEqual([untargeted.phase, untargeted.agent, untargeted.target], [null, "coder", null]);
+});
+
+test("a failed context call stays its own block, and a context call that hands over nothing is dropped", async () => {
+  const log = logOf([
+    attemptMarker(1),
+    toolUseEvent({ name: CONTEXT, id: "c1", input: { target: "coder" } }),
+    toolResultEvent({ toolUseId: "c1", content: "the store is locked", isError: true }),
+    toolUseEvent({ name: CONTEXT, id: "c2", input: { target: "coder" } }),
+    jsonResult("c2", { block: "" }),
+    toolUseEvent({ name: CONTEXT, id: "c3", input: { target: "coder" } }),
+  ]);
+  const recalls = await jobRecalls(log);
+  assert.deepEqual(
+    recalls.map((recall) => [recall.id, recall.pending, recall.error]),
+    [
+      ["c1", false, "the store is locked"],
+      ["c3", true, null],
+    ],
+  );
+});
+
+test("context calls of the same phase and agent merge into the first one, with the union of their hits and the call count", async () => {
+  const log = logOf([
+    attemptMarker(1, "2026-10-06T10:00:00Z"),
+    toolUseEvent({ name: LESSON, id: "r1", input: { query: "first" } }),
+    jsonResult("r1", []),
+    ...phasePrompt("p1", { target: "architect", check: "03", lessons: ["L1"], decisions: ["D-7", "D-24"] }),
+    ...phasePrompt("p2", { target: "coder", check: "04" }),
+    attemptMarker(2, "2026-10-06T11:00:00Z"),
+    ...phasePrompt("p3", { target: "architect", check: "03", lessons: ["L2"], decisions: ["D-24", "D-58"] }),
+    ...phasePrompt("p4", { target: "architect", check: "03", lessons: ["L1"], decisions: ["D-57"] }),
+  ]);
+  const recalls = await jobRecalls(log);
+  assert.deepEqual(
+    recalls.map((recall) => [recall.id, recall.agent, recall.phase, recall.calls ?? null, recall.attempt]),
+    [
+      ["r1", "orchestrator", null, null, 1],
+      ["p1", "architect", 3, 3, 1],
+      ["p2", "coder", 4, 1, 1],
+    ],
+  );
+  assert.deepEqual(
+    recalls[1].hits.map((hit) => hit.ref),
+    ["L1", "M9", "D-7", "D-24", "L2", "D-58", "D-57"],
+  );
+});
+
+test("context calls of another agent or another phase stay apart, and memory recalls never merge", async () => {
+  const log = logOf([
+    attemptMarker(1),
+    ...phasePrompt("p1", { target: "qa-guardian", check: "05" }),
+    agentToolUseEvent({ id: "lane1", subagentType: "nightqueue:qa-guardian" }),
+    ...phasePrompt("p2", { target: "qa-analyst", check: "05a", parentToolUseId: "lane1" }),
+    ...phasePrompt("p3", { target: "qa-guardian", check: "06" }),
+    toolUseEvent({ name: DECISION, id: "d1", input: { query: "a" } }),
+    jsonResult("d1", [{ ref: "D-7", title: "t" }]),
+    toolUseEvent({ name: DECISION, id: "d2", input: { query: "a" } }),
+    jsonResult("d2", [{ ref: "D-7", title: "t" }]),
+  ]);
+  const recalls = await jobRecalls(log);
+  assert.deepEqual(
+    recalls.map((recall) => [recall.id, recall.agent, recall.phase]),
+    [
+      ["p1", "qa-guardian", 5],
+      ["p2", "qa-analyst", 5],
+      ["p3", "qa-guardian", 6],
+      ["d1", "orchestrator", null],
+      ["d2", "orchestrator", null],
+    ],
+  );
+});
+
+test("the decisions heading a context call is read by is the one the runtime writes", () => {
+  assert.equal(DECISIONS_HEADING, STANDING_HEADING);
 });
 
 test("a log of tens of megabytes is scanned without stalling the event loop, every recall kept", async () => {

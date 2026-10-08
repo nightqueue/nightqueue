@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useReducer, useState } from "react";
-import type { Job, JobMeta, NarrationEvent, QueuePatch, QueueSnapshot, Timeline } from "./types";
+import type { Job, JobMeta, JobStreamEnd, NarrationEvent, QueuePatch, QueueSnapshot, Timeline } from "./types";
 
 export const QUEUE_KEY = ["queue"] as const;
 
@@ -62,7 +62,7 @@ export interface JobStreamState {
   events: NarrationEvent[];
   timeline: Timeline | null;
   files: string[];
-  ended: { status: string | null; reason: string | null } | null;
+  ended: JobStreamEnd | null;
   error: string | null;
 }
 
@@ -72,7 +72,8 @@ type JobStreamAction =
   | { type: "narration"; events: NarrationEvent[] }
   | { type: "timeline"; timeline: Timeline }
   | { type: "files"; files: string[] }
-  | { type: "end"; ended: { status: string | null; reason: string | null } }
+  | { type: "end"; ended: JobStreamEnd }
+  | { type: "resume" }
   | { type: "error"; message: string };
 
 const EMPTY_JOB_STREAM: JobStreamState = { meta: null, events: [], timeline: null, files: [], ended: null, error: null };
@@ -92,13 +93,20 @@ function jobStreamReducer(state: JobStreamState, action: JobStreamAction): JobSt
       return { ...state, files: action.files };
     case "end":
       return { ...state, ended: action.ended };
+    case "resume":
+      return { ...state, ended: null, error: null };
     case "error":
       return { ...state, error: action.message };
   }
 }
 
-// Subscribes to `/events?job=<ref>`, again whenever `epoch` changes (a new attempt): run paths, narration, timeline and files.
-export function useJobStream(ref: string, epoch: string): JobStreamState {
+// The `end` event of a job stream, its `final` coerced to a boolean whatever the wire carried.
+function streamEnd(data: Partial<JobStreamEnd>): JobStreamEnd {
+  return { status: data.status ?? null, reason: data.reason ?? null, final: data.final === true };
+}
+
+// Subscribes to `/events?job=<ref>` once per job: run paths, narration of every attempt, timeline and files; it closes only on a final end.
+export function useJobStream(ref: string): JobStreamState {
   const [state, dispatch] = useReducer(jobStreamReducer, EMPTY_JOB_STREAM);
   useEffect(() => {
     dispatch({ type: "reset" });
@@ -112,12 +120,14 @@ export function useJobStream(ref: string, epoch: string): JobStreamState {
     on<NarrationEvent[]>("narration", (events) => dispatch({ type: "narration", events }));
     on<Timeline>("timeline", (timeline) => dispatch({ type: "timeline", timeline }));
     on<string[]>("files", (files) => dispatch({ type: "files", files }));
-    on<{ status: string | null; reason: string | null }>("end", (ended) => {
+    on<Partial<JobStreamEnd>>("end", (data) => {
+      const ended = streamEnd(data);
       dispatch({ type: "end", ended });
-      source.close();
+      if (ended.final) source.close();
     });
+    on<unknown>("resume", () => dispatch({ type: "resume" }));
     source.addEventListener("error", () => dispatch({ type: "error", message: "the job stream is unavailable" }));
     return () => source.close();
-  }, [ref, epoch]);
+  }, [ref]);
   return state;
 }

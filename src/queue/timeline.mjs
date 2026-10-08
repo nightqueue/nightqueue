@@ -39,19 +39,29 @@ function span(fromMs, toMs) {
 
 // A fresh accumulator: no phase reached, no lane open, the orchestrator at the brief.
 function freshState() {
-  return { phases: new Map(), openLanes: new Map(), laneUsage: new Map(), seenMessages: new Set(), orchPhase: 0, idleSince: null, lastElapsed: null, current: null };
+  return { phases: new Map(), openLanes: new Map(), laneUsage: new Map(), seenMessages: new Set(), orchPhase: 0, idleSince: null, lastElapsed: null, current: null, attempt: null, base: 0 };
 }
 
-// The totals of one phase, created the first time the phase is reached.
+// The totals of one phase, created the first time the phase is reached, with the attempt it is reached in registered on it.
 function phaseEntry(state, number) {
-  if (!state.phases.has(number)) state.phases.set(number, { durationMs: 0, tokens: 0, model: null });
-  return state.phases.get(number);
+  if (!state.phases.has(number)) state.phases.set(number, { durationMs: 0, tokens: 0, model: null, startMs: state.base + (state.lastElapsed ?? 0), byAttempt: new Map() });
+  const entry = state.phases.get(number);
+  if (state.attempt !== null && !entry.byAttempt.has(state.attempt)) entry.byAttempt.set(state.attempt, { durationMs: 0, last: false });
+  return entry;
+}
+
+// Adds time to a phase, both to its total and to the attempt the accumulator is in.
+function addDuration(state, number, ms) {
+  const entry = phaseEntry(state, number);
+  entry.durationMs += ms;
+  const slot = entry.byAttempt.get(state.attempt);
+  if (slot) slot.durationMs += ms;
 }
 
 // Adds lane-less time to the orchestrator phase it belongs to, up to the given clock reading, and closes that idle segment.
 function closeIdle(state, atMs) {
   if (state.idleSince === null || state.openLanes.size) return;
-  phaseEntry(state, state.orchPhase).durationMs += span(state.idleSince, atMs);
+  addDuration(state, state.orchPhase, span(state.idleSince, atMs));
   state.idleSince = null;
 }
 
@@ -62,14 +72,29 @@ function openIdle(state, atMs) {
 
 // Ends the attempt the accumulator is in: lanes that never came back count up to the attempt's last clock reading, and so does the idle segment.
 function endAttempt(state) {
-  for (const lane of state.openLanes.values()) phaseEntry(state, lane.phase).durationMs += span(lane.openedAt, state.lastElapsed);
+  for (const lane of state.openLanes.values()) addDuration(state, lane.phase, span(lane.openedAt, state.lastElapsed));
   state.openLanes.clear();
   closeIdle(state, state.lastElapsed);
 }
 
+// Moves the cumulative clock past a finished attempt and marks the phase it stopped in as that attempt's last.
+function closeAttempt(state) {
+  state.base += state.lastElapsed ?? 0;
+  const slot = state.phases.get(state.current)?.byAttempt.get(state.attempt);
+  if (slot) slot.last = true;
+}
+
+// The number of an attempt, from its `attempt N` text, else the one after the previous attempt.
+function attemptNumber(state, event) {
+  const match = /^attempt (\d+)/.exec(typeof event?.text === "string" ? event.text : "");
+  return match ? Number(match[1]) : (state.attempt ?? 0) + 1;
+}
+
 // A new attempt: the previous one ends, the clock restarts and the orchestrator is back at the brief; the current phase is kept.
-function onAttempt(state, atMs) {
+function onAttempt(state, event, atMs) {
   endAttempt(state);
+  if (state.attempt !== null) closeAttempt(state);
+  state.attempt = attemptNumber(state, event);
   state.orchPhase = 0;
   state.lastElapsed = atMs;
   state.idleSince = atMs ?? 0;
@@ -92,7 +117,7 @@ function onLaneClose(state, event, atMs) {
   state.openLanes.delete(laneKey(event));
   if (Number.isInteger(event.phase)) {
     const entry = phaseEntry(state, event.phase);
-    if (Number.isFinite(event.durationMs)) entry.durationMs += event.durationMs;
+    if (Number.isFinite(event.durationMs)) addDuration(state, event.phase, event.durationMs);
     if (Number.isFinite(event.laneTokens) && !(state.laneUsage.get(laneKey(event)) > 0)) entry.tokens += event.laneTokens;
   }
   openIdle(state, atMs);
@@ -101,7 +126,7 @@ function onLaneClose(state, event, atMs) {
 // A lane that never reported back: it counts from its opening to the last clock reading.
 function onLaneOrphan(state, event, atMs) {
   const lane = state.openLanes.get(laneKey(event));
-  if (lane) phaseEntry(state, lane.phase).durationMs += span(lane.openedAt, atMs);
+  if (lane) addDuration(state, lane.phase, span(lane.openedAt, atMs));
   state.openLanes.delete(laneKey(event));
   openIdle(state, atMs);
 }
@@ -136,8 +161,8 @@ function isMarker(event) {
 function pushEvent(state, event) {
   if (!event || typeof event !== "object") return;
   const atMs = offsetOf(event) ?? state.lastElapsed;
-  if (event.kind === "attempt") return onAttempt(state, atMs);
-  if (state.lastElapsed === null && state.current === null) onAttempt(state, atMs);
+  if (event.kind === "attempt") return onAttempt(state, event, atMs);
+  if (state.lastElapsed === null && state.current === null) onAttempt(state, null, atMs);
   if (atMs !== null) state.lastElapsed = atMs;
   if (event.kind === "laneOpen") onLaneOpen(state, event, atMs);
   else if (event.kind === "laneClose") onLaneClose(state, event, atMs);
@@ -167,18 +192,29 @@ function openTime(state, number) {
 }
 
 // The state of one phase of the track, from what the job reached across every attempt and the status of the job.
-function phaseState(number, { state, status, lastReachedIndex, index }) {
+function phaseState(number, { state, status, lastReachedIndex, index, gatePhase }) {
   const running = status === "running";
   const open = [...state.openLanes.values()].some((lane) => lane.phase === number);
   if (number === state.current && running) return "now";
-  if (number === state.current && status === "gate") return "gate";
+  if (number === gatePhase && status === "gate") return "gate";
   if (open && running) return "now";
   if (state.phases.has(number)) return "done";
   return index < lastReachedIndex ? "skip" : "pending";
 }
 
-// One phase of the wire: name, model, state, summed duration, the clock its open part runs from and its estimated tokens.
-function phaseWire(number, { state, status, models, lastReachedIndex, index }) {
+// The time a phase spent in each attempt that reached it, in attempt order; once the job stopped, its current attempt takes the still open time and the stopped phase is marked last.
+function attemptsWire(state, number, entry, running) {
+  if (!entry) return [];
+  return [...entry.byAttempt.entries()]
+    .sort(([left], [right]) => left - right)
+    .map(([attempt, slot]) => {
+      const stoppedHere = !running && attempt === state.attempt;
+      return { attempt, durationMs: slot.durationMs + (stoppedHere ? openTime(state, number) : 0), last: slot.last || (stoppedHere && number === state.current) };
+    });
+}
+
+// One phase of the wire: name, model, state, summed duration, the clock its open part runs from, where it started on the job's clock, its attempts and its estimated tokens.
+function phaseWire(number, { state, status, models, lastReachedIndex, index, gatePhase }) {
   const entry = state.phases.get(number) ?? null;
   const running = status === "running";
   const durationMs = entry ? entry.durationMs + (running ? 0 : openTime(state, number)) : null;
@@ -187,22 +223,31 @@ function phaseWire(number, { state, status, models, lastReachedIndex, index }) {
     number,
     name: PHASE_NAMES.get(number),
     model: phaseModel(number, entry, models),
-    state: phaseState(number, { state, status, lastReachedIndex, index }),
+    state: phaseState(number, { state, status, lastReachedIndex, index, gatePhase }),
     durationMs,
     liveSinceMs: running ? liveSince(state, number) : null,
+    startMs: entry ? entry.startMs : null,
+    attempts: entry ? entry.byAttempt.size : 0,
+    byAttempt: attemptsWire(state, number, entry, running),
     tokens,
     tokens_label: compactTokens(tokens, { estimated: true }),
   };
 }
 
+// The job's active clock at the last reading: every finished attempt's time plus the current one's, null before any attempt.
+function clockOf(state) {
+  return state.attempt === null ? null : state.base + (state.lastElapsed ?? 0);
+}
+
 // The phase track of a job as it stands: every phase of the tier's track with what every attempt so far reached.
 function snapshotOf(state, { tier, status }) {
   const numbers = trackPhaseNumbers(tier);
-  if (!numbers) return { track: null, phases: [] };
+  if (!numbers) return { track: null, phases: [], clockMs: clockOf(state) };
   const { track, models } = routingRow(tier);
   const lastReachedIndex = Math.max(-1, ...numbers.map((number, index) => (state.phases.has(number) ? index : -1)));
-  const phases = numbers.map((number, index) => phaseWire(number, { state, status, models, lastReachedIndex, index }));
-  return { track, phases };
+  const gatePhase = state.current ?? numbers[0];
+  const phases = numbers.map((number, index) => phaseWire(number, { state, status, models, lastReachedIndex, index, gatePhase }));
+  return { track, phases, clockMs: clockOf(state) };
 }
 
 // An accumulator of a job's phase track: narration events of every attempt go in one by one, a snapshot comes out at any time.

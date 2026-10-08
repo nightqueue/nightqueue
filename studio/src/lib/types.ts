@@ -148,6 +148,12 @@ export interface NarrationEvent {
   bytes: number | null;
 }
 
+export interface JobStreamEnd {
+  status: string | null;
+  reason: string | null;
+  final: boolean;
+}
+
 export interface ArtifactEntry {
   name: string;
   bytes: number;
@@ -162,13 +168,23 @@ export interface TimelinePhase {
   state: "done" | "now" | "gate" | "pending" | "skip";
   durationMs: number | null;
   liveSinceMs: number | null;
+  startMs: number | null;
+  attempts: number;
+  byAttempt: PhaseAttempt[];
   tokens: number;
   tokens_label: string;
+}
+
+export interface PhaseAttempt {
+  attempt: number;
+  durationMs: number;
+  last: boolean;
 }
 
 export interface Timeline {
   track: string | null;
   phases: TimelinePhase[];
+  clockMs: number | null;
 }
 
 export interface JobMeta {
@@ -206,15 +222,19 @@ export interface RecallHit {
   score: number | null;
   via?: string;
   text?: string;
+  kind?: "decision" | "lesson" | "memory";
+  applied?: string[];
 }
 
-export type RecallKind = "decision" | "lesson" | "index" | "memory";
+export type RecallKind = "decision" | "lesson" | "index" | "memory" | "context";
 
 export interface Recall {
   id: string | null;
-  tool: "lesson_recall" | "memory_recall" | "decision_recall" | "index_recall";
+  tool: "lesson_recall" | "memory_recall" | "decision_recall" | "index_recall" | "phase_prompt" | "context_for_phase";
   kind: RecallKind;
   query: string | null;
+  target?: string | null;
+  calls?: number;
   agent: string;
   phase: number | null;
   attempt: number;
