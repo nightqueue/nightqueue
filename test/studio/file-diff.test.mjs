@@ -98,6 +98,15 @@ test("a large untracked file is cut at the byte cap on a whole line, and a binar
   assert.deepEqual([image.binary, image.diff], [true, ""]);
 });
 
+test("an untracked file whose first line outruns the byte cap answers a note, never a silent empty diff", async (t) => {
+  const env = makeHome(t, "file-diff-long-line");
+  const { path } = busyWorktree(t);
+  writeFileSync(join(path, "bundle.min.js"), "x".repeat(2 * MAX_DIFF_BYTES));
+  const answer = await jobFileDiff(jobAt(env, path), "bundle.min.js", env);
+  assert.deepEqual([answer.diff, answer.truncated], ["", true]);
+  assert.match(answer.note, /too large/);
+});
+
 test("a released worktree answers unavailable for a recorded file and refuses any other path", async (t) => {
   const env = makeHome(t, "file-diff-released");
   const { checkout, path } = busyWorktree(t);

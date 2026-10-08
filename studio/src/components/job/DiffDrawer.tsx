@@ -2,7 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import type { ReactNode } from "react";
 import { errorText } from "../../lib/actions";
 import { getJson } from "../../lib/api";
-import { parseUnifiedDiff } from "../../lib/diff";
+import { MAX_DIFF_ROWS, parseUnifiedDiff } from "../../lib/diff";
 import { usePrFileUrl } from "../../lib/pr-file";
 import { jobRef } from "../../lib/queue";
 import type { DiffHunk, DiffKind, DiffLine, DiffLineKind, DiffstatFile, FileDiff, JobDetail } from "../../lib/types";
@@ -126,13 +126,14 @@ function HunksTable({ hunks }: { hunks: DiffHunk[] }) {
 
 // The body for a diff the server read: binary, unchanged, or its hunks with a note when cut.
 function DiffBody({ answer }: { answer: FileDiff }) {
-  const { hunks, binary } = parseUnifiedDiff(answer.diff);
+  const { hunks, binary, capped } = parseUnifiedDiff(answer.diff);
   if (answer.binary || binary) return <DiffMessage>binary file — no text diff</DiffMessage>;
-  if (hunks.length === 0) return <DiffMessage>{answer.note ?? "no textual change"}</DiffMessage>;
+  if (hunks.length === 0) return <DiffMessage>{answer.note ?? (answer.truncated ? "file too large to show" : "no textual change")}</DiffMessage>;
   return (
     <div className="flex flex-col gap-2">
       <HunksTable hunks={hunks} />
       {answer.truncated && <DiffMessage>The diff was cut at 1 MiB; the rest is in the pull request or the worktree.</DiffMessage>}
+      {capped && <DiffMessage>Only the first {MAX_DIFF_ROWS.toLocaleString()} lines are shown; the rest is in the pull request or the worktree.</DiffMessage>}
     </div>
   );
 }

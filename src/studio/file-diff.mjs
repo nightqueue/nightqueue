@@ -9,6 +9,7 @@ const BINARY_SNIFF_BYTES = 8000;
 const BINARY_LINE = /^Binary files .* differ$/m;
 const RELEASED_NOTE = "diff unavailable — the worktree was released";
 const NOT_REGULAR_NOTE = "not a regular file — no text diff";
+const TOO_LONG_LINE_NOTE = "file too large to show — its first line exceeds 1 MiB";
 
 // The answer when no text diff can be read for a path, with the reason.
 function unavailable(path, note) {
@@ -64,7 +65,8 @@ async function untrackedDiff(cwd, path, base) {
   const text = bytes.toString("utf8");
   const whole = longer ? text.slice(0, text.lastIndexOf("\n") + 1) : text;
   const { text: diff, truncated } = capped(addedFileDiff(whole));
-  return { ...answer, diff, truncated: longer || truncated };
+  const note = diff === "" ? TOO_LONG_LINE_NOTE : null;
+  return { ...answer, diff, truncated: longer || truncated, note };
 }
 
 // The diff of a tracked file against the merge base, a rename read as one rename diff from its old name.

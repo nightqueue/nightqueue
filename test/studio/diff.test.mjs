@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { parseUnifiedDiff } from "../../studio/src/lib/diff.ts";
+import { MAX_DIFF_ROWS, parseUnifiedDiff } from "../../studio/src/lib/diff.ts";
 
 const EDIT = [
   "diff --git a/a.txt b/a.txt",
@@ -45,7 +45,21 @@ test("an omitted count means one line, a missing final newline is a meta row, an
 });
 
 test("a binary file has no hunk and is flagged, and no text at all answers nothing", () => {
-  assert.deepEqual(parseUnifiedDiff("diff --git a/i.png b/i.png\nBinary files a/i.png and b/i.png differ\n"), { hunks: [], binary: true });
-  assert.deepEqual(parseUnifiedDiff(null), { hunks: [], binary: false });
-  assert.deepEqual(parseUnifiedDiff(""), { hunks: [], binary: false });
+  assert.deepEqual(parseUnifiedDiff("diff --git a/i.png b/i.png\nBinary files a/i.png and b/i.png differ\n"), { hunks: [], binary: true, capped: false });
+  assert.deepEqual(parseUnifiedDiff(null), { hunks: [], binary: false, capped: false });
+  assert.deepEqual(parseUnifiedDiff(""), { hunks: [], binary: false, capped: false });
+});
+
+test("a diff cut short of its header's counts gives only the rows present, never a row for the final newline", () => {
+  const { hunks } = parseUnifiedDiff("@@ -1,5 +1,5 @@\n a\n b\n");
+  assert.deepEqual(hunks[0].lines.map((line) => line.text), ["a", "b"]);
+});
+
+test("rows stop at the cap and the answer says so", () => {
+  const count = MAX_DIFF_ROWS + 5;
+  const text = `@@ -0,0 +1,${count} @@\n${Array.from({ length: count }, () => "+x").join("\n")}\n`;
+  const { hunks, capped } = parseUnifiedDiff(text);
+  assert.equal(hunks[0].lines.length, MAX_DIFF_ROWS);
+  assert.equal(capped, true);
+  assert.equal(parseUnifiedDiff(EDIT).capped, false);
 });

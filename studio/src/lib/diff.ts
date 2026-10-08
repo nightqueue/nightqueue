@@ -1,6 +1,7 @@
 import type { DiffHunk, DiffLine } from "./types";
 
-const HUNK_HEADER = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/;
+export const MAX_DIFF_ROWS = 20_000;
+const HUNK_HEADER =/^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@/;
 
 interface OpenHunk {
   hunk: DiffHunk;
@@ -51,17 +52,29 @@ function isDone(open: OpenHunk): boolean {
   return open.oldLeft <= 0 && open.newLeft <= 0;
 }
 
-// The hunks of a unified diff with old/new line numbers, and whether git called the file binary.
-export function parseUnifiedDiff(text: string | null | undefined): { hunks: DiffHunk[]; binary: boolean } {
+// The lines of a diff text, without the empty piece a final newline leaves.
+function diffLines(text: string | null | undefined): string[] {
+  if (typeof text !== "string" || text === "") return [];
+  const lines = text.split("\n");
+  if (lines[lines.length - 1] === "") lines.pop();
+  return lines;
+}
+
+// The hunks of a unified diff with old/new line numbers, whether git called the file binary, and whether rows were cut at the cap.
+export function parseUnifiedDiff(text: string | null | undefined): { hunks: DiffHunk[]; binary: boolean; capped: boolean } {
   const hunks: DiffHunk[] = [];
   let binary = false;
+  let rows = 0;
   let open: OpenHunk | null = null;
-  for (const line of typeof text === "string" ? text.split("\n") : []) {
+  for (const line of diffLines(text)) {
+    if (rows >= MAX_DIFF_ROWS) return { hunks, binary, capped: true };
     if (open && !isDone(open)) {
+      rows += 1;
       open.hunk.lines.push(hunkLine(open, line));
       continue;
     }
     if (open && line.startsWith("\\")) {
+      rows += 1;
       open.hunk.lines.push({ kind: "meta", text: line, oldNo: null, newNo: null });
       continue;
     }
@@ -69,5 +82,5 @@ export function parseUnifiedDiff(text: string | null | undefined): { hunks: Diff
     if (open) hunks.push(open.hunk);
     else if (line.startsWith("Binary files ")) binary = true;
   }
-  return { hunks, binary };
+  return { hunks, binary, capped: false };
 }
