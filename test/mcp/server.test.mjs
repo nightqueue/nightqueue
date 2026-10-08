@@ -78,6 +78,12 @@ function payloadOf(result) {
   return JSON.parse(textOf(result));
 }
 
+// A job row without the attempt fields that follow the wall clock while an attempt is open.
+function rowAtRest(row) {
+  if (!Array.isArray(row?.attempt_rows)) return row;
+  return { ...row, attempt_rows: row.attempt_rows.map(({ elapsed_s, end_epoch, ...rest }) => rest) };
+}
+
 // Plain text of a tool result.
 function textOf(result) {
   return result.content.map((block) => block.text).join("\n");
@@ -1255,16 +1261,16 @@ test("queue_cancel with stop cancels a job that is not running by the plain rule
   assert.equal(cancelled.job.status, "cancelled");
   assert.equal(cancelled.runner, null);
 
-  const before = getJob(remote, env);
+  const before = rowAtRest(getJob(remote, env));
   const refused = await client.callTool({ name: "queue_cancel", arguments: { job_id: remote, stop: true } });
   assert.equal(refused.isError, true, textOf(refused));
   assert.match(textOf(refused), /is running on worker `other-host:1`, a runner of host `other-host`; nightqueue only stops a runner of this host/);
-  assert.deepEqual(getJob(remote, env), before, "the refused stop wrote to the row");
+  assert.deepEqual(rowAtRest(getJob(remote, env)), before, "the refused stop wrote to the row");
 
   const unpaired = await client.callTool({ name: "queue_cancel", arguments: { job_id: remote, release_worktree: true } });
   assert.equal(unpaired.isError, true, textOf(unpaired));
   assert.match(textOf(unpaired), /`release_worktree` only has meaning with `stop: true`/);
-  assert.deepEqual(getJob(remote, env), before, "the refused release wrote to the row");
+  assert.deepEqual(rowAtRest(getJob(remote, env)), before, "the refused release wrote to the row");
 });
 
 test("queue_stop answers the CLI line per runner, and refuses an unknown pid", async (t) => {
@@ -1306,11 +1312,11 @@ test("queue_close runs only on a done job with a pull request, refusing every ot
     [running, /is running with a live lease on worker/],
   ];
   for (const [id, reason] of cases) {
-    const before = getJob(id, env);
+    const before = rowAtRest(getJob(id, env));
     const refused = await client.callTool({ name: "queue_close", arguments: { job_id: id, force: true } });
     assert.equal(refused.isError, true, textOf(refused));
     assert.match(textOf(refused), reason);
-    assert.deepEqual(getJob(id, env), before, `the refused close wrote to job ${id}`);
+    assert.deepEqual(rowAtRest(getJob(id, env)), before, `the refused close wrote to job ${id}`);
   }
 });
 
