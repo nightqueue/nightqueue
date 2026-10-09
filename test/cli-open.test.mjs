@@ -77,7 +77,7 @@ test("`nightqueue open` in the checkout starts claude in the home with the opera
   assert.equal(argValue(argv, "--agent"), "nightqueue:nightqueue-operator");
   assert.equal(argValue(argv, "--setting-sources"), "project,local");
   assert.deepEqual(JSON.parse(argValue(argv, "--settings")), operatorSettings(home.env));
-  assert.deepEqual(JSON.parse(argValue(argv, "--settings")).permissions, { allow: ["mcp__nightqueue__*"] }, "the nightqueue tools are not pre-approved");
+  assert.deepEqual(JSON.parse(argValue(argv, "--settings")).permissions, { allow: ["mcp__nightqueue__*", "WebFetch", "WebSearch"] }, "the nightqueue tools and the web reads are not pre-approved");
   assert.equal(argv.at(-1), OPERATOR_OPENING_PROMPT, "a fresh session does not open with the greeting prompt");
   assert.equal(argValue(argv, "--plugin-dir"), pluginDir());
   assert.ok(JSON.parse(argValue(argv, "--mcp-config")).mcpServers.nightqueue, "the nightqueue MCP server is not configured");

@@ -35,8 +35,8 @@ test("the operator agent is `nightqueue-operator`, and `nightqueue open` address
   assert.equal(OPERATOR_AGENT, `nightqueue:${name}`);
 });
 
-test("the operator's tools carry no edit tool: it coordinates and never edits", () => {
-  assert.deepEqual(toolsOf(OPERATOR), ["Agent", "Read", "Grep", "Glob", "Bash", "TodoWrite", "SendMessage", "mcp__nightqueue__*"]);
+test("the operator's tools carry no edit tool, and the two web reads: it coordinates and never edits", () => {
+  assert.deepEqual(toolsOf(OPERATOR), ["Agent", "Read", "Grep", "Glob", "Bash", "WebFetch", "WebSearch", "TodoWrite", "SendMessage", "mcp__nightqueue__*"]);
 });
 
 test("operator.md is at most 160 lines, names D-58 and its three subagents, and holds nothing of the operator runs", () => {

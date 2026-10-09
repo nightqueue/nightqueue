@@ -339,6 +339,6 @@ test("the operator's settings fence the edit tools while the host's hooks keep t
   const env = makeHome(t, "operator-settings");
   const settings = operatorSettings(env);
   assert.equal(settings.hooks.PreToolUse[0].matcher, "Agent|Task|Bash|Read|Grep|Glob|Edit|Write|MultiEdit|NotebookEdit");
-  assert.deepEqual(settings.permissions, { allow: ["mcp__nightqueue__*"] });
+  assert.deepEqual(settings.permissions, { allow: ["mcp__nightqueue__*", "WebFetch", "WebSearch"] });
   assert.equal(desiredHooks(env).find(({ event }) => event === "PreToolUse").matcher, "Agent|Task|Bash|Read|Grep|Glob");
 });
