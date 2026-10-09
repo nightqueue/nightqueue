@@ -12,6 +12,9 @@ const EMBED_FIELD_MAX = 1024;
 const EMBED_FOOTER_MAX = 2048;
 const MERGED_COLOR = 0x2ECC71;
 const DONE_LABEL = "What was done:";
+const WEBHOOK_NAME_MAX = 80;
+const NO_CHANNEL_DETAIL = "the webhook answered no channel";
+const CONNECTED_DESCRIPTION = "This channel gets the “job closed” notice of the projects linked to this connection.";
 
 // Reads a Discord reference `<guild>/<channel>/<message>`: a message link, or (explicitly given) the bare triple.
 function parseDiscord(text, { explicit = false } = {}) {
@@ -28,20 +31,53 @@ function refParts(ref) {
   return { guild, channel, message };
 }
 
-// The ids a webhook GET answers, or null when the answer does not carry them.
+// The display name a webhook GET answers, at most 80 characters, or null.
+function webhookNameOf(body) {
+  const name = String(body?.name ?? "").trim().slice(0, WEBHOOK_NAME_MAX);
+  return name || null;
+}
+
+// The ids a webhook GET answers, and its name when it has one, or null when the answer does not carry the ids.
 function webhookIds(body) {
   const channelId = String(body?.channel_id ?? "");
   const guildId = String(body?.guild_id ?? "");
-  return SNOWFLAKE.test(channelId) && SNOWFLAKE.test(guildId) ? { channelId, guildId } : null;
+  if (!SNOWFLAKE.test(channelId) || !SNOWFLAKE.test(guildId)) return null;
+  const webhookName = webhookNameOf(body);
+  return webhookName ? { channelId, guildId, webhookName } : { channelId, guildId };
 }
 
-// Reads the channel and guild of a webhook, answering { ok, status, channelId, guildId, detail } without the URL.
+// Tells whether a text is a Discord webhook URL, without echoing it.
+export function isWebhookUrl(text) {
+  return WEBHOOK_URL.test(String(text ?? ""));
+}
+
+// Reads the channel, guild and name of a webhook, answering { ok, status, channelId, guildId, webhookName?, detail } without the URL.
 async function testDiscord(record, { fetchImpl = fetch, timeoutMs = 5000 } = {}) {
-  if (!WEBHOOK_URL.test(String(record?.url ?? ""))) return { ok: false, status: null, channelId: null, guildId: null, detail: "not a Discord webhook URL" };
+  const none = { channelId: null, guildId: null };
+  if (!isWebhookUrl(record?.url)) return { ok: false, status: null, ...none, detail: "not a Discord webhook URL" };
   const answer = await requestJson(fetchImpl, record.url, { timeoutMs });
   const ids = answer.ok ? webhookIds(answer.body) : null;
-  if (!ids) return { ok: false, status: answer.status, channelId: null, guildId: null, detail: answer.ok ? "the webhook answered no channel" : answer.detail };
+  if (!ids) return { ok: false, status: answer.status, ...none, detail: answer.ok ? NO_CHANNEL_DETAIL : answer.detail };
   return { ok: true, status: answer.status, ...ids, detail: "ok" };
+}
+
+// Posts the one "nightqueue connected" embed a studio add sends, answering { ok, status, detail } without the URL.
+export async function announceWebhook(record, { fetchImpl = fetch, timeoutMs = 5000 } = {}) {
+  if (!isWebhookUrl(record?.url)) return { ok: false, status: null, detail: "not a Discord webhook URL" };
+  const embed = { title: "nightqueue connected", description: CONNECTED_DESCRIPTION, color: MERGED_COLOR };
+  const answer = await requestJson(fetchImpl, `${record.url}?wait=true`, { method: "POST", body: messageBody({ embeds: [embed] }), timeoutMs });
+  return { ok: answer.ok, status: answer.status, detail: answer.detail };
+}
+
+// The fixed sentence that explains a Discord answer to a person; it never carries the URL.
+export function discordReason(result) {
+  const status = result?.status;
+  if (status === null || status === undefined) return `No answer from Discord (${result?.detail ?? "network failure"}).`;
+  if (status === 404) return "Discord answered 404: the webhook was deleted on the server.";
+  if (status === 401 || status === 403) return `Discord answered ${status}: the webhook token is no longer valid.`;
+  if (status === 429) return "Discord answered 429: rate limited, test again in a minute.";
+  if (status >= 200 && status < 300) return "Discord answered without a channel.";
+  return `Discord answered ${status}.`;
 }
 
 // Describes a successful Discord connection test in one line.
@@ -51,12 +87,13 @@ function summarizeDiscord(result) {
 
 // Derives the channel and guild of a webhook at `connection add`; the URL is never echoed back.
 async function completeDiscord(record, { fetchImpl = fetch, timeoutMs = 5000 } = {}) {
-  if (!WEBHOOK_URL.test(String(record?.url ?? ""))) {
+  if (!isWebhookUrl(record?.url)) {
     throw new UserError("the secret is not a Discord webhook URL (https://discord.com/api/webhooks/<id>/<token>); nothing was stored");
   }
   const result = await testDiscord(record, { fetchImpl, timeoutMs });
   if (!result.ok) throw new UserError(`the Discord webhook could not be read (${result.detail}); nothing was stored`);
-  return { ...record, channelId: result.channelId, guildId: result.guildId, mode: "webhook" };
+  const named = result.webhookName ? { webhookName: result.webhookName } : {};
+  return { ...record, channelId: result.channelId, guildId: result.guildId, ...named, mode: "webhook" };
 }
 
 // Which org webhook covers a message: the one posting in its channel, otherwise none with the probe that runs at close.
@@ -202,6 +239,7 @@ export const discord = {
     test: testDiscord,
     summary: summarizeDiscord,
     complete: completeDiscord,
+    reason: discordReason,
   },
   capabilities: { post: true, read: false, resolve: false },
   origin: { parse: parseDiscord },

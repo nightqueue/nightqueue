@@ -1187,6 +1187,35 @@ export function listCloses(env = process.env, db = openDb(env)) {
   return registry.attachNames(db, rows);
 }
 
+// The outcome of one recorded log step: true posted, false failed or pointing at a missing connection, null when it says nothing about a destination.
+function logOutcome({ status, note }) {
+  if (status === "done") return true;
+  if (status === "warning") return false;
+  if (status === "skipped" && String(note ?? "").startsWith("discord:")) return false;
+  return null;
+}
+
+// The newest log step of a closed job per project, `[{ projectId, jobId, at, ok, note }]`; a malformed checklist is passed over.
+export function lastLogResults(env = process.env, db = openDb(env)) {
+  const step = (field) => `CASE WHEN json_valid(close) THEN json_extract(close, '$.steps.log.${field}') END`;
+  const rows = db
+    .prepare(
+      `SELECT id, project_id, ${step("status")} AS status, ${step("at")} AS at, ${step("note")} AS note
+         FROM jobs
+        WHERE status = 'closed' AND close IS NOT NULL`,
+    )
+    .all();
+  const newest = new Map();
+  for (const row of rows) {
+    const ok = typeof row.status === "string" ? logOutcome(row) : null;
+    if (ok === null || typeof row.at !== "string") continue;
+    const kept = newest.get(row.project_id);
+    if (kept && kept.at >= row.at) continue;
+    newest.set(row.project_id, { projectId: row.project_id, jobId: row.id, at: row.at, ok, note: typeof row.note === "string" ? row.note : null });
+  }
+  return [...newest.values()];
+}
+
 // Sets the current project name and checkout `project_path` of a job row from the registry, by the `project_id` it holds.
 function withProjectFacts(db, row) {
   if (row) registry.attachNames(db, [row]);

@@ -71,6 +71,7 @@
  * @property {(id: number, spec: object) => Promise<boolean>} recordPostCloseStep writes the checklist after a post-close step and appends its `After close:` notice line when given, witnessed on disk; never changes the job's status
  * @property {(id: number, spec: object) => Promise<boolean>} releasePostClose releases the post-close lease of a closed job
  * @property {() => Promise<object[]>} listCloses the closes in flight, failed or stalled, with the liveness of each lease
+ * @property {() => Promise<{projectId: string, jobId: number, at: string, ok: boolean, note: string|null}[]>} lastLogResults the newest log step of a closed job per project, read-only; a step that names no destination is passed over
  */
 
 /**
@@ -272,6 +273,7 @@ export const STORE_CONTRACT = Object.freeze({
     "recordPostCloseStep",
     "releasePostClose",
     "listCloses",
+    "lastLogResults",
   ],
   runs: ["logPipelineRun", "logPipelineRunOnce", "updateRunTelemetry", "latestRunOutcome"],
   lessons: [
@@ -341,6 +343,7 @@ export const READ_ONLY_METHODS = Object.freeze([
   "jobs.tierBaseline",
   "jobs.listCloses",
   "jobs.jobsWithPrNumber",
+  "jobs.lastLogResults",
   "decisions.listDecisions",
   "decisions.decisionTitles",
   "decisions.proposalsOfJob",

@@ -78,6 +78,7 @@ function jobsDomain(env, db) {
     recordPostCloseStep: async (id, spec) => jobs.recordPostCloseStep(id, spec, env),
     releasePostClose: async (id, spec) => jobs.releasePostClose(id, spec, env),
     listCloses: async () => jobs.listCloses(env, db()),
+    lastLogResults: async () => jobs.lastLogResults(env, db()),
   };
 }
 

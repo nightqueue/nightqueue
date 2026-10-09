@@ -5,6 +5,7 @@ import { createRoot } from "react-dom/client";
 import { Shell } from "./components/Shell";
 import { JobPage } from "./routes/JobPage";
 import { QueuePage } from "./routes/QueuePage";
+import { SettingsPage } from "./routes/SettingsPage";
 import { TerminalPage } from "./routes/TerminalPage";
 import "./styles.css";
 
@@ -32,7 +33,9 @@ const terminalRoute = createRoute({
   },
 });
 
-const router = createRouter({ routeTree: rootRoute.addChildren([queueRoute, jobRoute, terminalRoute]) });
+const settingsRoute = createRoute({ getParentRoute: () => rootRoute, path: "/settings", component: SettingsPage });
+
+const router = createRouter({ routeTree: rootRoute.addChildren([queueRoute, jobRoute, terminalRoute, settingsRoute]) });
 
 declare module "@tanstack/react-router" {
   interface Register {

@@ -6,7 +6,7 @@ import { testConnection } from "../../src/config/connections.mjs";
 import { loadConfig, loadSecrets, saveSecrets } from "../../src/config/store.mjs";
 import { requestJson } from "../../src/integrations/http.mjs";
 import { detectOrigin, explicitOrigin } from "../../src/integrations/origin.mjs";
-import { discord, noticeSummary } from "../../src/integrations/discord.mjs";
+import { announceWebhook, discord, discordReason, noticeSummary } from "../../src/integrations/discord.mjs";
 import { acquireClose, getJob } from "../../src/memory/jobs.mjs";
 import { CLOSE_STEPS, runClosePipeline } from "../../src/queue/close.mjs";
 import { runPostCloseSteps } from "../../src/queue/close-start.mjs";
@@ -478,4 +478,67 @@ test("project integrations takes the four discord keys and refuses a log connect
   const badEvent = await runCli(home.env, ["project", "integrations", "alpha", "set", "discord.log.events=done"]);
   assert.match(badEvent.err.join("\n"), /`discord\.log\.events` takes a comma-separated list of: closed/);
   assertNoSecret([set, otherOrg, otherType, badEvent, await runCli(home.env, ["project", "integrations", "alpha", "show", "--json"])]);
+});
+
+test("the webhook name a GET answers is kept, trimmed to 80 characters, and stored on add next to the ids", async (t) => {
+  const named = fakeFetch({ [`GET ${CHAT_URL}`]: { body: { channel_id: CHAT_CHANNEL, guild_id: GUILD, name: `  ${"n".repeat(90)} ` } } });
+  const tested = await discord.connection.test({ type: "discord", url: CHAT_URL }, { fetchImpl: named.impl });
+  assert.equal(tested.webhookName, "n".repeat(80));
+  const env = makeHome(t, "discord-webhook-name");
+  makeProject(t, env, "alpha");
+  const fetch = fakeFetch({ [`GET ${CHAT_URL}`]: { body: { channel_id: CHAT_CHANNEL, guild_id: GUILD, name: "general-hook" } } });
+  const added = await runCli(env, ["connection", "add", "chat", "--type", "discord"], { input: `${CHAT_URL}\n`, fetch });
+  assert.equal(added.code, 0, added.err.join("\n"));
+  assert.deepEqual(loadSecrets(env, { warn: () => {} }).connections.chat, { type: "discord", url: CHAT_URL, channelId: CHAT_CHANNEL, guildId: GUILD, webhookName: "general-hook", mode: "webhook" });
+  assertNoSecret([tested, added]);
+});
+
+test("announceWebhook posts one connected embed with ?wait=true and no mentions, and answers the status without the URL", async () => {
+  const fetch = fakeFetch({ [`POST ${CHAT_URL}?wait=true`]: {} });
+  const posted = await announceWebhook({ url: CHAT_URL }, { fetchImpl: fetch.impl });
+  assert.deepEqual([posted.ok, posted.status], [true, 200]);
+  assert.deepEqual(fetch.calls.map((call) => [call.method, call.url]), [["POST", `${CHAT_URL}?wait=true`]]);
+  assert.equal(fetch.calls[0].body.embeds.length, 1);
+  assert.equal(fetch.calls[0].body.embeds[0].title, "nightqueue connected");
+  assert.deepEqual(fetch.calls[0].body.allowed_mentions, { parse: [] });
+  const refused = await announceWebhook({ url: CHAT_URL }, { fetchImpl: fakeFetch().impl });
+  assert.deepEqual([refused.ok, refused.status], [false, 404]);
+  const notAWebhook = fakeFetch();
+  assert.equal((await announceWebhook({ url: "https://example.com/hook" }, { fetchImpl: notAWebhook.impl })).ok, false);
+  assert.equal(notAWebhook.calls.length, 0);
+  assertNoSecret([posted, refused]);
+});
+
+test("discordReason gives one fixed sentence per Discord answer, never the URL", () => {
+  assert.equal(discordReason({ status: 404 }), "Discord answered 404: the webhook was deleted on the server.");
+  assert.equal(discordReason({ status: 401 }), "Discord answered 401: the webhook token is no longer valid.");
+  assert.equal(discordReason({ status: 403 }), "Discord answered 403: the webhook token is no longer valid.");
+  assert.equal(discordReason({ status: 429 }), "Discord answered 429: rate limited, test again in a minute.");
+  assert.equal(discordReason({ status: 500 }), "Discord answered 500.");
+  assert.equal(discordReason({ status: null, detail: "timeout (5s)" }), "No answer from Discord (timeout (5s)).");
+  assert.equal(discordReason({ status: null }), "No answer from Discord (network failure).");
+  assert.equal(discordReason({ status: 200, detail: CHAT_URL }), "Discord answered without a channel.");
+  assert.equal(discord.connection.reason, discordReason);
+});
+
+test("connection remove unlinks the projects logging to it, prints them, and leaves no dangling log connection", async (t) => {
+  const home = await discordHome(t, "discord-remove-unlink");
+  const set = await runCli(home.env, ["project", "integrations", "alpha", "set", "discord.log.connection=ops", "discord.log.events=closed"]);
+  assert.equal(set.code, 0, set.err.join("\n"));
+  const removed = await runCli(home.env, ["connection", "remove", "ops"]);
+  assert.equal(removed.code, 0, removed.err.join("\n"));
+  assert.deepEqual(removed.out, ["removed connection `ops`; unbound from: default", "unlinked the log destination of: alpha"]);
+  assert.equal(await home.store.projects.integrations(home.projectId), null);
+  const untouched = await runCli(home.env, ["connection", "remove", "chat"]);
+  assert.deepEqual(untouched.out, ["removed connection `chat`; unbound from: default"]);
+});
+
+test("connection remove in a home without a database removes the connection and unlinks nothing", async (t) => {
+  const env = makeHome(t, "discord-remove-no-db");
+  const secrets = { version: 1, connections: { ops: { type: "discord", url: OPS_URL, channelId: OPS_CHANNEL, guildId: GUILD, mode: "webhook" } } };
+  saveSecrets(secrets, env);
+  const removed = await runCli(env, ["connection", "remove", "ops"]);
+  assert.equal(removed.code, 0, removed.err.join("\n"));
+  assert.deepEqual(removed.out, ["removed connection `ops`; unbound from: none"]);
+  assert.equal(loadSecrets(env, { warn: () => {} }).connections.ops, undefined);
 });

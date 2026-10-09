@@ -179,6 +179,59 @@ export function bindConnection({ config, secrets, name, orgId }) {
   return { config, type, previous };
 }
 
+// The type an org binding declares for a connection whose secret may be missing, or null when no org binds it.
+function boundTypeOf(config, name) {
+  for (const slots of Object.values(config?.orgConnections ?? {})) {
+    const found = Object.entries(slots ?? {}).find(([, binding]) => boundNames(binding).includes(name));
+    if (found) return found[0];
+  }
+  return null;
+}
+
+// Unbinds a connection from one org only, from its slot and its lists; a stored or merely bound connection is accepted.
+export function unbindConnection({ config, secrets, name, orgId }) {
+  const type = typeOf(secrets, name) ?? boundTypeOf(config, name);
+  if (!type) throw new UserError(`unknown connection \`${name}\``);
+  if (CONNECTION_TYPES.has(type) && isHomeType(type)) throw new UserError(`connection \`${name}\` (${type}) serves the whole home and binds to no org`);
+  const slots = config?.orgConnections?.[orgId];
+  let wasBound = false;
+  for (const [slotType, bound] of Object.entries(slots ?? {})) {
+    if (!boundNames(bound).includes(name)) continue;
+    wasBound = true;
+    slots[slotType] = Array.isArray(bound) ? bound.filter((listed) => listed !== name) : null;
+  }
+  return { config, type, wasBound };
+}
+
+// The one-line reason of a test result, never carrying the secret: the type's own sentence when it declares one.
+export function testReason(type, result) {
+  const reason = CONNECTION_TYPES.get(type)?.reason;
+  if (typeof reason === "function") return reason(result);
+  if (result?.status === null || result?.status === undefined) return `no answer (${result?.detail ?? "network failure"})`;
+  return `${type} answered ${result.status}`;
+}
+
+// The `lastTest` a test result stands for: ok, when, the service's status and, on a failure, the reason.
+export function lastTestOf({ type, result, at }) {
+  const status = Number.isInteger(result?.status) ? result.status : null;
+  return result?.ok === true ? { ok: true, at, status } : { ok: false, at, status, reason: testReason(type, result) };
+}
+
+// Tells whether two connection records are the same connection: same type and the same secret fields.
+function sameConnection(stored, tested) {
+  const fields = CONNECTION_TYPES.get(stored?.type)?.secretFields;
+  if (!Array.isArray(fields) || !fields.length || stored.type !== tested?.type) return false;
+  return fields.every((field) => typeof stored[field] === "string" && stored[field] === tested[field]);
+}
+
+// Records the outcome of a test on the record that was tested, answering the stored `lastTest` or null when that record is gone or was replaced.
+export function recordTest({ secrets, name, tested, result, at }) {
+  const record = secrets?.connections?.[name];
+  if (!record || !sameConnection(record, tested)) return null;
+  record.lastTest = lastTestOf({ type: record.type, result, at });
+  return record.lastTest;
+}
+
 // Unbinds the connection from every org and deletes it from secrets.
 export function removeConnection({ config, secrets, name }) {
   if (!hasConnection(secrets, name)) throw new UserError(`unknown connection \`${name}\``);
