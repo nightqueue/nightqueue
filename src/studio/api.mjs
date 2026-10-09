@@ -24,6 +24,7 @@ import { listArtifacts, readArtifactFile } from "./artifacts.mjs";
 import { connectLinear } from "./connect.mjs";
 import { jobDiffstat } from "./diffstat.mjs";
 import { jobFileDiff } from "./file-diff.mjs";
+import { ApiRefusal, serveIntegrations } from "./integrations.mjs";
 import { runDirOf } from "./job-extras.mjs";
 import { appliedRefs, withApplied } from "./recall-applied.mjs";
 import { TerminalRefusal } from "./terminal.mjs";
@@ -288,6 +289,8 @@ async function routeApi(req, res, { env, origin, path, terminals, fetchImpl }) {
   if (path === "/api/connections/linear" && isPost) {
     return sendJson(res, 200, await connectLinear({ body: await readJsonBody(req), env, fetchImpl: fetchImpl ?? globalThis.fetch }));
   }
+  const integrations = await serveIntegrations(req, { path, env, fetchImpl, readBody: readJsonBody });
+  if (integrations) return sendJson(res, integrations.status, integrations.body);
   const log = JOB_LOG_PATH.exec(path);
   if (log && isGet) return await sendJobLog(req, res, { env, ref: log[1] });
   const diffstat = JOB_DIFFSTAT_PATH.exec(path);
@@ -310,6 +313,7 @@ export async function serveApi(req, res, context) {
   } catch (err) {
     if (res.headersSent) return res.destroy();
     if (err instanceof TerminalRefusal) return respond(res, err.status, err.message);
+    if (err instanceof ApiRefusal) return sendJson(res, err.status, { error: err.message, code: err.code, ...err.details });
     if (err instanceof UserError) return respond(res, 400, err.message);
     process.stderr.write(`studio api ${req.method} ${context.path} failed: ${err?.stack ?? String(err)}\n`);
     return respond(res, 500, "the studio API failed; see the server output");

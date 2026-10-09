@@ -374,3 +374,51 @@ export type TrackerError = "no-connection" | "provider-unavailable";
 export type TrackerAnswer =
   | { ok: true; provider: string; items: TrackerItem[]; truncated: boolean; filters?: TrackerFilters }
   | { ok: false; error: TrackerError; hint: string; provider: string | null };
+
+export interface LastTest {
+  ok: boolean;
+  at: string | null;
+  status: number | null;
+  reason?: string;
+}
+
+export interface LastNotice {
+  jobRef: string;
+  at: string | null;
+  ok: boolean;
+  note: string | null;
+}
+
+export interface OrgSummary {
+  id: string;
+  name: string;
+  projects: number;
+}
+
+export interface ConnectionRow {
+  id: string;
+  name: string;
+  type: string;
+  present: boolean;
+  scope: "home" | "org";
+  orgs: string[];
+  lastTest: LastTest | null;
+  usedBy: string[];
+  channelId?: string | null;
+  serverId?: string | null;
+  webhookName?: string | null;
+}
+
+export interface ProjectDestination {
+  id: string;
+  name: string;
+  org: string | null;
+  destination: string | null;
+  lastNotice: LastNotice | null;
+}
+
+export interface IntegrationsView {
+  orgs: OrgSummary[];
+  connections: ConnectionRow[];
+  projects: ProjectDestination[];
+}

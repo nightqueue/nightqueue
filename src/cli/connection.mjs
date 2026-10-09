@@ -9,8 +9,10 @@ import {
   removeConnection,
   requireType,
   testConnection,
+  typeOf,
 } from "../config/connections.mjs";
 import { UserError } from "../config/errors.mjs";
+import { DESTINATION_KIND, unlinkProjectsUsing } from "../integrations/destinations.mjs";
 import { defaultOrg, requireOrg } from "../config/orgs.mjs";
 import { assertName } from "../config/schema.mjs";
 import { loadConfig, loadSecrets } from "../config/store.mjs";
@@ -51,7 +53,7 @@ export function saveConfigAfterSecret({ config, ctx, name, org }) {
 }
 
 // Writes the secrets after the config, pointing at the recovery when that write fails.
-function saveSecretsAfterConfig({ secrets, ctx, name }) {
+export function saveSecretsAfterConfig({ secrets, ctx, name }) {
   try {
     ctx.saveSecrets(secrets, ctx.env);
   } catch (err) {
@@ -195,21 +197,28 @@ async function runTest(argv, ctx) {
   ctx.out(`${name} (${result.type}): ok — ${testSummary(result)}`);
 }
 
+// Clears the log destination of the projects that use a Discord connection about to be removed, answering their names; a home without a database has none.
+async function unlinkRemovedDestination(ctx, { name, type }) {
+  if (type !== DESTINATION_KIND || !(await openRegistryReader(ctx.env))) return [];
+  const store = await openRegistryWriter(ctx.env);
+  return (await unlinkProjectsUsing({ store, name })).map((project) => project.name);
+}
+
 // Runs `connection remove`.
 async function runRemove(argv, ctx) {
   const { positionals } = parseCommand(argv);
   checkArgs(positionals, { min: 1, usage: "nightqueue connection remove <name>" });
   const name = positionals[0];
   const namesOf = await orgNamesById(ctx);
-  const result = removeConnection({
-    config: loadConfig(ctx.env, { warn: ctx.err }),
-    secrets: loadSecrets(ctx.env, { warn: ctx.err }),
-    name,
-  });
+  const secrets = loadSecrets(ctx.env, { warn: ctx.err });
+  const type = typeOf(secrets, name);
+  const result = removeConnection({ config: loadConfig(ctx.env, { warn: ctx.err }), secrets, name });
+  const unlinked = await unlinkRemovedDestination(ctx, { name, type });
   ctx.saveConfig(result.config, ctx.env);
   saveSecretsAfterConfig({ secrets: result.secrets, ctx, name });
   const unbound = result.unboundFrom.length ? namesOf(result.unboundFrom).join(", ") : "none";
   ctx.out(`removed connection \`${name}\`; unbound from: ${unbound}`);
+  if (unlinked.length) ctx.out(`unlinked the log destination of: ${unlinked.join(", ")}`);
 }
 
 const SUBCOMMANDS = new Map([

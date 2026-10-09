@@ -8,7 +8,9 @@ import { runPostCloseSteps } from "../../src/queue/close-start.mjs";
 import { closeChecklistLines, statusLabel } from "../../src/queue/close-view.mjs";
 import { openStore } from "../../src/store/open.mjs";
 import { makeHome, makeProject, projectIdOf, seedClosedJob, seedDoneJob } from "../../test-support/memory.mjs";
-import { bindTrackerConnection, setIntegrations, trackerProvider, TRACKER_SECRET, TRACKER_URL } from "../../test-support/origin-provider.mjs";
+import { bindTrackerConnection, orgOfProject, setIntegrations, trackerProvider, TRACKER_SECRET, TRACKER_URL } from "../../test-support/origin-provider.mjs";
+import { loadConfig, saveConfig, saveSecrets } from "../../src/config/store.mjs";
+import { linkProjects } from "../../src/integrations/destinations.mjs";
 
 const WORKER = "close:test:1:post";
 const MERGE_SHA = "abc1234def5678";
@@ -413,4 +415,23 @@ test("queue close --steps prints each step and a summary, exits 1 on a warning, 
     assert.notEqual(forced.code, 0);
     assert.match(forced.err.join("\n"), /cannot be combined with --merged or --force/);
   });
+});
+
+test("a project linked through linkProjects posts its closed job once to the linked Discord webhook", async (t) => {
+  const webhook = "https://discord.com/api/webhooks/9001/linkedWebhookSecretToken-0123";
+  const home = postHome(t, "post-linked-discord", { integrations: null, bind: false });
+  const orgId = orgOfProject(home.env, home.projectId);
+  const config = loadConfig(home.env, { warn: () => {} });
+  config.orgConnections[orgId] = { discord: ["dlw-log"] };
+  saveConfig(config, home.env);
+  const secrets = { version: 1, connections: { "dlw-log": { type: "discord", url: webhook, channelId: "222", guildId: "111", mode: "webhook" } } };
+  saveSecrets(secrets, home.env);
+  await linkProjects({ store: home.store, name: "dlw-log", projectIds: [home.projectId], files: { config, secrets } });
+
+  const fetch = fakeFetch();
+  const { outcome } = await closeOnce(home, { fetch });
+  assert.equal(outcome.status, "closed");
+  assert.deepEqual(outcome.postClose.steps.find((step) => step.name === "log"), { name: "log", status: "done", note: "discord: logged through dlw-log" });
+  assert.deepEqual(fetch.calls.map((call) => [call.method, call.url]), [["POST", `${webhook}?wait=true`]]);
+  assert.ok(!JSON.stringify(outcome).includes("linkedWebhookSecretToken"), "the webhook token leaked into the outcome");
 });

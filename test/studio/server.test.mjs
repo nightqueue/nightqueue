@@ -24,6 +24,14 @@ const GATED_REQUESTS = [
   { method: "GET", path: "/api/jobs/J-1/recalls" },
   { method: "GET", path: "/events" },
   { method: "POST", path: "/api/connections/linear", headers: { "content-type": "application/json" }, body: "{\"api_key\":\"lin_api_x\"}" },
+  { method: "GET", path: "/api/integrations" },
+  { method: "POST", path: "/api/integrations/discord", headers: { "content-type": "application/json" }, body: "{\"name\":\"x\",\"org\":\"dlw\",\"url\":\"u\"}" },
+  { method: "POST", path: "/api/integrations/x/test", headers: { "content-type": "application/json" }, body: "{}" },
+  { method: "POST", path: "/api/integrations/x/orgs", headers: { "content-type": "application/json" }, body: "{\"org\":\"dlw\"}" },
+  { method: "DELETE", path: "/api/integrations/x/orgs/dlw?unlink=1" },
+  { method: "DELETE", path: "/api/integrations/x?unlink=1" },
+  { method: "POST", path: "/api/integrations/x/link", headers: { "content-type": "application/json" }, body: "{\"projectIds\":[\"p\"]}" },
+  { method: "PUT", path: "/api/projects/p/destination", headers: { "content-type": "application/json" }, body: "{\"connectionId\":null}" },
   { method: "POST", path: "/mcp", headers: { "content-type": "application/json" }, body: "{}" },
 ];
 

@@ -1,6 +1,6 @@
-import { Link, Outlet } from "@tanstack/react-router";
-import { CircleCheck, CircleX, Info, type LucideIcon } from "lucide-react";
-import type { CSSProperties, ReactNode } from "react";
+import { Link, Outlet, useLocation } from "@tanstack/react-router";
+import { CircleCheck, CircleX, Info, Menu, X, type LucideIcon } from "lucide-react";
+import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
 import { useStudioInfo } from "../lib/api";
 import { useQueueStream } from "../lib/events";
 import { utcClock } from "../lib/format";
@@ -32,17 +32,50 @@ function SoonLink({ label, stage }: { label: string; stage: string }) {
   );
 }
 
-// The main navigation: Queue, and the screens of the later stages dimmed.
-function Nav() {
+const ACTIVE_NAV = "bg-row-line !text-fg";
+
+// The links of the main navigation: Queue, Memory dimmed, Settings, Doctor dimmed.
+function NavItems() {
+  const onSettings = useLocation({ select: (location) => location.pathname.startsWith("/settings") });
   return (
-    <nav className="ml-3 hidden gap-0.5 sm:flex">
-      <Link to="/" className="rounded-md px-2.5 py-1.5 text-muted" activeProps={{ className: "bg-row-line !text-fg" }}>
+    <>
+      <Link to="/" className={`rounded-md px-2.5 py-1.5 text-muted ${onSettings ? "" : ACTIVE_NAV}`}>
         Queue
       </Link>
       <SoonLink label="Memory" stage="S2" />
-      <SoonLink label="Home" stage="S3" />
+      <Link to="/settings" className={`rounded-md px-2.5 py-1.5 text-muted ${onSettings ? ACTIVE_NAV : ""}`}>
+        Settings
+      </Link>
       <SoonLink label="Doctor" stage="S3" />
+    </>
+  );
+}
+
+// The main navigation on a desktop.
+function Nav() {
+  return (
+    <nav className="ml-3 hidden gap-0.5 sm:flex">
+      <NavItems />
     </nav>
+  );
+}
+
+// The main navigation on a phone: a hamburger that opens the same links in a panel under the header.
+function MobileNav() {
+  const [open, setOpen] = useState(false);
+  const location = useLocation();
+  useEffect(() => setOpen(false), [location.pathname]);
+  return (
+    <div className="sm:hidden">
+      <button type="button" aria-label="menu" aria-expanded={open} onClick={() => setOpen(!open)} className="-ml-1.5 inline-flex min-h-10 min-w-10 items-center justify-center rounded-md text-muted hover:text-fg">
+        {open ? <X size={20} aria-hidden="true" /> : <Menu size={20} aria-hidden="true" />}
+      </button>
+      {open && (
+        <nav aria-label="main" className="absolute inset-x-0 top-[52px] flex flex-col gap-1 border-b border-line bg-header px-4 py-3 [&>*]:flex [&>*]:min-h-11 [&>*]:items-center">
+          <NavItems />
+        </nav>
+      )}
+    </div>
   );
 }
 
@@ -121,7 +154,8 @@ function HeaderOperatorButton() {
 // The header of every page: logo, navigation, Operator, MCP status, runtime version and clock.
 function Header() {
   return (
-    <header className="sticky top-0 z-20 flex h-[52px] items-center gap-5 border-b border-line bg-header px-4 sm:px-6">
+    <header className="sticky top-0 z-20 flex h-[52px] items-center gap-5 border-b border-line bg-header px-4 max-sm:gap-3 sm:px-6">
+      <MobileNav />
       <Logo />
       <Nav />
       <div className="ml-auto flex items-center gap-4 text-sm text-muted">
