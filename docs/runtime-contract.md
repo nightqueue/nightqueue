@@ -360,9 +360,10 @@ neither edit nor execute.
 The `agent-foreground` hook in operator mode is the D-58 guard. Each refusal is a PreToolUse
 `deny` whose reason is one line starting `D-58:`, naming what is allowed instead; it never moves
 a call to the foreground. The main thread (no `agent_id` in the payload) may not use `Edit`,
-`Write`, `MultiEdit` or `NotebookEdit`; reads only under a registered checkout, `<home>/qa`,
-`<home>/runs`, `<home>/worktrees`, the plugin and the session spill (an absolute Glob `pattern`
-or Grep `glob` is judged by its static prefix too); Bash only as one bare command with no shell
+`Write`, `MultiEdit` or `NotebookEdit`; reads anything on disk but `<home>/secrets.json` and any
+`.env*` file, never a Grep whose `path` is the home or a parent of it (the sweep would read the
+secrets file) nor a path that cannot be resolved (an absolute Glob `pattern` or Grep `glob` is
+judged by its static prefix too); Bash only as one bare command with no shell
 operator or backslash:
 `nightqueue|nq <queue|decision|project|org|connection|doctor|memory|libs|version> …`
 (not `queue session`, `decision export|import`, `project add|move`, `queue add --run`,
@@ -370,7 +371,7 @@ operator or backslash:
 `Agent`/`Task` only for the `triage`, `qa` and `reviewer` subagents (`<role>`,
 `nightqueue:<role>` or `plugin_nightqueue_<role>`). Every top-level CLI command is classified as
 allowed or refused in one list, and so is every subcommand of `queue`, `decision` and `project`;
-a test keeps both exhaustive. Every subagent reads only under the main thread's read roots. The
+a test keeps both exhaustive. Every subagent reads exactly where the main thread reads. The
 `qa` subagent may edit only inside a qa worktree `<home>/qa/<project id>/<id>`; its Bash is
 `nightqueue sandbox worktree <project>`, `nightqueue sandbox worktree --drop <path>`, or a
 command of the exact shape `cd <path inside a qa worktree> && …` - the only accepted shape for
@@ -386,7 +387,7 @@ still reach outside the worktree. Any other subagent may not edit, and its Bash 
 thread's `git -C` reads, `gh pr view|diff|checks|list|status` or `gh issue view|list`. The
 guard fails closed: an error inside it refuses every tool but `Read`/`Grep`/`Glob`, an `Edit`,
 `Write`, `MultiEdit`, `NotebookEdit`, `Bash`, `Agent` or `Task` call whose `tool_input` is not
-an object is refused, and a registry it cannot read refuses the checkout reads and `git -C`.
+an object is refused, and a registry it cannot read refuses `git -C`.
 Job mode is unchanged and still fails open.
 
 The `subagent-stop` hook acts only in an operator session (`NIGHTQUEUE_MODE=operator`, no

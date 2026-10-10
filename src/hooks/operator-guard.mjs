@@ -1,5 +1,5 @@
 import { isAbsolute } from "node:path";
-import { globStaticPrefix, insideRoots, isOrchestratorCall, readTarget } from "../queue/orchestrator-scope.mjs";
+import { globStaticPrefix, isOrchestratorCall, readTarget } from "../queue/orchestrator-scope.mjs";
 import {
   OPERATOR_DECISION,
   agentRole,
@@ -13,10 +13,11 @@ import {
   describeReadonlySubagentBashDenial,
   describeSubagentWriteDenial,
   mainBashAllowed,
-  operatorReadRoots,
   qaBashAllowed,
   qaPathAllowed,
+  readRefusal,
   readonlySubagentBashAllowed,
+  sweepsSecrets,
 } from "../queue/operator-scope.mjs";
 
 const WRITE_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
@@ -35,15 +36,18 @@ function absoluteGlobTarget(toolName, toolInput) {
   return typeof glob === "string" && isAbsolute(glob) ? globStaticPrefix(glob) : null;
 }
 
-// Deny reason of a read outside the operator's roots, its own target and any absolute glob it carries both judged, or null.
+// Deny reason of a read the operator may not make (the secrets file, a `.env*` file, an unresolvable path, or a Grep that would sweep
+// the secrets file), its own target and any absolute glob it carries both judged; null when the read is allowed.
 function readReason(input, env) {
-  const session = { transcriptPath: input.transcript_path, sessionId: input.session_id };
-  const { roots, registryError } = operatorReadRoots(env, session);
   const target = readTarget(input.tool_name, input.tool_input, input.cwd);
   const globTarget = absoluteGlobTarget(input.tool_name, input.tool_input);
   const targets = globTarget === null ? [target] : [target, globTarget];
-  const outside = targets.find((path) => !insideRoots(path, roots));
-  return outside === undefined ? null : describeReadDenial({ target: outside, roots, registryError });
+  for (const path of targets) {
+    const refusal = readRefusal(path, env);
+    if (refusal) return describeReadDenial({ target: path, refusal, env });
+  }
+  if (input.tool_name === "Grep" && sweepsSecrets(target, env)) return describeReadDenial({ target, refusal: "sweep", env });
+  return null;
 }
 
 // Deny reason of a call whose tool_input is not an object, for a tool that must carry one to be judged, or null.
