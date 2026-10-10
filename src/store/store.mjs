@@ -40,6 +40,7 @@
  * @property {(id: number) => Promise<{projectKey: string|null}>} jobSpawnRefs the facts the runtime records in a run's job block before the spawn
  * @property {(options?: object) => Promise<object[]>} listJobs
  * @property {(spec: {query: string, projectId: string, excludeJobId?: number, limit?: number}) => Promise<{id: number, ref: string, slug: string|null, title: string|null, status: string, pr_url: string|null, finished_at: string|null}[]>} searchJobs up to five jobs of one project whose slug, brief or notice match the query, best first
+ * @property {(spec: {projectId: string, ids: number[]}) => Promise<{id: number, ref: string, slug: string|null, title: string|null, status: string, pr_url: string|null, finished_at: string|null, branch: string|null, notice: string|null}[]>} jobsByIds the jobs of one project among the given ids, in the given order; an unknown id or another project's is absent
  * @property {() => Promise<Record<string, number>>} countsByStatus
  * @property {() => Promise<number>} countBlockedGates gated jobs a preflight block stopped
  * @property {() => Promise<number>} countActiveJobs
@@ -242,6 +243,7 @@ export const STORE_CONTRACT = Object.freeze({
     "jobSpawnRefs",
     "listJobs",
     "searchJobs",
+    "jobsByIds",
     "countsByStatus",
     "countBlockedGates",
     "countActiveJobs",
@@ -329,6 +331,7 @@ export const READ_ONLY_METHODS = Object.freeze([
   "jobs.jobSpawnRefs",
   "jobs.listJobs",
   "jobs.searchJobs",
+  "jobs.jobsByIds",
   "jobs.listWithSlug",
   "jobs.listOpenJobs",
   "jobs.listNamedJobs",

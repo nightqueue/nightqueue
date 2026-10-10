@@ -193,6 +193,14 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **The pull request footer names the job.** A job's body ends with `Opened by nightqueue · J-<n>`,
+  then ` · <kind> <ref>` when the job has an origin (`Opened by nightqueue · J-12 · linear MK-42`);
+  a run outside a job keeps `Opened by nightqueue`.
+- **The triager's `## Related jobs` pins the jobs a prompt cites.** A `J-<n>` or a GitHub pull
+  request URL in the job prompt or the query resolves, by exact lookup within the project, to a
+  `cited` line (status, PR URL, branch, first notice line) above the search hits, which never
+  repeat it; a citation of no job of the project gets one line saying so, and the caller's own
+  job adds nothing.
 - The studio timeline wire always carries the nine slots, with the run `tier` and, per slot, its
   routing `agent` and a `skipped` record; the passed-over state is renamed `skip` → `skipped`.
 - **The studio Files card and file drawer.** Each file is one button row (`path · kind icon ·

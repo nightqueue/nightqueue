@@ -6,6 +6,7 @@ import { clip, section } from "../hooks/block.mjs";
 import { lessonIdsFromRefs, recordInjected, seenRefs } from "../hooks/state.mjs";
 import { capMarkdown } from "../integrations/enrich.mjs";
 import { LESSON_TARGETS } from "../memory/lessons.mjs";
+import { resolveCitations } from "../queue/job-citations.mjs";
 import { isRunPath } from "../queue/resume.mjs";
 import { callerJobId } from "../queue/retry.mjs";
 import { openStore } from "../store/open.mjs";
@@ -18,14 +19,16 @@ const WHOLE_RUN = { reinjectAfter: Number.MAX_SAFE_INTEGER };
 const PHASE_LIMIT = 4;
 const INDEX_LIMIT = 40;
 const LINE_MAX = 300;
+const NOTICE_MAX = 200;
 
 // What the caller's own job row says about this run: the session whose injections are already spent, and the project every recall reads.
 export async function callerContext(env) {
   const own = callerJobId(env);
-  if (own === null) return { sessionId: null, project: null, projectId: null, slug: null };
+  if (own === null) return { sessionId: null, project: null, projectId: null, slug: null, prompt: null };
   const row = await openStore(env).jobs.getJob(own);
   const session = typeof row?.session_id === "string" ? row.session_id.trim() : "";
-  return { sessionId: session || null, project: row?.project ?? null, projectId: row?.project_id ?? null, slug: row?.slug ?? null };
+  const prompt = typeof row?.prompt === "string" ? row.prompt : null;
+  return { sessionId: session || null, project: row?.project ?? null, projectId: row?.project_id ?? null, slug: row?.slug ?? null, prompt };
 }
 
 // Lesson ids this run already saw - the whole session, not a rolling window - merged with the ones the call excluded by hand.
@@ -99,12 +102,46 @@ function jobLine(job) {
   return [`- [${job.ref}]`, name ? clip(name, LINE_MAX) : null, `[${facts}]`].filter(Boolean).join(" ");
 }
 
-// The earlier jobs the triager should know about before judging a request; any other phase, a run without an owner or a failed search gets nothing.
-async function jobSection({ target, projectId, query, excludeJobId }, env) {
-  if (target !== "triager" || !projectId || typeof query !== "string" || !query.trim()) return "";
+// One cited job line of the triager block: its reference, its title or slug, where it stands with its PR and branch, and the first line of its notice.
+function citedLine(job) {
+  const name = job.title ?? job.slug;
+  const facts = ["cited", job.status, job.pr_url ? `PR ${job.pr_url}` : null, job.branch ? `branch ${job.branch}` : null, finishedDayOf(job.finished_at)];
+  const notice = job.notice ? `notice: ${clip(job.notice, NOTICE_MAX)}` : null;
+  return [`- [${job.ref}]`, name ? clip(name, LINE_MAX) : null, `[${facts.filter(Boolean).join(" · ")}]`, notice].filter(Boolean).join(" ");
+}
+
+// One line of the Related jobs block, by what the entry is: a search hit, a cited job, or a citation the project does not resolve.
+function relatedLine(entry) {
+  if (entry.kind === "hit") return jobLine(entry.job);
+  if (entry.kind === "cited") return citedLine(entry.job);
+  if (entry.kind === "missing-job") return `- [${entry.ref}] cited, not found in this project`;
+  if (entry.kind === "missing-pr") return `- [PR] ${entry.url} cited, no job of this project opened it`;
+  if (entry.kind === "unavailable-job") return `- [${entry.ref}] cited, could not be looked up`;
+  if (entry.kind === "unavailable-pr") return `- [PR] ${entry.url} cited, could not be looked up`;
+  return `- [PR] ${entry.url} cited, opened by more than one job of this project: ${entry.refs.join(", ")}`;
+}
+
+// The project's jobs matching a query, best first; an empty query or a failed search answers none.
+async function searchedJobs(store, { projectId, query, excludeJobId }) {
+  if (typeof query !== "string" || !query.trim()) return [];
   try {
-    const jobs = await openStore(env).jobs.searchJobs({ projectId, query, excludeJobId });
-    return section("Related jobs", jobs, jobLine);
+    return await store.jobs.searchJobs({ projectId, query, excludeJobId });
+  } catch {
+    return [];
+  }
+}
+
+// The earlier jobs the triager should know about before judging a request: the ones the job prompt or the query cites first, then the search hits; any other phase, a run without an owner or a failed read gets nothing.
+async function jobSection({ target, projectId, query, prompt, excludeJobId }, env) {
+  if (target !== "triager" || !projectId) return "";
+  try {
+    const store = openStore(env);
+    const text = [prompt, query].filter((part) => typeof part === "string").join("\n");
+    const resolved = await resolveCitations(store, { projectId, text, ownJobId: excludeJobId });
+    const cited = resolved.filter((entry) => entry.kind !== "own");
+    const pinned = new Set(cited.filter((entry) => entry.kind === "cited").map((entry) => entry.job.id));
+    const hits = (await searchedJobs(store, { projectId, query, excludeJobId })).filter((job) => !pinned.has(job.id));
+    return section("Related jobs", [...cited, ...hits.map((job) => ({ kind: "hit", job }))], relatedLine);
   } catch {
     return "";
   }
@@ -161,7 +198,7 @@ export async function phaseContextBlock({ target, query, project, repoRoot, excl
     section("Applicable lessons", lessons, lessonLine),
     section("Project memory", memories, memoryLine),
     await indexSection({ target, projectId: owner.id, repoRoot, query }, env),
-    await jobSection({ target, projectId: owner.id, query, excludeJobId: callerJobId(env) }, env),
+    await jobSection({ target, projectId: owner.id, query, prompt: caller.prompt, excludeJobId: callerJobId(env) }, env),
     originSection({ target, caller }, env),
   ].filter(Boolean);
   return { project: owner.name, block: sections.join("\n\n") };
