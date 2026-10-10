@@ -302,7 +302,7 @@ export interface Project {
   exists: boolean;
 }
 
-export type TerminalKind = "session" | "operator";
+export type TerminalKind = "session" | "operator" | "connect";
 
 export interface TerminalExit {
   code: number | null;
@@ -336,7 +336,7 @@ export interface TerminalCreated {
   reused: boolean;
 }
 
-export type TerminalRequest = { kind: "session"; job: string; instruction?: string } | { kind: "operator"; project?: string; instruction?: string };
+export type TerminalRequest = { kind: "session"; job: string; instruction?: string } | { kind: "operator"; project?: string; instruction?: string } | { kind: "connect"; provider: string };
 
 export type RunnerChoice =
   | { mode: "drain" }
@@ -425,8 +425,50 @@ export interface ProjectDestination {
   lastNotice: LastNotice | null;
 }
 
+export type ModulePlace = "machine" | "home" | "org";
+
+export interface ModuleField {
+  name: string;
+  format: string | null;
+  required: boolean;
+  default: string | null;
+}
+
+export interface ModuleAddForm {
+  secretField: string | null;
+  secretLabel: string;
+  nameRequired: boolean;
+  orgRequired: boolean;
+  fields: ModuleField[];
+}
+
+export interface ModuleAmbient {
+  statusPath: string;
+  command: string | null;
+}
+
+export interface ModuleCard {
+  kind: string;
+  label: string;
+  description: string;
+  place: ModulePlace;
+  cardinality: "one" | "many" | null;
+  add: ModuleAddForm | null;
+  ambient: ModuleAmbient | null;
+}
+
+export interface AmbientStatus {
+  kind: string;
+  installed: boolean;
+  authenticated: boolean | null;
+  login: string | null;
+  host: string | null;
+  checkedAt: string | null;
+}
+
 export interface IntegrationsView {
   orgs: OrgSummary[];
   connections: ConnectionRow[];
   projects: ProjectDestination[];
+  modules: ModuleCard[];
 }

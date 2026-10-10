@@ -15,7 +15,6 @@ import { openDb } from "../src/memory/db.mjs";
 import { projectByName } from "../src/memory/registry.mjs";
 import { orgIdOf } from "../test-support/memory.mjs";
 
-const QUESTION = `GitHub CLI is authenticated as ${FAKE_GH_LOGIN} — import its token as connection "gh"? [Y/n] `;
 const PACKAGE_ROOT = fileURLToPath(new URL("../", import.meta.url)).replace(/\/$/, "");
 const VERSION = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8")).version;
 
@@ -136,102 +135,35 @@ test("the semantic recall question is asked once and the second init never bring
   assert.equal(second.out[0], `host already installed (v${VERSION}) - nothing to do`, second.out.join("\n"));
 });
 
-test("--gh imports the token of the GitHub CLI, binds it to the org and reports the connection test", async (t) => {
-  const host = makeAuthenticatedHost(t, "init-gh");
-  const repo = makeRepo(t, "init-gh-repo");
-  const { ctx, out, text } = makeCtx(host.env);
-
-  assert.equal(await run(["init", "--no-path", repo, "--name", "api", "--gh"], ctx), 0);
-  assert.ok(out.includes("stored connection `gh` (github) and bound it to org `default`"), out.join("\n"));
-  assert.ok(out.includes(`gh (github): ok — login=${FAKE_GH_LOGIN} scopes=repo`), out.join("\n"));
-  assert.equal(bindingOf(host, "default"), "gh");
-  assert.equal(readFileSync(join(host.home, "secrets.json"), "utf8").includes(FAKE_GH_TOKEN), true);
-  assert.deepEqual(ghSubcommands(host), ["auth status", "auth token"]);
-  assert.equal(text().includes(FAKE_GH_TOKEN), false, "the token showed up in the output");
-});
-
-test("the token never shows up in any listing of the CLI", async (t) => {
-  const host = makeAuthenticatedHost(t, "init-gh-sweep");
-  const repo = makeRepo(t, "init-gh-sweep-repo");
-  const { ctx, text } = makeCtx(host.env);
-
-  assert.equal(await run(["init", "--no-path", repo, "--name", "api", "--gh"], ctx), 0);
-  for (const argv of [["connection", "list"], ["connection", "list", "--json"], ["project", "list", "--json"], ["queue", "status", "--json"]]) {
-    assert.equal(await run(argv, ctx), 0, argv.join(" "));
+test("init prints the gh status line and imports nothing, with or without the deprecated --gh", async (t) => {
+  for (const flags of [[], ["--gh"]]) {
+    const host = makeAuthenticatedHost(t, `init-gh-status${flags.length}`);
+    const { ctx, out, text } = makeCtx(host.env);
+    assert.equal(await run(["init", "--no-path", makeRepo(t, `init-gh-status-repo${flags.length}`), "--name", "api", ...flags], ctx), 0);
+    assert.ok(out.includes(`GitHub: gh is authenticated as ${FAKE_GH_LOGIN} on github.com; every job uses it`), out.join("\n"));
+    assert.deepEqual(ghSubcommands(host), ["auth status"]);
+    assert.deepEqual(JSON.parse(readFileSync(join(host.home, "secrets.json"), "utf8")).connections, {});
+    assert.equal(bindingOf(host, "default", "github"), null);
+    assert.equal(text().includes(FAKE_GH_TOKEN), false, "the token showed up in the output");
   }
-  assert.equal(text().includes(FAKE_GH_TOKEN), false, "a listing printed the token");
-  assert.equal(readFileSync(join(host.home, "secrets.json"), "utf8").includes(FAKE_GH_TOKEN), true);
 });
 
-test("an occupied slot and a name already taken stop the import, with --gh included", async (t) => {
-  const host = makeAuthenticatedHost(t, "init-gh-slot");
-  const repo = makeRepo(t, "init-gh-slot-repo");
-  const first = makeCtx(host.env);
-  assert.equal(await run(["init", "--no-path", repo, "--name", "api", "--gh"], first.ctx), 0);
-
-  const again = makeCtx(host.env);
-  assert.equal(await run(["init", "--no-path", repo, "--name", "api", "--gh"], again.ctx), 0);
-  assert.ok(again.out.includes("org `default` already uses `gh` for github; nothing to import"), again.out.join("\n"));
-  assert.deepEqual(ghSubcommands(host), ["auth status", "auth token"], "the occupied slot still called the GitHub CLI");
-
-  const other = makeRepo(t, "init-gh-slot-other");
-  const moved = makeCtx(host.env);
-  assert.equal(await run(["org", "add", "acme"], moved.ctx), 0);
-  assert.equal(await run(["connection", "remove", "gh"], moved.ctx), 0);
-  assert.equal(
-    await run(["connection", "add", "gh", "--type", "github", "--org", "acme"], makeCtx(host.env, { stdin: Readable.from(["other-secret\n"]) }).ctx),
-    0,
-  );
-  const collision = makeCtx(host.env);
-  assert.equal(await run(["init", "--no-path", other, "--name", "web", "--gh"], collision.ctx), 0);
-  assert.ok(collision.out.includes("connection `gh` already exists; run `nightqueue connection bind gh --org default`"), collision.out.join("\n"));
-  assert.equal(orgOfProject(host, "web"), "default");
-});
-
-test("without a terminal init only points at the flag, and never reads the token", async (t) => {
-  const host = makeAuthenticatedHost(t, "init-gh-no-tty");
-  const repo = makeRepo(t, "init-gh-no-tty-repo");
-  const { ctx, out } = makeCtx(host.env);
-
-  assert.equal(await run(["init", "--no-path", repo, "--name", "api"], ctx), 0);
-  assert.ok(
-    out.includes(`GitHub CLI is authenticated as ${FAKE_GH_LOGIN}; run \`nightqueue init --gh\` to import its token as connection \`gh\``),
-    out.join("\n"),
-  );
-  assert.deepEqual(ghSubcommands(host), ["auth status"]);
+test("on a terminal init asks nothing about GitHub and still only prints the status line", async (t) => {
+  const host = makeAuthenticatedHost(t, "init-gh-tty");
+  const answer = tty("y\n");
+  const { ctx, out } = makeCtx(host.env, { stdin: answer.stdin, stdout: answer.stdout });
+  assert.equal(await run(["init", "--no-path", makeRepo(t, "init-gh-tty-repo"), "--name", "api", "--key", "API"], ctx), 0);
+  assert.equal(answer.written.join("").includes("import its token"), false, answer.written.join(""));
+  assert.ok(out.some((line) => line.startsWith("GitHub: gh is authenticated as")), out.join("\n"));
   assert.deepEqual(JSON.parse(readFileSync(join(host.home, "secrets.json"), "utf8")).connections, {});
 });
 
-test("on a terminal init asks the exact question and honours the answer", async (t) => {
-  const accepted = makeAuthenticatedHost(t, "init-gh-yes");
-  const yes = tty("y\n");
-  const yesRun = makeCtx(accepted.env, { stdin: yes.stdin, stdout: yes.stdout });
-  assert.equal(await run(["init", "--no-path", makeRepo(t, "init-gh-yes-repo"), "--name", "api", "--key", "API"], yesRun.ctx), 0);
-  assert.equal(yes.written.join("").includes(QUESTION), true, `the question changed: ${yes.written.join("")}`);
-  assert.equal(bindingOf(accepted, "default"), "gh");
-  assert.deepEqual(ghSubcommands(accepted), ["auth status", "auth token"]);
-
-  const refused = makeAuthenticatedHost(t, "init-gh-no");
-  const no = tty("n\n");
-  const noRun = makeCtx(refused.env, { stdin: no.stdin, stdout: no.stdout });
-  assert.equal(await run(["init", "--no-path", makeRepo(t, "init-gh-no-repo"), "--name", "api", "--key", "API"], noRun.ctx), 0);
-  assert.equal(no.written.join("").includes(QUESTION), true);
-  assert.ok(
-    noRun.out.includes('store a token with `echo "$GITHUB_TOKEN" | nightqueue connection add gh --type github`'),
-    noRun.out.join("\n"),
-  );
-  assert.deepEqual(ghSubcommands(refused), ["auth status"]);
-  assert.deepEqual(JSON.parse(readFileSync(join(refused.home, "secrets.json"), "utf8")).connections, {});
-});
-
-test("an input that ends without an answer is a no, and the command still finishes", async (t) => {
-  const host = makeAuthenticatedHost(t, "init-gh-eof");
-  const eof = tty("");
-  const { ctx, out } = makeCtx(host.env, { stdin: eof.stdin, stdout: eof.stdout });
-
-  assert.equal(await run(["init", "--no-path", makeRepo(t, "init-gh-eof-repo"), "--name", "api", "--key", "API"], ctx), 0);
-  assert.ok(out.some((line) => line.startsWith("store a token with")), out.join("\n"));
-  assert.deepEqual(ghSubcommands(host), ["auth status"]);
+test("--no-gh prints no GitHub line and never calls the GitHub CLI", async (t) => {
+  const host = makeAuthenticatedHost(t, "init-gh-silent");
+  const { ctx, out } = makeCtx(host.env);
+  assert.equal(await run(["init", "--no-path", makeRepo(t, "init-gh-silent-repo"), "--name", "api", "--no-gh"], ctx), 0);
+  assert.equal(out.some((line) => line.includes("GitHub")), false, out.join("\n"));
+  assert.deepEqual(ghSubcommands(host), []);
 });
 
 test("a GitHub CLI that is missing or logged out costs one line and never an error", async (t) => {
@@ -239,19 +171,15 @@ test("a GitHub CLI that is missing or logged out costs one line and never an err
   missing.env.NIGHTQUEUE_GH_BIN = join(missing.configDir, "does-not-exist");
   const absent = makeCtx(missing.env);
   assert.equal(await run(["init", "--no-path", makeRepo(t, "init-gh-missing-repo"), "--name", "api", "--gh"], absent.ctx), 0);
-  assert.ok(
-    absent.out.includes('GitHub CLI not found; store a token with `echo "$GITHUB_TOKEN" | nightqueue connection add gh --type github`'),
-    absent.out.join("\n"),
-  );
+  assert.ok(absent.out.includes("GitHub CLI not found; install it (https://cli.github.com)"), absent.out.join("\n"));
+  assert.deepEqual(JSON.parse(readFileSync(join(missing.home, "secrets.json"), "utf8")).connections, {});
 
   const loggedOut = makeHostEnv(t, "init-gh-logged-out");
   const anonymous = makeCtx(loggedOut.env);
   assert.equal(await run(["init", "--no-path", makeRepo(t, "init-gh-logged-out-repo"), "--name", "api", "--gh"], anonymous.ctx), 0);
-  assert.ok(
-    anonymous.out.includes("GitHub CLI is not authenticated; run `gh auth login` and then `nightqueue init --gh`"),
-    anonymous.out.join("\n"),
-  );
+  assert.ok(anonymous.out.includes("GitHub CLI is not authenticated; run `gh auth login`"), anonymous.out.join("\n"));
   assert.deepEqual(ghSubcommands(loggedOut), ["auth status"]);
+  assert.deepEqual(JSON.parse(readFileSync(join(loggedOut.home, "secrets.json"), "utf8")).connections, {});
 });
 
 test("--gh together with --no-gh is refused before anything is installed", async (t) => {
@@ -456,7 +384,7 @@ test("the login is read from either stream of `gh auth status`", () => {
     env: {},
     spawnSyncImpl: () => ({ status: 0, stdout: "", stderr: "  Logged in to github.com account octocat (keyring)\n" }),
   });
-  assert.deepEqual(onStderr, { authenticated: true, login: "octocat", missing: false });
+  assert.deepEqual(onStderr, { authenticated: true, login: "octocat", host: "github.com", missing: false });
 
   const onStdout = ghAuthStatus({
     env: {},
@@ -465,5 +393,5 @@ test("the login is read from either stream of `gh auth status`", () => {
   assert.equal(onStdout.login, "octocat");
 
   const unparsed = ghAuthStatus({ env: {}, spawnSyncImpl: () => ({ status: 0, stdout: "who knows", stderr: "" }) });
-  assert.deepEqual(unparsed, { authenticated: true, login: null, missing: false });
+  assert.deepEqual(unparsed, { authenticated: true, login: null, host: null, missing: false });
 });

@@ -126,6 +126,11 @@ export function loadSecrets(env = process.env, { warn = warnToStderr } = {}) {
   return raw === null ? emptySecrets() : normalizeSecrets(raw);
 }
 
+// The JSON of secrets.json exactly as it is on disk, or null when there is none; only a migration reads it this way.
+export function loadRawSecrets(env = process.env) {
+  return readJsonFile(secretsPath(env), null);
+}
+
 // Writes secrets.json atomically and with mode 0600.
 export function saveSecrets(secrets, env = process.env) {
   ensureHome(env);

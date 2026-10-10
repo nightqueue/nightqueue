@@ -1,6 +1,6 @@
 import { UserError } from "./errors.mjs";
 import { assertName, emptySlots } from "./schema.mjs";
-import { connectionTypes } from "../integrations/registry.mjs";
+import { connectionTypes, providerOf } from "../integrations/registry.mjs";
 
 export const CONNECTION_TYPES = connectionTypes();
 
@@ -8,6 +8,8 @@ export const CONNECTION_TYPES = connectionTypes();
 export function requireType(type) {
   const descriptor = CONNECTION_TYPES.get(type);
   if (!descriptor) {
+    const ambient = providerOf(type)?.ambient;
+    if (ambient) throw new UserError(`${type} is not a stored connection: ${ambient.hint}`);
     throw new UserError(`unknown connection type \`${type}\`; supported: ${[...CONNECTION_TYPES.keys()].join(", ")}`);
   }
   return descriptor;

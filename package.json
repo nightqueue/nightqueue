@@ -1,7 +1,7 @@
 {
   "name": "@nightqueue/nq",
   "version": "0.6.0",
-  "description": "Autonomous queue of coding agents with its own memory. Bundles the Claude Code plugin and the nightqueue configuration CLI.",
+  "description": "Issues in, pull requests with proof out. A local queue of coding agents that fixes and proves each job — reproducing and root-causing the risky ones. Runs on Claude Code, on your machine.",
   "license": "BUSL-1.1",
   "author": {
     "name": "Maykon Vinicius",

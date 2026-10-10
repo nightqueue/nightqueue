@@ -24,7 +24,6 @@ interface ConnectionRowProps {
 }
 
 const USAGE_TEXT: Record<string, string> = {
-  github: "clone, push and PRs of the projects of its orgs",
   linear: "source of tracker tickets for jobs",
   sentry: "error issues of the projects of its orgs",
 };

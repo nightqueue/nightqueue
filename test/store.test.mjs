@@ -100,7 +100,7 @@ test("loading secrets warns about an open mode without refusing", (t) => {
 test("saveConfig round-trips through loadConfig", (t) => {
   const env = makeEnv(t, { nested: true });
   const config = emptyConfig();
-  config.orgConnections["01J0000000000000000000ACME"] = Object.assign(emptySlots(), { github: "gh" });
+  config.orgConnections["01J0000000000000000000ACME"] = Object.assign(emptySlots(), { sentry: "st" });
   saveConfig(config, env);
   assert.equal(modeOf(env.NIGHTQUEUE_HOME), 0o700);
   assert.deepEqual(loadConfig(env), config);

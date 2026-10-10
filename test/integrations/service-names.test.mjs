@@ -16,6 +16,7 @@ const GENERIC_FILES = [
   "src/integrations/origin.mjs",
   "src/integrations/settings.mjs",
   "src/integrations/connections.mjs",
+  "src/studio/integrations.mjs",
 ];
 
 // The text of a repository file.

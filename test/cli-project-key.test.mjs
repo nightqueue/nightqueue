@@ -163,7 +163,7 @@ test("org add suggests or asks a key, org key renames it, and org list shows the
   assert.equal(registry.ownerByKey(openDb(env), "DW")?.orgId, registry.orgByName(openDb(env), "dlweb").id);
 
   const text = await cli(env, ["org", "list"]);
-  assert.ok(text.out.includes("  dlweb  DLW  github=- sentry=-  projects=0"), text.out.join("\n"));
+  assert.ok(text.out.includes("  dlweb  DLW  sentry=-  projects=0"), text.out.join("\n"));
 
   const json = JSON.parse((await cli(env, ["org", "list", "--json"])).out[0]);
   const dlweb = json.orgs.find((org) => org.name === "dlweb");

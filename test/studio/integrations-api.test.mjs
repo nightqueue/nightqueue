@@ -3,10 +3,11 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { join } from "node:path";
 import { test } from "node:test";
 import { lockPath } from "../../src/config/lock.mjs";
-import { secretsPath } from "../../src/config/paths.mjs";
+import { configPath, secretsPath } from "../../src/config/paths.mjs";
 import { loadConfig, loadSecrets, saveSecrets } from "../../src/config/store.mjs";
 import { openStore } from "../../src/store/open.mjs";
-import { ensureProject, makeHome, orgIdOf } from "../../test-support/memory.mjs";
+import { isolatedHostVars } from "../../test-support/host.mjs";
+import { ensureProject, makeDir, makeHome, orgIdOf } from "../../test-support/memory.mjs";
 import { setIntegrations } from "../../test-support/origin-provider.mjs";
 import { send, startStudio, studioCookie } from "../../test-support/studio.mjs";
 
@@ -352,4 +353,112 @@ test("a cookie write to the integrations without the studio's Origin is refused"
   const noOrigin = await send(studio.port, { method: "POST", path: "/api/integrations/discord", body, headers: { cookie: studioCookie(studio.port), "content-type": "application/json" } });
   assert.equal(noOrigin.status, 403);
   assert.equal(home.discord.calls.length, 0);
+});
+
+const LINEAR_KEY = "lin_api_secretKey0123456789";
+const SENTRY_TOKEN = "sntrys_secretToken0123456789";
+
+// A simulated Linear and Sentry: Linear accepts only LINEAR_KEY, Sentry answers the org slug of any token it is set to accept.
+function fakeServices() {
+  const fake = { calls: [], sentryStatus: 200 };
+  fake.impl = async (url, options) => {
+    const auth = options?.headers?.Authorization ?? options?.headers?.authorization ?? null;
+    fake.calls.push(String(url));
+    if (String(url).includes("linear.app")) {
+      const ok = auth === LINEAR_KEY;
+      return { status: ok ? 200 : 401, headers: new Map(), json: async () => ({ data: { viewer: { name: "Ana" } } }) };
+    }
+    if (String(url).includes("sentry.io")) return { status: fake.sentryStatus, headers: new Map(), json: async () => ({ slug: "acme" }) };
+    return { status: 404, headers: new Map(), json: async () => ({}) };
+  };
+  return fake;
+}
+
+// The bytes of config.json and secrets.json, null for a file that does not exist.
+function filesOf(env) {
+  return [configPath(env), secretsPath(env)].map((path) => (existsSync(path) ? readFileSync(path, "utf8") : null));
+}
+
+test("with zero connections the view answers the four module cards in Discord, Linear, GitHub, Sentry order", async (t) => {
+  const home = await integrationsHome(t, "integrations-modules");
+  const view = await home.call("GET", "/api/integrations");
+  assert.equal(view.status, 200);
+  assert.deepEqual(view.body.connections, []);
+  assert.deepEqual(view.body.modules.map((module) => [module.kind, module.place]), [["discord", "org"], ["linear", "home"], ["github", "machine"], ["sentry", "org"]]);
+  assert.deepEqual(view.body.modules[2].ambient, { statusPath: "/api/integrations/github/status", command: "gh auth login --web" });
+});
+
+test("an add of a kind read from the machine is a 409, an unknown kind a 404, and neither writes", async (t) => {
+  const home = await integrationsHome(t, "integrations-kinds");
+  const github = await home.call("POST", "/api/integrations/github", { token: "ghp_x" });
+  assert.deepEqual([github.status, github.body.code], [409, "ambient"]);
+  assert.match(github.body.error, /gh auth login/);
+  assert.equal((await home.call("POST", "/api/integrations/jira", { token: "x" })).status, 404);
+  assert.deepEqual(filesOf(home.env), [null, null]);
+});
+
+test("a Linear add stores one home-wide connection with its test; a second is a 409 and a refused key a 502, both writing nothing", async (t) => {
+  const services = fakeServices();
+  const home = await integrationsHome(t, "integrations-linear", { fetchImpl: services.impl });
+  const refused = await home.call("POST", "/api/integrations/linear", { apiKey: "lin_api_wrong" });
+  assert.deepEqual([refused.status, refused.body.code, refused.body.status], [502, "refused", 401]);
+  assert.deepEqual(filesOf(home.env), [null, null]);
+  const added = await home.call("POST", "/api/integrations/linear", { apiKey: LINEAR_KEY });
+  assert.equal(added.status, 201, JSON.stringify(added.body));
+  assert.deepEqual([added.body.connection.name, added.body.connection.type, added.body.connection.scope, added.body.connection.lastTest.ok], ["linear", "linear", "home", true]);
+  assert.equal(loadSecrets(home.env, QUIET).connections.linear.apiKey, LINEAR_KEY);
+  const before = filesOf(home.env);
+  const again = await home.call("POST", "/api/integrations/linear", { name: "linear-two", apiKey: LINEAR_KEY });
+  assert.deepEqual([again.status, again.body.code], [409, "duplicate"]);
+  assert.equal((await home.call("POST", "/api/integrations/linear", { apiKey: LINEAR_KEY, org: "dlw" })).status, 400);
+  assert.deepEqual(filesOf(home.env), before);
+});
+
+test("a Sentry add fills an empty org slot; a second one for that org is a 409 naming the bound connection and writing nothing", async (t) => {
+  const services = fakeServices();
+  const home = await integrationsHome(t, "integrations-sentry", { fetchImpl: services.impl });
+  const added = await home.call("POST", "/api/integrations/sentry", { org: "dlw", token: SENTRY_TOKEN, extra: { org: "acme" } });
+  assert.equal(added.status, 201, JSON.stringify(added.body));
+  assert.deepEqual([added.body.connection.name, added.body.connection.orgs], ["sentry-dlw", ["dlw"]]);
+  assert.equal(loadConfig(home.env, QUIET).orgConnections[orgIdOf(home.env, "dlw")].sentry, "sentry-dlw");
+  assert.equal(loadSecrets(home.env, QUIET).connections["sentry-dlw"].org, "acme");
+  const before = filesOf(home.env);
+  const occupied = await home.call("POST", "/api/integrations/sentry", { name: "sentry-two", org: "dlw", token: SENTRY_TOKEN, extra: { org: "acme" } });
+  assert.deepEqual([occupied.status, occupied.body.code, occupied.body.connection], [409, "occupied", "sentry-dlw"]);
+  assert.match(occupied.body.error, /sentry-dlw/);
+  assert.equal((await home.call("POST", "/api/integrations/sentry", { name: "sentry-x", org: "clareza", token: SENTRY_TOKEN })).status, 400);
+  assert.equal((await home.call("POST", "/api/integrations/sentry", { name: "sentry-y", org: "clareza", token: "", extra: { org: "acme" } })).body.code, "invalid-token");
+  assert.deepEqual(filesOf(home.env), before);
+});
+
+test("no answer of a Linear or Sentry add, accepted or refused, carries the submitted secret", async (t) => {
+  const services = fakeServices();
+  const home = await integrationsHome(t, "integrations-secret-leak", { fetchImpl: services.impl });
+  await home.call("POST", "/api/integrations/linear", { apiKey: LINEAR_KEY });
+  await home.call("POST", "/api/integrations/linear", { apiKey: LINEAR_KEY });
+  await home.call("POST", "/api/integrations/sentry", { org: "dlw", token: SENTRY_TOKEN, extra: { org: "acme" } });
+  await home.call("POST", "/api/integrations/sentry", { name: "s2", org: "dlw", token: SENTRY_TOKEN, extra: { org: "acme" } });
+  services.sentryStatus = 401;
+  await home.call("POST", "/api/integrations/sentry", { org: "clareza", token: SENTRY_TOKEN, extra: { org: "acme" } });
+  await home.call("GET", "/api/integrations");
+  for (const text of home.answers) assert.ok(!text.includes(LINEAR_KEY) && !text.includes(SENTRY_TOKEN), `a secret leaked: ${text.slice(0, 200)}`);
+});
+
+test("the GitHub status reads the machine's gh: the account when logged in, installed false when missing, one probe for parallel calls", async (t) => {
+  const host = isolatedHostVars(makeDir(t, "integrations-gh-host"));
+  const env = { ...host, NIGHTQUEUE_FAKE_GH_STATE: "authenticated", NIGHTQUEUE_FAKE_GH_LOGIN: "dev1", NIGHTQUEUE_FAKE_GH_HOST: "ghe.acme.io", NIGHTQUEUE_FAKE_GH_SLEEP_MS: "300" };
+  const home = await integrationsHome(t, "integrations-gh-status", { env });
+  const [first, second] = await Promise.all([home.call("GET", "/api/integrations/github/status"), home.call("GET", "/api/integrations/github/status")]);
+  assert.equal(first.status, 200, JSON.stringify(first.body));
+  const { checkedAt, ...status } = first.body;
+  assert.deepEqual(status, { kind: "github", installed: true, authenticated: true, login: "dev1", host: "ghe.acme.io" });
+  assert.equal(typeof checkedAt, "string");
+  assert.equal(second.body.login, "dev1");
+  const probes = readFileSync(host.NIGHTQUEUE_FAKE_GH_LOG, "utf8").split("\n").filter((line) => line === JSON.stringify(["auth", "status"]));
+  assert.equal(probes.length, 1);
+  assert.equal((await home.call("GET", "/api/integrations/sentry/status")).status, 404);
+
+  const missing = await integrationsHome(t, "integrations-gh-missing", { env: { ...host, NIGHTQUEUE_GH_BIN: join(makeDir(t, "integrations-gh-none"), "gh") } });
+  const absent = await missing.call("GET", "/api/integrations/github/status");
+  assert.deepEqual([absent.status, absent.body.installed, absent.body.authenticated, absent.body.login], [200, false, false, null]);
 });

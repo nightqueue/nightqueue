@@ -555,6 +555,34 @@ test("a create from inside a job against the runner's home is refused, and a tem
   assert.equal((await allowed.create({ kind: "operator", project: "alpha" })).reused, false);
 });
 
+test("a connect terminal runs the provider's registry login in the home, is reused while live, and records no token", async (t) => {
+  const GH = "/fake/bin/gh";
+  const env = { ...makeHome(t, "term-connect"), NIGHTQUEUE_GH_BIN: GH, GH_TOKEN_PROBE: "gho_SECRET_never_recorded" };
+  const { manager, fake } = makeManager(t, env);
+  const { terminal, reused } = await manager.create({ kind: "connect", provider: "github" });
+  assert.equal(reused, false);
+  assert.deepEqual([terminal.kind, terminal.label, terminal.cwd, terminal.job_ref], ["connect", "GitHub login", homeDir(env), null]);
+  const child = fake.spawned[0];
+  assert.deepEqual([child.file, child.args, child.options.cwd], [GH, ["auth", "login", "--web"], homeDir(env)]);
+  const again = await manager.create({ kind: "connect", provider: "github" });
+  assert.deepEqual([again.reused, again.terminal.id, fake.spawned.length], [true, terminal.id, 1]);
+  const registration = readFileSync(join(studioTerminalsDir(env), `${PORT}-${terminal.id}.json`), "utf8");
+  assert.equal(JSON.parse(registration).entry, GH);
+  assert.ok(!registration.includes("gho_SECRET"), registration);
+});
+
+test("a connect terminal refuses a provider without a connect action, and any cwd, command or instruction", async (t) => {
+  const env = makeHome(t, "term-connect-refused");
+  const { manager, fake } = makeManager(t, env);
+  for (const provider of ["jira", "../x", "discord", 7]) {
+    assert.equal((await refusal(manager.create({ kind: "connect", provider }))).status, 404, String(provider));
+  }
+  for (const extra of [{ cwd: "/" }, { command: "rm" }, { instruction: "log in" }]) {
+    assert.equal((await refusal(manager.create({ kind: "connect", provider: "github", ...extra }))).status, 400, JSON.stringify(extra));
+  }
+  assert.equal(fake.spawned.length, 0);
+});
+
 test("ps lines and resize frames are read strictly", () => {
   assert.deepEqual(parsePsLine("Mon Oct  5 14:00:00 2026     /fake/bin/claude --agent x\n"), { lstart: LSTART, command: "/fake/bin/claude --agent x" });
   assert.equal(parsePsLine(""), null);

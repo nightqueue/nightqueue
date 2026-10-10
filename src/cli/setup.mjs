@@ -1,8 +1,9 @@
 import { existsSync } from "node:fs";
 import { isDeepStrictEqual } from "node:util";
 import { configPath, homeDir, secretsPath, shimNames } from "../config/paths.mjs";
-import { DEFAULT_ORG_NAME, emptyConfig, emptySecrets } from "../config/schema.mjs";
-import { ensureHome } from "../config/store.mjs";
+import { DEFAULT_ORG_NAME, emptyConfig, emptySecrets, hasRetiredConnections, retiredConnectionCount, retiredSlotCount } from "../config/schema.mjs";
+import { ensureHome, loadConfig, loadRawConfig, loadRawSecrets, loadSecrets } from "../config/store.mjs";
+import { retiredConnectionKinds } from "../integrations/registry.mjs";
 import { claudeCommandLine, runClaude } from "../host/claude.mjs";
 import {
   DESKTOP_LABEL,
@@ -124,6 +125,18 @@ export function setupHome(ctx, report) {
     detail: "0600",
     report,
   });
+  retireStoredConnections(ctx, report);
+}
+
+// Rewrites config.json and secrets.json once when they still hold a slot or a record of a kind that is no longer stored.
+function retireStoredConnections(ctx, report) {
+  const rawSecrets = loadRawSecrets(ctx.env);
+  const rawConfig = loadRawConfig(ctx.env);
+  if (!hasRetiredConnections(rawConfig, rawSecrets)) return;
+  ctx.saveConfig(loadConfig(ctx.env), ctx.env);
+  ctx.saveSecrets(loadSecrets(ctx.env), ctx.env);
+  const label = `stored ${retiredConnectionKinds().join(", ")} connection`;
+  report.step(label, "removed", `${retiredConnectionCount(rawSecrets)} record(s), ${retiredSlotCount(rawConfig)} org slot(s)`);
 }
 
 // Registers the MCP server at user scope, reading the current state from disk instead of asking the CLI.

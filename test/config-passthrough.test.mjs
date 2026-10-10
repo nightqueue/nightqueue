@@ -65,7 +65,7 @@ test("config writes made before the first database open keep the v17 registry, a
   assert.deepEqual(Object.keys(declined.projects), ["api", "web"]);
   assert.deepEqual(declined.handAdded, { keep: true });
 
-  writeFileSync(secretsPath(env), `${JSON.stringify({ version: 1, connections: { other: { type: "github", token: "t" } } })}\n`, { mode: 0o600 });
+  writeFileSync(secretsPath(env), `${JSON.stringify({ version: 1, connections: { other: { type: "jira", token: "t" } } })}\n`, { mode: 0o600 });
   assert.equal(await run(["connection", "remove", "other"], ctx), 0);
 
   const listed = JSON.parse(runCli(env, ["project", "list", "--json"]).stdout).projects;
