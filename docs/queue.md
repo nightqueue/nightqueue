@@ -1052,7 +1052,8 @@ agent, never a second job, never queue work:
    step's data records `merger` (`resolved`, `unresolved` or `not-eligible`, with the
    reason), and each run of the agent logs to `logs/merger-<job>-<stamp>.log` in the home.
    The throwaway worktree is removed whatever happens. A pull request `BEHIND` its base (mergeable, but GitHub refuses to merge it
-   while it is not up to date) goes through the same rebase, suite and push, records
+   while it is not up to date) goes through the same rebase, suite and push (the merge step
+   does the same when the base moves later in the close), records
    `pushed <old> -> <new>`, and then waits in the same run for the checks of the new head:
    `gh pr checks` is polled with a growing gap (10 s up to 60 s), the checklist and a
    foreground close show `waiting for checks on <sha>: 2/3 done`, and the close lease is
@@ -1133,6 +1134,15 @@ call. A head that changes during the step (on that read, or under a failed pinne
 is judged again; after 2 such loopbacks the step stops with `head-moved` - `the head changed 2
 times during the close; nothing was merged` - and the last head read is neither merged nor
 recorded.
+
+Before the merge call the step reads the pull request's merge state; a head GitHub shows
+`BEHIND`, or a pinned merge GitHub refuses as not up to date while the pull request stays open
+at the same head, is updated by the merge step itself exactly like the conflict step does
+(rebase onto the current base, suite unless CI gates it, push, checks wait on the new head;
+`--force` skips the suite and the wait) and merged again; after 2 such updates in one run the
+step stops with `base-moved` (main keeps moving), merging nothing, and `queue close <id>`
+resumes from the conflict step. A merge that leaves no merge commit for any other reason is
+still `merge-without-sha`.
 
 Any push by the close reopens preflight, which runs again in the same run on the pushed head
 - the checks of that head are waited for, even when none is registered yet - and its note ends

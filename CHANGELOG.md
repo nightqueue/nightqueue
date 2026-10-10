@@ -149,6 +149,9 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- close: a pull request main moved past during the checks wait is rebased, waited on and
+  merged in the same run instead of stopping at `merge-without-sha`; a base that keeps moving
+  stops at `base-moved`.
 - A job that was gated or released and retried now shows all of its attempts instead of the
   last one. Schema v23 keeps one `job_attempts` row per claim (start, end, outcome, exit reason,
   inner `spawns`, tokens and cost), and the job's `tokens_*`, `cache_*`, `cost_usd`, host and
