@@ -310,11 +310,17 @@ prompt.
 history of the job's project - each job's slug, brief and notice - as a `## Related jobs`
 block of its phase context: at most five jobs, best first, one
 `- [J-<n>] <title> [<status> · PR #<n> · <YYYY-MM-DD>]` line each, never the caller's own job.
+Jobs cited in the job prompt or the query, by `J-<n>` or by a GitHub pull request URL, of the
+same project and never the caller's own, come first: up to five on top of the five matches,
+each marked `cited` with its status, PR URL, branch, finish day and the first line of its
+notice, and a match already cited is not repeated. A citation that resolves to no job of the
+project (an unknown ref, another project's job, a pull request no job of the project opened, or
+one several of them opened) gets one line saying so.
 
 **Private by design.** Decisions live only in `$NIGHTQUEUE_HOME/nightqueue.db`, the
 same file as the rest of the memory. The runtime writes nothing into the
 repository and publishes nothing; the one thing it puts in a pull request is the
-footer `nightqueue run pr` appends (`Opened by nightqueue`): no `docs/adr/` tree, no `ISSUES.md`; only an explicit `nightqueue decision export`
+footer `nightqueue run pr` appends (`Opened by nightqueue · J-<n>` inside a job, plus ` · <kind> <ref>` when the job has an origin; `Opened by nightqueue` outside a job): no `docs/adr/` tree, no `ISSUES.md`; only an explicit `nightqueue decision export`
 writes a file. The only ways in are the MCP tools below and the one deliberate
 terminal write, `nightqueue decision import` (see below), and the only ways to
 read them from a terminal are the two read-only commands
