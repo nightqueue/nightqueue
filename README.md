@@ -1,14 +1,24 @@
 # nightqueue
 
-**An autonomous queue of coding agents with its own memory.**
+**Issues in. Pull requests with proof out.**
 
 [![npm](https://img.shields.io/npm/v/%40nightqueue%2Fnq?label=npm)](https://www.npmjs.com/package/@nightqueue/nq)
 [![ci](https://github.com/nightqueue/nightqueue/actions/workflows/ci.yml/badge.svg)](https://github.com/nightqueue/nightqueue/actions/workflows/ci.yml)
 [![node](https://img.shields.io/node/v/%40nightqueue%2Fnq)](package.json)
 [![license: BUSL-1.1](https://img.shields.io/badge/license-BUSL--1.1-blue)](LICENSE)
 
+Every job is proved before it ships. Bugs and risky changes are reproduced
+first, root-caused, fixed and attacked by adversarial QA, then checked at
+runtime; a docs or config change just runs your project's own checks. The pull
+request ships with Report → Cause → Changes → QA. A job that can't prove its fix
+stops at a gate with a written notice instead of opening a PR.
+
 Queue the work during the day. Start the batch when you step away. Come back to
 pull requests — and to an agent that remembers what it learned last night.
+
+**Operate it however you work.** `nq` in the terminal, the Studio in the
+browser, or straight from Claude Code and Claude Desktop through the MCP server.
+Same queue, same pipeline, same memory underneath.
 
 <p>
   <a href="https://nightqueue.github.io">Website</a> ·
@@ -27,10 +37,11 @@ pull requests — and to an agent that remembers what it learned last night.
 ## What it is
 
 nightqueue turns a coding request into a full pipeline run instead of a chat
-session. Every request is triaged against real evidence, explored, planned,
-implemented, attacked by an adversarial QA and verified against the checks your
-project already defines — then it opens the pull request. Every phase hands off
-through a file, so a run can be inspected, resumed and audited after the fact.
+session. Bugs and risky changes are triaged against real evidence, explored,
+planned, implemented, attacked by an adversarial QA and verified against the
+checks your project already defines; a docs or config change just runs those
+checks. Then it opens the pull request. Every phase hands off through a file, so
+a run can be inspected, resumed and audited after the fact.
 
 It runs on **Claude Code**, with your own subscription, on your own machine.
 Nothing leaves it.
@@ -40,7 +51,7 @@ Nothing leaves it.
 - **A backlog, not a chat.** `nightqueue queue add` records a deliverable;
   `nightqueue queue run` works through the whole backlog unattended and comes
   back with one pull request per job.
-- **An 8-phase pipeline.** Triage, exploration, architecture, implementation,
+- **An 8-phase pipeline.** On bugs and risky changes: triage, exploration, architecture, implementation,
   adversarial QA, verification, runtime validation, commit and report — each
   phase run by a dedicated agent, each one gated by the previous artifact.
 - **A memory that compounds.** Lessons, project decisions and structural indexes
@@ -62,6 +73,8 @@ queue add ─▶ triage ─▶ explore ─▶ architect ─▶ implement ─▶ 
                     with a written notice, and `queue retry <id> --note` sends it back
 ```
 
+A low-risk change (docs, copy, config) skips straight to implement → verify → commit + PR.
+
 Each phase is a dedicated subagent with its own instructions (`plugin/agents/`),
 running inside a git worktree of your repository, in a job environment it cannot
 leave. What it learns — lessons, decisions, structural indexes of the codebase —
@@ -69,13 +82,22 @@ is written to a local SQLite home and recalled by the next job through the
 nightqueue MCP server. The full promise between the pipeline and the runner is
 written down in [docs/runtime-contract.md](docs/runtime-contract.md).
 
+## Where jobs come from, where you drive them
+
+| In | Out |
+|---|---|
+| A Linear issue, queued with `origin: {kind: "linear", ref}` over MCP (from `tracker_issues`) or `--origin linear:MK-42` on the CLI | The Studio in the browser: queue, jobs and settings (`nightqueue studio`) |
+| One line in the terminal: `nightqueue queue add "<request>"` | The CLI: `nightqueue queue add`, `run`, `status` and `retry` |
+| A plan under discussion in Claude Code: `/nightqueue:queue` | The MCP server, from any Claude client: `queue_add`, `queue_status`, and memory tools such as `lesson_recall` and `decision_recall` |
+
 ## Why nightqueue
 
 | | A chat session | nightqueue |
 |---|---|---|
 | Who drives | you, prompt by prompt | the pipeline, phase by phase |
+| Root cause | fixes what you described | reproduces first and fixes the cause on bugs and risky changes; proves every job |
 | Memory | gone when the window closes | lessons and decisions persist per org |
-| Quality gate | whatever you remember to ask | adversarial QA + your project's own checks, every run |
+| Quality gate | whatever you remember to ask | your project's own checks on every run, plus adversarial QA on complex jobs |
 | Output | a diff in a terminal | a reviewable pull request with a report |
 | When it runs | while you watch | while you sleep |
 
