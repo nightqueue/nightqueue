@@ -119,13 +119,14 @@ test("a job stream narrates the current attempt with structured fields, its time
   const edit = narration.find((event) => event.tool === "Edit");
   assert.equal(edit.file, "worker.mjs");
   const publish = narration.find((event) => event.tool === "Bash");
-  assert.equal(publish.phase, 7);
+  assert.equal(publish.phase, 8);
   assert.equal(publish.clock, "01:20");
   const timeline = events.filter((event) => event.name === "timeline").at(-1).data;
   assert.equal(timeline.track, "Standard");
   const coder = timeline.phases.find((phase) => phase.number === 4);
   assert.deepEqual([coder.state, coder.durationMs, coder.model], ["done", 60000, "opus"]);
-  assert.equal(timeline.phases.find((phase) => phase.number === 7).state, "done");
+  assert.equal(timeline.phases.find((phase) => phase.number === 8).state, "done");
+  assert.equal(timeline.phases.find((phase) => phase.number === 7).state, "skipped", "publish lights commit · PR, never runtime");
   assert.equal(timeline.phases.find((phase) => phase.number === 2).state, "skipped");
   assert.deepEqual(events.find((event) => event.name === "files").data, ["worker.mjs"]);
   assert.deepEqual([events.at(-1).data.status, events.at(-1).data.final], ["done", true]);
@@ -362,7 +363,7 @@ test("a run tier recorded mid-stream over a different row tier drives the next t
   const timelines = await timelinesAfter(t, job, act);
   assert.equal(timelines[0].data.tier, "complex", "the row tier is the fallback before state.json records one");
   assert.equal(timelines.at(-1).data.tier, "simple");
-  assert.deepEqual(skippedNumbers(timelines.at(-1)), [2, 3, 5]);
+  assert.deepEqual(skippedNumbers(timelines.at(-1)), [2, 3, 5, 7]);
 });
 
 test("a run tier raised mid-stream from simple to complex clears the tier skips on the next timeline", async (t) => {

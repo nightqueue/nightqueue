@@ -53,6 +53,27 @@ test("recalls come as one flat list in run order across attempts, each with its 
   assert.equal("results" in memory, false);
 });
 
+test("a recall inside the runtime lane reads phase 7, the same number the track gives it, and one inside a plain verifier reads 6", async () => {
+  const runtimePrompt = "# Runtime\n\nMode: RUNTIME\n\nRun the app.";
+  const log = logOf([
+    agentToolUseEvent({ id: "lane_v", subagentType: "nightqueue:verifier", prompt: "Run the checks." }),
+    toolUseEvent({ name: LESSON, id: "r1", input: { query: "checks" }, parentToolUseId: "lane_v" }),
+    agentToolUseEvent({ id: "lane_r", subagentType: "nightqueue:verifier", prompt: runtimePrompt }),
+    toolUseEvent({ name: LESSON, id: "r2", input: { query: "runtime" }, parentToolUseId: "lane_r" }),
+    taskStartedEvent({ toolUseId: "lane_t", subagentType: "nightqueue:verifier", prompt: runtimePrompt }),
+    toolUseEvent({ name: MEMORY, id: "r3", input: { query: "boot" }, parentToolUseId: "lane_t" }),
+  ]);
+  const recalls = await jobRecalls(log);
+  assert.deepEqual(
+    recalls.map((recall) => [recall.id, recall.agent, recall.phase]),
+    [
+      ["r1", "verifier", 6],
+      ["r2", "verifier", 7],
+      ["r3", "verifier", 7],
+    ],
+  );
+});
+
 test("at_s counts the seconds from the attempt's marker to the recall's event, else from the attempt's first stamped event", async () => {
   const log = logOf([
     attemptMarker(1, "2026-10-06T10:00:00Z"),
