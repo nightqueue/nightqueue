@@ -11,6 +11,7 @@ import {
   recordPrUrl,
   recordResume,
   recordRunFields,
+  recordSkip,
   recordTermination,
   RUN_OUTCOME_STATUSES,
 } from "../../src/queue/run-state.mjs";
@@ -241,6 +242,80 @@ test("an updatedAt written by an older plugin is overwritten by the clock, and t
   assert.equal(state.resumeCount, 1, "the record reset the resume count the runtime owns");
   assert.equal(recordResume({ ...RUN, resumeCount: 2, env }).status, "written");
   assert.equal(readState(env).resumeCount, 2);
+});
+
+// The skips of the run on disk, each reduced to its author.
+function skipAuthors(env) {
+  return Object.fromEntries(Object.entries(readState(env).skips ?? {}).map(([phase, entry]) => [phase, entry.by]));
+}
+
+test("a tier and type write records the tier skips the routing implies, recomputed on every later tier or type write", (t) => {
+  const env = makeHome(t, "run-state-tier-skips");
+
+  assert.equal(recordRunFields({ ...RUN, fields: { branch: "fix/the-worker" }, env }).status, "written");
+  assert.equal("skips" in readState(env), false, "a write without tier or type wrote skips");
+
+  assert.equal(recordRunFields({ ...RUN, fields: { tier: "simple", type: "bug/error" }, env }).status, "written");
+  assert.deepEqual(skipAuthors(env), { explore: "tier", architecture: "tier", qa: "tier" });
+  const firstAt = readState(env).skips.explore.at;
+  assert.match(firstAt, UTC_ISO);
+  assert.equal("reason" in readState(env).skips.explore, false);
+
+  assert.equal(recordRunFields({ ...RUN, fields: { type: "feature/refactor" }, env }).status, "written");
+  assert.deepEqual(skipAuthors(env), { explore: "tier", architecture: "tier", qa: "tier", triage: "tier" });
+  assert.equal(readState(env).skips.explore.at, firstAt, "an existing tier entry keeps its time");
+
+  assert.equal(recordRunFields({ ...RUN, fields: { type: "bug/error" }, env }).status, "written");
+  assert.deepEqual(skipAuthors(env), { explore: "tier", architecture: "tier", qa: "tier" });
+});
+
+test("a type written before the tier records nothing until the tier is known, then the tier alone stands in for an old run", (t) => {
+  const env = makeHome(t, "run-state-type-first");
+  assert.equal(recordRunFields({ ...RUN, fields: { type: "feature/refactor" }, env }).status, "written");
+  assert.equal("skips" in readState(env), false);
+  assert.equal(recordRunFields({ ...RUN, fields: { tier: "trivial" }, env }).status, "written");
+  assert.deepEqual(skipAuthors(env), { triage: "tier", explore: "tier", architecture: "tier", qa: "tier" });
+});
+
+test("a raise to complex drops the tier skips and keeps an agent's", (t) => {
+  const env = makeHome(t, "run-state-raise-skips");
+  recordRunFields({ ...RUN, fields: { tier: "simple", type: "bug/error" }, env });
+  assert.equal(recordSkip({ ...RUN, phase: "runtime", by: "verifier", reason: "nothing to run", env }).status, "written");
+  assert.equal(recordRunFields({ ...RUN, fields: { tier: "complex", tierRaiseReason: "the cause is in the store" }, env }).status, "written");
+  assert.deepEqual(readState(env).skips, { runtime: { by: "verifier", reason: "nothing to run", at: readState(env).skips.runtime.at } });
+});
+
+test("an agent skip wins over the tier entry of the same phase and survives a type write", (t) => {
+  const env = makeHome(t, "run-state-agent-wins");
+  recordRunFields({ ...RUN, fields: { tier: "simple", type: "bug/error" }, env });
+  assert.equal(recordSkip({ ...RUN, phase: "qa", by: "architect", reason: "docs only", env }).status, "written");
+  recordRunFields({ ...RUN, fields: { type: "feature/refactor" }, env });
+  assert.deepEqual(readState(env).skips.qa.by, "architect");
+  assert.equal(readState(env).skips.qa.reason, "docs only");
+});
+
+test("a skip is refused for a phase already run, the runtime's own author, an empty reason and an unknown phase", (t) => {
+  const env = makeHome(t, "run-state-skip-refusals");
+  recordPhaseDone({ ...RUN, phase: "triage", artifact: "01-triage.md", env });
+
+  assert.match(recordSkip({ ...RUN, phase: "triage", by: "architect", reason: "late", env }).reason, /`triage` already ran: only a later phase can be skipped/);
+  assert.match(recordSkip({ ...RUN, phase: "qa", by: "tier", reason: "mine", env }).reason, /`tier` skips are written by the runtime only/);
+  assert.match(recordSkip({ ...RUN, phase: "qa", by: "operator", reason: "mine", env }).reason, /unknown by `operator`; accepted: orchestrator, triager/);
+  assert.match(recordSkip({ ...RUN, phase: "qa", by: "architect", reason: "   ", env }).reason, /a skip needs a reason/);
+  assert.match(recordSkip({ ...RUN, phase: "critique", by: "architect", reason: "x", env }).reason, /unknown phase `critique`/);
+  assert.equal("skips" in readState(env), false, "a refused skip was recorded");
+});
+
+test("a recorded skip never moves the resume decision", (t) => {
+  const env = makeHome(t, "run-state-skip-resume");
+  for (const phase of ["triage", "explore", "architecture", "implementation"]) recordPhaseDone({ ...RUN, phase, artifact: `0-${phase}.md`, env });
+  recordOutcome({ ...RUN, status: "gate", notice: "stopped", env });
+  const without = decideResume({ state: readState(env) });
+  assert.equal(recordSkip({ ...RUN, phase: "qa", by: "architect", reason: "docs only", env }).status, "written");
+  const state = readState(env);
+  assert.deepEqual(state.phases.map((entry) => entry.phase), ["triage", "explore", "architecture", "implementation"], "a skip went into phases");
+  assert.deepEqual(decideResume({ state }), without);
+  assert.equal(without.fromPhase, "qa");
 });
 
 test("an unsafe project or slug records nothing at all", (t) => {

@@ -1,13 +1,14 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import { phaseAttemptsTitle, phaseCaption, phaseColor, shareEntries, sharePercent, spentMs } from "../../studio/src/lib/track.ts";
+import { phaseVar } from "../../studio/src/lib/phase-colors.ts";
+import { legendEntries, phaseAttemptsTitle, phaseCaption, shareEntries, sharePercent, spentMs, trackCounts } from "../../studio/src/lib/track.ts";
 
 const STUDIO = new URL("../../studio/src/", import.meta.url);
 
 // One phase of the timeline wire, with the given fields over the defaults of a done phase.
 function phase(fields = {}) {
-  return { number: 3, name: "architect", model: "opus", state: "done", durationMs: 60000, liveSinceMs: null, startMs: 90000, attempts: 1, byAttempt: [{ attempt: 1, durationMs: 60000, last: false }], tokens: 0, tokens_label: "-", ...fields };
+  return { number: 3, name: "architect", agent: "architect", model: "opus", state: "done", skipped: null, durationMs: 60000, liveSinceMs: null, startMs: 90000, attempts: 1, byAttempt: [{ attempt: 1, durationMs: 60000, last: false }], tokens: 0, tokens_label: "-", ...fields };
 }
 
 // One attempts_log row, finished at the given outcome.
@@ -26,9 +27,8 @@ test("a phase that ran in two attempts reads start, summed duration and the atte
   assert.equal(phaseCaption(phase(), { runElapsedMs: null, clockMs: null }), "01:30 · 1m00s");
 });
 
-test("pending and skipped phases read a dash, and a running phase counts its open part", () => {
+test("a pending phase reads a dash, and a running phase counts its open part", () => {
   assert.equal(phaseCaption(phase({ state: "pending", startMs: null, attempts: 0, byAttempt: [] }), { runElapsedMs: null, clockMs: null }), "—");
-  assert.equal(phaseCaption(phase({ state: "skip" }), { runElapsedMs: null, clockMs: null }), "—");
   const running = phase({ state: "now", durationMs: 0, liveSinceMs: 10000 });
   assert.equal(spentMs(running, 40000), 30000);
   assert.equal(phaseCaption(running, { runElapsedMs: 40000, clockMs: null }), "01:30 · 30s");
@@ -56,14 +56,39 @@ test("the gate is no longer a segment: format.ts drops its approximations and th
   assert.match(track, /gate at phase/);
 });
 
-test("the share legend lists the spending phases in bar order with a stable color per phase and whole percents", () => {
-  const phases = [phase({ number: 1, name: "triager", tokens: 600 }), phase({ number: 2, name: "explore", tokens: 0 }), phase({ number: 4, name: "coder", tokens: 399, state: "now" }), phase({ number: 5, name: "qa", tokens: 1 })];
+test("the four captions of a skipped slot say who skipped it and why", () => {
+  const clocks = { runElapsedMs: null, clockMs: null, tier: "simple" };
+  assert.equal(phaseCaption(phase({ state: "skipped", skipped: { by: "tier", reason: null, at: null } }), clocks), "skipped · simple tier");
+  assert.equal(phaseCaption(phase({ state: "skipped", skipped: { by: "architect", reason: "docs only", at: null } }), clocks), "skipped · architect: docs only");
+  assert.equal(phaseCaption(phase({ state: "skipped", skipped: { by: "architect", reason: null, at: null } }), clocks), "skipped · architect");
+  assert.equal(phaseCaption(phase({ state: "skipped", skipped: null }), clocks), "skipped");
+});
+
+test("the share entries are coloured by agent, so a share segment matches its track slot", () => {
+  const phases = [phase({ number: 1, name: "triager", agent: "triager", tokens: 600 }), phase({ number: 2, name: "explore", agent: "explore", tokens: 0 }), phase({ number: 4, name: "coder", agent: "coder", tokens: 399, state: "now" }), phase({ number: 5, name: "qa-guardian", agent: "qaGuardian", tokens: 1 })];
   const entries = shareEntries(phases);
-  assert.deepEqual(entries.map((entry) => [entry.number, entry.name, entry.percent, entry.running]), [[1, "triager", "60%", false], [4, "coder", "40%", true], [5, "qa", "<1%", false]]);
-  assert.deepEqual(entries.map((entry) => entry.color), [phaseColor(1), phaseColor(4), phaseColor(5)]);
-  const later = shareEntries([phase({ number: 0, name: "brief", tokens: 5 }), ...phases]);
-  assert.equal(later.find((entry) => entry.number === 4).color, entries[1].color, "an earlier phase spending does not recolor a later one");
-  assert.equal(new Set(Array.from({ length: 9 }, (_, number) => phaseColor(number))).size, 9);
+  assert.deepEqual(entries.map((entry) => [entry.number, entry.name, entry.percent, entry.running]), [[1, "triager", "60%", false], [4, "coder", "40%", true], [5, "qa-guardian", "<1%", false]]);
+  assert.deepEqual(entries.map((entry) => entry.color), ["var(--ph-triager)", "var(--ph-coder)", "var(--ph-qa-guardian)"]);
+  assert.deepEqual(entries.map((entry) => entry.hex), ["#3987e5", "#c98500", "#d55181"]);
+  const architect = phase({ tokens: 10 });
+  assert.equal(shareEntries([architect])[0].color, phaseVar(architect.agent), "the architect share colour is the architect slot colour");
+  assert.equal(shareEntries([phase({ number: 0, name: "brief", agent: null, tokens: 5 })])[0].color, "var(--ph-system)");
+});
+
+test("the share legend keeps the top three shares, ties broken by phase order, listed in phase order", () => {
+  const entry = (number, share) => ({ number, name: `p${number}`, color: "", hex: "", percent: "", share, running: false });
+  assert.deepEqual(legendEntries([entry(0, 0.1), entry(3, 0.4), entry(4, 0.3), entry(6, 0.2)], 3).map((kept) => kept.number), [3, 4, 6]);
+  assert.deepEqual(legendEntries([entry(0, 0.25), entry(3, 0.25), entry(4, 0.25), entry(6, 0.25)], 3).map((kept) => kept.number), [0, 3, 4]);
+  assert.deepEqual(legendEntries([entry(6, 0.9), entry(1, 0.1)], 3).map((kept) => kept.number), [1, 6]);
+  assert.deepEqual(legendEntries([], 3), []);
+});
+
+test("the track counts leave the skipped slots out: a simple feature runs five slots and skips four", () => {
+  const states = ["done", "skipped", "skipped", "skipped", "now", "skipped", "pending", "pending", "pending"];
+  const counts = trackCounts(states.map((state, number) => phase({ number, state })));
+  assert.equal(counts.skipped, 4);
+  assert.deepEqual(counts.running.map((kept) => kept.number), [0, 4, 6, 7, 8]);
+  assert.deepEqual(trackCounts([]), { running: [], skipped: 0 });
 });
 
 test("a share percent is whole, <1% above zero and below one percent, and 0% for nothing", () => {

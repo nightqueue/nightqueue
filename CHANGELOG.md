@@ -50,6 +50,17 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **The studio track has role colours and skipped slots.** The job's pipeline card always shows
+  the nine slots from second 0 (`tier pending` until the tier is known), each a role dot and bar
+  in its agent's colour (`studio/src/lib/phase-colors.ts`, the `--ph-*` variables). A slot the
+  run does not go through is narrower, hatched, with a ring dot and a caption saying why
+  (`skipped · simple tier`, `skipped · architect: docs only`); the header counts `N skipped`
+  (simple bug 3, simple feature 4, trivial 4, complex 0). The token share bar uses the same role
+  colours, stripes the running segment and lists the top three shares.
+- **`run_skip` MCP tool and the `skips` key of `state.json`.** The runtime records a `tier` skip
+  for each phase off the run's routing on every tier/type write; `run_skip { phase, by, reason }`
+  records an agent's. Both are display only: routing and resume never read them, and a phase
+  that still runs shows as run.
 - **The operator reads the web.** `WebFetch` and `WebSearch` join the operator's tools and are
   pre-approved in the session's `permissions.allow`, so it reads a linked page, an issue or a
   library's docs without a prompt. Still no edit and no execution (D-58).
@@ -182,6 +193,19 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- The studio timeline wire always carries the nine slots, with the run `tier` and, per slot, its
+  routing `agent` and a `skipped` record; the passed-over state is renamed `skip` → `skipped`.
+- **The studio Files card and file drawer.** Each file is one button row (`path · kind icon ·
+  +N −M`, a missing side absent, the open row marked `aria-current`) with no proportion blocks
+  and no text kind tag. The new 480px `FileDrawer` shows the file's `+/−` with a 120×8
+  proportion bar and the unified hunks, steps through the job's files with `‹ i / n ›` or ↑/↓,
+  and closes with Esc or ✕; it replaces `DiffDrawer`.
+- **`GET /api/jobs/<ref>/diff?path=` answers parsed hunks.** The answer is `{ path, from, kind,
+  source, base, adds, dels, hunks, truncated, binary, note }` (the raw `diff` text is gone),
+  parsed on the server and cut at 2000 lines (`truncated: true`). A path that is not one of the
+  job's files is now a 400 (was 404). Once the worktree is released, a closed job's recorded
+  file is read from its merge commit in the project checkout (`source: "merge"`), read-only, with
+  no fetch, and with fsmonitor, hooks, external diff and textconv off.
 - `plugin/agents/operator.md` is rewritten to 159 lines around D-58: the operator names
   `project` in every owner-taking call, recalls memory per project when one comes up, delegates
   to `triage`, `qa` and `reviewer`, and queues only after an explicit go. `nightqueue open`,

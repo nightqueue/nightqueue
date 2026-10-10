@@ -3,6 +3,7 @@ import { runDir } from "../config/paths.mjs";
 import { jobRef } from "../memory/refs.mjs";
 import { PIPELINE_TASK_TYPES, PIPELINE_TIERS } from "../memory/runs.mjs";
 import { isRunPath, isStateObject, readRunState, RESUME_PHASE_ORDER, RESUME_SCHEMA_VERSION, saveRunState } from "./resume.mjs";
+import { offTierPhases } from "./routing.mjs";
 import { isPrUrl } from "./stream.mjs";
 
 // The lock of one run's state.json: a holder only ever keeps it for a single read and write, so a lock this old can only have been left behind by a dead process.
@@ -38,6 +39,12 @@ const RUN_FIELDS = {
   [EVIDENCE_LEVEL]: [1, 2, 3, 4],
   planStatus: ["draft", "approved"],
 };
+
+// Who may record a skip through `run_skip`: the pipeline's own agents; `tier` skips are written by the runtime only.
+export const SKIP_AGENTS = ["orchestrator", "triager", "explore", "architect", "coder", "qa-guardian", "verifier"];
+
+// The author of the skips the runtime derives from the run's tier and type.
+const TIER_SKIP = "tier";
 
 // Refusal to record, always with the same shape as a write.
 function kept(reason) {
@@ -191,6 +198,31 @@ function runFieldsRecord(fields, at) {
   return { ...written, [QA_STAGE_A]: withText({ artifact: trimmedText(marker.artifact), at }, { verdict: marker.verdict }) };
 }
 
+// The skip records held in a state, each kept only when it is an object naming its author.
+function heldSkips(skips) {
+  if (!isStateObject(skips)) return {};
+  return Object.fromEntries(Object.entries(skips).filter(([, entry]) => isStateObject(entry) && typeof entry.by === "string"));
+}
+
+// The skips after a tier or type write: agent entries kept as they are, one `tier` entry per phase off the run's routing, an existing one keeping its time.
+function tierSkips(skips, tier, type, at) {
+  const held = heldSkips(skips);
+  const agents = Object.fromEntries(Object.entries(held).filter(([, entry]) => entry.by !== TIER_SKIP));
+  const derived = offTierPhases(tier, type)
+    .filter((phase) => !(phase in agents))
+    .map((phase) => [phase, { by: TIER_SKIP, at: held[phase]?.by === TIER_SKIP && typeof held[phase].at === "string" ? held[phase].at : at }]);
+  return { ...agents, ...Object.fromEntries(derived) };
+}
+
+// The change of a run fields write, with the tier skips recomputed whenever the tier or the type is written and the tier is known.
+function runFieldsChange(changes, state, at) {
+  const written = runFieldsRecord(changes, at);
+  if (!("tier" in changes) && !("type" in changes)) return written;
+  const tier = written.tier ?? state.tier;
+  if (!PIPELINE_TIERS.includes(tier)) return written;
+  return { ...written, skips: tierSkips(state.skips, tier, written.type ?? state.type, at) };
+}
+
 // Records the fields of the run a phase discovered: its type, its tier, where its code lives and the QA stage it already paid for.
 export function recordRunFields({ projectId, slug, fields, env = process.env } = {}) {
   const changes = isStateObject(fields) ? fields : {};
@@ -198,7 +230,36 @@ export function recordRunFields({ projectId, slug, fields, env = process.env } =
   if (entries.length === 0) return kept(`no field to record; accepted: ${Object.keys(RUN_FIELDS).join(", ")}`);
   const refused = entries.map(invalidRunField).find(Boolean);
   if (refused) return refused;
-  return record({ projectId, slug, env, change: (_state, at) => runFieldsRecord(changes, at) });
+  return record({ projectId, slug, env, change: (state, at) => runFieldsChange(changes, state, at) });
+}
+
+// Refusal of a skip `run_skip` cannot record, or null when its phase, author and reason are the ones state.json keeps.
+function invalidSkip({ phase, by, reason }) {
+  if (!RESUME_PHASE_ORDER.includes(phase)) return refuseEnum("phase", phase, RESUME_PHASE_ORDER);
+  if (by === TIER_SKIP) return kept("`tier` skips are written by the runtime only");
+  if (!SKIP_AGENTS.includes(by)) return refuseEnum("by", by, SKIP_AGENTS);
+  return trimmedText(reason) === null ? kept("a skip needs a reason: it is what the studio track shows on the slot") : null;
+}
+
+// Writes one agent skip into the run's state.json, refused when the phase already ran.
+function saveSkip({ projectId, slug, phase, skip, env }) {
+  const state = withFixedFields(readRunState({ projectId, slug, env }), { projectId, slug });
+  const ran = Array.isArray(state.phases) && state.phases.some((entry) => entry?.phase === phase);
+  if (ran) return kept(`\`${phase}\` already ran: only a later phase can be skipped`);
+  const skips = { ...(isStateObject(state.skips) ? state.skips : {}), [phase]: skip };
+  return saveRunState({ projectId, slug, env, state: { ...state, skips, updatedAt: skip.at } });
+}
+
+// Records that an agent skips a later phase, for display only: routing and resume never read it.
+export function recordSkip({ projectId, slug, phase, by, reason, env = process.env } = {}) {
+  const refused = invalidSkip({ phase, by, reason });
+  if (refused) return refused;
+  return underRunLock({
+    projectId,
+    slug,
+    env,
+    write: () => saveSkip({ projectId, slug, phase, skip: { by, reason: trimmedText(reason), at: new Date().toISOString() }, env }),
+  });
 }
 
 // Sets where the code of a run lives to what git actually holds: `branch` and `worktree` each recorded, or dropped when null.

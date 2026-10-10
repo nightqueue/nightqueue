@@ -93,6 +93,20 @@
   --animate-flow: flow 1.6s linear infinite;
 }
 
+:root {
+  --ph-triager: #3987e5;
+  --ph-explore: #d95926;
+  --ph-architect: #199e70;
+  --ph-coder: #c98500;
+  --ph-qa-guardian: #d55181;
+  --ph-verifier: #9085e9;
+  --ph-system: #4b5568;
+}
+
+@utility ph-hatch {
+  background: repeating-linear-gradient(45deg, color-mix(in srgb, var(--ph) 55%, transparent) 0 3px, transparent 3px 6px), #1c2130;
+}
+
 @keyframes flow {
   from {
     background-position: 200% 0;

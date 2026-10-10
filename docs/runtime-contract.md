@@ -50,7 +50,7 @@ What a runtime has to provide, and what it can rely on:
   `05a-qa-analyst.md`, `05-qa.md`, `06-verification.md`, `06-runtime.md`.
 - `state.json` in the same directory carries the resumable state, and **the runtime
   is its only writer**: every key goes through `src/queue/run-state.mjs`, which the
-  MCP tools `run_phase_done`, `run_terminate`, `run_outcome` and `run_set`, the
+  MCP tools `run_phase_done`, `run_terminate`, `run_skip`, `run_outcome` and `run_set`, the
   command `nightqueue run pr` and the runner itself call. The pipeline never writes
   the file, and an `updatedAt` an older plugin hand-wrote is overwritten by the
   runtime's clock and never read. Every key, and who writes it:
@@ -63,6 +63,16 @@ What a runtime has to provide, and what it can rely on:
     so a phase recorded twice never erases the first record.
   - `termination{phase, reason, at}`: `run_terminate`; a run terminated this way is
     never resumed by a retry.
+  - `skips{<phase>:{by, reason?, at}}`: why a slot of the studio track did not run,
+    for display only. The `tier` entries (`by: "tier"`, no reason) are written by the
+    runtime on every `tier`/`type` write, from `phasesFor(tier, type)`, and from the
+    tier alone while `type` is unknown; a tier raise drops the ones back in the track.
+    Agent entries (`by` an agent name, with a reason) are written by `run_skip`, which
+    refuses a phase already in `phases` and the `tier` author. The key is never in
+    `phases` and is never read by resume, routing, the run report or the run context;
+    a phase that still runs shows as run. `pipeline_phases.status` is post-run
+    telemetry only: it is written by `pipeline_log` after the run and is never a
+    source of the live track.
   - `outcome{status, at, notice?, prUrl?}`: `run_outcome` (`status`, `notice`),
     `nightqueue run pr` (`status: "done"`) and the runner, which writes `prUrl` at
     finalize from what the session really published - it is never a parameter.
@@ -392,7 +402,7 @@ a worktree another live session holds is never dropped. It always answers nothin
 fails the session. What it misses, `nightqueue open` and `nightqueue doctor --fix` drop once the
 worktree is stale (see [the CLI](cli.md#sandbox)).
 
-The twenty-seven MCP tools, with the parameters `nightqueue mcp` actually accepts:
+The twenty-eight MCP tools, with the parameters `nightqueue mcp` actually accepts:
 
 | tool | parameters |
 |---|---|
@@ -421,10 +431,11 @@ The twenty-seven MCP tools, with the parameters `nightqueue mcp` actually accept
 | `decision_recall` | `project`, `query?`, `limit?` (1-20); or `id` (a decision ref) alone for one decision whole, whatever its status |
 | `run_phase_done` | `phase`, `artifact?`, `verdict?`, `note?`, `project?`, `slug?` |
 | `run_terminate` | `phase`, `reason`, `project?`, `slug?` |
+| `run_skip` | `phase`, `by`, `reason`, `project?`, `slug?` |
 | `run_outcome` | `status` (`done`, `gate`), `notice?`, `project?`, `slug?` |
 | `run_set` | `type?`, `tier?`, `tier_raise_reason?`, `branch?`, `worktree?`, `qa_stage_a?{artifact, verdict?}`, `project?`, `slug?` |
 
-The four `run_*` tools are the only way the pipeline records its run (see the
+The five `run_*` tools are the only way the pipeline records its run (see the
 `state.json` list above). Inside a job each of them resolves the run from the job's
 own row, and a `project` or a `slug` sent there is REFUSED instead of silently
 overridden - naming another job's run from inside one is never an accident worth

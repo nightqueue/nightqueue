@@ -1,7 +1,7 @@
 import { Clock } from "lucide-react";
-import type { ReactNode } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import { activeMs, attemptsSummary, compactCount, durationLabel, formatDurationMs, tokenCounters, tokensTotalLabel, usdLabel, wallMs } from "../../lib/format";
-import { type ShareEntry, shareEntries } from "../../lib/track";
+import { legendEntries, type ShareEntry, shareEntries } from "../../lib/track";
 import type { Job, JobDetail, JobMeta, Timeline, TimelinePhase } from "../../lib/types";
 import { useNow } from "../../lib/useNow";
 import { ActionIcon } from "../StatusIcon";
@@ -22,7 +22,9 @@ interface Total {
   title?: string;
 }
 
-const SHARE_RUNNING_OPACITY = 0.7;
+const LEGEND_SIZE = 3;
+
+const RUNNING_STRIPE = "repeating-linear-gradient(45deg, var(--ph) 0 4px, color-mix(in srgb, var(--ph) 55%, #0f1219) 4px 8px)";
 
 const CELL_GRID = "grid grid-cols-2 gap-x-[22px] gap-y-3 md:grid-cols-[repeat(4,minmax(0,1fr))_minmax(220px,1.4fr)]";
 
@@ -89,12 +91,12 @@ function TotalCell({ total, running, divided }: { total: Total; running: boolean
   );
 }
 
-// The legend of the share bar: a dot in the segment's color, the phase name and its percent, per phase in bar order.
+// The legend of the share bar: the top shares in phase order, each a dot in its series colour, the role and its percent in neutral text.
 function ShareLegend({ entries }: { entries: ShareEntry[] }) {
   return (
-    <ul className="m-0 mt-2 flex list-none flex-wrap gap-x-3 gap-y-1 p-0 text-xs text-muted">
-      {entries.map((entry) => (
-        <li key={entry.number} className="flex items-center gap-1.5" style={{ opacity: entry.running ? SHARE_RUNNING_OPACITY : 1 }}>
+    <ul className="m-0 mt-2 flex list-none flex-wrap gap-x-3 gap-y-1 p-0 text-[11px] text-muted">
+      {legendEntries(entries, LEGEND_SIZE).map((entry) => (
+        <li key={entry.number} className="flex items-center gap-1.5">
           <i className="block h-2 w-2 flex-none rounded-full" style={{ background: entry.color }} />
           <span>{entry.name}</span>
           <span className="font-mono text-dim">{entry.percent}</span>
@@ -104,17 +106,25 @@ function ShareLegend({ entries }: { entries: ShareEntry[] }) {
   );
 }
 
-// The token share of every phase that spent any, as one stacked bar with its legend; an empty grey bar before any.
+// The inline style of one share segment: its share as a basis, at least 2px, solid in its role colour or striped while it runs.
+function segmentStyle(entry: ShareEntry): CSSProperties {
+  const role = { "--ph": entry.color } as CSSProperties;
+  const paint: CSSProperties = entry.running ? { backgroundImage: RUNNING_STRIPE } : { background: "var(--ph)" };
+  return { ...role, flex: `0 1 ${entry.share * 100}%`, minWidth: 2, ...paint };
+}
+
+// The token share of every phase that spent any, as one stacked bar in role colours with its legend; an empty grey bar before any.
 function ShareBar({ phases }: { phases: TimelinePhase[] }) {
   const entries = shareEntries(phases);
   const spent = phases.filter((phase) => phase.tokens > 0);
   const title = spent.map((phase) => `${phase.number} ${phase.name} ${phase.tokens_label}`).join(" · ");
+  const track = entries.length > 0 ? "gap-[2px] bg-inset" : "bg-row-line";
   return (
     <div className="col-span-2 min-w-0 md:col-span-1 md:border-l md:border-line md:pl-[18px]">
       <div className="text-xs tracking-[.3px] text-dim uppercase">token share by phase</div>
-      <div className="mt-3 flex h-2 overflow-hidden rounded bg-row-line" title={title || undefined}>
+      <div className={`mt-3 flex h-2 overflow-hidden rounded ${track}`} title={title || undefined}>
         {entries.map((entry) => (
-          <i key={entry.number} className="block h-full" style={{ width: `${entry.share * 100}%`, background: entry.color, opacity: entry.running ? SHARE_RUNNING_OPACITY : 1 }} />
+          <i key={entry.number} className="block h-full" style={segmentStyle(entry)} />
         ))}
       </div>
       <ShareLegend entries={entries} />
