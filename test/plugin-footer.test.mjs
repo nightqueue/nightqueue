@@ -25,9 +25,10 @@ function linesMatching(pattern) {
   );
 }
 
-test("plugin/ never tells an agent to write the footer, a job id suffix, the run slug closing line or a `Refs` trailer", () => {
+test("plugin/ never tells an agent to write the footer or the job-ref segment, a job id suffix, the run slug closing line or a `Refs` trailer", () => {
   assert.ok(pluginFiles().length > 5, "the scan found no plugin file");
   assert.deepEqual(linesMatching(/Opened by nightqueue\s*[··]/), []);
+  assert.deepEqual(linesMatching(/[··]\s*J-(?:<n>|\d+\b)/), []);
   assert.deepEqual(linesMatching(/[··]\s*job\s*<id>/i), []);
   assert.deepEqual(linesMatching(/run <slug>`?\s*$|· run <slug>/), []);
   assert.deepEqual(linesMatching(/without the `#` \(`job 24`/), []);

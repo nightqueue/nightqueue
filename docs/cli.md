@@ -138,8 +138,9 @@ for every subsection. Both: no bare `#<number>` outside a `Fixes`/`Closes` line,
 `{{placeholder}}` or `<...>` example left over from the template, and none of the
 traceability the runtime appends itself - an `Opened by nightqueue` line, a whole
 `Refs` line, a job ref or the run slug. It then publishes a copy of the body with
-the footer `Opened by nightqueue` (`Opened by nightqueue · <kind> <ref>` for a job with
-an origin, e.g. `Opened by nightqueue · linear MK-42`; see
+the footer `Opened by nightqueue · J-<n>` inside a job, plus ` · <kind> <ref>` when the
+job has an origin (e.g. `Opened by nightqueue · J-12 · linear MK-42`), and `Opened by
+nightqueue` outside a job (see
 [Runtime contract](runtime-contract.md)). A body that
 fails prints one `REJECTED: <reason>` or `MISSING: <what>` line per violation
 and exits `1` with nothing pushed. Otherwise it renames the branch

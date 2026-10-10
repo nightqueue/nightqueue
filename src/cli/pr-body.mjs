@@ -27,7 +27,7 @@ const FOOTER_LINE = /^Opened by nightqueue\b/i;
 // A whole line of `Refs` followed by refs only, never prose that starts with the word.
 const REFS_LINE = /^Refs:?\s+[\w#/.-]+(\s*,\s*[\w#/.-]+)*$/i;
 
-// A job ref, which `run pr` writes from the job row.
+// A job ref, which only the runtime writes, in the footer `run pr` appends from the job the run belongs to.
 const JOB_REF = /\bJ-\d+\b/;
 
 // A heading line of the body, matched on the trimmed line.
