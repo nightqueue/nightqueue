@@ -1,5 +1,5 @@
 import { UserError } from "./errors.mjs";
-import { manyTypes, slotTypes } from "../integrations/registry.mjs";
+import { manyTypes, retiredConnectionKinds, slotTypes } from "../integrations/registry.mjs";
 
 export const NAME_RE = /^[a-z0-9][a-z0-9._-]{0,63}$/;
 export const SCHEMA_VERSION = 1;
@@ -112,11 +112,13 @@ function normalizeSlots(raw, rawLists) {
   const single = isPlainObject(raw) ? raw : {};
   const lists = isPlainObject(rawLists) ? rawLists : {};
   const many = new Set(manyTypes());
+  const retired = new Set(retiredConnectionKinds());
   for (const [type, value] of Object.entries(single)) {
+    if (retired.has(type)) continue;
     slots[type] = many.has(type) ? normalizeList(value) : isName(value) ? value : null;
   }
   for (const [type, value] of Object.entries(lists)) {
-    if (many.has(type)) slots[type] = normalizeList([...normalizeList(slots[type]), ...normalizeList(value)]);
+    if (many.has(type) && !retired.has(type)) slots[type] = normalizeList([...normalizeList(slots[type]), ...normalizeList(value)]);
   }
   return slots;
 }
@@ -223,9 +225,50 @@ export function normalizeSecrets(raw) {
   if (!isPlainObject(raw)) return secrets;
   assertSupportedVersion("secrets.json", raw);
   if (!isPlainObject(raw.connections)) return secrets;
+  const retired = new Set(retiredConnectionKinds());
   for (const [name, entry] of Object.entries(raw.connections)) {
-    if (!isPlainObject(entry) || typeof entry.type !== "string" || !entry.type) continue;
+    if (!isPlainObject(entry) || typeof entry.type !== "string" || !entry.type || retired.has(entry.type)) continue;
     secrets.connections[name] = { ...entry };
   }
   return secrets;
+}
+
+// Tells whether one org's raw slot map holds a key of a retired kind.
+function slotsHoldRetired(slotsByOrg, retired) {
+  if (!isPlainObject(slotsByOrg)) return false;
+  return Object.values(slotsByOrg).some((slots) => isPlainObject(slots) && Object.keys(slots).some((type) => retired.has(type)));
+}
+
+// Counts the records of a retired kind in a raw secrets file.
+function retiredRecordCount(rawSecrets, retired) {
+  if (!isPlainObject(rawSecrets) || !isPlainObject(rawSecrets.connections)) return 0;
+  return Object.values(rawSecrets.connections).filter((entry) => isPlainObject(entry) && retired.has(entry.type)).length;
+}
+
+// Tells whether raw config.json or secrets.json still hold a slot or a record of a kind that is no longer stored.
+export function hasRetiredConnections(rawConfig, rawSecrets) {
+  const retired = new Set(retiredConnectionKinds());
+  if (!retired.size) return false;
+  const config = isPlainObject(rawConfig) ? rawConfig : {};
+  const inConfig = slotsHoldRetired(config.orgConnections, retired) || slotsHoldRetired(config.orgConnectionLists, retired);
+  return inConfig || retiredRecordCount(rawSecrets, retired) > 0;
+}
+
+// Counts the records of a kind that is no longer stored in a raw secrets file.
+export function retiredConnectionCount(rawSecrets) {
+  return retiredRecordCount(rawSecrets, new Set(retiredConnectionKinds()));
+}
+
+// Counts the slot keys of a retired kind across every org of one raw slot map.
+function retiredKeysIn(slotsByOrg, retired) {
+  if (!isPlainObject(slotsByOrg)) return 0;
+  const orgs = Object.values(slotsByOrg).filter(isPlainObject);
+  return orgs.reduce((total, slots) => total + Object.keys(slots).filter((type) => retired.has(type)).length, 0);
+}
+
+// Counts the org slots and org lists of a kind that is no longer stored in a raw config file.
+export function retiredSlotCount(rawConfig) {
+  if (!isPlainObject(rawConfig)) return 0;
+  const retired = new Set(retiredConnectionKinds());
+  return retiredKeysIn(rawConfig.orgConnections, retired) + retiredKeysIn(rawConfig.orgConnectionLists, retired);
 }

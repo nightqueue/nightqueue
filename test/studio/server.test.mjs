@@ -26,6 +26,8 @@ const GATED_REQUESTS = [
   { method: "POST", path: "/api/connections/linear", headers: { "content-type": "application/json" }, body: "{\"api_key\":\"lin_api_x\"}" },
   { method: "GET", path: "/api/integrations" },
   { method: "POST", path: "/api/integrations/discord", headers: { "content-type": "application/json" }, body: "{\"name\":\"x\",\"org\":\"dlw\",\"url\":\"u\"}" },
+  { method: "POST", path: "/api/integrations/linear", headers: { "content-type": "application/json" }, body: "{\"apiKey\":\"lin_api_x\"}" },
+  { method: "GET", path: "/api/integrations/github/status" },
   { method: "POST", path: "/api/integrations/x/test", headers: { "content-type": "application/json" }, body: "{}" },
   { method: "POST", path: "/api/integrations/x/orgs", headers: { "content-type": "application/json" }, body: "{\"org\":\"dlw\"}" },
   { method: "DELETE", path: "/api/integrations/x/orgs/dlw?unlink=1" },

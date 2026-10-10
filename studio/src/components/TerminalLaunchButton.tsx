@@ -10,11 +10,13 @@ interface TerminalLaunchButtonProps {
   size?: ButtonSize;
   variant?: ButtonVariant;
   className?: string;
+  fallback?: string | null;
+  onLaunched?: (id: string) => void;
   children: ReactNode;
 }
 
 // A button that opens a terminal for its request, disabled with the reason as tooltip when it cannot, and busy while the studio answers.
-export function TerminalLaunchButton({ request, blockedReason, title, size, variant, className, children }: TerminalLaunchButtonProps) {
+export function TerminalLaunchButton({ request, blockedReason, title, size, variant, className, fallback, onLaunched, children }: TerminalLaunchButtonProps) {
   const launch = useLaunchTerminal();
   const [busy, setBusy] = useState(false);
   const blocked = blockedReason ?? (request ? null : "nothing to open");
@@ -22,7 +24,8 @@ export function TerminalLaunchButton({ request, blockedReason, title, size, vari
     if (!request || busy) return;
     setBusy(true);
     try {
-      await launch(request);
+      const id = await launch(request, fallback);
+      if (id) onLaunched?.(id);
     } finally {
       setBusy(false);
     }

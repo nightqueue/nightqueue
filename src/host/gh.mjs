@@ -10,7 +10,9 @@ const PR_DETAIL_FIELDS = "state,mergeable,mergeStateStatus,headRefName,headRefOi
 const STATUS_PENDING = new Set(["PENDING", "EXPECTED"]);
 const CHECK_PASSED = new Set(["SUCCESS", "NEUTRAL", "SKIPPED"]);
 const CHECK_ABORTED = new Set(["CANCELLED", "TIMED_OUT", "STARTUP_FAILURE", "STALE"]);
-const LOGIN_RE = /\blogged in to \S+ (?:account|as) ([A-Za-z0-9][A-Za-z0-9-]*)/i;
+const ACCOUNT_LINE_RE = /\b(logged in|failed to log in) to (\S+) (?:account|as) ([A-Za-z0-9][A-Za-z0-9-]*)/i;
+const ACTIVE_MARKER_RE = /\bactive account:\s*(true|false)\b/i;
+const ACCOUNT_STATUS_TIMEOUT_MS = 10000;
 
 // Path of the GitHub CLI, the resolver every call of this module goes through.
 export function ghBin(env = process.env) {
@@ -32,7 +34,14 @@ export function runGh(args, { env = process.env, spawnSyncImpl = spawnSync, time
     stdout: typeof result?.stdout === "string" ? result.stdout : "",
     stderr: typeof result?.stderr === "string" && result.stderr ? result.stderr : (failure?.message ?? ""),
     missing: failure?.code === "ENOENT",
+    unfinished: failure?.code === "ETIMEDOUT" || Boolean(result?.signal),
   };
+}
+
+// Tells whether an async gh call was killed (timeout, abort or signal) before it could answer.
+function killedBeforeAnswer(err) {
+  if (!err) return false;
+  return err.killed === true || Boolean(err.signal) || err.name === "AbortError" || err.code === "ETIMEDOUT";
 }
 
 // Runs the GitHub CLI without ever blocking the event loop and without ever rejecting: a missing binary, a failure and a
@@ -45,6 +54,7 @@ function runGhAsync(args, { env = process.env, execFileImpl = execFile, timeoutM
         stdout: typeof stdout === "string" ? stdout : "",
         stderr: typeof stderr === "string" && stderr ? stderr : (err?.message ?? ""),
         missing: err?.code === "ENOENT",
+        unfinished: killedBeforeAnswer(err),
       });
     try {
       execFileImpl(ghBin(env), args, { encoding: "utf8", timeout: timeoutMs, env, signal }, answer);
@@ -54,20 +64,56 @@ function runGhAsync(args, { env = process.env, execFileImpl = execFile, timeoutM
   });
 }
 
-// Account name the GitHub CLI reports as logged in, or null when the text carries none.
-export function parseGhLogin(text) {
-  const match = LOGIN_RE.exec(String(text ?? ""));
-  return match ? match[1] : null;
+// The account blocks of a `gh auth status` text, in order, each with its host, login, logged-in state and active marker.
+function ghAccountBlocks(text) {
+  const blocks = [];
+  for (const line of String(text ?? "").split("\n")) {
+    const account = ACCOUNT_LINE_RE.exec(line);
+    if (account) {
+      blocks.push({ host: account[2], login: account[3], loggedIn: account[1].toLowerCase() === "logged in", active: null });
+      continue;
+    }
+    const marker = ACTIVE_MARKER_RE.exec(line);
+    const current = blocks.at(-1);
+    if (marker && current && current.active === null) current.active = marker[1].toLowerCase() === "true";
+  }
+  return blocks;
 }
 
-// Tells whether the GitHub CLI is installed and authenticated, and for which account.
+// The account block gh uses: the one marked active, or the first when gh prints no marker (older gh).
+function activeGhBlock(text) {
+  const blocks = ghAccountBlocks(text);
+  return blocks.find((block) => block.active === true) ?? blocks[0] ?? null;
+}
+
+// Account name of the account the GitHub CLI uses, or null when the text carries none.
+export function parseGhLogin(text) {
+  return activeGhBlock(text)?.login ?? null;
+}
+
+// Host and account of the account the GitHub CLI uses, or null when the text carries none.
+export function parseGhAccount(text) {
+  const block = activeGhBlock(text);
+  return block ? { host: block.host, login: block.login } : null;
+}
+
+// Reads one `gh auth status` result: the active account decides authentication, the exit code only when no account parsed, null when gh never answered.
+function readAuthStatus(result) {
+  const block = activeGhBlock(`${result.stdout}\n${result.stderr}`);
+  const authenticated = result.unfinished ? null : (block ? block.loggedIn : result.ok);
+  return { authenticated, login: block?.login ?? null, host: block?.host ?? null };
+}
+
+// Tells whether the GitHub CLI is installed and authenticated (null when it did not answer in time), and for which account and host.
 export function ghAuthStatus({ env = process.env, spawnSyncImpl = spawnSync } = {}) {
   const result = runGh(["auth", "status"], { env, spawnSyncImpl });
-  return {
-    authenticated: result.ok,
-    login: parseGhLogin(`${result.stdout}\n${result.stderr}`),
-    missing: result.missing,
-  };
+  return { ...readAuthStatus(result), missing: result.missing };
+}
+
+// Tells, without blocking the event loop, whether the GitHub CLI is installed and authenticated (null when it did not answer in time), for which account and host; never answers raw output.
+export async function ghAccountStatus({ env = process.env, execFileImpl = execFile, timeoutMs = ACCOUNT_STATUS_TIMEOUT_MS } = {}) {
+  const result = await runGhAsync(["auth", "status"], { env, execFileImpl, timeoutMs });
+  return { installed: !result.missing, ...readAuthStatus(result) };
 }
 
 // Parses the json of `gh pr view`, keeping only the fields asked for; anything unexpected is undetermined.

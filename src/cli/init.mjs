@@ -5,7 +5,7 @@ import { gitPathOrNull, requireGitPath } from "../config/projects.mjs";
 import { packageVersion, shimState } from "../host/runtime.mjs";
 import { pathBlock, rcFilePath } from "../host/shell.mjs";
 import { checkArgs, parseCommand } from "./args.mjs";
-import { importGhConnection } from "./gh-import.mjs";
+import { reportGhStatus } from "./gh-import.mjs";
 import { guardIdleRuntime } from "./install-guard.mjs";
 import { setupEmbedding, setupPath, setupRuntime, setupShim, verifyShim } from "./install-steps.mjs";
 import { keyOption, registerProject } from "./project.mjs";
@@ -13,7 +13,7 @@ import { firstLine, makeReport } from "./report.mjs";
 import { INSTALL_OPTIONS, finish, installOptions, registerHostServices, setupHome } from "./setup.mjs";
 
 const USAGE =
-  "nightqueue init [path] [--org <name>] [--name <name>] [--key <KEY>] [--from <dir>] [--force] [--path|--no-path] [--embedding|--no-embedding] [--shortcuts|--no-shortcuts] [--desktop|--no-desktop] [--gh|--no-gh] [--verbose]";
+  "nightqueue init [path] [--org <name>] [--name <name>] [--key <KEY>] [--from <dir>] [--force] [--path|--no-path] [--embedding|--no-embedding] [--shortcuts|--no-shortcuts] [--desktop|--no-desktop] [--gh (deprecated, no effect)|--no-gh] [--verbose]";
 
 const SOURCE_HINT = "Open a new terminal or run `source ~/.zshrc` (or your shell's rc) to use `nightqueue`.";
 
@@ -28,13 +28,12 @@ const NEXT_STEPS = [
   'Come back to `nightqueue queue status` and review the PRs; a job waiting at the gate is answered with `nightqueue queue retry <id> --note "..."`.',
 ];
 
-// Turns the two GitHub CLI flags into the single mode the import understands, refusing the contradictory pair.
+// Turns the two GitHub CLI flags into the mode of the status line, refusing the contradictory pair; `--gh` is a deprecated no-op.
 function ghMode(values) {
   if (values.gh === true && values["no-gh"] === true) {
     throw new UserError(`\`--gh\` and \`--no-gh\` cannot be used together; usage: ${USAGE}`);
   }
-  if (values["no-gh"] === true) return "never";
-  return values.gh === true ? "always" : "auto";
+  return values["no-gh"] === true ? "never" : "auto";
 }
 
 // Repository to register: an explicit path has to be one, the current directory only is one when it carries a `.git`.
@@ -126,10 +125,10 @@ async function installForInit(ctx, { verbose, ...options } = {}) {
   }
 }
 
-// Registers the repository of this run and offers it the token of the GitHub CLI, the part of init that only a repository gets.
+// Registers the repository of this run and tells whether the machine's GitHub CLI is ready, the part of init that only a repository gets.
 async function registerHere(ctx, { path, name, org, key, mode }) {
-  const project = await registerProject(ctx, { path, name, org, key });
-  await importGhConnection(ctx, { mode, org: { id: project.org_id, name: project.org } });
+  await registerProject(ctx, { path, name, org, key });
+  reportGhStatus(ctx, { mode });
 }
 
 // Runs `nightqueue init`: installs the runtime, registers it in the host and, inside a repository, registers the project too.

@@ -33,19 +33,29 @@ function SkeletonRow({ shape }: { shape: (typeof ROW_SHAPES)[number] }) {
   );
 }
 
-// The loading state of Settings › Integrations: the two cards with skeleton rows shaped like the real ones.
+// One skeleton module card: its header with title, description and add button, and one connection row.
+function SkeletonModule({ shape }: { shape: (typeof ROW_SHAPES)[number] }) {
+  return (
+    <section className="rounded-lg border border-line bg-surface">
+      <div className="flex items-start gap-3 border-b border-line px-4 py-3">
+        <div className="flex flex-col gap-2">
+          <Bar className={`h-3.5 ${shape.name}`} />
+          <Bar className="h-3 w-[260px] max-sm:w-[180px]" />
+        </div>
+        <Bar className="ml-auto h-[30px] w-[64px]" />
+      </div>
+      <SkeletonRow shape={shape} />
+    </section>
+  );
+}
+
+// The loading state of Settings › Integrations: module cards and the destinations card, shaped like the real ones.
 export function SettingsSkeleton() {
   return (
     <div className="flex flex-col gap-3.5" aria-busy="true" aria-label="loading integrations">
-      <section className="rounded-lg border border-line bg-surface">
-        <div className="flex items-center gap-3 border-b border-line px-4 py-3">
-          <SettingsCardTitle>Connections</SettingsCardTitle>
-          <Bar className="h-3 w-[120px]" />
-        </div>
-        {ROW_SHAPES.map((shape, index) => (
-          <SkeletonRow key={index} shape={shape} />
-        ))}
-      </section>
+      {ROW_SHAPES.map((shape, index) => (
+        <SkeletonModule key={index} shape={shape} />
+      ))}
       <section className="rounded-lg border border-line bg-surface">
         <div className="flex items-center gap-3 border-b border-line px-4 py-3">
           <SettingsCardTitle>Log destination per project</SettingsCardTitle>

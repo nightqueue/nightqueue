@@ -2,11 +2,13 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCallback } from "react";
 import { deleteJson, getJson, postJson, putJson } from "./api";
 import { normalizeView } from "./integrations";
-import type { ConnectionRow, IntegrationsView, LastTest } from "./types";
+import type { AmbientStatus, ConnectionRow, IntegrationsView, LastTest, ModuleCard } from "./types";
 
 export const INTEGRATIONS_KEY = ["integrations"] as const;
 
 export const RETRY_MS = 8000;
+
+const AMBIENT_STALE_MS = 30_000;
 
 export interface AddWebhookInput {
   name: string;
@@ -52,6 +54,43 @@ export function useRefreshIntegrations(): () => void {
 export async function addWebhook(input: AddWebhookInput): Promise<ConnectionRow | null> {
   const answer = await postJson<{ connection?: ConnectionRow | null }>("/api/integrations/discord", input);
   return answer?.connection ?? null;
+}
+
+// Adds a connection of a module kind: tested by the runtime first; the secret is sent once and never read back.
+export async function addConnectionOf(kind: string, body: Record<string, unknown>): Promise<ConnectionRow | null> {
+  const answer = await postJson<{ connection?: ConnectionRow | null }>(`/api/integrations/${encodeURIComponent(kind)}`, body);
+  return answer?.connection ?? null;
+}
+
+// The query key of an ambient module's machine status.
+export function ambientStatusKey(kind: string) {
+  return [...INTEGRATIONS_KEY, kind, "status"] as const;
+}
+
+// Reads the machine status of an ambient module, keeping only the known fields.
+async function fetchAmbientStatus(path: string): Promise<AmbientStatus> {
+  const body = await getJson<Partial<AmbientStatus> | null>(path);
+  const text = (value: unknown) => (typeof value === "string" && value ? value : null);
+  return {
+    kind: text(body?.kind) ?? "",
+    installed: body?.installed !== false,
+    authenticated: body?.authenticated === null ? null : body?.authenticated === true,
+    login: text(body?.login),
+    host: text(body?.host),
+    checkedAt: text(body?.checkedAt),
+  };
+}
+
+// The machine status of an ambient module, read on demand and kept for 30 s; disabled for a stored module.
+export function useAmbientStatus(module: ModuleCard) {
+  const path = module.ambient?.statusPath ?? "";
+  return useQuery({
+    queryKey: ambientStatusKey(module.kind),
+    queryFn: () => fetchAmbientStatus(path),
+    enabled: path !== "",
+    staleTime: AMBIENT_STALE_MS,
+    retry: false,
+  });
 }
 
 // Tests one connection against its service; a failed test is an answer with `ok: false`.

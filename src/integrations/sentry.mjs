@@ -172,6 +172,9 @@ async function closeSentryIssue({ ref, result, settings, slot, http }) {
 
 export const sentry = {
   kind: "sentry",
+  label: "Sentry",
+  description: "Reads the issues jobs come from and resolves them as the jobs close, per org.",
+  card: { order: 4 },
   connection: {
     cardinality: "one",
     secretFields: ["token"],

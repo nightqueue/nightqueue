@@ -1,17 +1,23 @@
-// The studio's Settings › Integrations: the connections, the projects' log destination, and every write on them.
+// The studio's Settings › Integrations: the module cards, the connections, the projects' log destination, and every write on them.
+// Route rule: `POST /api/integrations/<kind>` and `GET /api/integrations/<kind>/status` are keyed by kind (a connection name never
+// had a bare-path POST nor a `status` route); every other `/api/integrations/<x>[/…]` route is keyed by connection name.
 import { existsSync } from "node:fs";
-import { saveConfigAfterSecret, saveSecretsAfterConfig } from "../cli/connection.mjs";
+import { saveConfigAfterSecret, saveSecretsAfterConfig, storeHomeConnection } from "../cli/connection.mjs";
 import {
   addConnection,
   bindConnection,
+  completeConnection,
+  connectionExtras,
+  connectionFor,
   hasConnection,
+  homeConnectionName,
   lastTestOf,
   listConnections,
   orgsUsingConnection,
   recordTest,
   removeConnection,
-  requireType,
   testConnection,
+  testReason,
   unbindConnection,
 } from "../config/connections.mjs";
 import { UserError } from "../config/errors.mjs";
@@ -31,20 +37,23 @@ import {
   setDestination,
   unlinkProjectsUsing,
 } from "../integrations/destinations.mjs";
-import { announceWebhook, discordReason, isWebhookUrl } from "../integrations/discord.mjs";
+import { manyTypes, moduleCards, providerOf } from "../integrations/registry.mjs";
 import { jobRef } from "../memory/refs.mjs";
 import { refuseHomeWriteInsideJob } from "../queue/home-guard.mjs";
 import { openRegistryWriter, withReadOnlyStore } from "../store/open.mjs";
 
 const QUIET = { warn: () => {} };
-const MAX_URL_CHARS = 512;
+const MAX_SECRET_CHARS = 512;
 const MAX_LINK_IDS = 500;
 const TEST_TIMEOUT_MS = 5000;
 const NOTHING_SAVED = "Nothing was saved.";
+const KIND_PATH = /^\/api\/integrations\/([^/]+)$/;
+const STATUS_PATH = /^\/api\/integrations\/([^/]+)\/status$/;
 const CONNECTION_PATH = /^\/api\/integrations\/([^/]+)(?:\/(test|orgs|link)(?:\/([^/]+))?)?$/;
 const DESTINATION_PATH = /^\/api\/projects\/([^/]+)\/destination$/;
 const EMPTY_REGISTRY = { orgs: [], projects: [], integrations: new Map(), notices: [] };
 const addsInFlight = new Set();
+const statusesInFlight = new Map();
 
 // A refusal the API answers with its own status, a stable `code` and structured details.
 export class ApiRefusal extends Error {
@@ -77,13 +86,13 @@ function publicLastTest(lastTest) {
   return typeof lastTest.reason === "string" ? { ...answer, reason: lastTest.reason } : answer;
 }
 
-// The Discord fields of a record a row may show: webhook name, channel and server ids.
+// The destination fields of a record a row may show: webhook name, channel and server ids.
 function webhookFields(record) {
   const text = (value) => (typeof value === "string" && value ? value : null);
   return { channelId: text(record?.channelId), serverId: text(record?.guildId), webhookName: text(record?.webhookName) };
 }
 
-// The ids of the projects a connection serves: its destination projects for Discord, its orgs' projects otherwise.
+// The ids of the projects a connection serves: its destination projects for a destination kind, its orgs' projects otherwise.
 function usedByOf(listed, registry) {
   if (listed.type === DESTINATION_KIND) return registry.projects.filter((project) => destinationOf(registry.integrations.get(project.id)) === listed.name).map((project) => project.id);
   if (listed.scope === "home") return registry.projects.map((project) => project.id);
@@ -118,7 +127,7 @@ function projectRow(project, registry) {
   };
 }
 
-// The Settings › Integrations view: orgs, connections and projects; it calls no service and writes nothing.
+// The Settings › Integrations view: module cards, orgs, connections and projects; it calls no service and writes nothing.
 export async function integrationsView(env) {
   const { config, secrets } = quietFiles(env);
   const registry = existsSync(dbPath(env)) ? await withReadOnlyStore(env, readRegistry) : EMPTY_REGISTRY;
@@ -126,6 +135,7 @@ export async function integrationsView(env) {
   const orgName = (id) => names.get(id) ?? id;
   const listed = listConnections(config, secrets?.connections ? secrets : { connections: {} });
   return {
+    modules: moduleCards(),
     orgs: registry.orgs.map((org) => ({ id: org.id, name: org.name, projects: registry.projects.filter((project) => project.org_id === org.id).length })),
     connections: listed.map((entry) => connectionRow(entry, { secrets, registry, orgName })),
     projects: registry.projects.map((project) => projectRow(project, registry)),
@@ -169,9 +179,12 @@ function requireListed(files, name) {
   return listed;
 }
 
-// Refuses an org edit on a connection that is not Discord: other types keep the CLI's binding rules.
-function requireDiscordRow(listed) {
-  if (listed.type !== DESTINATION_KIND) throw new UserError(`only a Discord connection is allowed for orgs here; \`${listed.name}\` is a ${listed.type} connection`);
+// Refuses an org edit on a connection whose kind does not bind many per org: other kinds keep the CLI's binding rules.
+function requireOrgEditable(listed) {
+  const kinds = manyTypes();
+  if (kinds.includes(listed.type)) return;
+  const labels = kinds.map((kind) => providerOf(kind)?.label ?? kind).join(" or ");
+  throw new UserError(`only a ${labels} connection is allowed for orgs here; \`${listed.name}\` is a ${listed.type} connection`);
 }
 
 // Refuses a remove that would leave projects without notice, unless the request asked to unlink them.
@@ -188,14 +201,60 @@ function requiredString(body, field) {
   return value;
 }
 
-// The name, org and webhook URL of an add; the URL is never echoed back, not even in a refusal.
-function addFields(body) {
-  const name = requiredString(body, "name");
+// The kind of an add with its provider and descriptor: an unknown kind is a 404, a kind read from the machine a 409.
+function addKindOf(kind) {
+  const provider = providerOf(kind);
+  if (!provider) throw new ApiRefusal(404, `unknown integration \`${kind}\``, { code: "not-found" });
+  if (!provider.connection) {
+    const hint = provider.ambient?.hint ?? "it has no stored connection";
+    throw new ApiRefusal(409, `${kind} is not a stored connection: ${hint}`, { code: "ambient" });
+  }
+  const descriptor = provider.connection;
+  return { kind, provider, descriptor, home: descriptor.scope === "home", one: descriptor.cardinality !== "many" };
+}
+
+// The name of an add: required for a kind of many connections, otherwise the given one or the kind's default.
+function addNameOf(body, target) {
+  const given = typeof body?.name === "string" ? body.name.trim() : "";
+  const name = target.one && !given ? (target.home ? target.kind : `${target.kind}-${requiredString(body, "org")}`) : requiredString(body, "name");
   assertName("connection", name);
-  const org = requiredString(body, "org");
-  const url = typeof body?.url === "string" ? body.url.trim() : "";
-  if (!url || url.length > MAX_URL_CHARS) throw new ApiRefusal(422, `Invalid URL: a Discord webhook URL of at most ${MAX_URL_CHARS} characters is expected. ${NOTHING_SAVED}`, { code: "invalid-url" });
-  return { name, org, url };
+  return name;
+}
+
+// The org an add binds to: required for an org kind, refused for a home-wide one.
+function addOrgOf(body, target) {
+  if (!target.home) return requiredString(body, "org");
+  if (body?.org !== undefined) throw new UserError(`a ${target.kind} connection serves the whole home; drop \`org\``);
+  return null;
+}
+
+// The secret of an add, trimmed; empty or over the cap is a 422 that never echoes it back.
+function addSecretOf(body, target) {
+  const field = target.descriptor.secretFields[0];
+  const secret = typeof body?.[field] === "string" ? body[field].trim() : "";
+  if (secret && secret.length <= MAX_SECRET_CHARS) return secret;
+  const text = target.descriptor.tooLong ?? `Invalid ${target.descriptor.secretLabel ?? "secret"}: a value of at most ${MAX_SECRET_CHARS} characters is expected.`;
+  throw new ApiRefusal(422, `${text} ${NOTHING_SAVED}`, { code: invalidCodeOf(target) });
+}
+
+// The stable code of a refused secret value of a kind.
+function invalidCodeOf(target) {
+  return `invalid-${String(target.descriptor.secretFields[0]).toLowerCase()}`;
+}
+
+// The extra fields of an add, validated against the kind's declaration.
+function addExtrasOf(body, target) {
+  const extra = body?.extra;
+  if (extra !== undefined && (extra === null || typeof extra !== "object" || Array.isArray(extra))) throw new UserError("`extra` expects an object of fields");
+  return connectionExtras(target.kind, extra ?? {});
+}
+
+// The fields of an add read from its body, in the order a refusal names them; the secret is never echoed back.
+function addFields(body, target) {
+  const name = addNameOf(body, target);
+  const org = addOrgOf(body, target);
+  const secret = addSecretOf(body, target);
+  return { name, org, secret, extra: addExtrasOf(body, target) };
 }
 
 // Refuses a connection name the home already has, naming the orgs that use it.
@@ -206,17 +265,43 @@ async function refuseDuplicate({ store, files, name }) {
   throw new ApiRefusal(409, `A connection named \`${name}\` already exists. ${NOTHING_SAVED}`, { code: "duplicate", details: { orgs } });
 }
 
-// Refuses a Discord answer that is not a success, with the fixed reason and the status only.
-function refuseUnless(result) {
-  if (result.ok) return;
-  const reason = discordReason(result);
-  throw new ApiRefusal(502, `${reason} ${NOTHING_SAVED}`, { code: "refused", details: { status: result.status, reason } });
+// Refuses a second connection of a home-wide kind, naming the one the home already has.
+function refuseHomeTaken(files, target) {
+  const taken = homeConnectionName(files.secrets, target.kind);
+  if (taken) throw new ApiRefusal(409, `A home has one ${target.kind} connection: \`${taken}\`; remove it first. ${NOTHING_SAVED}`, { code: "duplicate", details: { orgs: [] } });
 }
 
-// Reads the webhook from Discord; a failure refuses with nothing stored.
-async function testedWebhook(url, fetchImpl) {
-  const tested = await requireType(DESTINATION_KIND).test({ type: DESTINATION_KIND, url }, { fetchImpl, timeoutMs: TEST_TIMEOUT_MS });
-  refuseUnless(tested);
+// Refuses an add on an org slot another connection already holds, naming that connection and never its secret.
+function refuseOccupied(files, { target, org }) {
+  const bound = connectionFor(files.config, org.id, target.kind);
+  if (!bound) return;
+  const message = `org ${org.name} already has ${target.kind} connection \`${bound}\`; remove it first. ${NOTHING_SAVED}`;
+  throw new ApiRefusal(409, message, { code: "occupied", details: { org: org.name, connection: bound } });
+}
+
+// Refuses an add that would clash with what the home holds: the name, the home's one connection, or the org's slot.
+async function refuseConflicts({ store, files, add }) {
+  await refuseDuplicate({ store, files, name: add.name });
+  if (add.target.home) refuseHomeTaken(files, add.target);
+  else if (add.target.one) refuseOccupied(files, add);
+}
+
+// Refuses an answer of the service that is not a success, with the kind's fixed reason and the status only.
+function refuseUnless(kind, result) {
+  if (result?.ok) return;
+  const reason = testReason(kind, result);
+  throw new ApiRefusal(502, `${reason} ${NOTHING_SAVED}`, { code: "refused", details: { status: result?.status ?? null, reason } });
+}
+
+// The record a test and a store of an add read: type, secret and extra fields.
+function addRecordOf(add) {
+  return { type: add.target.kind, [add.target.descriptor.secretFields[0]]: add.secret, ...add.extra };
+}
+
+// Tests an add against its service; a failure refuses with nothing stored.
+async function testedAdd(add, fetchImpl) {
+  const tested = await add.target.descriptor.test(addRecordOf(add), { fetchImpl, timeoutMs: TEST_TIMEOUT_MS });
+  refuseUnless(add.target.kind, tested);
   return tested;
 }
 
@@ -238,44 +323,90 @@ async function nothingSavedOnRefusal(step) {
   }
 }
 
-// Posts the "nightqueue connected" embed once the name is reserved and the lock and the name were checked, then stores the connection.
-async function announceAndStore({ env, name, org, url, tested, fetchImpl }) {
-  const release = reserveName(env, name);
+// Refuses a secret the kind's own shape check rejects, before its service is asked.
+function refuseInvalidSecret(add) {
+  const invalid = add.target.descriptor.validate?.(add.secret);
+  if (invalid) throw new ApiRefusal(422, `${invalid} ${NOTHING_SAVED}`, { code: invalidCodeOf(add.target) });
+}
+
+// The fields a stored connection keeps from its test: the kind's own pick, or what the kind derives from its secret.
+async function derivedOf(add, { tested, fetchImpl }) {
+  const fromTest = add.target.descriptor.fromTest;
+  if (typeof fromTest === "function") return fromTest(tested);
+  return await completeConnection({ type: add.target.kind, secret: add.secret, extra: add.extra, fetchImpl, timeoutMs: TEST_TIMEOUT_MS });
+}
+
+// Announces the connection on its service once the name is reserved and the lock and the conflicts were checked, then stores it.
+async function announceAndStore({ env, add, tested, fetchImpl }) {
+  const release = reserveName(env, add.name);
   try {
-    await nothingSavedOnRefusal(() => lockedWrite(env, async (store) => await refuseDuplicate({ store, files: loadFiles(env), name })));
-    refuseUnless(await announceWebhook({ url }, { fetchImpl, timeoutMs: TEST_TIMEOUT_MS }));
-    await nothingSavedOnRefusal(() => storeDiscord({ env, name, org, url, tested }));
+    await nothingSavedOnRefusal(() => lockedWrite(env, async (store) => await refuseConflicts({ store, files: loadFiles(env), add })));
+    const announce = add.target.descriptor.announce;
+    if (typeof announce === "function") refuseUnless(add.target.kind, await announce(addRecordOf(add), { fetchImpl, timeoutMs: TEST_TIMEOUT_MS }));
+    const derived = await derivedOf(add, { tested, fetchImpl });
+    await nothingSavedOnRefusal(() => storeAdd({ env, add, derived: { ...derived, lastTest: { ok: true, at: new Date().toISOString(), status: tested.status } } }));
   } finally {
     release();
   }
 }
 
-// Stores a verified Discord connection under the lock, re-checking the name, and binds it to the org.
-async function storeDiscord({ env, name, org, url, tested }) {
-  const at = new Date().toISOString();
-  const named = tested.webhookName ? { webhookName: tested.webhookName } : {};
-  const derived = { channelId: tested.channelId, guildId: tested.guildId, ...named, mode: "webhook", lastTest: { ok: true, at, status: tested.status } };
+// Stores a verified connection under the lock, re-checking the conflicts: home-wide in the secrets only, or bound to its org.
+async function storeAdd({ env, add, derived }) {
+  const { name, target, secret, extra, org } = add;
   await lockedWrite(env, async (store) => {
     const files = loadFiles(env);
-    await refuseDuplicate({ store, files, name });
-    const result = addConnection({ ...files, name, type: DESTINATION_KIND, orgId: org.id, secret: url, derived });
+    await refuseConflicts({ store, files, add });
+    if (target.home) {
+      storeHomeConnection({ env, secrets: files.secrets, name, type: target.kind, secret, extra, derived, saveSecrets });
+      return;
+    }
+    const result = addConnection({ ...files, name, type: target.kind, orgId: org.id, secret, extra, derived });
     saveSecrets(result.secrets, env);
     saveConfigAfterSecret({ config: result.config, ctx: { saveConfig, env }, name, org: org.name });
   });
 }
 
-// Adds a Discord connection for an org: validated, read and announced on Discord first, then stored and bound at once.
-export async function addDiscord({ body, env, fetchImpl }) {
+// Adds a connection of a kind: validated, tested and announced on its service first, then stored (and bound to its org) at once.
+export async function addOfKind({ kind, body, env, fetchImpl }) {
   refuseHomeWriteInsideJob(env);
-  const { name, org: orgName, url } = addFields(body);
+  const target = addKindOf(kind);
+  const fields = addFields(body, target);
   const store = await writableStore(env);
-  const org = await requireOrg(store, orgName);
-  await refuseDuplicate({ store, files: loadFiles(env), name });
-  if (!isWebhookUrl(url)) throw new ApiRefusal(422, `Invalid URL: expected https://discord.com/api/webhooks/<id>/<token>. ${NOTHING_SAVED}`, { code: "invalid-url" });
-  const tested = await testedWebhook(url, fetchImpl);
-  await announceAndStore({ env, name, org, url, tested, fetchImpl });
+  const org = target.home ? null : await requireOrg(store, fields.org);
+  const add = { ...fields, target, org };
+  await refuseConflicts({ store, files: loadFiles(env), add });
+  refuseInvalidSecret(add);
+  const tested = await testedAdd(add, fetchImpl);
+  await announceAndStore({ env, add, tested, fetchImpl });
   const view = await integrationsView(env);
-  return { connection: view.connections.find((row) => row.id === name) ?? null };
+  return { connection: view.connections.find((row) => row.id === add.name) ?? null };
+}
+
+// The status of a kind read from the machine, one probe per home and kind at a time; any other kind is a 404.
+export async function ambientStatus({ kind, env }) {
+  const status = providerOf(kind)?.ambient?.status;
+  if (typeof status !== "function") throw new ApiRefusal(404, `\`${kind}\` has no machine status`, { code: "not-found" });
+  const key = `${homeDir(env)}\0${kind}`;
+  if (!statusesInFlight.has(key)) {
+    const probe = Promise.resolve()
+      .then(() => status(env))
+      .finally(() => statusesInFlight.delete(key));
+    statusesInFlight.set(key, probe);
+  }
+  return publicStatus(kind, await statusesInFlight.get(key));
+}
+
+// The public fields of a machine status: flags and account names only, never raw output.
+function publicStatus(kind, status) {
+  const text = (value) => (typeof value === "string" && value ? value : null);
+  return {
+    kind,
+    installed: status?.installed !== false,
+    authenticated: status?.authenticated === null ? null : status?.authenticated === true,
+    login: text(status?.login),
+    host: text(status?.host),
+    checkedAt: new Date().toISOString(),
+  };
 }
 
 // Tests one stored connection against its service and records the outcome on its record; a failed test is an answer, not an error.
@@ -293,13 +424,13 @@ export async function testOne({ name, env, fetchImpl }) {
   });
 }
 
-// Allows a Discord connection for one more org.
+// Allows a connection of a many-per-org kind for one more org.
 export async function allowOrg({ name, body, env }) {
   const orgName = requiredString(body, "org");
   return await lockedWrite(env, async (store) => {
     const org = await requireOrg(store, orgName);
     const files = loadFiles(env);
-    requireDiscordRow(requireListed(files, name));
+    requireOrgEditable(requireListed(files, name));
     if (!hasConnection(files.secrets, name)) throw new UserError(`connection \`${name}\` has no stored secret; remove it and add it again`);
     bindConnection({ ...files, name, orgId: org.id });
     saveConfig(files.config, env);
@@ -307,12 +438,12 @@ export async function allowOrg({ name, body, env }) {
   });
 }
 
-// Takes one org away from a Discord connection, unlinking that org's projects first when the request confirms it.
+// Takes one org away from a many-per-org connection, unlinking that org's projects first when the request confirms it.
 export async function removeOrg({ name, orgName, unlink, env }) {
   return await lockedWrite(env, async (store) => {
     const org = await requireOrg(store, orgName);
     const files = loadFiles(env);
-    requireDiscordRow(requireListed(files, name));
+    requireOrgEditable(requireListed(files, name));
     refuseInUse(await projectsUsing({ store, name, orgIds: [org.id] }), unlink);
     const unlinked = await unlinkProjectsUsing({ store, name, orgIds: [org.id] });
     unbindConnection({ ...files, name, orgId: org.id });
@@ -346,7 +477,7 @@ function projectIdsOf(body) {
   return ids;
 }
 
-// Links many projects to a Discord connection, all of them or none.
+// Links many projects to a destination connection, all of them or none.
 export async function linkMany({ name, body, env }) {
   const projectIds = projectIdsOf(body);
   return await lockedWrite(env, async (store) => await linkProjects({ store, name, projectIds, files: loadFiles(env) }));
@@ -398,11 +529,22 @@ function connectionHandler({ req, match, ctx }) {
   return null;
 }
 
+// The handler of one kind-keyed request (an add, or a machine status), or null when the request is not one.
+function kindHandler(req, path, ctx) {
+  const { env, fetchImpl, readBody } = ctx;
+  const add = req.method === "POST" ? KIND_PATH.exec(path) : null;
+  if (add) return async () => ({ status: 201, body: await addOfKind({ kind: segmentOf(add[1]), body: await readBody(req), env, fetchImpl }) });
+  const status = req.method === "GET" ? STATUS_PATH.exec(path) : null;
+  if (status) return async () => ({ status: 200, body: await ambientStatus({ kind: segmentOf(status[1]), env }) });
+  return null;
+}
+
 // The handler of one Settings › Integrations request, or null when the path and method are not one of its routes.
 function integrationsHandler(req, path, ctx) {
-  const { env, fetchImpl, readBody } = ctx;
+  const { env, readBody } = ctx;
   if (path === "/api/integrations" && req.method === "GET") return async () => ({ status: 200, body: await integrationsView(env) });
-  if (path === "/api/integrations/discord" && req.method === "POST") return async () => ({ status: 201, body: await addDiscord({ body: await readBody(req), env, fetchImpl }) });
+  const byKind = kindHandler(req, path, ctx);
+  if (byKind) return byKind;
   const destination = DESTINATION_PATH.exec(path);
   if (destination && req.method === "PUT") return async () => ({ status: 200, body: await putDestination({ projectId: segmentOf(destination[1]), body: await readBody(req), env }) });
   const connection = CONNECTION_PATH.exec(path);

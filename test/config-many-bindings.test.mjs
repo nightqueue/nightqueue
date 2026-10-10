@@ -13,17 +13,17 @@ const OLDER_OWNED_KEYS = new Set(["version", "defaultOrg", "orgConnections", "qu
 function olderBuildRewrite(raw) {
   const orgConnections = {};
   for (const [orgId, slots] of Object.entries(raw.orgConnections ?? {})) {
-    orgConnections[orgId] = { github: null };
+    orgConnections[orgId] = { sentry: null };
     for (const [type, value] of Object.entries(slots)) orgConnections[orgId][type] = typeof value === "string" && value ? value : null;
   }
   const unowned = Object.fromEntries(Object.entries(raw).filter(([key]) => !OLDER_OWNED_KEYS.has(key)));
   return { version: 1, defaultOrg: raw.defaultOrg ?? null, orgConnections, queue: raw.queue, embedding: null, ...unowned };
 }
 
-// A config whose org binds a github slot and a list of the first many kind of this build.
+// A config whose org binds a sentry slot and a list of the first many kind of this build.
 function boundConfig(many) {
   const config = emptyConfig();
-  config.orgConnections.org1 = { github: "gh", [many]: ["ops", "team"] };
+  config.orgConnections.org1 = { sentry: "st", [many]: ["ops", "team"] };
   return config;
 }
 
@@ -32,14 +32,14 @@ test("many-kind lists are written outside orgConnections, so an older build's no
   assert.ok(many, "this build registers a many kind");
   const disk = JSON.parse(JSON.stringify(diskConfig(boundConfig(many))));
   assert.equal(Object.hasOwn(disk.orgConnections.org1, many), false);
-  assert.equal(disk.orgConnections.org1.github, "gh");
+  assert.equal(disk.orgConnections.org1.sentry, "st");
   assert.deepEqual(disk.orgConnectionLists, { org1: { [many]: ["ops", "team"] } });
   assert.equal(disk.version, 1, "the schema version stays readable by the installed build");
 
   const afterOlderSave = olderBuildRewrite(disk);
   const reread = normalizeConfig(afterOlderSave);
   assert.deepEqual(reread.orgConnections.org1[many], ["ops", "team"]);
-  assert.equal(reread.orgConnections.org1.github, "gh");
+  assert.equal(reread.orgConnections.org1.sentry, "st");
 });
 
 test("a list left in orgConnections by an earlier write is merged with orgConnectionLists and moved out on the next save", (t) => {
@@ -58,6 +58,6 @@ test("a list left in orgConnections by an earlier write is merged with orgConnec
 
 test("a config with no many-kind binding is written with no orgConnectionLists key", () => {
   const config = emptyConfig();
-  config.orgConnections.org1 = { github: "gh" };
+  config.orgConnections.org1 = { sentry: "st" };
   assert.equal(Object.hasOwn(diskConfig(config), "orgConnectionLists"), false);
 });

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-import { appendFileSync, mkdirSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 
 const args = process.argv.slice(2);
@@ -25,16 +25,47 @@ function token() {
   return value;
 }
 
-// Tells whether the test asked this fake to look logged in.
-function authenticated() {
-  return process.env.NIGHTQUEUE_FAKE_GH_STATE === "authenticated";
+// The state a previous fake `gh auth login` left in the state file, or an empty text.
+function storedState() {
+  const path = process.env.NIGHTQUEUE_FAKE_GH_STATE_FILE;
+  if (!path || !existsSync(path)) return "";
+  return readFileSync(path, "utf8").trim();
 }
 
-// Answers `gh auth status`, writing the identity line on the stream the real CLI uses for a pipe.
+// Tells whether the test asked this fake to look logged in, or a fake login already happened.
+function authenticated() {
+  return process.env.NIGHTQUEUE_FAKE_GH_STATE === "authenticated" || storedState() === "authenticated";
+}
+
+// The block of a second, inactive account the test asked for: logged in before the active one, or failed after it.
+function otherAccountBlock(host) {
+  const other = process.env.NIGHTQUEUE_FAKE_GH_OTHER_LOGIN;
+  if (!other) return { before: "", after: "" };
+  if (process.env.NIGHTQUEUE_FAKE_GH_OTHER_FAILED === "1") {
+    return { before: "", after: `\n  X Failed to log in to ${host} account ${other} (keyring)\n  - Active account: false\n` };
+  }
+  return { before: `  ✓ Logged in to ${host} account ${other} (keyring)\n  - Active account: false\n\n`, after: "" };
+}
+
+// Answers `gh auth status`, writing the identity lines on the stream the real CLI uses for a pipe; a failed other account exits 1.
 function authStatus() {
   if (!authenticated()) fail("You are not logged into any GitHub hosts. To log in, run: gh auth login");
   const login = process.env.NIGHTQUEUE_FAKE_GH_LOGIN || "octocat";
-  process.stdout.write(`github.com\n  Logged in to github.com account ${login} (keyring)\n`);
+  const host = process.env.NIGHTQUEUE_FAKE_GH_HOST || "github.com";
+  const other = otherAccountBlock(host);
+  const marker = process.env.NIGHTQUEUE_FAKE_GH_OTHER_LOGIN ? "  - Active account: true\n" : "";
+  process.stdout.write(`${host}\n${other.before}  Logged in to ${host} account ${login} (keyring)\n${marker}${other.after}`);
+  if (other.after) process.exitCode = 1;
+}
+
+// Answers `gh auth login`, recording the login in the state file when the test named one.
+function authLogin() {
+  const path = process.env.NIGHTQUEUE_FAKE_GH_STATE_FILE;
+  if (path) {
+    mkdirSync(dirname(path), { recursive: true });
+    writeFileSync(path, "authenticated\n");
+  }
+  process.stdout.write("fake gh: login\n");
 }
 
 // Answers `gh pr view --json` with the state the test asked for; without one the fake refuses to invent it.
@@ -80,6 +111,7 @@ function main() {
   sleepIfAsked();
   const [command, sub] = args;
   if (command === "auth" && sub === "status") return authStatus();
+  if (command === "auth" && sub === "login") return authLogin();
   if (command === "auth" && sub === "token") return process.stdout.write(`${token()}\n`);
   if (command === "pr" && sub === "view") return prView();
   if (command === "pr" && sub === "create") return prCreate();

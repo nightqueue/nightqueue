@@ -6,17 +6,23 @@ import path from "node:path";
 
 import { CONNECTION_TYPES, requireType } from "../../src/config/connections.mjs";
 import { emptySlots } from "../../src/config/schema.mjs";
+import { originCoverage } from "../../src/integrations/coverage.mjs";
 import {
   actsOnOrigin,
+  ambientProviders,
+  connectionProviders,
   connectionTypes,
   isHomeScoped,
   manyTypes,
+  moduleCards,
   originProviders,
   providerOf,
   providers,
+  retiredConnectionKinds,
   slotTypes,
   withProviders,
 } from "../../src/integrations/registry.mjs";
+import { providerSettingsView } from "../../src/integrations/settings.mjs";
 import { requestJson } from "../../src/integrations/http.mjs";
 
 const INTEGRATIONS_DIR = fileURLToPath(new URL("../../src/integrations/", import.meta.url));
@@ -26,32 +32,46 @@ test("the registry lists github first, then sentry, then linear, then discord, i
   assert.deepEqual(providers().map((provider) => provider.kind), ["github", "sentry", "linear", "discord"]);
   assert.equal(providerOf("github").kind, "github");
   assert.equal(providerOf("nope"), null);
-  assert.deepEqual(slotTypes(), ["github", "sentry"]);
+  assert.deepEqual(slotTypes(), ["sentry"]);
   assert.deepEqual(manyTypes(), ["discord"]);
   assert.deepEqual(originProviders().map((provider) => provider.kind), ["sentry", "linear", "discord"]);
 });
 
-test("emptySlots is derived from the one-cardinality providers", () => {
-  assert.deepEqual({ ...emptySlots() }, { github: null, sentry: null });
+test("emptySlots is derived from the one-cardinality connection providers", () => {
+  assert.deepEqual({ ...emptySlots() }, { sentry: null });
   assert.equal(Object.getPrototypeOf(emptySlots()), null);
 });
 
-test("CONNECTION_TYPES is the registry's map with the github descriptor", () => {
+test("CONNECTION_TYPES holds only the stored kinds; github is read from the machine's gh", () => {
   assert.ok(CONNECTION_TYPES instanceof Map);
-  assert.deepEqual([...CONNECTION_TYPES.keys()], ["github", "sentry", "linear", "discord"]);
-  const github = CONNECTION_TYPES.get("github");
-  assert.deepEqual(github.secretFields, ["token"]);
-  assert.deepEqual(github.extraFields, []);
-  assert.equal(github.cardinality, "one");
-  assert.equal(typeof github.test, "function");
-  assert.equal(requireType("github"), github);
-  assert.equal(connectionTypes().get("github"), github);
+  assert.deepEqual([...CONNECTION_TYPES.keys()], ["sentry", "linear", "discord"]);
+  assert.deepEqual(connectionProviders().map((provider) => provider.kind), ["sentry", "linear", "discord"]);
+  assert.deepEqual(ambientProviders().map((provider) => provider.kind), ["github"]);
+  assert.deepEqual(retiredConnectionKinds(), ["github"]);
+  assert.equal(requireType("sentry"), connectionTypes().get("sentry"));
+  assert.throws(() => requireType("github"), /github is not a stored connection: nightqueue uses the machine's authenticated gh; run `gh auth login`/);
+  assert.throws(() => requireType("jira"), /unknown connection type `jira`; supported: sentry, linear, discord/);
 });
 
-test("the github summary keeps the historical connection test line", () => {
-  const summary = requireType("github").summary;
-  assert.equal(summary({ login: "octocat", scopes: "repo" }), "login=octocat scopes=repo");
-  assert.equal(summary({ login: null, scopes: "" }), "login=(none) scopes=(none)");
+test("moduleCards lists Discord, Linear, GitHub, Sentry as plain data that survives JSON", () => {
+  const cards = moduleCards();
+  assert.deepEqual(cards.map((card) => card.kind), ["discord", "linear", "github", "sentry"]);
+  assert.deepEqual(JSON.parse(JSON.stringify(cards)), cards);
+  const byKind = Object.fromEntries(cards.map((card) => [card.kind, card]));
+  assert.deepEqual([byKind.discord.place, byKind.linear.place, byKind.github.place, byKind.sentry.place], ["org", "home", "machine", "org"]);
+  assert.equal(byKind.github.add, null);
+  assert.deepEqual(byKind.github.ambient, { statusPath: "/api/integrations/github/status", command: "gh auth login --web" });
+  assert.equal(byKind.discord.add.nameRequired, true);
+  assert.equal(byKind.linear.add.orgRequired, false);
+  assert.equal(byKind.sentry.add.secretField, "token");
+  assert.deepEqual(byKind.sentry.add.fields.map((field) => field.name), ["org", "url"]);
+});
+
+test("origin coverage and the settings view run on the real registry, github included", () => {
+  const empty = { orgConnections: {} };
+  const covered = originCoverage({ origin: { kind: "github", ref: "x" }, orgId: "o", integrations: { github: {} }, config: empty, secrets: { connections: {} } });
+  assert.equal(covered.connection, "none");
+  assert.deepEqual(providerSettingsView().map((view) => view.kind), ["github", "sentry", "linear", "discord"]);
 });
 
 test("withProviders swaps the list for the callback and restores it after a throw", async () => {

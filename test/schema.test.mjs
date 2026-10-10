@@ -6,9 +6,12 @@ import {
   assertName,
   emptyConfig,
   emptySecrets,
+  hasRetiredConnections,
   normalizeConfig,
   normalizeName,
   normalizeSecrets,
+  retiredConnectionCount,
+  retiredSlotCount,
 } from "../src/config/schema.mjs";
 
 test("NAME_RE accepts the documented shape and rejects the rest", () => {
@@ -41,7 +44,7 @@ test("normalizeConfig fills defaults over a partial, hand-edited file", () => {
   const config = normalizeConfig({ defaultOrg: "01J0000000000000000000ACME", orgConnections: { "01J0000000000000000000ACME": {} } });
   assert.equal(config.version, 1);
   assert.equal(config.defaultOrg, "01J0000000000000000000ACME");
-  assert.deepEqual({ ...config.orgConnections["01J0000000000000000000ACME"] }, { github: null, sentry: null });
+  assert.deepEqual({ ...config.orgConnections["01J0000000000000000000ACME"] }, { sentry: null });
   assert.equal(emptyConfig().defaultOrg, null);
   assert.deepEqual({ ...emptyConfig().orgConnections }, {});
   assert.deepEqual(config.queue, {
@@ -166,23 +169,23 @@ test("normalizeConfig keeps every top-level key it does not own verbatim, the v1
 });
 
 test("normalizeSecrets keeps only well-formed connection entries", () => {
-  const secrets = normalizeSecrets({ connections: { gh: { type: "github", token: "t" }, bad: { token: "t" } } });
-  assert.deepEqual(Object.keys(secrets.connections), ["gh"]);
+  const secrets = normalizeSecrets({ connections: { st: { type: "sentry", token: "t" }, bad: { token: "t" } } });
+  assert.deepEqual(Object.keys(secrets.connections), ["st"]);
   assert.deepEqual(normalizeSecrets(undefined), emptySecrets());
 });
 
 test("a `__proto__` key in a hand-edited file never reaches the prototype of the built maps", () => {
-  const raw = JSON.parse('{"orgConnections":{"__proto__":{"github":"gh"},"01J0000000000000000000ACME":{"__proto__":"x","github":"gh"}}}');
+  const raw = JSON.parse('{"orgConnections":{"__proto__":{"sentry":"st"},"01J0000000000000000000ACME":{"__proto__":"x","sentry":"st"}}}');
   const config = normalizeConfig(raw);
-  assert.equal(config.orgConnections.github, undefined);
+  assert.equal(config.orgConnections.sentry, undefined);
   assert.equal(Object.getPrototypeOf(config.orgConnections), null);
   assert.equal(Object.getPrototypeOf(config.orgConnections["01J0000000000000000000ACME"]), null);
-  assert.equal(config.orgConnections["01J0000000000000000000ACME"].github, "gh");
-  assert.equal({}.github, undefined);
+  assert.equal(config.orgConnections["01J0000000000000000000ACME"].sentry, "st");
+  assert.equal({}.sentry, undefined);
 });
 
 test("a `__proto__` connection in secrets.json stays inert data instead of answering lookups", () => {
-  const secrets = normalizeSecrets(JSON.parse('{"connections":{"__proto__":{"type":"github","token":"t"}}}'));
+  const secrets = normalizeSecrets(JSON.parse('{"connections":{"__proto__":{"type":"sentry","token":"t"}}}'));
   assert.equal(secrets.connections.type, undefined);
   assert.equal(secrets.connections.token, undefined);
   assert.equal(secrets.connections.nope, undefined);
@@ -203,4 +206,55 @@ test("a file written by a newer nightqueue is refused instead of silently downgr
     return true;
   });
   assert.equal(normalizeConfig({ version: 1, orgs: {} }).version, 1);
+});
+
+test("a github slot, a github list and a github record are dropped on load, with or without a version", () => {
+  for (const version of [1, undefined]) {
+    const config = normalizeConfig({
+      version,
+      orgConnections: { a: { github: "gh", sentry: "st" } },
+      orgConnectionLists: { a: { github: ["gh"], discord: ["d"] } },
+    });
+    assert.deepEqual({ ...config.orgConnections.a }, { sentry: "st", discord: ["d"] });
+    assert.equal(config.version, 1);
+    const secrets = normalizeSecrets({ version, connections: { gh: { type: "github", token: "t" }, st: { type: "sentry", token: "s" } } });
+    assert.deepEqual(Object.keys(secrets.connections), ["st"]);
+  }
+});
+
+test("a kind this build does not know passes through verbatim", () => {
+  const config = normalizeConfig({ orgConnections: { a: { jira: "j" } } });
+  assert.equal(config.orgConnections.a.jira, "j");
+  const secrets = normalizeSecrets({ connections: { j: { type: "jira", token: "t" } } });
+  assert.deepEqual(secrets.connections.j, { type: "jira", token: "t" });
+});
+
+test("malformed or legacy slot data never throws while the home opens", () => {
+  const manyOrgs = Object.fromEntries(Array.from({ length: 200 }, (_, index) => [`org${index}`, { github: "gh", sentry: null }]));
+  const raws = [
+    { orgConnections: "x" },
+    { orgConnections: { org: [1, 2] } },
+    { orgConnections: { org: { github: 42 } } },
+    { orgConnectionLists: { org: { github: ["a", null] } } },
+    { orgConnections: manyOrgs },
+  ];
+  for (const raw of raws) {
+    const config = normalizeConfig(raw);
+    for (const slots of Object.values(config.orgConnections)) assert.equal("github" in slots, false);
+  }
+  const secrets = normalizeSecrets({ connections: { gh: { type: "github" }, x: null } });
+  assert.deepEqual(Object.keys(secrets.connections), []);
+});
+
+test("hasRetiredConnections tells whether either raw file still holds a github slot or record", () => {
+  assert.equal(hasRetiredConnections(null, null), false);
+  assert.equal(hasRetiredConnections("x", 42), false);
+  assert.equal(hasRetiredConnections({ orgConnections: { a: { sentry: "st" } } }, { connections: { st: { type: "sentry" } } }), false);
+  assert.equal(hasRetiredConnections({ orgConnections: { a: { github: null } } }, null), true);
+  assert.equal(hasRetiredConnections({ orgConnectionLists: { a: { github: [] } } }, null), true);
+  assert.equal(hasRetiredConnections(null, { connections: { gh: { type: "github" } } }), true);
+  assert.equal(retiredConnectionCount({ connections: { gh: { type: "github" }, st: { type: "sentry" }, x: null } }), 1);
+  assert.equal(retiredConnectionCount("x"), 0);
+  assert.equal(retiredSlotCount({ orgConnections: { a: { github: null, sentry: "st" }, b: "x" }, orgConnectionLists: { a: { github: [] } } }), 2);
+  assert.equal(retiredSlotCount(null), 0);
 });

@@ -48,13 +48,13 @@ test("listOrgs marks the default org, carries the bindings by id and counts proj
   const acme = await addOrg(store, "acme");
   registerIn(t, env, "api", "acme");
   registerIn(t, env, "web");
-  const config = { ...emptyConfig(), orgConnections: { [acme.id]: { github: "gh" } } };
+  const config = { ...emptyConfig(), orgConnections: { [acme.id]: { sentry: "st" } } };
   const orgs = await listOrgs(store, config);
   assert.deepEqual(orgs.map((org) => org.name), ["default", "acme"]);
   assert.equal(orgs[0].isDefault, true);
-  assert.deepEqual(orgs[0].connections, { github: null, sentry: null });
+  assert.deepEqual(orgs[0].connections, { sentry: null });
   assert.equal(orgs[0].projects, 1);
-  assert.deepEqual(orgs[1].connections, { github: "gh", sentry: null });
+  assert.deepEqual(orgs[1].connections, { sentry: "st" });
   assert.equal(orgs[1].projects, 1);
   assert.equal((await defaultOrg(store, { ...config, defaultOrg: acme.id })).name, "acme");
 });
@@ -85,7 +85,7 @@ test("removeOrg refuses the default org and orgs still in use, and drops the bin
   const { env, store } = homeWithAcme(t);
   const acme = await addOrg(store, "acme");
   const api = registerIn(t, env, "api", "acme");
-  const config = { ...emptyConfig(), orgConnections: { [acme.id]: { github: "gh" } } };
+  const config = { ...emptyConfig(), orgConnections: { [acme.id]: { sentry: "st" } } };
   await assert.rejects(removeOrg(store, config, "default"), (err) => {
     assert.match(err.message, /it is the default org/);
     return true;

@@ -24,7 +24,7 @@ const SESSION_BLOCK_REASONS: Partial<Record<JobStatus, string>> = {
 // Tells whether one listing entry has the fields a tab needs.
 function isTerminalInfo(entry: unknown): entry is TerminalInfo {
   const value = entry as Partial<TerminalInfo> | null;
-  return typeof value?.id === "string" && typeof value?.label === "string" && (value?.kind === "session" || value?.kind === "operator");
+  return typeof value?.id === "string" && typeof value?.label === "string" && (value?.kind === "session" || value?.kind === "operator" || value?.kind === "connect");
 }
 
 // Reads the terminal listing, keeping only the well-formed entries.
@@ -66,31 +66,35 @@ export function useOpenTerminal() {
   );
 }
 
-// The command a terminal request runs by hand when the studio cannot embed it.
-export function fallbackCommand(request: TerminalRequest): string {
+// The command a terminal request runs by hand when the studio cannot embed it; a given fallback wins.
+export function fallbackCommand(request: TerminalRequest, fallback?: string | null): string {
+  if (fallback) return fallback;
   if (request.kind === "session") return `nightqueue queue session ${request.job}`;
+  if (request.kind === "connect") return "nightqueue doctor";
   return request.project ? `nightqueue open ${request.project}` : "nightqueue open";
 }
 
-// Opens a terminal from an entry point: the copy-the-command fallback when the studio cannot embed one, a toast on any other refusal, the full page when already on one.
+// Opens a terminal from an entry point and answers its id: null on the copy-the-command fallback or a refusal (toasted), the full page when already on one.
 export function useLaunchTerminal() {
   const queryClient = useQueryClient();
   const openTerminal = useOpenTerminal();
   const navigate = useNavigate();
   const onTerminalPage = useRouterState({ select: (state) => state.location.pathname.startsWith("/terminal/") });
   return useCallback(
-    async (request: TerminalRequest): Promise<void> => {
+    async (request: TerminalRequest, fallback?: string | null): Promise<string | null> => {
       const listing = queryClient.getQueryData<TerminalsAnswer>(TERMINALS_KEY);
       if (listing && !listing.available) {
-        showTerminalFallback({ reason: listing.reason ?? "node-pty is not loaded", command: fallbackCommand(request) });
-        return;
+        showTerminalFallback({ reason: listing.reason ?? "node-pty is not loaded", command: fallbackCommand(request, fallback) });
+        return null;
       }
       try {
         const created = await openTerminal(request);
         if (onTerminalPage) await navigate({ to: "/terminal/$id", params: { id: created.terminal.id } });
+        return created.terminal.id;
       } catch (err) {
-        if (err instanceof ApiError && err.status === 503) showTerminalFallback({ reason: err.message, command: fallbackCommand(request) });
+        if (err instanceof ApiError && err.status === 503) showTerminalFallback({ reason: err.message, command: fallbackCommand(request, fallback) });
         else showToast(`The terminal was not opened: ${errorText(err)}`, "error");
+        return null;
       }
     },
     [queryClient, openTerminal, navigate, onTerminalPage],
@@ -117,6 +121,12 @@ export function useCloseTerminal() {
 export function sessionBlockReason(status: JobStatus): string | null {
   if (TERMINAL_SESSION_STATUSES.includes(status)) return null;
   return SESSION_BLOCK_REASONS[status] ?? `a ${status} job is not resumed from the studio`;
+}
+
+// Tells whether a terminal is over in a listing: its process exited or the listing no longer holds it.
+export function terminalEnded(terminals: readonly TerminalInfo[], id: string): boolean {
+  const terminal = terminals.find((entry) => entry.id === id);
+  return !terminal || Boolean(terminal.exited);
 }
 
 // The line a tab shows once its process exited.

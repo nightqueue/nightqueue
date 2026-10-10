@@ -273,18 +273,21 @@ nightqueue project integrations api show [--json] # one <kind>.<key>=<value> lin
 nightqueue project integrations api set <kind>.<key>=<value> ...   # validated against the provider that declares the key
 nightqueue project integrations api unset <kind>.<key> ...         # the last key removed leaves the project without integrations
 
-echo "$GITHUB_TOKEN" | nightqueue connection add gh --type github
-nightqueue connection bind gh --org acme           # bind (or rebind) an org slot
-nightqueue connection test gh                      # prints login and scopes, never the token
 echo "$SENTRY_AUTH_TOKEN" | nightqueue connection add sn --type sentry --set org=acme [--set url=https://sentry.example.com]
 nightqueue connection test sn                      # prints org=<slug>, never the token
+nightqueue connection bind sn --org acme           # bind (or rebind) an org slot
 echo "$DISCORD_WEBHOOK_URL" | nightqueue connection add team-chat --type discord   # reads the webhook's channel and guild, added to the org's list
 nightqueue connection test team-chat               # prints channel=<id> guild=<id>, never the URL
 echo "$LINEAR_API_KEY" | nightqueue connection add linear --type linear   # serves the whole home, binds no org
 nightqueue connection test linear                  # prints viewer=<name>, never the key
 nightqueue connection list --json
-nightqueue connection remove gh                    # unbinds from every org, then deletes the secret
+nightqueue connection remove sn                    # unbinds from every org, then deletes the secret
 ```
+
+GitHub is not a stored connection: every job uses the machine's authenticated `gh`, so
+`connection add <name> --type github` is refused with `github is not a stored connection:
+nightqueue uses the machine's authenticated gh; run \`gh auth login\``, and a GitHub record an
+older build stored is dropped on the next load.
 
 The secret is read from stdin when stdin is not a terminal, and asked for in a
 hidden prompt otherwise. It is never accepted as a command-line argument, and

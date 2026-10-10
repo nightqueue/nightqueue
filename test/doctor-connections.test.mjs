@@ -6,15 +6,16 @@ import { assertIsolatedEnv, makeHostEnv } from "../test-support/host.mjs";
 
 const SETUP = ["setup", "--no-path", "--no-embedding"];
 const GITHUB_TOKEN = "ghp_doctor_secret_token";
+const LINEAR_KEY = "lin_api_doctor_secret_key";
 const SENTRY_TOKEN = "sntrys_doctor_secret_token";
 const WEBHOOK_URL = "https://discord.com/api/webhooks/123456789012345678/doctor-secret-webhook-token";
 
-// A fake fetch: github answers, sentry refuses with a 500, the discord webhook never answers and ignores the abort.
+// A fake fetch: linear answers, sentry refuses with a 500, the discord webhook never answers and ignores the abort.
 function fakeFetch() {
   const calls = [];
   const impl = async (url) => {
     calls.push(url);
-    if (url === "https://api.github.com/user") return { status: 200, headers: new Map([["x-oauth-scopes", "repo"]]), json: async () => ({ login: "octo" }) };
+    if (url === "https://api.linear.app/graphql") return { status: 200, headers: new Map(), json: async () => ({ data: { viewer: { id: "u", name: "Octo" } } }) };
     if (url.startsWith("https://sentry.io/")) return { status: 500, headers: new Map(), json: async () => ({}) };
     return new Promise(() => {});
   };
@@ -49,10 +50,11 @@ test("doctor prints no connection line when no connection is stored", async (t) 
   assert.deepEqual(fetch.calls, []);
 });
 
-test("doctor tests every stored connection and warns, never fails, for a failed test, a timeout or an unknown type", async (t) => {
+test("doctor tests every stored connection and warns, never fails, for a failed test, a timeout or an unknown type; a retired github record is not listed", async (t) => {
   const host = await setupHost(t, "doctor-connections-warn");
   const secrets = loadSecrets(host.env, { warn: () => {} });
   secrets.connections.zgh = { type: "github", token: GITHUB_TOKEN };
+  secrets.connections.zlin = { type: "linear", apiKey: LINEAR_KEY };
   secrets.connections.sn = { type: "sentry", token: SENTRY_TOKEN, org: "acme", url: "https://sentry.io" };
   secrets.connections.chat = { type: "discord", url: WEBHOOK_URL, channelId: "1", guildId: "2", mode: "webhook" };
   secrets.connections.old = { type: "pager", token: "x" };
@@ -64,9 +66,9 @@ test("doctor tests every stored connection and warns, never fails, for a failed 
     { name: "connection chat", status: "warn", detail: "discord: failed - timeout (1s)", hint: "nightqueue connection test chat" },
     { name: "connection old", status: "warn", detail: "unknown type pager", hint: "update nightqueue or run `nightqueue connection remove old`" },
     { name: "connection sn", status: "warn", detail: "sentry: failed - HTTP 500", hint: "nightqueue connection test sn" },
-    { name: "connection zgh", status: "ok", detail: "github: ok", hint: null },
+    { name: "connection zlin", status: "ok", detail: "linear: ok", hint: null },
   ]);
   assert.equal(fetch.calls.length, 3);
-  for (const secret of [GITHUB_TOKEN, SENTRY_TOKEN, WEBHOOK_URL]) assert.ok(!raw.includes(secret));
+  for (const secret of [GITHUB_TOKEN, LINEAR_KEY, SENTRY_TOKEN, WEBHOOK_URL]) assert.ok(!raw.includes(secret));
   assert.ok(connectionChecks(report).every((entry) => entry.status !== "fail"));
 });

@@ -1,48 +1,44 @@
-import { Plus } from "lucide-react";
 import { useCallback, useState } from "react";
+import { AddConnectionDialog } from "../components/settings/AddConnectionDialog";
 import { AddWebhookDialog } from "../components/settings/AddWebhookDialog";
 import type { ConnectionHandlers } from "../components/settings/ConnectionRow";
-import { ConnectionsCard } from "../components/settings/ConnectionsCard";
 import { DestinationsCard } from "../components/settings/DestinationsCard";
 import { LinkProjectsDialog } from "../components/settings/LinkProjectsDialog";
+import { ModuleCard } from "../components/settings/ModuleCard";
 import { RemoveConnectionDialog, type RemoveTarget } from "../components/settings/RemoveConnectionDialog";
-import { SettingsEmpty } from "../components/settings/SettingsEmpty";
 import { SettingsError } from "../components/settings/SettingsError";
 import { SettingsSections } from "../components/settings/SettingsSections";
 import { SettingsSkeleton } from "../components/settings/SettingsSkeleton";
-import { Button } from "../components/ui";
-import { discordConnections, projectsUsingInOrg } from "../lib/integrations";
+import { DISCORD, discordConnections, joinLabels, projectsUsingInOrg } from "../lib/integrations";
 import { showToast } from "../lib/toast";
 import type { ConnectionRow, IntegrationsView } from "../lib/types";
 import { useAction } from "../lib/useAction";
 import { allowOrg, removeOrg, useIntegrations, useRefreshIntegrations } from "../lib/useIntegrations";
 
-type Dialog = { kind: "add" } | { kind: "link"; connection: string } | { kind: "remove"; target: RemoveTarget } | null;
+type Dialog = { kind: "add"; module: string } | { kind: "link"; connection: string } | { kind: "remove"; target: RemoveTarget } | null;
 
 interface OrgEdit {
   name: string;
   org: string;
 }
 
-const EXPLAINER = "Connections to GitHub, Linear and Discord. A connection's secret is never shown again once saved.";
-
 // The in-flight key of an org edit.
 function orgEditKey(edit: OrgEdit): string {
   return `${edit.name}\u0000${edit.org}`;
 }
 
-// The section header: title, a one-line state, and the add button.
-function IntegrationsHeader({ note, noteTone, canAdd, onAdd }: { note: string; noteTone: "muted" | "red"; canAdd: boolean; onAdd: () => void }) {
+// The explainer under the title, naming the modules of the registry.
+function explainer(view: IntegrationsView): string {
+  const names = joinLabels(view.modules);
+  return `${names ? `Connections to ${names}. ` : ""}A connection's secret is never shown again once saved.`;
+}
+
+// The section header: title and a one-line state.
+function IntegrationsHeader({ note, noteTone }: { note: string; noteTone: "muted" | "red" }) {
   return (
-    <div className="flex flex-wrap items-end gap-4">
-      <div className="flex flex-col gap-1">
-        <h1 className="m-0 text-[20px] font-semibold">Integrations</h1>
-        <div className={`text-[13px] ${noteTone === "red" ? "text-red" : "text-muted"}`}>{note}</div>
-      </div>
-      <Button variant="primary" disabled={!canAdd} onClick={onAdd} className="ml-auto gap-2 max-lg:ml-0 max-lg:min-h-11 max-lg:w-full">
-        <Plus size={14} strokeWidth={2.2} aria-hidden="true" />
-        Add Discord webhook
-      </Button>
+    <div className="flex flex-col gap-1">
+      <h1 className="m-0 text-[20px] font-semibold">Integrations</h1>
+      <div className={`text-[13px] ${noteTone === "red" ? "text-red" : "text-muted"}`}>{note}</div>
     </div>
   );
 }
@@ -84,23 +80,33 @@ function switchOpener(view: IntegrationsView, target: RemoveTarget, open: (dialo
   return other ? () => open({ kind: "link", connection: other.name }) : null;
 }
 
+// The add dialog of a module: Discord keeps its own webhook dialog, every other stored module gets the generic form.
+function AddDialog({ kind, view, open }: { kind: string; view: IntegrationsView; open: (dialog: Dialog) => void }) {
+  const close = () => open(null);
+  if (kind === DISCORD) return <AddWebhookDialog orgs={view.orgs} onClose={close} onLink={(connection) => open({ kind: "link", connection })} />;
+  const module = view.modules.find((entry) => entry.kind === kind);
+  if (!module?.add) return null;
+  return <AddConnectionDialog module={module} form={module.add} orgs={view.orgs} onClose={close} />;
+}
+
 // The open dialog of the page, if any.
 function PageDialog({ dialog, view, open }: { dialog: Dialog; view: IntegrationsView; open: (dialog: Dialog) => void }) {
   const close = () => open(null);
-  if (dialog?.kind === "add") return <AddWebhookDialog orgs={view.orgs} onClose={close} onLink={(connection) => open({ kind: "link", connection })} />;
+  if (dialog?.kind === "add") return <AddDialog kind={dialog.module} view={view} open={open} />;
   if (dialog?.kind === "link") return <LinkProjectsDialog key={dialog.connection} view={view} initial={dialog.connection} onClose={close} />;
   if (dialog?.kind === "remove") return <RemoveConnectionDialog view={view} target={dialog.target} onClose={close} onSwitch={switchOpener(view, dialog.target, open)} />;
   return null;
 }
 
-// The body of the Integrations section for the current state of the view: loading, error, empty or populated.
-function IntegrationsBody({ query, handlers, onAdd }: { query: ReturnType<typeof useIntegrations>; handlers: ConnectionHandlers; onAdd: () => void }) {
+// The body of the Integrations section for the current state of the view: loading, error, or one card per module and the destinations.
+function IntegrationsBody({ query, handlers, onAdd }: { query: ReturnType<typeof useIntegrations>; handlers: ConnectionHandlers; onAdd: (kind: string) => void }) {
   if (query.isPending) return <SettingsSkeleton />;
   if (query.isError) return <SettingsError error={query.error} retrying={query.isFetching} onRetry={() => void query.refetch()} />;
-  if (!query.data.connections.length) return <SettingsEmpty onAdd={onAdd} />;
   return (
     <>
-      <ConnectionsCard view={query.data} handlers={handlers} />
+      {query.data.modules.map((module) => (
+        <ModuleCard key={module.kind} module={module} view={query.data} handlers={handlers} onAdd={onAdd} />
+      ))}
       <DestinationsCard view={query.data} />
     </>
   );
@@ -110,22 +116,21 @@ function IntegrationsBody({ query, handlers, onAdd }: { query: ReturnType<typeof
 function headerNote(query: ReturnType<typeof useIntegrations>): { note: string; noteTone: "muted" | "red" } {
   if (query.isPending) return { note: "Reading connections and project destinations…", noteTone: "muted" };
   if (query.isError) return { note: "runtime unreachable · retrying in 8 s", noteTone: "red" };
-  return { note: EXPLAINER, noteTone: "muted" };
+  return { note: explainer(query.data), noteTone: "muted" };
 }
 
-// Settings › Integrations: the connections, the log destination of every project, and their dialogs.
+// Settings › Integrations: a card per module of the registry, the log destination of every project, and their dialogs.
 export function SettingsPage() {
   const query = useIntegrations();
   const [dialog, setDialog] = useState<Dialog>(null);
   const open = useCallback((next: Dialog) => setDialog(next), []);
   const handlers = useConnectionHandlers(query.data, open);
-  const onAdd = () => open({ kind: "add" });
-  const canAdd = query.isSuccess && !query.isError;
+  const onAdd = (kind: string) => open({ kind: "add", module: kind });
   return (
     <div className="grid items-start gap-6 lg:grid-cols-[200px_minmax(0,1fr)] max-lg:gap-3">
       <SettingsSections />
       <section id="integrations" aria-label="integrations" className="flex min-w-0 flex-col gap-3.5">
-        <IntegrationsHeader {...headerNote(query)} canAdd={canAdd} onAdd={onAdd} />
+        <IntegrationsHeader {...headerNote(query)} />
         <IntegrationsBody query={query} handlers={handlers} onAdd={onAdd} />
       </section>
       {query.data && <PageDialog dialog={dialog} view={query.data} open={open} />}
