@@ -139,6 +139,32 @@ export function phasesFor(tier, type) {
   return [...phases];
 }
 
+// The nine slots of the studio track, in order: the number, the label, the routing agent key and the canonical phase of each.
+export const TRACK_SLOTS = [
+  { number: 0, name: "brief", agent: null, phase: null },
+  { number: 1, name: "triager", agent: "triager", phase: "triage" },
+  { number: 2, name: "explore", agent: "explore", phase: "explore" },
+  { number: 3, name: "architect", agent: "architect", phase: "architecture" },
+  { number: 4, name: "coder", agent: "coder", phase: "implementation" },
+  { number: 5, name: "qa-guardian", agent: "qaGuardian", phase: "qa" },
+  { number: 6, name: "verifier", agent: "verifier", phase: "verification" },
+  { number: 7, name: "runtime", agent: null, phase: "runtime" },
+  { number: 8, name: "commit · PR", agent: null, phase: "commit" },
+];
+
+const LANE_SLOTS = TRACK_SLOTS.filter((slot) => slot.number >= 1 && slot.number <= 6);
+
+// The phases of the agent slots (1 to 6) the run does not go through: from its tier and type, from the tier alone while the type is unknown, none for an unknown tier.
+export function offTierPhases(tier, type) {
+  if (!PIPELINE_TIERS.includes(tier)) return [];
+  if (PIPELINE_TASK_TYPES.includes(type)) {
+    const phases = phasesFor(tier, type);
+    return LANE_SLOTS.filter((slot) => !phases.includes(slot.phase)).map((slot) => slot.phase);
+  }
+  const numbers = trackPhaseNumbers(tier);
+  return LANE_SLOTS.filter((slot) => !numbers.includes(slot.number)).map((slot) => slot.phase);
+}
+
 // The numbers of the pipeline phases the tier's track runs, read from its "Phases that run" cell; null for a tier outside the pipeline.
 export function trackPhaseNumbers(tier) {
   if (!PIPELINE_TIERS.includes(tier)) return null;

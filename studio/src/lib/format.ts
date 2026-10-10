@@ -172,18 +172,6 @@ export function tokensTotalLabel(job: TokenSource): string {
   return `${mark}${(total / 1_000_000).toFixed(1)}M`;
 }
 
-// GitHub's five-block proportion of a change: green for additions, red for deletions, grey when nothing changed.
-export function blocks5(added: number | null | undefined, deleted: number | null | undefined): { green: number; red: number } {
-  const adds = finiteOrZero(added);
-  const dels = finiteOrZero(deleted);
-  const total = adds + dels;
-  if (total <= 0) return { green: 0, red: 0 };
-  const green = Math.round((5 * adds) / total);
-  if (adds > 0 && green === 0) return { green: 1, red: 4 };
-  if (dels > 0 && green === 5) return { green: 4, red: 1 };
-  return { green, red: 5 - green };
-}
-
 // The number of a GitHub pull request URL, null when the URL carries none.
 export function prNumber(url: string | null | undefined): number | null {
   const match = /\/pull\/(\d+)/.exec(url ?? "");

@@ -12,7 +12,7 @@ import { narrateJob } from "../queue/narrated-tail.mjs";
 import { createTimeline } from "../queue/timeline.mjs";
 import { withReadOnlyStore } from "../store/open.mjs";
 import { artifactSummary } from "./artifacts.mjs";
-import { jobExtras, runDirOf, runTierOf } from "./job-extras.mjs";
+import { jobExtras, runDirOf, runTrackFacts } from "./job-extras.mjs";
 import { decorateSnapshot } from "./rows.mjs";
 
 export const QUEUE_POLL_MS = 1000;
@@ -278,13 +278,12 @@ function truncatedEvent(start) {
 
 // The state of one job stream: the timeline of every attempt, the touched files and the batch waiting to be flushed.
 function createJobState({ res, env, job, extras, isClosed }) {
-  return { res, env, id: job.id, isClosed, job, tier: extras.tier ?? job.tier ?? null, runDir: extras.run_dir ?? null, reported: new Set(), timeline: createTimeline(), timelineDirty: false, recordedFiles: extras.files, files: new Set(), pending: [], timer: null, flushChain: Promise.resolve(), status: job.status };
+  return { res, env, id: job.id, isClosed, job, runDir: extras.run_dir ?? null, reported: new Set(), timeline: createTimeline(), timelineDirty: false, recordedFiles: extras.files, files: new Set(), pending: [], timer: null, flushChain: Promise.resolve(), status: job.status };
 }
 
-// Sends the timeline as it stands, re-reading the run tier while it is still unknown.
+// Sends the timeline as it stands, re-reading the run's tier, skips and type from one state.json read on every send.
 function sendTimeline(state) {
-  if (!state.tier) state.tier = runTierOf(state.job, state.env);
-  sendEvent(state.res, "timeline", state.timeline.snapshot({ tier: state.tier, status: state.status }));
+  sendEvent(state.res, "timeline", state.timeline.snapshot({ ...runTrackFacts(state.job, state.env), status: state.status }));
 }
 
 // Sends one narration batch, then the files it touched when the run recorded none.

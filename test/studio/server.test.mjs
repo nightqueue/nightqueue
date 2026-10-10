@@ -245,13 +245,16 @@ test("the diffstat of a job with no worktree and no recorded files answers none"
   assert.deepEqual([body.source, body.files, body.totals], ["none", [], null]);
 });
 
-test("the diff of one file needs `?path=`, and a path that is not one of the job's files is a 404", async (t) => {
+test("the diff of one file needs `?path=`, a path that is not one of the job's files is a 400, and an unknown job a 404", async (t) => {
   const env = makeHome(t, "studio-api-file-diff");
   const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker" }, env).id;
   const { port } = await startStudio(t, env);
   const headers = { cookie: studioCookie(port) };
   assert.equal((await send(port, { path: `/api/jobs/J-${id}/diff`, headers })).status, 400);
-  assert.equal((await send(port, { path: `/api/jobs/J-${id}/diff?path=${encodeURIComponent("../../etc/passwd")}`, headers })).status, 404);
+  for (const asked of ["../../etc/passwd", "/etc/passwd", "*.txt", "a.txt"]) {
+    const answer = await send(port, { path: `/api/jobs/J-${id}/diff?path=${encodeURIComponent(asked)}`, headers });
+    assert.equal(answer.status, 400, `\`${asked}\` answered ${answer.status}`);
+  }
   assert.equal((await send(port, { path: "/api/jobs/J-999/diff?path=a.txt", headers })).status, 404);
   assert.equal((await send(port, { path: "/api/jobs/nope/diff?path=a.txt", headers })).status, 400);
 });

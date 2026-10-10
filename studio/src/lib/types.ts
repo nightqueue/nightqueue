@@ -161,11 +161,19 @@ export interface ArtifactEntry {
   mtime: string;
 }
 
+export interface PhaseSkip {
+  by: string;
+  reason: string | null;
+  at: string | null;
+}
+
 export interface TimelinePhase {
   number: number;
   name: string;
+  agent: string | null;
   model: string | null;
-  state: "done" | "now" | "gate" | "pending" | "skip";
+  state: "done" | "now" | "gate" | "pending" | "skipped";
+  skipped: PhaseSkip | null;
   durationMs: number | null;
   liveSinceMs: number | null;
   startMs: number | null;
@@ -183,6 +191,7 @@ export interface PhaseAttempt {
 
 export interface Timeline {
   track: string | null;
+  tier: string | null;
   phases: TimelinePhase[];
   clockMs: number | null;
 }
@@ -216,31 +225,30 @@ export interface Diffstat {
   note: string | null;
 }
 
-export interface FileDiff {
-  path: string;
-  from: string | null;
-  kind: DiffKind | null;
-  source: "worktree" | "unavailable";
-  base: string | null;
-  untracked: boolean;
-  binary: boolean;
-  truncated: boolean;
-  diff: string | null;
-  note: string | null;
-}
-
-export type DiffLineKind = "add" | "del" | "ctx" | "meta";
-
 export interface DiffLine {
-  kind: DiffLineKind;
+  type: "ctx" | "add" | "del";
+  old?: number;
+  new?: number;
   text: string;
-  oldNo: number | null;
-  newNo: number | null;
 }
 
 export interface DiffHunk {
   header: string;
   lines: DiffLine[];
+}
+
+export interface FileDiff {
+  path: string;
+  from: string | null;
+  kind: DiffKind | null;
+  source: "worktree" | "merge" | "unavailable";
+  base: string | null;
+  adds: number | null;
+  dels: number | null;
+  hunks: DiffHunk[];
+  truncated: boolean;
+  binary: boolean;
+  note: string | null;
 }
 
 export interface RecallHit {
