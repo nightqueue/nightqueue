@@ -169,14 +169,14 @@ function PhaseIcon({ state }: { state: PhaseState }) {
   return null;
 }
 
-// The 7px role dot and the 4px bar of one slot, both painted from the slot's `--ph` colour.
+// The 4px bar of one slot, painted from the slot's `--ph` colour.
 function PhaseRail({ state }: { state: PhaseState }) {
-  return (
-    <div className="flex items-center gap-1.5">
-      <i className="block h-[7px] w-[7px] flex-none rounded-full" style={DOT_STYLE[state]} />
-      <div className={`h-1 flex-1 rounded-sm ${BAR_CLASS[state]}`} style={BAR_STYLE[state]} />
-    </div>
-  );
+  return <div className={`h-1 rounded-sm ${BAR_CLASS[state]}`} style={BAR_STYLE[state]} />;
+}
+
+// The 7px role dot before a slot's name, painted from the slot's `--ph` colour.
+function PhaseDot({ state }: { state: PhaseState }) {
+  return <i className="block h-[7px] w-[7px] flex-none rounded-full" style={DOT_STYLE[state]} />;
 }
 
 // One slot of the track: its rail, name and model, its caption with the per-attempt hover, and its tokens unless it was skipped.
@@ -188,6 +188,7 @@ function PhaseSegment({ phase, caption, attemptsTitle }: { phase: TimelinePhase;
     <div className={`flex flex-col gap-1.5 ${skipped ? "min-w-[64px]" : "min-w-[96px]"}`} style={style}>
       <PhaseRail state={phase.state} />
       <div className={`flex items-center gap-[5px] truncate text-sm ${NAME_STYLE[phase.state]}`} title={label}>
+        <PhaseDot state={phase.state} />
         <PhaseIcon state={phase.state} />
         <span className="truncate">{label}</span>
       </div>

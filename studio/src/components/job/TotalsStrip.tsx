@@ -1,6 +1,6 @@
 import { Clock } from "lucide-react";
 import type { CSSProperties, ReactNode } from "react";
-import { activeMs, attemptsSummary, compactCount, durationLabel, formatDurationMs, tokenCounters, tokensTotalLabel, usdLabel, wallMs } from "../../lib/format";
+import { activeMs, attemptsSummary, compactCount, formatActiveMs, spanMs, tokenCounters, tokensTotalLabel, usdLabel, wallMs } from "../../lib/format";
 import { legendEntries, type ShareEntry, shareEntries } from "../../lib/track";
 import type { Job, JobDetail, JobMeta, Timeline, TimelinePhase } from "../../lib/types";
 import { useNow } from "../../lib/useNow";
@@ -36,11 +36,11 @@ function counted(count: number, noun: string): string {
 // The active time cell: every attempt summed while it ticks, the wall and gate time under it once the history is known.
 function activeTotal(job: JobDetail, now: number): Total {
   const active = activeMs(job, now);
-  const value = active === null ? durationLabel(job.started_at, job.finished_at, now) : formatDurationMs(active);
+  const value = formatActiveMs(active === null ? spanMs(job.started_at, job.finished_at, now) : active);
   const hasLog = Array.isArray(job.attempts_log) && job.attempts_log.length > 0;
   const wall = hasLog ? wallMs(job, now) : null;
   const atGate = wall !== null && active !== null ? wall - active : 0;
-  const sub = wall === null ? null : atGate > 0 ? `wall ${formatDurationMs(wall)} · ${formatDurationMs(atGate)} at gate` : `wall ${formatDurationMs(wall)}`;
+  const sub = wall === null ? null : atGate > 0 ? `wall ${formatActiveMs(wall)} · ${formatActiveMs(atGate)} at gate` : `wall ${formatActiveMs(wall)}`;
   return { key: <><ActionIcon icon={Clock} size={12} />active time</>, value, live: true, lines: [sub] };
 }
 

@@ -1,5 +1,5 @@
 import { truncateByCodePoint } from "../memory/jobs.mjs";
-import { PHASES } from "./narrate.mjs";
+import { lanePhase, PHASES } from "./narrate.mjs";
 import { laneName, parseAttemptMarker, parseEventLine } from "./stream.mjs";
 import { eachLineYielding } from "./yielding-lines.mjs";
 
@@ -158,25 +158,39 @@ function secondsSince(anchorMs, stampMs) {
   return Math.max(0, Math.round((stampMs - anchorMs) / 1000));
 }
 
-// Records the agent a subagent lane runs, from the tool call that launched it or its task_started event.
+// The agent a lane runs and its track phase, decided by the narrator's own rule from the prompt that launched it.
+function laneOf(subagentType, prompt) {
+  const agent = laneName(subagentType);
+  return { agent, phase: lanePhase(agent, prompt) };
+}
+
+// Records the agent and phase of a subagent lane, from the tool call that launched it or its task_started event.
 function trackLane(state, event) {
   if (event.type === "system" && event.subtype === "task_started" && typeof event.tool_use_id === "string" && event.subagent_type) {
-    state.lanes.set(event.tool_use_id, laneName(event.subagent_type));
+    state.lanes.set(event.tool_use_id, laneOf(event.subagent_type, event.prompt));
     return;
   }
   for (const block of contentBlocks(event)) {
     const type = block?.input?.subagent_type;
-    if (block?.type === "tool_use" && typeof type === "string" && type.trim()) state.lanes.set(block.id, laneName(type));
+    if (block?.type === "tool_use" && typeof type === "string" && type.trim()) state.lanes.set(block.id, laneOf(type, block.input.prompt));
   }
 }
 
-// The tool-specific fields of a recall call: a memory recall's kind and query, or a context call's target as its agent; null for other tools.
-function callFields(block, agent) {
+// The lane an assistant event belongs to: its subagent lane, an unknown subagent, or the orchestrator.
+function eventLane(state, event) {
+  const parent = typeof event.parent_tool_use_id === "string" && event.parent_tool_use_id ? event.parent_tool_use_id : null;
+  if (!parent) return { agent: ORCHESTRATOR, phase: null };
+  return state.lanes.get(parent) ?? { agent: "subagent", phase: null };
+}
+
+// The tool-specific fields of a recall call: a memory recall's kind, query and its lane's phase, or a context call's target as its agent; null for other tools.
+function callFields(block, lane) {
+  const { agent } = lane;
   const name = String(block.name ?? "");
   const recall = RECALL_TOOL_RE.exec(name);
   if (recall) {
     const query = typeof block.input?.query === "string" ? block.input.query : null;
-    return { tool: recall[1], kind: KIND_OF_TOOL[recall[1]], query, phase: PHASES.get(agent) ?? null };
+    return { tool: recall[1], kind: KIND_OF_TOOL[recall[1]], query, phase: lane.phase };
   }
   const context = CONTEXT_TOOL_RE.exec(name);
   if (!context) return null;
@@ -187,14 +201,13 @@ function callFields(block, agent) {
 // Opens a pending recall for every memory recall or context tool call of an assistant event.
 function collectCalls(state, event, stampMs) {
   if (event.type !== "assistant") return;
-  const parent = typeof event.parent_tool_use_id === "string" && event.parent_tool_use_id ? event.parent_tool_use_id : null;
-  const agent = parent ? (state.lanes.get(parent) ?? "subagent") : ORCHESTRATOR;
+  const lane = eventLane(state, event);
   for (const block of contentBlocks(event)) {
-    const fields = block?.type === "tool_use" ? callFields(block, agent) : null;
+    const fields = block?.type === "tool_use" ? callFields(block, lane) : null;
     if (!fields) continue;
     const recall = {
       id: block.id ?? null,
-      agent,
+      agent: lane.agent,
       ...fields,
       attempt: state.attempt,
       at_s: secondsSince(state.anchorMs, stampMs),

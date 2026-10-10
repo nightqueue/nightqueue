@@ -3,7 +3,7 @@ import { truncateByCodePoint } from "../memory/jobs.mjs";
 import { clockLabel } from "./hints.mjs";
 import { extractNotice, extractPrUrl, hasGateMarker, laneName, parseEventLine, parseSlugLine, tokensFromEvent } from "./stream.mjs";
 import { jobRef } from "../memory/refs.mjs";
-import { trackPhaseNumbers } from "./routing.mjs";
+import { slotNumberOf, trackPhaseNumbers } from "./routing.mjs";
 import { PHASE_ARTIFACTS } from "./phase-artifacts.mjs";
 
 const ATTEMPT_LINE_RE = /^=== attempt (\d+) @ (\S+) ===$/;
@@ -34,11 +34,20 @@ export const PHASES = new Map([
   ["verifier", 6],
 ]);
 
+// `run report` has no slot of its own: it is the tail of commit · PR, like publish.
 const PHASE_MARKERS = [
   [/nightqueue run start\b/, 0],
-  [/nightqueue run publish\b/, 7],
-  [/nightqueue run report\b/, 8],
+  [/nightqueue run publish\b/, slotNumberOf("commit")],
+  [/nightqueue run report\b/, slotNumberOf("commit")],
 ];
+
+export const RUNTIME_PROMPT_RE = /^﻿?[ \t]*Mode: RUNTIME[ \t]*$/m;
+
+// The track phase of a lane: the runtime lane is the verifier launched with prompts/runtime.md, told apart only by that template's own `Mode: RUNTIME` line.
+export function lanePhase(name, prompt) {
+  if (name === "verifier" && typeof prompt === "string" && RUNTIME_PROMPT_RE.test(prompt)) return slotNumberOf("runtime");
+  return PHASES.get(name) ?? null;
+}
 
 export const GLYPHS = {
   ratePause: "⏸",
@@ -149,9 +158,8 @@ function toolNarration(name, input) {
 
 // Label of a lane: its name, the phase of the pipeline and the model the orchestrator picked for it, each part only when it is known.
 // The model comes from the `tool_use` block that launched the subagent, the only event of the stream that carries it: a lane opened from `task_started` has none.
-function laneLabel(subagentType, model) {
+function laneLabel(subagentType, model, phase) {
   const name = laneName(subagentType);
-  const phase = PHASES.get(name);
   const detail = [phase ? `phase ${phase}` : null, clip(model, MODEL_LIMIT) || null].filter(Boolean);
   return detail.length ? `${name} (${detail.join(", ")})` : name;
 }
@@ -222,7 +230,7 @@ export function handBackText(text) {
 // The structured fields of a lane event: the agent, its pipeline phase, the model and the lane's tool_use id, each null when unknown.
 function laneFields(lane, laneId = lane?.id ?? null) {
   const agent = lane?.name ?? null;
-  return { agent, phase: PHASES.get(agent) ?? null, model: lane?.model ?? null, laneId };
+  return { agent, phase: lane?.phase ?? PHASES.get(agent) ?? null, model: lane?.model ?? null, laneId };
 }
 
 // The phase an orchestrator Bash command marks (`nightqueue run start|publish|report`), or null.
@@ -363,8 +371,10 @@ function narrateText(state, raw, lane) {
 }
 
 // Opens a lane for a subagent, the only event that indents everything reported under it.
-function openLane(state, { toolUseId, subagentType, description, model = null }) {
-  const lane = { id: toolUseId ?? null, name: laneName(subagentType), label: laneLabel(subagentType, model), model: clip(model, MODEL_LIMIT) || null, openMs: state.clockMs, tools: 0, edits: 0 };
+function openLane(state, { toolUseId, subagentType, description, model = null, prompt = null }) {
+  const name = laneName(subagentType);
+  const phase = lanePhase(name, prompt);
+  const lane = { id: toolUseId ?? null, name, phase, label: laneLabel(subagentType, model, phase), model: clip(model, MODEL_LIMIT) || null, openMs: state.clockMs, tools: 0, edits: 0 };
   if (toolUseId) state.lanes.set(toolUseId, lane);
   const detail = clip(description, DESCRIPTION_LIMIT);
   return narrationEvent(state, "laneOpen", detail ? `${lane.label} — ${detail}` : lane.label, { fields: laneFields(lane) });
@@ -377,7 +387,7 @@ function narrateToolUse(state, block, lane) {
   if (id) state.tools.set(id, toolLabel(name));
   const subagentType = block.input?.subagent_type;
   if (typeof subagentType === "string" && subagentType.trim()) {
-    return [openLane(state, { toolUseId: id, subagentType, description: block.input?.description, model: block.input?.model })];
+    return [openLane(state, { toolUseId: id, subagentType, description: block.input?.description, model: block.input?.model, prompt: block.input?.prompt })];
   }
   if (lane) {
     lane.tools += 1;
@@ -517,7 +527,7 @@ function narrateSystem(state, event) {
       state.bashTasks.add(id);
       return [];
     }
-    return [openLane(state, { toolUseId: id, subagentType: event.subagent_type, description: event.description })];
+    return [openLane(state, { toolUseId: id, subagentType: event.subagent_type, description: event.description, prompt: event.prompt })];
   }
   if (event.subtype === "task_notification") return state.bashTasks.has(event.tool_use_id) ? [] : closeLane(state, event);
   return [];
@@ -689,11 +699,12 @@ function freshLiveState(attempt, clockMs) {
 }
 
 // Opens a lane in the live reading; a lane already open is left as the event that opened it first described it.
-function liveOpenLane(state, { id, subagentType, description, model }) {
+function liveOpenLane(state, { id, subagentType, description, model, prompt }) {
   if (!id || state.lanes.has(id)) return;
   const lane = { agent: laneName(subagentType), model: clip(model, MODEL_LIMIT) || null, intent: clip(description, DESCRIPTION_LIMIT) || null, openedMs: state.clockMs, last: null };
+  lane.phase = lanePhase(lane.agent, prompt);
   state.lanes.set(id, lane);
-  state.orchPhase = PHASES.get(lane.agent) ?? state.orchPhase;
+  state.orchPhase = lane.phase ?? state.orchPhase;
 }
 
 // The open lane an event of the stream belongs to; a parent never seen opening is a lane that opened before the window of the tail.
@@ -701,9 +712,10 @@ function liveLaneOf(state, parent) {
   if (typeof parent !== "string" || !parent) return null;
   if (state.lanes.has(parent)) return state.lanes.get(parent);
   if (state.closed.has(parent)) return null;
-  liveOpenLane(state, { id: parent, subagentType: null, description: null, model: null });
+  liveOpenLane(state, { id: parent, subagentType: null, description: null, model: null, prompt: null });
   const lane = state.lanes.get(parent);
   lane.agent = null;
+  lane.phase = null;
   lane.openedMs = null;
   return lane;
 }
@@ -733,7 +745,7 @@ function liveBlock(state, block, lane) {
   if (block?.type !== "tool_use") return;
   const input = block.input;
   if (typeof input?.subagent_type === "string" && input.subagent_type.trim()) {
-    liveOpenLane(state, { id: block.id, subagentType: input.subagent_type, description: input.description, model: input.model });
+    liveOpenLane(state, { id: block.id, subagentType: input.subagent_type, description: input.description, model: input.model, prompt: input.prompt });
     return;
   }
   if (!lane && block.name === "Bash") livePhaseMarker(state, input?.command);
@@ -744,7 +756,7 @@ function liveBlock(state, block, lane) {
 function liveSystem(state, event) {
   const id = typeof event.tool_use_id === "string" ? event.tool_use_id : "";
   if (event.subtype === "task_started" && event.task_type === "local_bash") state.bashTasks.add(id);
-  else if (event.subtype === "task_started") liveOpenLane(state, { id, subagentType: event.subagent_type, description: event.description, model: null });
+  else if (event.subtype === "task_started") liveOpenLane(state, { id, subagentType: event.subagent_type, description: event.description, model: null, prompt: event.prompt });
   else if (event.subtype === "task_notification" && !state.bashTasks.has(id) && id) {
     state.lanes.delete(id);
     state.closed.add(id);
@@ -796,7 +808,7 @@ export function liveState(tail, { tier = null, nowMs = Date.now() } = {}) {
   const state = readLiveTail(tail);
   const lane = [...state.lanes.values()].pop() ?? null;
   const last = lane ? lane.last : state.orchLast;
-  const number = lane ? PHASES.get(lane.agent) : state.orchPhase;
+  const number = lane ? lane.phase : state.orchPhase;
   return {
     attempt: state.attempt,
     agent: lane ? lane.agent : ORCHESTRATOR,

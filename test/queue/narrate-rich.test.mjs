@@ -168,12 +168,12 @@ test("phase events come before the event that opens them, once per phase, in pip
   const phases = events.filter((event) => event.kind === "phase");
   assert.deepEqual(
     phases.map((event) => event.phase),
-    [0, 1, 4, 6, 4, 7, 8],
+    [0, 1, 4, 6, 4, 8],
   );
   assert.deepEqual([events[0].kind, events[1].kind, events[1].phase], ["attempt", "phase", 0]);
   const coder = phases.find((event) => event.phase === 4);
   assert.deepEqual([coder.agent, coder.model, coder.text, coder.at], ["coder", "opus", "phase 4", secondsIntoAttempt(10)]);
-  assert.equal(phases.find((event) => event.phase === 7).agent, "orchestrator");
+  assert.equal(phases.find((event) => event.phase === 8).agent, "orchestrator");
   const coderIndex = events.indexOf(coder);
   assert.deepEqual([events[coderIndex + 1].kind, events[coderIndex + 1].laneId], ["laneOpen", "toolu_c1"]);
 });

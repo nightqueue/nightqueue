@@ -17,12 +17,28 @@ export function formatDurationMs(ms: number | null): string {
   return `${Math.floor(minutes / 60)}h${String(minutes % 60).padStart(2, "0")}m`;
 }
 
+// The track's active time: always to the second — `9s`, `4m09s`, `1h28m32s`; `-` when unknown. Unlike formatDurationMs it keeps seconds past an hour.
+export function formatActiveMs(ms: number | null): string {
+  if (ms === null || !Number.isFinite(ms) || ms < 0) return "-";
+  const seconds = Math.round(ms / 1000);
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  const ss = String(seconds % 60).padStart(2, "0");
+  if (minutes < 60) return `${minutes}m${ss}s`;
+  return `${Math.floor(minutes / 60)}h${String(minutes % 60).padStart(2, "0")}m${ss}s`;
+}
+
+// The milliseconds a job ran: start to finish, or start to now while it runs; null before it started.
+export function spanMs(startedAt: string | null, finishedAt: string | null, nowMs: number): number | null {
+  const started = isoMs(startedAt);
+  if (started === null) return null;
+  return (isoMs(finishedAt) ?? nowMs) - started;
+}
+
 // How long a job ran: since its start while it runs, start to finish once it stopped, `-` before it started.
 export function durationLabel(startedAt: string | null, finishedAt: string | null, nowMs: number): string {
-  const started = isoMs(startedAt);
-  if (started === null) return "-";
-  const finished = isoMs(finishedAt);
-  return formatDurationMs((finished ?? nowMs) - started);
+  const span = spanMs(startedAt, finishedAt, nowMs);
+  return span === null ? "-" : formatDurationMs(span);
 }
 
 type AttemptTiming = Pick<Job, "started_at" | "attempt_started_at" | "attempts_log" | "active_s">;

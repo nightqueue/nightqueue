@@ -65,24 +65,24 @@ test("a gate stops the timeline at the last phase reached", () => {
   assert.equal(states(timeline)[4], "pending");
 });
 
-test("a trivial job that published and reported is done end to end, its orchestrator phases timed between markers", () => {
+test("a trivial job that published and reported is done end to end, runtime hatched by tier, publish and report timed on commit · PR", () => {
   const events = [
     { kind: "attempt", elapsedMs: 0 },
     open(4, "coder", 1000, { laneId: "c" }),
     close(4, "coder", 5000, { durationMs: 4000, laneId: "c" }),
     open(6, "verifier", 5000, { laneId: "v" }),
     close(6, "verifier", 6000, { durationMs: 1000, laneId: "v" }),
-    marker(7, 7000),
+    marker(8, 7000),
     marker(8, 9000),
     { kind: "resultEnd", elapsedMs: 10000 },
   ];
   const timeline = phaseTimeline(events, { tier: "trivial", status: "done" });
   assert.equal(timeline.track, "Fast Lite");
   assert.deepEqual(timeline.phases.map((phase) => phase.number), [0, 1, 2, 3, 4, 5, 6, 7, 8]);
-  assert.deepEqual(states(timeline), { 0: "done", 1: "skipped", 2: "skipped", 3: "skipped", 4: "done", 5: "skipped", 6: "done", 7: "done", 8: "done" });
+  assert.deepEqual(states(timeline), { 0: "done", 1: "skipped", 2: "skipped", 3: "skipped", 4: "done", 5: "skipped", 6: "done", 7: "skipped", 8: "done" });
   assert.equal(phaseOf(timeline, 0).durationMs, 2000);
-  assert.equal(phaseOf(timeline, 7).durationMs, 2000);
-  assert.equal(phaseOf(timeline, 8).durationMs, 1000);
+  assert.deepEqual(phaseOf(timeline, 7).skipped, { by: "tier", reason: null, at: null });
+  assert.equal(phaseOf(timeline, 8).durationMs, 3000);
 });
 
 test("an unknown tier still has the nine slots from second 0, with no track, no tier and nothing skipped", () => {
@@ -111,9 +111,9 @@ function skippedNumbers(timeline) {
   return timeline.phases.filter((phase) => phase.state === "skipped").map((phase) => phase.number);
 }
 
-test("a simple bug hatches explore, architect and qa-guardian by tier, never the triager; recorded skips carry their time", () => {
+test("a simple bug hatches explore, architect, qa-guardian and runtime by tier, never the triager; recorded skips carry their time", () => {
   const derived = phaseTimeline([], { tier: "simple", type: "bug/error", status: "pending" });
-  assert.deepEqual(skippedNumbers(derived), [2, 3, 5]);
+  assert.deepEqual(skippedNumbers(derived), [2, 3, 5, 7]);
   assert.deepEqual(phaseOf(derived, 2).skipped, { by: "tier", reason: null, at: null });
   assert.equal(phaseOf(derived, 1).state, "pending");
   const skips = { explore: { by: "tier", at: "2026-10-09T10:00:00.000Z" } };
@@ -121,18 +121,18 @@ test("a simple bug hatches explore, architect and qa-guardian by tier, never the
   assert.deepEqual(phaseOf(recorded, 2).skipped, { by: "tier", reason: null, at: "2026-10-09T10:00:00.000Z" });
 });
 
-test("a simple feature also hatches the triager by tier: four skipped", () => {
+test("a simple feature also hatches the triager by tier: five skipped", () => {
   const timeline = phaseTimeline([], { tier: "simple", type: "feature/refactor", status: "pending" });
-  assert.deepEqual(skippedNumbers(timeline), [1, 2, 3, 5]);
+  assert.deepEqual(skippedNumbers(timeline), [1, 2, 3, 5, 7]);
   assert.deepEqual(phaseOf(timeline, 1).skipped, { by: "tier", reason: null, at: null });
   assert.equal(phaseOf(timeline, 1).model, null, "a skipped slot names no routing model");
 });
 
-test("a simple run of unknown type hatches three and leaves the triager pending; trivial hatches four and complex none", () => {
+test("a simple run of unknown type hatches four and leaves the triager pending; trivial hatches five and complex none", () => {
   const unknownType = phaseTimeline([], { tier: "simple", type: "not-a-type", status: "pending" });
-  assert.deepEqual(skippedNumbers(unknownType), [2, 3, 5]);
+  assert.deepEqual(skippedNumbers(unknownType), [2, 3, 5, 7]);
   assert.equal(phaseOf(unknownType, 1).state, "pending");
-  assert.deepEqual(skippedNumbers(phaseTimeline([], { tier: "trivial", status: "pending" })), [1, 2, 3, 5]);
+  assert.deepEqual(skippedNumbers(phaseTimeline([], { tier: "trivial", status: "pending" })), [1, 2, 3, 5, 7]);
   assert.deepEqual(skippedNumbers(phaseTimeline([], { tier: "complex", type: "feature/refactor", status: "pending" })), []);
 });
 
@@ -238,8 +238,8 @@ function withUsage(event, tokensIn) {
 }
 
 // One subagent lane: its launch, an assistant turn with usage inside it (optionally repeated) and its notification.
-function lane({ id, agent, at, durationS, iso, tokens = null, repeat = false, totalTokens = 1200 }) {
-  const events = [agentToolUseEvent({ id, subagentType: `nightqueue:${agent}`, description: agent, timestamp: secondsIntoAttempt(at, iso) })];
+function lane({ id, agent, at, durationS, iso, tokens = null, repeat = false, totalTokens = 1200, prompt = undefined }) {
+  const events = [agentToolUseEvent({ id, subagentType: `nightqueue:${agent}`, description: agent, prompt, timestamp: secondsIntoAttempt(at, iso) })];
   if (tokens !== null) {
     const turn = () => assistantEvent(`${agent} at work`, { messageId: `msg_${id}`, usage: { tokensIn: tokens }, parentToolUseId: id, timestamp: secondsIntoAttempt(at + 1, iso) });
     events.push(turn());
@@ -255,7 +255,7 @@ function orchestratorCommand(id, command, at, tokens) {
   return withUsage(toolUseEvent({ id, name: "Bash", input: { command }, timestamp: secondsIntoAttempt(at, ATTEMPT_2) }), tokens);
 }
 
-// J-125's shape: attempt 1 runs triager, explore and architect and dies; attempt 2 resumes at the coder and loops coder/qa/verifier before publishing.
+// J-125's shape: attempt 1 runs triager, explore and architect and dies; attempt 2 resumes at the coder and loops coder/qa/verifier, then runs the runtime lane before publishing.
 function j125Log() {
   const first = [
     systemInitEvent(),
@@ -275,6 +275,7 @@ function j125Log() {
     ...lane({ id: "q2", agent: "qa-guardian", at: 740, durationS: 40, iso: ATTEMPT_2, tokens: 150 }),
     ...lane({ id: "v2", agent: "verifier", at: 800, durationS: 80, iso: ATTEMPT_2, tokens: 250 }),
     ...lane({ id: "c3", agent: "coder", at: 900, durationS: 50, iso: ATTEMPT_2, tokens: 90 }),
+    ...lane({ id: "rt", agent: "verifier", at: 952, durationS: 6, iso: ATTEMPT_2, tokens: 120, prompt: "Phase 6.5.\nMode: RUNTIME\nRun it for real." }),
     assistantEvent("all green, publishing", { messageId: "msg_o2", usage: { tokensIn: 50 }, timestamp: secondsIntoAttempt(960, ATTEMPT_2) }),
     orchestratorCommand("toolu_pub", "nightqueue run publish --message-file m.txt", 970, 70),
     assistantEvent("pull request open", { messageId: "msg_o3", usage: { tokensIn: 30 }, timestamp: secondsIntoAttempt(990, ATTEMPT_2) }),
@@ -292,12 +293,12 @@ test("J-125: a job resumed in attempt 2 keeps the phases attempt 1 ran, each sum
   assert.deepEqual([1, 2, 3].map((number) => phaseOf(timeline, number).durationMs), [60000, 90000, 120000]);
   assert.equal(phaseOf(timeline, 4).durationMs, 550000, "the coder is the sum of its three lanes");
   assert.equal(phaseOf(timeline, 5).durationMs, 100000);
+  assert.deepEqual([phaseOf(timeline, 7).durationMs, phaseOf(timeline, 7).tokens], [6000, 120], "the verifier launched with the runtime prompt is the runtime slot");
   assert.ok(phaseOf(timeline, 6).durationMs <= 180000, "the verifier never spans the gaps between its rounds");
   assert.equal(phaseOf(timeline, 1).tokens, 200, "a repeated message id counts once");
   assert.deepEqual([2, 4, 5, 6].map((number) => phaseOf(timeline, number).tokens), [300, 1790, 550, 850]);
   assert.equal(phaseOf(timeline, 3).tokens, 5000, "a lane with no assistant usage counts its reported total");
   assert.equal(phaseOf(timeline, 0).tokens, 160, "lane-less usage before the publish marker, both attempts");
-  assert.equal(phaseOf(timeline, 7).tokens, 100, "the publish command and what follows it until the report");
-  assert.equal(phaseOf(timeline, 8).tokens, 60);
+  assert.equal(phaseOf(timeline, 8).tokens, 160, "publish, report and what follows them all accrue to commit · PR");
   assert.ok(timeline.phases.every((phase) => phase.tokens_label.startsWith("~") || phase.tokens === 0));
 });
