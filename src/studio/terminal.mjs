@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { UserError } from "../config/errors.mjs";
 import { homeDir, studioTerminalsDir } from "../config/paths.mjs";
 import { packageRoot, spawnRoot } from "../host/paths.mjs";
+import { providerOf } from "../integrations/registry.mjs";
 import { jobRef, parseJobRef } from "../memory/refs.mjs";
 import { refuseHomeWriteInsideJob } from "../queue/home-guard.mjs";
 import { resolveJobSession } from "../queue/session.mjs";
@@ -22,7 +23,8 @@ const STUDIO_ENV_PREFIX = "NIGHTQUEUE_STUDIO_";
 
 const REGISTRATION = /^\d+-[0-9a-f]{16}\.json$/;
 const SCROLLBACK_BYTES = 256 * 1024;
-const BODY_KEYS = new Set(["kind", "job", "project", "instruction"]);
+const BODY_KEYS = new Set(["kind", "job", "project", "instruction", "provider"]);
+const TERMINAL_KINDS = new Set(["session", "operator", "connect"]);
 const PS_TIMEOUT_MS = 5000;
 const PTY_SIZE = { cols: 120, rows: 32 };
 const RESIZE_LIMITS = { cols: [2, 500], rows: [1, 200] };
@@ -146,9 +148,9 @@ function checkBody(body) {
   if (body === null || typeof body !== "object" || Array.isArray(body)) throw new TerminalRefusal(400, "the body must be a JSON object");
   const extra = Object.keys(body).filter((key) => !BODY_KEYS.has(key));
   if (extra.length > 0) {
-    throw new TerminalRefusal(400, `unknown key ${extra.map((key) => `\`${key}\``).join(", ")}: the terminal's directory comes from the job or the project registry, never the request`);
+    throw new TerminalRefusal(400, `unknown key ${extra.map((key) => `\`${key}\``).join(", ")}: the terminal's directory comes from the job, the project registry or the provider registry, never the request`);
   }
-  if (body.kind !== "session" && body.kind !== "operator") throw new TerminalRefusal(400, "`kind` must be `session` or `operator`");
+  if (!TERMINAL_KINDS.has(body.kind)) throw new TerminalRefusal(400, "`kind` must be `session`, `operator` or `connect`");
 }
 
 // Refuses a create from inside a job against the runner's own home: a job never spawns claude there.
@@ -319,12 +321,33 @@ async function createTerminal(m, body) {
   const loaded = await ptyState(m);
   refuseWhenClosing(m);
   if (!loaded.available) throw new TerminalRefusal(503, `terminal unavailable: ${loaded.reason}`);
-  const plan = body.kind === "session" ? await sessionPlan(m, body, instruction) : await operatorPlan(m, body, instruction);
+  const plan = await planOf(m, body, instruction);
   refuseWhenClosing(m);
   if (plan.reused) return { terminal: terminalInfo(plan.reused), reused: true };
   if (liveTerminals(m).length >= TERMINAL_CAP) throw new TerminalRefusal(409, `${TERMINAL_CAP} terminals are open, the cap; close one first`);
   const record = spawnTerminal(m, { ...plan, instruction, pty: loaded.pty });
   return { terminal: terminalInfo(record), reused: false };
+}
+
+// The launch plan of a create body, by its kind.
+async function planOf(m, body, instruction) {
+  if (body.kind === "session") return await sessionPlan(m, body, instruction);
+  if (body.kind === "connect") return connectPlan(m, body, instruction);
+  return await operatorPlan(m, body, instruction);
+}
+
+// The launch of a connect terminal: the provider's own login command from the registry, in the nightqueue home, or the live one already open.
+function connectPlan(m, body, instruction) {
+  if (instruction !== null) throw new TerminalRefusal(400, "a connect terminal takes no instruction");
+  const provider = typeof body.provider === "string" ? providerOf(body.provider) : null;
+  if (typeof provider?.ambient?.connect !== "function") throw new TerminalRefusal(404, `no connect action for provider \`${String(body.provider)}\``);
+  const open = liveTerminals(m).find((record) => record.kind === "connect" && record.provider === provider.kind);
+  if (open) return { reused: open };
+  const { bin, args } = provider.ambient.connect(m.env) ?? {};
+  if (typeof bin !== "string" || !bin || !Array.isArray(args)) throw new TerminalRefusal(500, `provider \`${provider.kind}\` declares no runnable connect command`);
+  const launch = { bin, entry: bin, args: [...args], env: { ...m.env } };
+  const label = `${provider.label ?? provider.kind} login`;
+  return { kind: "connect", provider: provider.kind, label, jobId: null, project: null, cwd: homeDir(m.env), note: null, launch };
 }
 
 // Refuses a create once the studio started closing, so no child is born after closeAll.
@@ -426,6 +449,7 @@ function newRecord(m, plan, child) {
   return {
     id,
     kind: plan.kind,
+    provider: plan.provider ?? null,
     label: plan.label,
     jobId: plan.jobId,
     project: plan.project,

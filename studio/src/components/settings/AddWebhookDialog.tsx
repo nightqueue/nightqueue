@@ -1,10 +1,10 @@
 import { useMutation } from "@tanstack/react-query";
-import { useState, type ReactNode } from "react";
+import { useState } from "react";
 import { addErrorView, shortId, type AddErrorView } from "../../lib/integrations";
 import type { ConnectionRow, OrgSummary } from "../../lib/types";
 import { addWebhook, useRefreshIntegrations } from "../../lib/useIntegrations";
 import { Button } from "../ui";
-import { INPUT_CLASS, Note } from "./bits";
+import { AddError, Field, INPUT_CLASS, Note, orgOption } from "./bits";
 import { SettingsDialog } from "./SettingsDialog";
 
 interface AddWebhookDialogProps {
@@ -16,35 +16,6 @@ interface AddWebhookDialogProps {
 const URL_PLACEHOLDER = "https://discord.com/api/webhooks/…";
 const SAVED_PLACEHOLDER = "URL saved — not shown, not even masked";
 const PHONE_BUTTON = "max-sm:min-h-[46px] max-sm:w-full";
-
-// A labelled field of the dialog, with an optional dim hint beside the label.
-function Field({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {
-  return (
-    <label className="flex min-w-0 flex-col gap-1.5">
-      <span className="flex justify-between gap-2 text-sm text-muted">
-        {label}
-        {hint && <span className="text-dim max-sm:hidden">{hint}</span>}
-      </span>
-      {children}
-    </label>
-  );
-}
-
-// The org select option text, as `dlw · 7 projects`.
-function orgOption(org: OrgSummary): string {
-  return `${org.name} · ${org.projects} ${org.projects === 1 ? "project" : "projects"}`;
-}
-
-// The red note of a failed add; it always says nothing was saved.
-function AddError({ error }: { error: AddErrorView }) {
-  return (
-    <Note tone="err" icon="⚠" role="alert">
-      <div className="font-semibold text-red">{error.title}</div>
-      <div>{error.body}</div>
-      <div className="text-sm text-[#c98f8a]">Nothing was saved. Fix it and test again.</div>
-    </Note>
-  );
-}
 
 // The green note of a saved connection: what the webhook told about its channel, and the next step.
 function AddSuccess({ connection, org }: { connection: ConnectionRow | null; org: string }) {

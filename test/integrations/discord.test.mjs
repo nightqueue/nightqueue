@@ -174,7 +174,7 @@ test("connection add --type discord derives the channel and guild, refuses a bad
   assert.deepEqual(list.out, ["chat  discord  orgs=default", "ops  discord  orgs=default"]);
   assert.deepEqual(JSON.parse(json.out[0]).connections.map((row) => Object.keys(row)), [["name", "type", "present", "orgs"], ["name", "type", "present", "orgs"]]);
   const orgs = await runCli(env, ["org", "list"]);
-  assert.match(orgs.out.join("\n"), /github=- sentry=- discord=chat,ops/);
+  assert.match(orgs.out.join("\n"), /  sentry=- discord=chat,ops/);
 
   const tested = await testConnection({ name: "chat", secrets: loadSecrets(env, { warn: () => {} }), fetchImpl: fakeFetch(webhookRoutes()).impl });
   assert.deepEqual(tested, { type: "discord", ok: true, status: 200, channelId: CHAT_CHANNEL, guildId: GUILD, detail: "ok" });
@@ -462,7 +462,7 @@ test("project integrations takes the four discord keys and refuses a log connect
   assert.equal((await runCli(home.env, ["org", "add", "other", "--key", "OTH"])).code, 0);
   assert.equal((await runCli(home.env, ["connection", "add", "far", "--type", "discord", "--org", "other"], { input: `${FAR_URL}\n` })).code, 0);
   const secrets = loadSecrets(home.env, { warn: () => {} });
-  secrets.connections.gh = { type: "github", token: "ghp_not_a_webhook" };
+  secrets.connections.st = { type: "sentry", token: "sntrys_not_a_webhook", org: "acme" };
   saveSecrets(secrets, home.env);
 
   const set = await runCli(home.env, ["project", "integrations", "alpha", "set", "discord.log.connection=ops", "discord.log.events=closed", "discord.replyToOrigin=false"]);
@@ -472,9 +472,9 @@ test("project integrations takes the four discord keys and refuses a log connect
   const otherOrg = await runCli(home.env, ["project", "integrations", "alpha", "set", "discord.log.connection=far"]);
   assert.equal(otherOrg.code, 1);
   assert.match(otherOrg.err.join("\n"), /connection `far` is not bound to the project's org/);
-  const otherType = await runCli(home.env, ["project", "integrations", "alpha", "set", "discord.log.connection=gh"]);
+  const otherType = await runCli(home.env, ["project", "integrations", "alpha", "set", "discord.log.connection=st"]);
   assert.equal(otherType.code, 1);
-  assert.match(otherType.err.join("\n"), /`discord\.log\.connection` needs a discord connection; `gh` is a github connection/);
+  assert.match(otherType.err.join("\n"), /`discord\.log\.connection` needs a discord connection; `st` is a sentry connection/);
   const badEvent = await runCli(home.env, ["project", "integrations", "alpha", "set", "discord.log.events=done"]);
   assert.match(badEvent.err.join("\n"), /`discord\.log\.events` takes a comma-separated list of: closed/);
   assertNoSecret([set, otherOrg, otherType, badEvent, await runCli(home.env, ["project", "integrations", "alpha", "show", "--json"])]);

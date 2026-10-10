@@ -37,8 +37,8 @@ on where the command ran from: the npx cache and a development checkout both
 converge on the same `~/.nightqueue/runtime`. The npm package is scoped,
 `nightqueue`; the command it installs is still `nightqueue`.
 
-Inside a repository it also registers that repository as a project and offers to
-import the token of the GitHub CLI. Outside one it installs the host all the same
+Inside a repository it also registers that repository as a project and prints
+whether the machine's GitHub CLI is ready. Outside one it installs the host all the same
 and closes by pointing at the single command that registers a project when you get
 there: `nightqueue queue add "<task>"`, which offers to register it on the spot.
 Either way the `Next steps` block says how to queue work from Claude Code, how to
@@ -48,7 +48,8 @@ one line instead of the whole report; `--verbose` brings every step back.
 Flags: `--path` / `--no-path` answers the PATH question
 without a terminal,
 `--embedding` / `--no-embedding` answers the semantic recall question,
-`--gh` / `--no-gh` answers the GitHub CLI one, `--shortcuts` / `--no-shortcuts`
+`--no-gh` skips the GitHub CLI status line (`--gh` is deprecated and has no
+effect), `--shortcuts` / `--no-shortcuts`
 decides whether the short command names are written, `--desktop` /
 `--no-desktop` decides whether the MCP server is registered in the Claude
 Desktop app, and `--org` / `--name` name
@@ -138,29 +139,34 @@ every command then refuses with the message above. A second `nightqueue update` 
 
 `nightqueue init` is `nightqueue setup` plus the project registration, always in that
 order: every step below first, then the repository of the current directory (or
-of `[path]`), then the token of the GitHub CLI. Running it again changes
+of `[path]`), then the status line of the GitHub CLI. Running it again changes
 nothing and says so in one line, `host already installed (v<version>) - nothing to
 do`, followed by the registration line and the `Next steps` block; `--verbose`
 prints every step as before. A semantic recall you turned down once is recorded in
 `config.json` and never asked about again — `nightqueue embed install` (or
 `init --embedding`) still installs it whenever you change your mind.
 
-**The token of the GitHub CLI.** When `gh` is installed and authenticated and
-the `github` slot of the org is still free, `nightqueue init` on a terminal asks
-`GitHub CLI is authenticated as <login> — import its token as connection "gh"?
-[Y/n]`. A yes reads `gh auth token`, stores it in `secrets.json` (`0600`), binds
-it to the org and checks it against the API; the value never goes through argv,
-stdout or stderr. `--gh` imports without asking, `--no-gh` never even calls the
-binary, and without a terminal nothing is asked - only a line pointing at
-`nightqueue init --gh`. A slot already taken, a connection already named `gh`, a
-missing `gh` or one that is logged out all cost a single line and never an
-error; the manual path stays open:
+**GitHub is the machine's `gh`.** nightqueue stores no GitHub token: every job
+clones, pushes and opens its pull request through the GitHub CLI the machine is
+already logged into. `nightqueue init` reads `gh auth status` and prints one line,
+never an error and never a token:
 
-```sh
-echo "$GITHUB_TOKEN" | nightqueue connection add gh --type github
+```
+GitHub: gh is authenticated as <login> on <host>; every job uses it
+GitHub CLI is not authenticated; run `gh auth login`
+GitHub CLI not found; install it (https://cli.github.com)
+GitHub CLI status unavailable: `gh auth status` did not answer in time
 ```
 
-`NIGHTQUEUE_GH_BIN` chooses which `gh` binary the import calls.
+`--no-gh` skips the line, and `--gh` is a deprecated alias with no effect (the two
+together are still a usage error). `nightqueue connection add <name> --type github`
+is refused with the same `gh auth login` hint, and the GitHub card of Settings in the
+studio shows the account and opens `gh auth login --web` in an embedded terminal. A
+GitHub connection an older build stored is dropped on the next load; `setup` and
+`init` rewrite both files once and report `stored github connection: removed (<n>
+record(s), <m> org slot(s))`.
+
+`NIGHTQUEUE_GH_BIN` chooses which `gh` binary the status line calls.
 
 Restart Claude Code and the pipeline answers as `/nightqueue:resolve`. To check
 the result of all of it at any point, run `nightqueue doctor`.
@@ -172,7 +178,7 @@ install (`npm install -g @nightqueue/nq`) or a clone (`npm install` plus
 ```sh
 nightqueue setup                                   # install the runtime and register everything in the host
 nightqueue init                                    # register this repository as a project
-echo "$GITHUB_TOKEN" | nightqueue connection add gh --type github
+gh auth login                                      # GitHub is the machine's gh; nothing is stored
 echo "$LINEAR_API_KEY" | nightqueue connection add linear --type linear   # optional: one per home, binds no org
 ```
 

@@ -15,6 +15,9 @@ const DONE_LABEL = "What was done:";
 const WEBHOOK_NAME_MAX = 80;
 const NO_CHANNEL_DETAIL = "the webhook answered no channel";
 const CONNECTED_DESCRIPTION = "This channel gets the “job closed” notice of the projects linked to this connection.";
+const MAX_URL_CHARS = 512;
+const INVALID_URL_TEXT = "Invalid URL: expected https://discord.com/api/webhooks/<id>/<token>.";
+const TOO_LONG_TEXT = `Invalid URL: a Discord webhook URL of at most ${MAX_URL_CHARS} characters is expected.`;
 
 // Reads a Discord reference `<guild>/<channel>/<message>`: a message link, or (explicitly given) the bare triple.
 function parseDiscord(text, { explicit = false } = {}) {
@@ -49,6 +52,17 @@ function webhookIds(body) {
 // Tells whether a text is a Discord webhook URL, without echoing it.
 export function isWebhookUrl(text) {
   return WEBHOOK_URL.test(String(text ?? ""));
+}
+
+// The refusal text of a secret that is not a Discord webhook URL, or null when it is one.
+function validateWebhookUrl(secret) {
+  return isWebhookUrl(secret) ? null : INVALID_URL_TEXT;
+}
+
+// The fields a stored Discord connection keeps from a successful webhook read.
+function fromWebhookTest(tested) {
+  const named = tested?.webhookName ? { webhookName: tested.webhookName } : {};
+  return { channelId: tested?.channelId, guildId: tested?.guildId, ...named, mode: "webhook" };
 }
 
 // Reads the channel, guild and name of a webhook, answering { ok, status, channelId, guildId, webhookName?, detail } without the URL.
@@ -231,6 +245,9 @@ async function logToDiscord({ event, job, result, connection, http }) {
 
 export const discord = {
   kind: "discord",
+  label: "Discord",
+  description: "Posts the “job closed” notice of each project to the channel its webhook points to.",
+  card: { order: 1 },
   connection: {
     cardinality: "many",
     secretFields: ["url"],
@@ -240,6 +257,10 @@ export const discord = {
     summary: summarizeDiscord,
     complete: completeDiscord,
     reason: discordReason,
+    validate: validateWebhookUrl,
+    tooLong: TOO_LONG_TEXT,
+    announce: announceWebhook,
+    fromTest: fromWebhookTest,
   },
   capabilities: { post: true, read: false, resolve: false },
   origin: { parse: parseDiscord },

@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import type { OrgSummary } from "../../lib/types";
 
 export type PillTone = "ok" | "err" | "off" | "warn";
 
@@ -41,6 +42,35 @@ export function Note({ tone, icon, role, children }: { tone: NoteTone; icon?: Re
       {icon && <span className="mt-px shrink-0 text-[15px] leading-[1.2]">{icon}</span>}
       <div className="flex min-w-0 grow flex-col gap-0.5">{children}</div>
     </div>
+  );
+}
+
+// A labelled field of a dialog, with an optional dim hint beside the label.
+export function Field({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {
+  return (
+    <label className="flex min-w-0 flex-col gap-1.5">
+      <span className="flex justify-between gap-2 text-sm text-muted">
+        {label}
+        {hint && <span className="text-dim max-sm:hidden">{hint}</span>}
+      </span>
+      {children}
+    </label>
+  );
+}
+
+// The org select option text, as `dlw · 7 projects`.
+export function orgOption(org: OrgSummary): string {
+  return `${org.name} · ${org.projects} ${org.projects === 1 ? "project" : "projects"}`;
+}
+
+// The red note of a failed add; it always says nothing was saved.
+export function AddError({ error }: { error: { title: string; body: string } }) {
+  return (
+    <Note tone="err" icon="⚠" role="alert">
+      <div className="font-semibold text-red">{error.title}</div>
+      <div>{error.body}</div>
+      <div className="text-sm text-[#c98f8a]">Nothing was saved. Fix it and test again.</div>
+    </Note>
   );
 }
 

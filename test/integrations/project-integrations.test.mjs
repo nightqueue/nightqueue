@@ -32,7 +32,7 @@ function settingsProviders() {
   return [originProviders()[0], settingsProvider()];
 }
 
-// A temp home with the project `alpha`, its org bound to the tracker connection `trk`, plus a spare tracker and a github connection.
+// A temp home with the project `alpha`, its org bound to the tracker connection `trk`, plus a spare tracker and a sentry connection.
 function makeSettingsHome(t, name) {
   const env = makeHome(t, name);
   makeProject(t, env, "alpha");
@@ -40,7 +40,7 @@ function makeSettingsHome(t, name) {
   bindTrackerConnection(env, projectId);
   const secrets = loadSecrets(env, { warn: () => {} });
   secrets.connections.spare = { type: "tracker", token: TRACKER_SECRET };
-  secrets.connections.gh = { type: "github", token: TRACKER_SECRET };
+  secrets.connections.st = { type: "sentry", token: TRACKER_SECRET, org: "acme" };
   saveSecrets(secrets, env);
   return { env, projectId };
 }
@@ -146,7 +146,7 @@ test("each value type is validated, an unknown key lists the valid ones, and one
       ["tracker.reply=yes", "takes true or false"],
       ["tracker.log.events=closed,merged", "comma-separated list of: closed, failed"],
       ["tracker.log.connection=nope", "there is no connection named `nope`"],
-      ["tracker.log.connection=gh", "needs a tracker connection; `gh` is a github connection"],
+      ["tracker.log.connection=st", "needs a tracker connection; `st` is a sentry connection"],
       ["tracker.log.connection=spare", "connection `spare` is not bound to the project's org"],
       ["tracker.mode=x", "valid settings: tracker.onClosed, tracker.reply, tracker.log.connection, tracker.log.events"],
       ["tracker.reply", "is not <kind.key>=<value>"],

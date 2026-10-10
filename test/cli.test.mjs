@@ -163,25 +163,25 @@ test("the secret never shows up in any output, in any format", (t) => {
   const runs = [
     runCli(home, ["setup"]),
     runCli(home, ["init", repo, "--name", "api", "--no-gh"]),
-    runCli(home, ["connection", "add", "gh", "--type", "github"], { input: `${SENTINEL}\n` }),
-    runCli(home, ["connection", "add", "gh", "--type", "github"], { input: `${SENTINEL}\n` }),
+    runCli(home, ["connection", "add", "st", "--type", "sentry", "--set", "org=acme"], { input: `${SENTINEL}\n` }),
+    runCli(home, ["connection", "add", "st", "--type", "sentry", "--set", "org=acme"], { input: `${SENTINEL}\n` }),
     runCli(home, ["connection", "list"]),
     runCli(home, ["connection", "list", "--json"]),
-    runCli(home, ["connection", "bind", "gh", "--org", "ghost"]),
-    runCli(home, ["connection", "bind", "gh", "--org", "default"]),
-    runCli(home, ["connection", "test", "gh", "--org", "default"]),
+    runCli(home, ["connection", "bind", "st", "--org", "ghost"]),
+    runCli(home, ["connection", "bind", "st", "--org", "default"]),
+    runCli(home, ["connection", "test", "st", "--org", "default"]),
     runCli(home, ["org", "list"]),
     runCli(home, ["org", "list", "--json"]),
     runCli(home, ["project", "list"]),
     runCli(home, ["project", "list", "--json"]),
-    runCli(home, ["connection", "remove", "gh"]),
+    runCli(home, ["connection", "remove", "st"]),
     runCli(home, ["bogus"]),
   ];
   for (const [index, result] of runs.entries()) {
     assert.equal(`${result.stdout}${result.stderr}`.includes(SENTINEL), false, `run ${index}`);
   }
   assert.equal(runs[2].status, 0);
-  assert.match(runs[3].stderr, /connection `gh` already exists/);
+  assert.match(runs[3].stderr, /connection `st` already exists/);
   assert.equal(runs[3].status, 1);
   assert.match(runs[6].stderr, /unknown org `ghost`/);
   assert.equal(runs[14].status, 1);
@@ -190,27 +190,38 @@ test("the secret never shows up in any output, in any format", (t) => {
 test("the stored secret lives in secrets.json, which stays 0600", (t) => {
   const home = makeDir(t, "secret-home");
   runCli(home, ["setup"]);
-  const added = runCli(home, ["connection", "add", "gh", "--type", "github"], { input: `${SENTINEL}\n` });
+  const added = runCli(home, ["connection", "add", "st", "--type", "sentry", "--set", "org=acme"], { input: `${SENTINEL}\n` });
   assert.equal(added.status, 0);
-  assert.match(added.stdout, /stored connection `gh` \(github\) and bound it to org `default`/);
+  assert.match(added.stdout, /stored connection `st` \(sentry\) and bound it to org `default`/);
   const secretsFile = join(home, "secrets.json");
   assert.equal(statSync(secretsFile).mode & 0o777, 0o600);
   assert.equal(readFileSync(secretsFile, "utf8").includes(SENTINEL), true);
   const listed = JSON.parse(runCli(home, ["connection", "list", "--json"]).stdout);
-  assert.deepEqual(listed, { connections: [{ name: "gh", type: "github", present: true, orgs: ["default"] }] });
-  assert.equal(runCli(home, ["connection", "remove", "gh"]).status, 0);
+  assert.deepEqual(listed, { connections: [{ name: "st", type: "sentry", present: true, orgs: ["default"] }] });
+  assert.equal(runCli(home, ["connection", "remove", "st"]).status, 0);
   assert.equal(readFileSync(secretsFile, "utf8").includes(SENTINEL), false);
 });
 
 test("connection add warns when the org slot is already taken", (t) => {
   const home = makeDir(t, "slot-home");
   runCli(home, ["setup"]);
-  runCli(home, ["connection", "add", "gh", "--type", "github"], { input: "one\n" });
-  const second = runCli(home, ["connection", "add", "gh2", "--type", "github"], { input: "two\n" });
+  runCli(home, ["connection", "add", "st", "--type", "sentry", "--set", "org=acme"], { input: "one\n" });
+  const second = runCli(home, ["connection", "add", "st2", "--type", "sentry", "--set", "org=acme"], { input: "two\n" });
   assert.equal(second.status, 0);
-  assert.match(second.stderr, /already uses `gh` for github; run `nightqueue connection bind gh2 --org default` to switch/);
-  const bound = runCli(home, ["connection", "bind", "gh2", "--org", "default"]);
-  assert.match(bound.stdout, /bound `gh2` to org `default` \(github\) \(replaced `gh`\)/);
+  assert.match(second.stderr, /already uses `st` for sentry; run `nightqueue connection bind st2 --org default` to switch/);
+  const bound = runCli(home, ["connection", "bind", "st2", "--org", "default"]);
+  assert.match(bound.stdout, /bound `st2` to org `default` \(sentry\) \(replaced `st`\)/);
+});
+
+test("connection add --type github is refused with the gh auth login hint and writes nothing", (t) => {
+  const home = makeDir(t, "github-refused");
+  runCli(home, ["setup"]);
+  const before = [readFileSync(join(home, "config.json"), "utf8"), readFileSync(join(home, "secrets.json"), "utf8")];
+  const refused = runCli(home, ["connection", "add", "x", "--type", "github"], { input: `${SENTINEL}\n` });
+  assert.notEqual(refused.status, 0);
+  assert.match(refused.stderr, /github is not a stored connection: nightqueue uses the machine's authenticated gh; run `gh auth login`/);
+  assert.equal(`${refused.stdout}${refused.stderr}`.includes(SENTINEL), false);
+  assert.deepEqual([readFileSync(join(home, "config.json"), "utf8"), readFileSync(join(home, "secrets.json"), "utf8")], before);
 });
 
 test("connection add of a home-wide type stores the secret, binds nothing and refuses --org, bind and a second one", (t) => {
@@ -285,23 +296,23 @@ test("an unexpected failure exits 2 with a stack", () => {
   assert.doesNotMatch(result.stderr, /^nightqueue: /m);
 });
 
-test("connection test reports login and scopes, and fails as a user error", async (t) => {
+test("connection test reports the service summary, and fails as a user error", async (t) => {
   const home = makeDir(t, "test-home");
   runCli(home, ["setup"]);
-  runCli(home, ["connection", "add", "gh", "--type", "github"], { input: `${SENTINEL}\n` });
+  runCli(home, ["connection", "add", "st", "--type", "sentry", "--set", "org=acme"], { input: `${SENTINEL}\n` });
   const okResponse = {
     status: 200,
-    headers: new Headers({ "X-OAuth-Scopes": "repo" }),
-    json: async () => ({ login: "octocat" }),
+    headers: new Headers(),
+    json: async () => ({ slug: "acme" }),
   };
   const ok = makeContext(home, { fetchImpl: async () => okResponse });
-  assert.equal(await run(["connection", "test", "gh"], ok.ctx), 0);
-  assert.deepEqual(ok.out, ["gh (github): ok — login=octocat scopes=repo"]);
+  assert.equal(await run(["connection", "test", "st"], ok.ctx), 0);
+  assert.deepEqual(ok.out, ["st (sentry): ok — org=acme"]);
   const denied = makeContext(home, {
     fetchImpl: async () => ({ status: 401, headers: new Headers(), json: async () => ({}) }),
   });
-  assert.equal(await run(["connection", "test", "gh"], denied.ctx), 1);
-  assert.deepEqual(denied.err, ["nightqueue: gh (github): failed — HTTP 401"]);
+  assert.equal(await run(["connection", "test", "st"], denied.ctx), 1);
+  assert.deepEqual(denied.err, ["nightqueue: st (sentry): failed — HTTP 401"]);
   assert.equal(JSON.stringify([ok.out, ok.err, denied.out, denied.err]).includes(SENTINEL), false);
 });
 
@@ -313,9 +324,9 @@ test("a failed config write after the secret write points at the recovery comman
       throw new Error("disk on fire");
     },
   });
-  assert.equal(await run(["connection", "add", "gh", "--type", "github"], ctx), 2);
-  assert.match(err.join("\n"), /secret stored for `gh`, but the config write failed: disk on fire/);
-  assert.match(err.join("\n"), /run `nightqueue connection bind gh --org default`/);
+  assert.equal(await run(["connection", "add", "st", "--type", "sentry", "--set", "org=acme"], ctx), 2);
+  assert.match(err.join("\n"), /secret stored for `st`, but the config write failed: disk on fire/);
+  assert.match(err.join("\n"), /run `nightqueue connection bind st --org default`/);
   assert.equal(readFileSync(join(home, "secrets.json"), "utf8").includes(SENTINEL), true);
   assert.equal(statSync(join(home, "config.json"), { throwIfNoEntry: false }), undefined);
 });
@@ -323,17 +334,17 @@ test("a failed config write after the secret write points at the recovery comman
 test("a failed secret write after the config write points at the recovery command", async (t) => {
   const home = makeDir(t, "partial-remove");
   runCli(home, ["setup"]);
-  runCli(home, ["connection", "add", "gh", "--type", "github"], { input: `${SENTINEL}\n` });
+  runCli(home, ["connection", "add", "st", "--type", "sentry", "--set", "org=acme"], { input: `${SENTINEL}\n` });
   const { ctx, err } = makeContext(home, {
     saveSecrets: () => {
       throw new Error("disk on fire");
     },
   });
-  assert.equal(await run(["connection", "remove", "gh"], ctx), 2);
-  assert.match(err.join("\n"), /unbound `gh` from all orgs, but the secret file write failed: disk on fire/);
-  assert.match(err.join("\n"), /run `nightqueue connection remove gh` again/);
+  assert.equal(await run(["connection", "remove", "st"], ctx), 2);
+  assert.match(err.join("\n"), /unbound `st` from all orgs, but the secret file write failed: disk on fire/);
+  assert.match(err.join("\n"), /run `nightqueue connection remove st` again/);
   const config = JSON.parse(readFileSync(join(home, "config.json"), "utf8"));
-  assert.deepEqual(Object.values(config.orgConnections).map((slots) => slots.github), [null]);
+  assert.deepEqual(Object.values(config.orgConnections).map((slots) => slots.sentry), [null]);
   assert.equal(readFileSync(join(home, "secrets.json"), "utf8").includes(SENTINEL), true);
 });
 

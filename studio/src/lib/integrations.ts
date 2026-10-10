@@ -1,14 +1,16 @@
-import type { ConnectionRow, IntegrationsView, LastNotice, LastTest, OrgSummary, ProjectDestination } from "./types";
+import type { AmbientStatus, ConnectionRow, IntegrationsView, LastNotice, LastTest, ModuleCard, ModuleField, ModulePlace, OrgSummary, ProjectDestination } from "./types";
 
 export const DISCORD = "discord";
 
 export const NO_DESTINATION = "";
 
-const TYPE_ORDER = ["discord", "github", "linear", "sentry"];
+const TYPE_LABELS: Record<string, string> = { discord: "Discord", linear: "Linear", sentry: "Sentry" };
 
-const TYPE_LABELS: Record<string, string> = { discord: "Discord", github: "GitHub", linear: "Linear", sentry: "Sentry" };
+const CREDENTIAL_LABELS: Record<string, string> = { discord: "webhook", linear: "API key", sentry: "token" };
 
-const CREDENTIAL_LABELS: Record<string, string> = { discord: "webhook", github: "token", linear: "API key", sentry: "token" };
+const PLACE_LABELS: Record<ModulePlace, string> = { machine: "this machine", home: "whole home", org: "per org" };
+
+const NOTHING_SAVED = /\s*Nothing was saved\.?\s*$/;
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
 
@@ -21,11 +23,6 @@ export type Tone = "ok" | "err" | "off";
 export interface Labelled {
   tone: Tone;
   text: string;
-}
-
-export interface TypeChip {
-  value: string;
-  label: string;
 }
 
 export interface DestinationOption {
@@ -74,6 +71,12 @@ export interface AddErrorView {
   field: "name" | "url" | null;
 }
 
+export interface ConnectionErrorView {
+  title: string;
+  body: string;
+  field: "name" | "secret" | "org" | null;
+}
+
 export interface Refusal {
   org: string;
   connectionId: string;
@@ -84,11 +87,25 @@ function listOf<T>(value: unknown): T[] {
   return Array.isArray(value) ? (value as T[]) : [];
 }
 
+// Tells whether a module card of the payload has the fields a card needs.
+function isModuleCard(entry: unknown): entry is ModuleCard {
+  const value = entry as Partial<ModuleCard> | null;
+  return typeof value?.kind === "string" && typeof value?.label === "string" && typeof value?.place === "string" && value.place in PLACE_LABELS;
+}
+
+// A module card with its add form fields guaranteed to be a list.
+function normalizeModule(card: ModuleCard): ModuleCard {
+  const add = card.add && typeof card.add === "object" ? { ...card.add, fields: listOf<ModuleField>(card.add.fields) } : null;
+  const ambient = card.ambient && typeof card.ambient === "object" ? card.ambient : null;
+  return { ...card, description: typeof card.description === "string" ? card.description : "", add, ambient };
+}
+
 // The integrations answer with every list guaranteed to be an array.
 export function normalizeView(body: unknown): IntegrationsView {
   const source = (body && typeof body === "object" ? body : {}) as Record<string, unknown>;
   const connections = listOf<ConnectionRow>(source.connections).map((row) => ({ ...row, orgs: listOf<string>(row.orgs), usedBy: listOf<string>(row.usedBy) }));
-  return { orgs: listOf<OrgSummary>(source.orgs), connections, projects: listOf<ProjectDestination>(source.projects) };
+  const modules = listOf<unknown>(source.modules).filter(isModuleCard).map(normalizeModule);
+  return { orgs: listOf<OrgSummary>(source.orgs), connections, projects: listOf<ProjectDestination>(source.projects), modules };
 }
 
 // Tells whether a connection is a Discord webhook.
@@ -107,29 +124,51 @@ export function typeLine(type: string): string {
   return credential ? `${typeLabel(type)} · ${credential}` : typeLabel(type);
 }
 
-// The types present in the list, in the fixed display order.
-function presentTypes(rows: readonly ConnectionRow[]): string[] {
-  const types = new Set(rows.map((row) => row.type));
-  const known = TYPE_ORDER.filter((type) => types.has(type));
-  return [...known, ...[...types].filter((type) => !TYPE_ORDER.includes(type))];
+// The connections of one module kind.
+export function connectionsOfKind(view: IntegrationsView, kind: string): ConnectionRow[] {
+  return view.connections.filter((row) => row.type === kind);
 }
 
-// The filter chips of the connections card: all, Discord, GitHub, Linear, plus any other stored type.
-export function typeChips(rows: readonly ConnectionRow[]): TypeChip[] {
-  const types = [...new Set([...TYPE_ORDER.slice(0, 3), ...presentTypes(rows)])];
-  return [{ value: "all", label: "all" }, ...types.map((type) => ({ value: type, label: typeLabel(type) }))];
+// Where a module's credential lives, as the card header says it.
+export function placeLabel(place: ModulePlace): string {
+  return PLACE_LABELS[place] ?? place;
 }
 
-// The count per type beside the card title, as `2 Discord · 1 GitHub`.
-export function typeSummary(rows: readonly ConnectionRow[]): string {
-  return presentTypes(rows)
-    .map((type) => `${rows.filter((row) => row.type === type).length} ${typeLabel(type)}`)
-    .join(" · ");
+// The connection state of a stored module: not connected, connected, N connected, or connected in N orgs.
+export function moduleState(module: ModuleCard, view: IntegrationsView): string {
+  const count = connectionsOfKind(view, module.kind).length;
+  if (!count) return "not connected";
+  if (module.place === "org" && module.cardinality === "one") return `connected in ${count} ${count === 1 ? "org" : "orgs"}`;
+  return count === 1 ? "connected" : `${count} connected`;
 }
 
-// The connections of one type, or all of them.
-export function filterConnections(rows: readonly ConnectionRow[], type: string): ConnectionRow[] {
-  return type === "all" ? [...rows] : rows.filter((row) => row.type === type);
+// Tells whether a stored module can take one more connection: a home-wide single one cannot once connected.
+export function canAddConnection(module: ModuleCard, view: IntegrationsView): boolean {
+  if (!module.add) return false;
+  return !(module.place === "home" && module.cardinality === "one" && connectionsOfKind(view, module.kind).length > 0);
+}
+
+// The command-line tool an ambient module reads, as the first word of its connect command.
+export function ambientTool(module: ModuleCard): string {
+  const word = module.ambient?.command?.trim().split(/\s+/)[0];
+  return word || module.label;
+}
+
+// The status line of an ambient module: the account it is connected as, not authenticated, unavailable, or the tool missing.
+export function ambientLine(status: AmbientStatus | null | undefined, tool: string): string {
+  if (!status) return "checking…";
+  if (!status.installed) return `${tool} not installed`;
+  if (status.authenticated === null) return "status unavailable";
+  if (!status.authenticated) return "not authenticated";
+  if (!status.login) return "connected";
+  return status.host ? `connected as ${status.login} · ${status.host}` : `connected as ${status.login}`;
+}
+
+// The names of the modules joined for a sentence, as `Discord, Linear and GitHub`.
+export function joinLabels(modules: readonly ModuleCard[]): string {
+  const labels = modules.map((module) => module.label);
+  if (labels.length <= 1) return labels.join("");
+  return `${labels.slice(0, -1).join(", ")} and ${labels[labels.length - 1]}`;
 }
 
 // The last six characters of a Discord id, ellipsed.
@@ -382,6 +421,30 @@ export function addErrorView(err: unknown, name: string): AddErrorView {
   if (code === "refused") return { title: "Discord refused the URL", body: refusedBody(body), field: "url" };
   if (code === "duplicate") return { title: "A connection with this name already exists", body: duplicateBody(name, body), field: "name" };
   return { title: "Couldn't save the connection", body: messageOf(err), field: null };
+}
+
+// The message of a failed call without the trailing `Nothing was saved.` the dialog already says.
+function refusalText(err: unknown): string {
+  return messageOf(err).replace(NOTHING_SAVED, "");
+}
+
+// The text of an occupied org slot refusal, naming the connection that holds it.
+function occupiedBody(module: ModuleCard, body: Record<string, unknown>): string {
+  const holder = typeof body.connection === "string" ? `“${body.connection}”` : "another connection";
+  return `The ${module.label} slot of this org is held by ${holder}. Remove it first, or pick another org.`;
+}
+
+// What the generic add dialog shows for a failed add of a module: a title, a body and the field to mark red.
+export function addConnectionErrorView(err: unknown, module: ModuleCard): ConnectionErrorView {
+  const { body } = errorParts(err);
+  const code = errorCode(err) ?? "";
+  const secret = module.add?.secretLabel ?? "secret";
+  if (code.startsWith("invalid-")) return { title: `Invalid ${secret}`, body: refusalText(err), field: "secret" };
+  if (code === "refused") return { title: `${module.label} refused the ${secret}`, body: typeof body.reason === "string" && body.reason ? body.reason : refusalText(err), field: "secret" };
+  if (code === "duplicate") return { title: module.add?.nameRequired ? "A connection with this name already exists" : `${module.label} is already connected`, body: refusalText(err), field: module.add?.nameRequired ? "name" : null };
+  if (code === "occupied") return { title: `This org already has a ${module.label} connection`, body: occupiedBody(module, body), field: "org" };
+  if (code === "ambient") return { title: `${module.label} is not added here`, body: refusalText(err), field: null };
+  return { title: "Couldn't save the connection", body: refusalText(err), field: null };
 }
 
 // The org refusal of a destination change, or null when the failure is another one.

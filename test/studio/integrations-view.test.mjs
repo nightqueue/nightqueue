@@ -1,23 +1,28 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
+  addConnectionErrorView,
   addErrorView,
   agoLabel,
+  ambientLine,
+  ambientTool,
+  canAddConnection,
+  connectionsOfKind,
   destinationOptions,
   destinationSummary,
-  filterConnections,
   groupProjectsByOrg,
+  joinLabels,
   lastTestLabel,
   linkCta,
   linkPlan,
+  moduleState,
   normalizeView,
   noticeLabel,
+  placeLabel,
   refusalOf,
   remainingOrgs,
   toggledOrg,
   toggledProject,
-  typeChips,
-  typeSummary,
   usedByNames,
   webhookLine,
   whenLabel,
@@ -35,17 +40,34 @@ function project(id, org, destination = null) {
   return { id, name: id, org, destination, lastNotice: null };
 }
 
-// The view of a home with orgs dlw (3 projects), clareza (2) and nightqueue (1), and two Discord connections plus a GitHub one.
+// The module cards the runtime answers, in card order: Discord, Linear, GitHub, Sentry.
+function sampleModules() {
+  const add = (secretField, secretLabel, fields = []) => ({ secretField, secretLabel, nameRequired: secretField === "url", orgRequired: secretField !== "apiKey", fields });
+  return [
+    { kind: "discord", label: "Discord", description: "posts", place: "org", cardinality: "many", add: add("url", "webhook URL"), ambient: null },
+    { kind: "linear", label: "Linear", description: "tickets", place: "home", cardinality: "one", add: add("apiKey", "API key"), ambient: null },
+    { kind: "github", label: "GitHub", description: "gh", place: "machine", cardinality: null, add: null, ambient: { statusPath: "/api/integrations/github/status", command: "gh auth login --web" } },
+    { kind: "sentry", label: "Sentry", description: "issues", place: "org", cardinality: "one", add: add("token", "auth token", [{ name: "org", format: "a slug", required: true, default: null }]), ambient: null },
+  ];
+}
+
+// The view of a home with orgs dlw (3 projects), clareza (2) and nightqueue (1), and two Discord connections plus a Sentry one.
 function sampleView() {
   return normalizeView({
     orgs: [{ id: "o1", name: "dlw", projects: 3 }, { id: "o2", name: "clareza", projects: 2 }, { id: "o3", name: "nightqueue", projects: 1 }],
     connections: [
       discordRow("dlw-log", ["dlw"], { usedBy: ["a1", "a2"] }),
       discordRow("ops", ["dlw", "clareza"], { usedBy: ["c1"] }),
-      { id: "gh", name: "gh", type: "github", present: true, scope: "org", orgs: ["dlw"], lastTest: null, usedBy: ["a1", "a2", "a3"] },
+      { id: "sentry-dlw", name: "sentry-dlw", type: "sentry", present: true, scope: "org", orgs: ["dlw"], lastTest: null, usedBy: ["a1", "a2", "a3"] },
     ],
     projects: [project("a1", "dlw", "dlw-log"), project("a2", "dlw", "dlw-log"), project("a3", "dlw", "ops"), project("c1", "clareza", "ops"), project("c2", "clareza"), project("n1", "nightqueue", "ghost")],
+    modules: sampleModules(),
   });
+}
+
+// A module card of the sample by kind.
+function moduleOf(kind) {
+  return sampleModules().find((module) => module.kind === kind);
 }
 
 // An ApiError-like failure with a status and a parsed body.
@@ -54,17 +76,66 @@ function apiError(status, body) {
 }
 
 test("normalizeView turns a hostile payload into empty lists instead of throwing", () => {
-  assert.deepEqual(normalizeView(null), { orgs: [], connections: [], projects: [] });
-  assert.deepEqual(normalizeView({ orgs: "x", connections: [{ name: "a", orgs: "dlw", usedBy: null }], projects: {} }), { orgs: [], connections: [{ name: "a", orgs: [], usedBy: [] }], projects: [] });
+  assert.deepEqual(normalizeView(null), { orgs: [], connections: [], projects: [], modules: [] });
+  assert.deepEqual(normalizeView({ orgs: "x", connections: [{ name: "a", orgs: "dlw", usedBy: null }], projects: {}, modules: "x" }), { orgs: [], connections: [{ name: "a", orgs: [], usedBy: [] }], projects: [], modules: [] });
+  const modules = normalizeView({ modules: [null, { kind: "x" }, { kind: "y", label: "Y", place: "moon" }, { kind: "z", label: "Z", place: "org", add: { secretField: "k", fields: "bad" } }] }).modules;
+  assert.deepEqual(modules.map((module) => [module.kind, module.add?.fields, module.ambient, module.description]), [["z", [], null, ""]]);
 });
 
-test("type chips always offer all, Discord, GitHub and Linear, plus any other stored type; the filter keeps one type", () => {
+test("with zero connections the view still lists the four modules in card order, each one not connected", () => {
+  const view = normalizeView({ orgs: [], connections: [], projects: [], modules: sampleModules() });
+  assert.deepEqual(view.modules.map((module) => module.label), ["Discord", "Linear", "GitHub", "Sentry"]);
+  assert.deepEqual(view.modules.filter((module) => module.add).map((module) => moduleState(module, view)), ["not connected", "not connected", "not connected"]);
+  assert.equal(joinLabels(view.modules), "Discord, Linear, GitHub and Sentry");
+  assert.equal(joinLabels([]), "");
+});
+
+test("connections group by module kind, and the state counts them per kind", () => {
   const view = sampleView();
-  assert.deepEqual(typeChips(view.connections).map((chip) => chip.label), ["all", "Discord", "GitHub", "Linear"]);
-  assert.deepEqual(typeChips([...view.connections, { ...view.connections[2], name: "s", type: "sentry" }]).map((chip) => chip.label), ["all", "Discord", "GitHub", "Linear", "Sentry"]);
-  assert.equal(typeSummary(view.connections), "2 Discord · 1 GitHub");
-  assert.deepEqual(filterConnections(view.connections, "discord").map((row) => row.name), ["dlw-log", "ops"]);
-  assert.equal(filterConnections(view.connections, "all").length, 3);
+  assert.deepEqual(connectionsOfKind(view, "discord").map((row) => row.name), ["dlw-log", "ops"]);
+  assert.deepEqual(connectionsOfKind(view, "sentry").map((row) => row.name), ["sentry-dlw"]);
+  assert.deepEqual(connectionsOfKind(view, "github"), []);
+  assert.equal(moduleState(moduleOf("discord"), view), "2 connected");
+  assert.equal(moduleState(moduleOf("sentry"), view), "connected in 1 org");
+  assert.equal(moduleState(moduleOf("linear"), view), "not connected");
+  const linked = normalizeView({ ...view, connections: [{ id: "linear", name: "linear", type: "linear", scope: "home", orgs: [], usedBy: [] }] });
+  assert.equal(moduleState(moduleOf("linear"), linked), "connected");
+  assert.deepEqual([canAddConnection(moduleOf("linear"), view), canAddConnection(moduleOf("linear"), linked)], [true, false]);
+  assert.deepEqual([canAddConnection(moduleOf("discord"), view), canAddConnection(moduleOf("sentry"), view), canAddConnection(moduleOf("github"), view)], [true, true, false]);
+  assert.deepEqual([placeLabel("machine"), placeLabel("home"), placeLabel("org")], ["this machine", "whole home", "per org"]);
+});
+
+test("the ambient line reads the account, not authenticated, or the tool missing; the tool comes from the connect command", () => {
+  const github = moduleOf("github");
+  const tool = ambientTool(github);
+  assert.equal(tool, "gh");
+  const status = (fields) => ({ kind: "github", installed: true, authenticated: true, login: "octo", host: "github.com", checkedAt: null, ...fields });
+  assert.equal(ambientLine(status({}), tool), "connected as octo · github.com");
+  assert.equal(ambientLine(status({ host: null }), tool), "connected as octo");
+  assert.equal(ambientLine(status({ login: null }), tool), "connected");
+  assert.equal(ambientLine(status({ authenticated: false }), tool), "not authenticated");
+  assert.equal(ambientLine(status({ authenticated: null, login: null, host: null }), tool), "status unavailable");
+  assert.equal(ambientLine(status({ installed: false, authenticated: false }), tool), "gh not installed");
+  assert.equal(ambientLine(null, tool), "checking…");
+  assert.equal(ambientTool({ ...github, ambient: null }), "GitHub");
+});
+
+test("a generic add failure maps each refusal code to its title and field, without the repeated nothing-saved line", () => {
+  const sentry = moduleOf("sentry");
+  const linear = moduleOf("linear");
+  const invalid = addConnectionErrorView(apiError(422, { code: "invalid-token", error: "Invalid auth token: too long. Nothing was saved." }), sentry);
+  assert.deepEqual(invalid, { title: "Invalid auth token", body: "Invalid auth token: too long.", field: "secret" });
+  const refused = addConnectionErrorView(apiError(502, { code: "refused", status: 401, reason: "Sentry answered 401." }), sentry);
+  assert.deepEqual(refused, { title: "Sentry refused the auth token", body: "Sentry answered 401.", field: "secret" });
+  const duplicate = addConnectionErrorView(apiError(409, { code: "duplicate", error: "A home has one linear connection: `linear`; remove it first. Nothing was saved." }), linear);
+  assert.deepEqual(duplicate, { title: "Linear is already connected", body: "A home has one linear connection: `linear`; remove it first.", field: null });
+  assert.equal(addConnectionErrorView(apiError(409, { code: "duplicate", error: "x" }), moduleOf("discord")).field, "name");
+  const occupied = addConnectionErrorView(apiError(409, { code: "occupied", org: "dlw", connection: "sentry-dlw" }), sentry);
+  assert.deepEqual([occupied.title, occupied.field], ["This org already has a Sentry connection", "org"]);
+  assert.match(occupied.body, /held by “sentry-dlw”/);
+  const ambient = addConnectionErrorView(apiError(409, { code: "ambient", error: "github is not a stored connection: run `gh auth login`" }), moduleOf("github"));
+  assert.deepEqual([ambient.title, ambient.field], ["GitHub is not added here", null]);
+  assert.deepEqual(addConnectionErrorView(new Error("offline"), sentry), { title: "Couldn't save the connection", body: "offline", field: null });
 });
 
 test("the webhook line shows the webhook name and short ids, with the full ids as its title", () => {
