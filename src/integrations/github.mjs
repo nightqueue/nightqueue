@@ -4,7 +4,7 @@ export const github = {
   kind: "github",
   label: "GitHub",
   description: "Clones, pushes and opens the pull requests of every job through the machine's authenticated gh.",
-  card: { order: 3 },
+  card: { order: 1, icon: "github" },
   ambient: {
     status: (env) => ghAccountStatus({ env }),
     connect: (env) => ({ bin: ghBin(env), args: ["auth", "login", "--web"] }),

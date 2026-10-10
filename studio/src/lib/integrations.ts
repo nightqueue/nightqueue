@@ -97,7 +97,8 @@ function isModuleCard(entry: unknown): entry is ModuleCard {
 function normalizeModule(card: ModuleCard): ModuleCard {
   const add = card.add && typeof card.add === "object" ? { ...card.add, fields: listOf<ModuleField>(card.add.fields) } : null;
   const ambient = card.ambient && typeof card.ambient === "object" ? card.ambient : null;
-  return { ...card, description: typeof card.description === "string" ? card.description : "", add, ambient };
+  const icon = typeof card.icon === "string" ? card.icon : null;
+  return { ...card, description: typeof card.description === "string" ? card.description : "", icon, destinations: (card.destinations as unknown) === true || (card.destinations as unknown) === "true", add, ambient };
 }
 
 // The integrations answer with every list guaranteed to be an array.
