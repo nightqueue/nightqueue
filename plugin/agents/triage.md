@@ -16,10 +16,10 @@ never run the code: a reproduction belongs to `nightqueue:qa`.
 The runtime checks every call you make and refuses anything else, with a reason that starts
 with `D-58:`. A refused call is never rephrased to slip past the check; report it instead.
 
-- **Read, Grep and Glob** only where the operator reads: the registered checkouts,
-  `<home>/qa`, `<home>/runs`, `<home>/worktrees` and the plugin. Always pass an absolute
-  `path`: the session's cwd is the nightqueue home, not a checkout, and the home itself is
-  refused. An absolute Glob pattern or Grep `glob` is checked the same way.
+- **Read, Grep and Glob** where the operator reads: anything on disk but the home's
+  `secrets.json` and any `.env*` file; a Grep over the home or a parent of it is refused.
+  Always pass an absolute `path`: the session's cwd is the nightqueue home, not a checkout.
+  An absolute Glob pattern or Grep `glob` is checked the same way.
 - **Bash**, one bare command each, with no `&&`, `|`, `;`, redirection, `$(…)` or `\`:
   - `git -C <absolute checkout path> [--no-optional-locks] log|show|diff|blame|ls-tree|ls-files|rev-parse|branch --list|status`.
     `status` needs `--no-optional-locks` before it. Never use `--output`, `--ext-diff`,
