@@ -426,9 +426,9 @@ async function expectedPushedHead(ctx, deps, fetchedOk) {
 }
 
 // The note lead and data of a head GitHub shows other than the recorded one, or null when it did not move.
-function movedHead(ctx, pr) {
-  if (!headMoved(ctx, pr)) return null;
-  return { lead: `the head moved from ${sha7(ctx.data.headSha)} to ${sha7(pr.headRefOid)}`, data: { headSha: pr.headRefOid, pushedBy: null } };
+function movedHead(ctx, pr, recorded = ctx.data.headSha) {
+  if (!headMoved(ctx, pr, recorded)) return null;
+  return { lead: `the head moved from ${sha7(recorded)} to ${sha7(pr.headRefOid)}`, data: { headSha: pr.headRefOid, pushedBy: null } };
 }
 
 // What CI says about one head: a stop, no check at all (`empty`), or green now or once waited for (`slow`).
@@ -511,8 +511,8 @@ async function readMergeability(ctx, deps) {
 }
 
 // Tells whether the head GitHub shows is another than the recorded one.
-function headMoved(ctx, pr) {
-  return Boolean(ctx.data.headSha) && pr.headRefOid !== ctx.data.headSha;
+function headMoved(ctx, pr, recorded = ctx.data.headSha) {
+  return Boolean(recorded) && pr.headRefOid !== recorded;
 }
 
 // A step result with the note and data of a moved head the step went on with put before its own.
@@ -867,7 +867,7 @@ async function noCiVerdict(ctx, deps, { pr, lead, data }) {
 // The head the merge step may merge: one this close's suite verified, one CI reports green on, any head under --force, or one verified now.
 async function mergeHeadVerdict(ctx, deps, pr, known) {
   const head = pr.headRefOid;
-  const moved = movedHead(ctx, pr);
+  const moved = movedHead(ctx, pr, known.headSha);
   if (ctx.force) return { head, note: moved ? `${moved.lead}; taken with --force` : null, data: moved?.data ?? {} };
   if (head === known.verifiedSha || head === known.ciGreenSha) return { head, note: null, data: {} };
   const ci = await ciVerdict(ctx, deps, { head, lead: moved?.lead ?? null, data: moved?.data ?? {}, reopen: MERGE_REOPEN });
@@ -878,7 +878,8 @@ async function mergeHeadVerdict(ctx, deps, pr, known) {
 
 // A merge step result carrying the verification data gathered so far, with the note of the head it went on with put first.
 function withMergeData(result, merge, lead = null) {
-  const note = lead ? `${lead}; ${result.note}` : result.note;
+  const leads = [...merge.leads, lead].filter(Boolean);
+  const note = leads.length ? `${leads.join("; ")}; ${result.note}` : result.note;
   return { ...result, note, data: { ...merge.data, ...(result.data ?? {}) } };
 }
 
@@ -898,10 +899,36 @@ function openAt(pr, head) {
 // Folds an accepted verdict's data into what the merge step has verified.
 function recordVerdict(merge, verdict) {
   Object.assign(merge.data, verdict.data ?? {});
-  merge.known = { verifiedSha: merge.data.verifiedSha ?? merge.known.verifiedSha, ciGreenSha: merge.data.ciGreenSha ?? merge.known.ciGreenSha };
+  merge.known = { verifiedSha: merge.data.verifiedSha ?? merge.known.verifiedSha, ciGreenSha: merge.data.ciGreenSha ?? merge.known.ciGreenSha, headSha: merge.known.headSha };
 }
 
-// Merges the accepted head, pinned to it, and proves the merge by re-reading its commit; a failed call on a head that moved answers the new read.
+// Tells whether a refused merge call carries gh's message of a head not up to date with its base.
+function notUpToDate(call) {
+  return /not up to date with the base branch/i.test(call?.stderr ?? "");
+}
+
+// Reads the pull request once more after a pause, for a mergeability GitHub has not computed yet.
+async function readMergeabilityAgain(ctx, deps) {
+  await pause(ctx, deps, UNKNOWN_RETRY_MS);
+  return await readPr(ctx, deps);
+}
+
+// The turn answer of a head GitHub shows behind its base, keeping the note of the verdict it was accepted with.
+function behindTurn(merge, verdict, live) {
+  if (verdict.note) merge.leads.push(verdict.note);
+  return { behind: live };
+}
+
+// Classifies a refused merge at the unchanged open head: behind its base by GitHub's reread or gh's message, else null.
+async function refusedBehind(ctx, deps, { call, reread, verdict }) {
+  if (call.ok || !openAt(reread, verdict.head)) return null;
+  const unknown = reread.mergeable === "UNKNOWN" || reread.mergeStateStatus === "UNKNOWN";
+  const live = unknown ? await readMergeabilityAgain(ctx, deps) : reread;
+  if (!openAt(live, verdict.head)) return null;
+  return live.mergeStateStatus === "BEHIND" || notUpToDate(call) ? live : null;
+}
+
+// Merges the accepted head, pinned to it, and proves the merge by re-reading its commit; a failed call on a head that moved or fell behind answers the new read.
 async function callMerge(ctx, deps, { verdict, merge }) {
   if (ctx.signal?.aborted) return { result: withMergeData(abortedBefore("merge"), merge, verdict.note) };
   const call = await deps.gh.prMerge(ctx.prUrl, { matchHeadCommit: verdict.head, ...bounded(ctx, MERGE_TIMEOUT_MS) });
@@ -910,10 +937,19 @@ async function callMerge(ctx, deps, { verdict, merge }) {
     return { result: withMergeData(await mergedResult(ctx, deps, { pr: reread, note: "squash-merged", mergedBy: "nightqueue" }), merge, verdict.note) };
   }
   if (!call.ok && reread?.ok && reread.state === "OPEN" && reread.headRefOid !== verdict.head) return { next: reread };
+  const behind = await refusedBehind(ctx, deps, { call, reread, verdict });
+  if (behind) return behindTurn(merge, verdict, behind);
   return { result: withMergeData(mergeWithoutSha({ pr: reread, call }), merge, verdict.note) };
 }
 
-// One pass of the merge over the head GitHub shows: its verdict, the conflict check and the merge call; answers the result or the read of a changed head.
+// The freshest read of the pull request a turn holds before its merge call; `changed` when a wait or a lagging push read left another head or state.
+async function liveRead(ctx, deps, { pr, verdict }) {
+  if (!verdict.slow && !pr.pushLagged) return { changed: false, pr };
+  const reread = verdict.pushed || pr.pushLagged ? await readPushedPr(ctx, deps, verdict.head) : await readPr(ctx, deps);
+  return { changed: !openAt(reread, verdict.head) && !pushLag(reread, verdict), pr: reread };
+}
+
+// One pass of the merge over the head GitHub shows: its verdict, the conflict and behind checks and the merge call; answers the result, a changed head's read or a behind head.
 async function mergeTurn(ctx, deps, { pr, merge }) {
   const verdict = await mergeHeadVerdict(ctx, deps, pr, merge.known);
   if (verdict.problem) return { result: withMergeData(verdict.problem, merge) };
@@ -922,11 +958,34 @@ async function mergeTurn(ctx, deps, { pr, merge }) {
   if (CONFLICTED_STATES.has(pr.mergeable) || CONFLICTED_STATES.has(pr.mergeStateStatus)) {
     return { result: withMergeData(failed("not-mergeable", "the pull request conflicts with its base again; the next run rebases it", { reopen: ["conflict"] }), merge, verdict.note) };
   }
-  if (verdict.slow) {
-    const reread = verdict.pushed ? await readPushedPr(ctx, deps, verdict.head) : await readPr(ctx, deps);
-    if (!openAt(reread, verdict.head) && !pushLag(reread, verdict)) return { next: reread };
-  }
+  const live = await liveRead(ctx, deps, { pr, verdict });
+  if (live.changed) return { next: live.pr };
+  if (openAt(live.pr, verdict.head) && live.pr.mergeStateStatus === "BEHIND") return behindTurn(merge, verdict, live.pr);
   return await callMerge(ctx, deps, { verdict, merge });
+}
+
+// Brings a head GitHub shows behind its base up to date with the conflict step's own path, and answers the next read or the stop.
+async function updateBehindInMerge(ctx, deps, { pr, merge }) {
+  const updated = await updateBehindHead(ctx, deps, { head: pr.headRefName, base: pr.baseRefName });
+  const lead = `${pr.baseRefName} moved past ${sha7(pr.headRefOid)}: ${updated.note}`;
+  if (updated.status !== "done") return { result: withMergeData({ ...updated, note: lead, reopen: MERGE_REOPEN }, merge) };
+  merge.leads.push(lead);
+  recordVerdict(merge, updated);
+  merge.known.headSha = updated.data?.headSha ?? merge.known.headSha;
+  if (updated.headChanged) return { next: await readPr(ctx, deps) };
+  return { next: pushedHeadRead(await readPushedPr(ctx, deps, updated.data.headSha), updated.data) };
+}
+
+// A read after the in-step push that still shows the head it replaced, held as the pushed head until the turn reads GitHub again before its merge.
+function pushedHeadRead(read, pushed) {
+  if (!pushed?.headSha || !openAt(read, pushed.headShaBefore)) return read;
+  return { ...read, headRefOid: pushed.headSha, mergeable: "UNKNOWN", mergeStateStatus: "UNKNOWN", pushLagged: true };
+}
+
+// The stop of a base that kept moving while the close updated the branch: nothing merged, the next run rebases from the conflict step.
+function baseKeptMoving(ctx, pr, merge) {
+  const note = `main keeps moving: the base ${pr.baseRefName} moved past the branch ${MAX_LOOPBACKS} times after the close updated it; nothing was merged (head ${sha7(pr.headRefOid)} is behind again) - run queue close ${jobRef(ctx.jobId)} again`;
+  return withMergeData(failed("base-moved", note, { reopen: MERGE_REOPEN }), merge);
 }
 
 // Tells whether a read after the close's own push still shows the head it replaced: GitHub lags, the head did not change; the pinned merge stays safe.
@@ -941,18 +1000,30 @@ function headKeptMoving(pr, merge) {
 }
 
 // Squash-merges the pull request at a head this close or CI verified, pinned to it, and proves the merge by re-reading its merge commit.
-// A head that changes during the step is judged again, at most MAX_LOOPBACKS times; then the step stops with head-moved.
+// A head that changes is judged again and a head behind its base is updated, each at most MAX_LOOPBACKS times; then head-moved or base-moved.
 async function mergeStep({ ctx, deps }) {
   if (ctx.data.merged) return await confirmRecordedMerge(ctx, deps);
-  const merge = { known: { verifiedSha: ctx.data.verifiedSha ?? null, ciGreenSha: ctx.data.ciGreenSha ?? null }, data: {} };
+  const known = { verifiedSha: ctx.data.verifiedSha ?? null, ciGreenSha: ctx.data.ciGreenSha ?? null, headSha: ctx.data.headSha ?? null };
+  const merge = { known, data: {}, leads: [] };
   let pr = await readHeadPr(ctx, deps);
-  for (let changes = 0; ; changes += 1) {
+  let headChanges = 0;
+  let baseUpdates = 0;
+  for (;;) {
     const ended = await endedPrResult(ctx, deps, pr);
     if (ended) return withMergeData(ended, merge);
-    if (changes > MAX_LOOPBACKS) return headKeptMoving(pr, merge);
+    if (headChanges > MAX_LOOPBACKS) return headKeptMoving(pr, merge);
     const turn = await mergeTurn(ctx, deps, { pr, merge });
     if (turn.result) return turn.result;
-    pr = turn.next;
+    if (!turn.behind) {
+      headChanges += 1;
+      pr = turn.next;
+      continue;
+    }
+    if (baseUpdates === MAX_LOOPBACKS) return baseKeptMoving(ctx, turn.behind, merge);
+    baseUpdates += 1;
+    const update = await updateBehindInMerge(ctx, deps, { pr: turn.behind, merge });
+    if (update.result) return update.result;
+    pr = update.next;
   }
 }
 
