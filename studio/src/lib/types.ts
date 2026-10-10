@@ -451,6 +451,8 @@ export interface ModuleCard {
   kind: string;
   label: string;
   description: string;
+  icon: string | null;
+  destinations: boolean;
   place: ModulePlace;
   cardinality: "one" | "many" | null;
   add: ModuleAddForm | null;

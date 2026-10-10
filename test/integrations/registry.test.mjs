@@ -53,11 +53,13 @@ test("CONNECTION_TYPES holds only the stored kinds; github is read from the mach
   assert.throws(() => requireType("jira"), /unknown connection type `jira`; supported: sentry, linear, discord/);
 });
 
-test("moduleCards lists Discord, Linear, GitHub, Sentry as plain data that survives JSON", () => {
+test("moduleCards lists GitHub, Linear, Sentry, Discord as plain data that survives JSON", () => {
   const cards = moduleCards();
-  assert.deepEqual(cards.map((card) => card.kind), ["discord", "linear", "github", "sentry"]);
+  assert.deepEqual(cards.map((card) => card.kind), ["github", "linear", "sentry", "discord"]);
   assert.deepEqual(JSON.parse(JSON.stringify(cards)), cards);
   const byKind = Object.fromEntries(cards.map((card) => [card.kind, card]));
+  assert.deepEqual(cards.map((card) => card.icon), ["github", "linear", "sentry", "discord"]);
+  assert.deepEqual(cards.map((card) => card.destinations), [false, false, false, true]);
   assert.deepEqual([byKind.discord.place, byKind.linear.place, byKind.github.place, byKind.sentry.place], ["org", "home", "machine", "org"]);
   assert.equal(byKind.github.add, null);
   assert.deepEqual(byKind.github.ambient, { statusPath: "/api/integrations/github/status", command: "gh auth login --web" });

@@ -247,7 +247,7 @@ export const discord = {
   kind: "discord",
   label: "Discord",
   description: "Posts the “job closed” notice of each project to the channel its webhook points to.",
-  card: { order: 1 },
+  card: { order: 4, icon: "discord", destinations: true },
   connection: {
     cardinality: "many",
     secretFields: ["url"],

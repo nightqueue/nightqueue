@@ -252,7 +252,7 @@ export const linear = {
   kind: "linear",
   label: "Linear",
   description: "Reads the issues jobs come from and moves them along as the jobs close, for the whole home.",
-  card: { order: 2 },
+  card: { order: 2, icon: "linear" },
   connection: {
     scope: "home",
     cardinality: "one",

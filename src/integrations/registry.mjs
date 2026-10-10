@@ -69,6 +69,8 @@ function moduleCard(provider) {
     kind: provider.kind,
     label: provider.label ?? provider.kind,
     description: provider.description ?? "",
+    icon: typeof provider.card?.icon === "string" ? provider.card.icon : null,
+    destinations: provider.card?.destinations === true,
     place,
     cardinality: provider.connection?.cardinality ?? null,
     add: addFormOf(provider, place),
