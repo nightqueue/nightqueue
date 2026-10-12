@@ -105,6 +105,7 @@ function parseConnection(setting, name, { orgId, config, secrets }) {
   const record = secrets?.connections?.[name];
   if (!record) throw new UserError(`\`${setting.key}\`: there is no connection named \`${name}\`; see nightqueue connection list`);
   if (record.type !== setting.kind) throw new UserError(`\`${setting.key}\` needs a ${setting.kind} connection; \`${name}\` is a ${record.type} connection`);
+  if (record.forum === true) throw new UserError(`\`${setting.key}\`: connection \`${name}\` posts to a forum channel and the log has no thread to post in`);
   if (!orgUsesConnection({ kind: setting.kind, name, orgId, config })) {
     throw new UserError(`\`${setting.key}\`: connection \`${name}\` is not bound to the project's org; bind it with nightqueue connection bind ${name} --org <org>`);
   }

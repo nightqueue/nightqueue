@@ -1,4 +1,4 @@
-// The only HTTP path of the integrations: a failure answers a status or a fixed detail, never an error message, URL or header.
+// The only HTTP path of the integrations: a failure answers a status or a fixed detail, never an error message, URL or header; the JSON body of a refusal is kept apart as `errorBody` for the one caller that vets it.
 
 // Combines the per-request timeout with an optional caller signal.
 function requestSignal(timeoutMs, signal) {
@@ -22,12 +22,21 @@ function failureDetail(err, timeoutMs) {
   return timedOut ? `timeout (${Math.round(timeoutMs / 1000)}s)` : "network failure";
 }
 
-// Sends a request and answers { ok, status, headers, body, detail } without ever throwing.
+// Reads the JSON body of a refused answer, or null when it has none; only a caller that vets it (Discord) may surface it.
+async function readErrorBody(res) {
+  try {
+    return await res.json();
+  } catch {
+    return null;
+  }
+}
+
+// Sends a request and answers { ok, status, headers, body, errorBody, detail } without ever throwing.
 export async function requestJson(fetchImpl, url, { method = "GET", headers = {}, body, timeoutMs = 5000, signal } = {}) {
   try {
     const res = await fetchImpl(url, requestOptions({ method, headers, body, timeoutMs, signal }));
     const status = res.status;
-    if (status < 200 || status >= 300) return { ok: false, status, headers: res.headers, body: null, detail: `HTTP ${status}` };
+    if (status < 200 || status >= 300) return { ok: false, status, headers: res.headers, body: null, errorBody: await readErrorBody(res), detail: `HTTP ${status}` };
     return { ok: true, status, headers: res.headers, body: await res.json(), detail: "ok" };
   } catch (err) {
     return { ok: false, status: null, headers: null, body: null, detail: failureDetail(err, timeoutMs) };

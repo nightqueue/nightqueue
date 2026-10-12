@@ -15,6 +15,8 @@ const DONE_LABEL = "What was done:";
 const WEBHOOK_NAME_MAX = 80;
 const NO_CHANNEL_DETAIL = "the webhook answered no channel";
 const CONNECTED_DESCRIPTION = "This channel gets the “job closed” notice of the projects linked to this connection.";
+const FORUM_CODE = 220001;
+const ERROR_MESSAGE_MAX = 200;
 const MAX_URL_CHARS = 512;
 const INVALID_URL_TEXT = "Invalid URL: expected https://discord.com/api/webhooks/<id>/<token>.";
 const TOO_LONG_TEXT = `Invalid URL: a Discord webhook URL of at most ${MAX_URL_CHARS} characters is expected.`;
@@ -65,22 +67,36 @@ function fromWebhookTest(tested) {
   return { channelId: tested?.channelId, guildId: tested?.guildId, ...named, mode: "webhook" };
 }
 
+// The `code` and `message` Discord answered on a refusal, or none; never the URL or the token.
+function discordError(answer) {
+  const { code, message } = answer?.errorBody ?? {};
+  if (!Number.isInteger(code) || typeof message !== "string") return {};
+  return { code, message: message.slice(0, ERROR_MESSAGE_MAX) };
+}
+
 // Reads the channel, guild and name of a webhook, answering { ok, status, channelId, guildId, webhookName?, detail } without the URL.
 async function testDiscord(record, { fetchImpl = fetch, timeoutMs = 5000 } = {}) {
   const none = { channelId: null, guildId: null };
   if (!isWebhookUrl(record?.url)) return { ok: false, status: null, ...none, detail: "not a Discord webhook URL" };
   const answer = await requestJson(fetchImpl, record.url, { timeoutMs });
   const ids = answer.ok ? webhookIds(answer.body) : null;
-  if (!ids) return { ok: false, status: answer.status, ...none, detail: answer.ok ? NO_CHANNEL_DETAIL : answer.detail };
+  if (!ids) return { ok: false, status: answer.status, ...none, detail: answer.ok ? NO_CHANNEL_DETAIL : answer.detail, ...discordError(answer) };
   return { ok: true, status: answer.status, ...ids, detail: "ok" };
 }
 
-// Posts the one "nightqueue connected" embed a studio add sends, answering { ok, status, detail } without the URL.
+// Posts the one "nightqueue connected" embed a studio add sends, answering { ok, status, detail, code?, message?, forum? } without the URL; a forum webhook refuses it with code 220001.
 export async function announceWebhook(record, { fetchImpl = fetch, timeoutMs = 5000 } = {}) {
   if (!isWebhookUrl(record?.url)) return { ok: false, status: null, detail: "not a Discord webhook URL" };
   const embed = { title: "nightqueue connected", description: CONNECTED_DESCRIPTION, color: MERGED_COLOR };
   const answer = await requestJson(fetchImpl, `${record.url}?wait=true`, { method: "POST", body: messageBody({ embeds: [embed] }), timeoutMs });
-  return { ok: answer.ok, status: answer.status, detail: answer.detail };
+  const error = discordError(answer);
+  const forum = error.code === FORUM_CODE ? { forum: true } : {};
+  return { ok: answer.ok, status: answer.status, detail: answer.detail, ...error, ...forum };
+}
+
+// The ` (code N: message)` Discord added to a refusal, or nothing.
+function errorSuffix(result) {
+  return Number.isInteger(result?.code) ? ` (code ${result.code}: ${result.message}).` : ".";
 }
 
 // The fixed sentence that explains a Discord answer to a person; it never carries the URL.
@@ -91,7 +107,7 @@ export function discordReason(result) {
   if (status === 401 || status === 403) return `Discord answered ${status}: the webhook token is no longer valid.`;
   if (status === 429) return "Discord answered 429: rate limited, test again in a minute.";
   if (status >= 200 && status < 300) return "Discord answered without a channel.";
-  return `Discord answered ${status}.`;
+  return `Discord answered ${status}${errorSuffix(result)}`;
 }
 
 // Describes a successful Discord connection test in one line.
@@ -240,6 +256,7 @@ async function logToDiscord({ event, job, result, connection, http }) {
   if (event !== "closed") return { status: "skipped", note: `no log for the event ${event}` };
   const answer = await postMessage(http, connection, { embeds: [closedLogContent(job, result)] });
   if (answer.ok) return { status: "done", note: `logged through ${connection.name}` };
+  if (discordError(answer).code === FORUM_CODE) return { status: "warning", note: `log not posted through ${connection.name}: its channel is a forum and the log has no thread to post in` };
   return { status: "warning", note: `log not posted through ${connection.name} (${answer.detail})` };
 }
 

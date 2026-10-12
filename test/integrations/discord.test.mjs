@@ -521,6 +521,45 @@ test("discordReason gives one fixed sentence per Discord answer, never the URL",
   assert.equal(discord.connection.reason, discordReason);
 });
 
+test("a forum webhook: the announce 220001 marks it, the close replies in the origin thread through it, the log says the channel is a forum, and Discord's code reaches the reason", async () => {
+  const forumRefusal = { status: 400, body: { code: 220001, message: "Webhooks posted to forum channels must have a thread_name or thread_id" } };
+  const announced = await announceWebhook({ url: CHAT_URL }, { fetchImpl: fakeFetch({ [`POST ${CHAT_URL}?wait=true`]: forumRefusal }).impl });
+  assert.deepEqual([announced.ok, announced.status, announced.code, announced.forum], [false, 400, 220001, true]);
+  assert.equal(discordReason(announced), "Discord answered 400 (code 220001: Webhooks posted to forum channels must have a thread_name or thread_id).");
+  const other = await announceWebhook({ url: CHAT_URL }, { fetchImpl: fakeFetch({ [`POST ${CHAT_URL}?wait=true`]: { status: 400, body: { code: 50035, message: "Invalid Form Body" } } }).impl });
+  assert.equal(other.forum, undefined);
+  assert.equal((await announceWebhook({ url: CHAT_URL }, { fetchImpl: fakeFetch({ [`POST ${CHAT_URL}?wait=true`]: { status: 400 } }).impl })).code, undefined);
+  assertNoSecret([announced, other]);
+
+  const forum = { ...CHAT, forum: true };
+  const threadRef = `${GUILD}/${THREAD}/${MESSAGE}`;
+  const closed = await replyWith({ [`POST ${CHAT_URL}?wait=true&thread_id=${THREAD}`]: {} }, { ref: threadRef, connections: [forum] });
+  assert.deepEqual(closed.answer, { status: "done", note: `replied in thread ${THREAD} through chat` });
+  assert.deepEqual(closed.calls.map((call) => call.url), [`${CHAT_URL}?wait=true&thread_id=${THREAD}`]);
+
+  const otherThread = "888";
+  const routes = { [`POST ${CHAT_URL}?wait=true&thread_id=${THREAD}`]: {}, [`POST ${CHAT_URL}?wait=true&thread_id=${otherThread}`]: {} };
+  const jobA = await replyWith(routes, { ref: threadRef, connections: [forum] });
+  const jobB = await replyWith(routes, { ref: `${GUILD}/${otherThread}/${MESSAGE}`, connections: [forum] });
+  assert.deepEqual(jobA.calls.map((call) => call.url), [`${CHAT_URL}?wait=true&thread_id=${THREAD}`]);
+  assert.deepEqual(jobB.calls.map((call) => call.url), [`${CHAT_URL}?wait=true&thread_id=${otherThread}`]);
+  assert.equal(jobB.answer.note, `replied in thread ${otherThread} through chat`);
+
+  const fetch = fakeFetch({ [`POST ${CHAT_URL}?wait=true`]: forumRefusal });
+  const logged = await discord.log({ event: "closed", job: JOB, result: RESULT, settings: {}, connection: CHAT, http: httpOf(fetch) });
+  assert.deepEqual(logged, { status: "warning", note: "log not posted through chat: its channel is a forum and the log has no thread to post in" });
+});
+
+test("a forum connection cannot be the log destination of a project", async (t) => {
+  const home = await discordHome(t, "discord-forum-log");
+  const secrets = loadSecrets(home.env, { warn: () => {} });
+  secrets.connections.ops.forum = true;
+  saveSecrets(secrets, home.env);
+  const set = await runCli(home.env, ["project", "integrations", "alpha", "set", "discord.log.connection=ops"]);
+  assert.equal(set.code, 1);
+  assert.match(set.err.join("\n"), /connection `ops` posts to a forum channel and the log has no thread to post in/);
+});
+
 test("connection remove unlinks the projects logging to it, prints them, and leaves no dangling log connection", async (t) => {
   const home = await discordHome(t, "discord-remove-unlink");
   const set = await runCli(home.env, ["project", "integrations", "alpha", "set", "discord.log.connection=ops", "discord.log.events=closed"]);

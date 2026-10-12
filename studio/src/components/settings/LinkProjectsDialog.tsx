@@ -139,7 +139,7 @@ function LinkHeader({ connections, selected, onSelect }: { connections: Connecti
 // The Link projects dialog: the allowed orgs' projects to check, the switch warning, and one batch link of the newly checked ones.
 export function LinkProjectsDialog({ view, initial, onClose }: LinkProjectsDialogProps) {
   const refresh = useRefreshIntegrations();
-  const connections = discordConnections(view).filter((row) => row.present);
+  const connections = discordConnections(view).filter((row) => row.present && !row.forum);
   const [name, setName] = useState(initial);
   const [checked, setChecked] = useState<Set<string>>(() => new Set());
   const selected = connections.find((row) => row.name === name) ?? null;
