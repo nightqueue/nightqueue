@@ -9,7 +9,6 @@ Verification {{VERIFICATION_ICON}} · {{DELIVERY}}
 {{STEP_ROWS}}
 {{/FAST_TRACK}}
 
-{{LESSONS_LINE}}
 {{HAPPY_LINE}}
 {{^HAPPY}}
 

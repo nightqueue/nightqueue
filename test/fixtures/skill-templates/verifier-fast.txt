@@ -1,5 +1,5 @@
 ## File handoff (contract — read first)
-ARTIFACT_PATH: <RUN_DIR>/06-verification.md (append per iteration)
+ARTIFACT_PATH: <RUN_DIR>/06-verification.md (append-only: this launch is ## Round [n])
 Read before acting (via Read): <RUN_DIR>/04-implementation.md — ## Modified files
 Write the COMPLETE output (all your mandatory sections) to ARTIFACT_PATH via Write.
 Return to the orchestrator AT MOST 10 lines: verdict/status + the handoff file written + open items — never file contents, never a diff.

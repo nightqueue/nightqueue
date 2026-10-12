@@ -90,6 +90,7 @@ function runsDomain(env) {
     logPipelineRunOnce: async (run, options) => runs.logPipelineRunOnce(run, options, env),
     updateRunTelemetry: async (telemetry) => runs.updateRunTelemetry(telemetry, env),
     latestRunOutcome: async (spec) => runs.latestRunOutcome(spec, env),
+    runTimeline: async (spec) => runs.runTimeline(spec, env),
   };
 }
 
@@ -107,7 +108,6 @@ function lessonsDomain(env, db) {
     memoryStats: async () => lessons.memoryStats(env),
     recallLessons: async (spec) => search.recallLessons(spec, env, db()),
     saveLessonDeduped: async (lesson) => dedup.saveLessonDeduped(lesson, env),
-    persistLessons: async (items, options) => dedup.persistLessons(items, options, env, db()),
   };
 }
 
@@ -115,6 +115,7 @@ function lessonsDomain(env, db) {
 function memoryDomain(env) {
   return {
     saveMemory: async (entry) => memory.saveMemory(entry, env),
+    saveMemoryDeduped: async (entry) => memory.saveMemoryDeduped(entry, env),
     recentMemories: async (spec) => memory.recentMemories(spec, env),
     searchMemories: async (spec) => memory.searchMemories(spec, env),
     memoryByKey: async (spec) => memory.memoryByKey(spec, env),

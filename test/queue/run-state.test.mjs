@@ -51,6 +51,19 @@ test("a completed phase is appended with the fixed fields of the contract and a 
   assert.equal("note" in state.phases[0], false, "an absent note was recorded as an empty key");
 });
 
+test("the reason a phase ran again is recorded trimmed, a blank one is dropped, and a first run keeps today's shape", (t) => {
+  const env = makeHome(t, "run-state-phase-reason");
+
+  recordPhaseDone({ ...RUN, phase: "verification", artifact: "06-verification.md", verdict: "FAILED", env });
+  recordPhaseDone({ ...RUN, phase: "verification", artifact: "06-verification.md", verdict: "PASSED", reason: "  fix loop 1: lint failed  ", env });
+  recordPhaseDone({ ...RUN, phase: "commit", reason: "   ", env });
+
+  const [first, second, blank] = readState(env).phases;
+  assert.deepEqual(Object.keys(first), ["phase", "at", "artifact", "verdict"], "an entry with no reason changed shape");
+  assert.equal(second.reason, "fix loop 1: lint failed");
+  assert.deepEqual(Object.keys(blank), ["phase", "at"], "a blank reason was recorded as a key");
+});
+
 test("an unknown phase is refused with the accepted list and writes nothing", (t) => {
   const env = makeHome(t, "run-state-unknown-phase");
 

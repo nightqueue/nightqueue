@@ -278,8 +278,9 @@ Write, in this order:
 3. `## Left` — what is left or deviates from the plan, or `nothing`.
 4. `## How it was tested` — the commands run and their result.
 
-A stage lane appends its `### Stage <n>` block and rewrites the cumulative list; a re-run of the
-fix loop rewrites the cumulative list too. Return to the orchestrator ≤10 lines: status + the
+A stage lane appends its `### Stage <n>` block and rewrites the cumulative list; a fix-loop re-run
+updates only the cumulative `## Modified files` list and appends its `### Fix loop <n>` block at
+the end; nothing else is rewritten. Return to the orchestrator ≤10 lines: status + the
 handoff file written (`04-implementation.md`) + files touched + open items — never file
 contents, never a diff.
 

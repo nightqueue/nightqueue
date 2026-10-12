@@ -73,7 +73,6 @@ test("--help lists every command and exits 0", () => {
     "mcp",
     "studio",
     "hook",
-    "reflect",
     "embed",
     "memory",
     "decision",
@@ -83,6 +82,7 @@ test("--help lists every command and exits 0", () => {
   for (const command of commands) {
     assert.match(result.stdout, new RegExp(`^  ${command}`, "m"));
   }
+  assert.doesNotMatch(result.stdout, /^ {2}reflect/m);
   assert.equal(runCli(tmpdir(), []).status, 0);
 });
 
@@ -413,5 +413,12 @@ test("an unknown hook names the valid ones", (t) => {
   const home = makeDir(t, "hook-unknown");
   const result = runCli(home, ["hook", "nope"]);
   assert.equal(result.status, 1);
-  assert.match(result.stderr, /unknown hook `nope`; use: session-start, prompt-context, reflect, agent-foreground/);
+  assert.match(result.stderr, /unknown hook `nope`; use: session-start, prompt-context, agent-foreground/);
+});
+
+test("the retired reflect hook is an unknown hook", (t) => {
+  const home = makeDir(t, "hook-reflect-retired");
+  const result = runCli(home, ["hook", "reflect"]);
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /unknown hook `reflect`/);
 });

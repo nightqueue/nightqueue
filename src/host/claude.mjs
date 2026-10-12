@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 
 const CALL_TIMEOUT_MS = 20000;
 
-// Path of the claude CLI, the same resolver the reflection uses.
+// Path of the claude CLI, overridable through NIGHTQUEUE_CLAUDE_BIN.
 export function claudeBin(env = process.env) {
   const raw = typeof env?.NIGHTQUEUE_CLAUDE_BIN === "string" ? env.NIGHTQUEUE_CLAUDE_BIN.trim() : "";
   return raw || "claude";

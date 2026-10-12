@@ -3,14 +3,12 @@ import { join } from "node:path";
 import { isStateObject } from "../queue/resume.mjs";
 import { phasesFor } from "../queue/routing.mjs";
 import { renderSkillTemplate, skillReferencesDir } from "../queue/skill-template.mjs";
-import { isSubagentEvent, parseAttemptMarker, parseEventLine } from "../queue/stream.mjs";
 import { runDurationS } from "../queue/telemetry.mjs";
 import { checkArgs, parseCommand } from "./args.mjs";
 import { durationCell, phaseRows, readJobLog, requireRunState, resolveRun, RUN_OPTIONS } from "./run-context.mjs";
 
 export const REPORT_USAGE = "nightqueue run report [--json] [--project <name> --slug <slug>]";
 
-const LESSON_SAVE_TOOL = "mcp__nightqueue__lesson_save";
 const CONFIRMATION_HEADING = /^## Requires user confirmation\s*$/m;
 
 // The steps of the report, in order: the canonical phase, the step label and the agent of the visual identity.
@@ -111,41 +109,6 @@ function firstFailingGate(state, steps, plan) {
   return status === "done" ? null : `the run recorded no delivery (outcome ${status ?? "none"})`;
 }
 
-// The assistant tool_use blocks of the orchestrator in one event of the stream.
-function orchestratorToolUses(event) {
-  if (event?.type !== "assistant" || isSubagentEvent(event) || !Array.isArray(event.message?.content)) return [];
-  return event.message.content.filter((block) => block?.type === "tool_use");
-}
-
-// The tool results one `user` event carries, by the id of the call they answer.
-function toolResults(event) {
-  if (event?.type !== "user" || !Array.isArray(event.message?.content)) return [];
-  return event.message.content.filter((block) => block?.type === "tool_result");
-}
-
-// The lessons the orchestrator saved in the last attempt: each `lesson_save` call whose result was not an error.
-export function savedLessons(log) {
-  let calls = new Map();
-  let failed = new Set();
-  for (const line of String(log ?? "").split("\n")) {
-    if (parseAttemptMarker(line)) {
-      calls = new Map();
-      failed = new Set();
-      continue;
-    }
-    const event = parseEventLine(line);
-    for (const block of orchestratorToolUses(event)) if (block.name === LESSON_SAVE_TOOL) calls.set(block.id, block.input?.target ?? null);
-    for (const result of toolResults(event)) if (result.is_error === true) failed.add(result.tool_use_id);
-  }
-  const targets = [...calls].filter(([id]) => !failed.has(id)).map(([, target]) => target);
-  return { count: targets.length, targets: [...new Set(targets.filter(Boolean))] };
-}
-
-// The audit line of the lessons the run saved.
-function lessonsLine({ count, targets }) {
-  return count > 0 ? `Lessons saved: ${count} (targets: ${targets.join(", ")})` : "Lessons saved: 0";
-}
-
 // A recorded text made safe for one markdown table cell or line: `|` escaped and every line break collapsed to a space.
 function cellText(value) {
   return String(value ?? "")
@@ -183,7 +146,6 @@ function buildReport(run, state, log) {
     slug: run.slug,
     tier: state.tier ?? null,
     steps,
-    lessons: savedLessons(log),
     happy: reason === null,
     reason,
     execution: executionRows(state, log),
@@ -200,7 +162,6 @@ function reportValues(report) {
     VERIFICATION_ICON: stepOf("verification").icon,
     DELIVERY: stepOf("commit").highlight,
     STEP_ROWS: stepTableRows(report.steps),
-    LESSONS_LINE: lessonsLine(report.lessons),
     HAPPY: report.happy,
     HAPPY_LINE: report.happy ? "Happy: yes" : `Happy: no — ${cellText(report.reason)}`,
     EXECUTION_ROWS: executionTableRows(report.execution),

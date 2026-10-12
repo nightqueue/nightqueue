@@ -36,6 +36,7 @@ const CONTRACT_TOOLS = [
   "lesson_recall",
   "lesson_save",
   "memory_recall",
+  "memory_save",
   "phase_prompt",
   "pipeline_log",
   "project_integrations",
@@ -90,12 +91,12 @@ function textOf(result) {
   return result.content.map((block) => block.text).join("\n");
 }
 
-test("the server exposes exactly the twenty-eight tools of the contract", async (t) => {
+test("the server exposes exactly the twenty-nine tools of the contract", async (t) => {
   const env = makeHome(t, "mcp-tools");
   const client = await connect(t, env);
   const names = (await client.listTools()).tools.map((tool) => tool.name).sort();
   assert.deepEqual(names, CONTRACT_TOOLS);
-  assert.equal(names.length, 28, "the contract list and the server disagree on how many tools there are");
+  assert.equal(names.length, 29,"the contract list and the server disagree on how many tools there are");
 });
 
 test("tracker_issues with no tracker connection is a normal answer carrying the refusal and the contract", async (t) => {
@@ -151,6 +152,9 @@ test("the handshake carries the instructions that teach the backlog model", asyn
     "queue_retry` only after the person answers",
     "`queue_close`",
     "settles a design question",
+    "`lesson_save` and `memory_save` record what a session learned",
+    "offer `/nightqueue:reflect` once: it proposes lessons and memories and saves only the ones the person confirms",
+    "both are allowed inside a queue job, unlike decisions",
   ]) {
     assert.ok(instructions.includes(idea), `\`${idea}\` is missing from the instructions:\n${instructions}`);
   }

@@ -102,7 +102,6 @@ async function stampInjection(store, sessionId, lessons, env) {
 
 // Builds the context block injected at the start of a session, or one warning line when the home database is unavailable.
 export async function runSessionStart({ input, env = process.env, fetchImpl = null }) {
-  if (env?.NIGHTQUEUE_REFLECT === "1") return "";
   try {
     return await sessionBlock({ input, env, fetchImpl });
   } catch (err) {

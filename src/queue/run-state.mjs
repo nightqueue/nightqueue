@@ -110,14 +110,14 @@ function record({ projectId, slug, env, change }) {
 }
 
 // Records a phase the pipeline completed; the list is append-only, so a phase recorded twice never erases the first record.
-export function recordPhaseDone({ projectId, slug, phase, artifact, verdict, note, env = process.env } = {}) {
+export function recordPhaseDone({ projectId, slug, phase, artifact, verdict, note, reason, env = process.env } = {}) {
   if (!RESUME_PHASE_ORDER.includes(phase)) return refuseEnum("phase", phase, RESUME_PHASE_ORDER);
   return record({
     projectId,
     slug,
     env,
     change: (state, at) => ({
-      phases: [...(Array.isArray(state.phases) ? state.phases : []), withText({ phase, at }, { artifact, verdict, note })],
+      phases: [...(Array.isArray(state.phases) ? state.phases : []), withText({ phase, at }, { artifact, verdict, note, reason })],
     }),
   });
 }

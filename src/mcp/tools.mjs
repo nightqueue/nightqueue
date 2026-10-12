@@ -74,7 +74,7 @@ import { ensureStoreExists, openStore, withReadOnlyStore } from "../store/open.m
 import { coverageField, coverageLabel, jobOriginCoverage } from "../integrations/coverage.mjs";
 import { changeProjectIntegrations, INTEGRATION_ACTIONS, integrationsView } from "../integrations/settings.mjs";
 import { TRACKER_LIMIT, TRACKER_STATES, trackerInstructionLines, trackerIssues } from "../integrations/tracker.mjs";
-import { callerContext, PHASE_TARGETS, phaseContextBlock, recallFreshLessons } from "./phase-context.mjs";
+import { callerContext, PHASE_TARGETS, phaseContextBlock, recallFreshLessons, runInjectedLessonIds } from "./phase-context.mjs";
 import { phasePrompt, PROMPT_TARGETS } from "./phase-prompt.mjs";
 import { readVersion } from "../cli/version.mjs";
 import {
@@ -101,6 +101,8 @@ const SERVER_INSTRUCTIONS = [
   "Call `queue_status` to see what is pending before suggesting a batch.",
   "decisions are the operator's record of the project's standing constraints - recall them before proposing architecture and save one, outside a queue run, when the user settles a design question; inside a queue job they are read-only context and never bind the run",
   "a constraint the conversation states for two or more repos of the same org is saved ONCE with `org`, never once per repo: a project reads its own decisions and its org's",
+  "`lesson_save` and `memory_save` record what a session learned - a lesson for an error or correction, a memory (`key`/`value`) for a fact of the project's code; both are allowed inside a queue job, unlike decisions.",
+  "At the end of a session that changed or learned something, offer `/nightqueue:reflect` once: it proposes lessons and memories and saves only the ones the person confirms.",
   ...trackerInstructionLines(),
 ].join("\n");
 const PROMPT_SOURCE_MISSING = "queue_add needs `prompt`, the whole request as prose";
@@ -127,6 +129,7 @@ const phaseSchema = z.object({
   retry: z.boolean().nullable().optional(),
   duration_s: z.number().int().min(0).nullable().optional(),
   note: z.string().nullable().optional(),
+  reason: z.string().nullable().optional(),
 });
 
 // The registered project a lesson, memory, index or run call scopes to: a name, or an absolute path inside a checkout; null (global) for
@@ -221,7 +224,51 @@ async function pipelineLogRun(args, env) {
 // What the RUN already recorded about itself, the source of every field a `pipeline_log` call may now omit.
 function runFacts({ projectId, slug }, env) {
   const state = readRunState({ projectId, slug, env });
-  return { tier: state?.tier ?? null, taskType: state?.type ?? null, tierRaiseReason: state?.tierRaiseReason ?? null };
+  return {
+    tier: state?.tier ?? null,
+    taskType: state?.type ?? null,
+    tierRaiseReason: state?.tierRaiseReason ?? null,
+    phases: Array.isArray(state?.phases) ? state.phases : [],
+  };
+}
+
+// The `reason` each recorded phase carries, queued per phase name in the order the run recorded them.
+function recordedReasonsByPhase(recordedPhases) {
+  const queues = new Map();
+  for (const entry of recordedPhases) {
+    const name = typeof entry?.phase === "string" ? entry.phase : "";
+    const reason = typeof entry?.reason === "string" && entry.reason.trim() !== "" ? entry.reason : null;
+    queues.set(name, [...(queues.get(name) ?? []), reason]);
+  }
+  return queues;
+}
+
+// The trimmed phase name of a sent `pipeline_log` row.
+function sentPhaseName(phase) {
+  return String(phase?.phase ?? "").trim();
+}
+
+// The phase names whose recorded reasons cannot be paired: the call lists a different number of launches than the run recorded.
+function unpairedPhaseNames(phases, queues) {
+  const sentCounts = new Map();
+  for (const phase of phases) sentCounts.set(sentPhaseName(phase), (sentCounts.get(sentPhaseName(phase)) ?? 0) + 1);
+  return [...queues]
+    .filter(([name, reasons]) => (sentCounts.get(name) ?? 0) !== reasons.length)
+    .filter(([, reasons]) => reasons.some((reason) => reason !== null))
+    .map(([name]) => name);
+}
+
+// The sent phases with the reason state.json recorded for each, paired in order only when both sides list the same launches; a sent reason wins.
+function withRecordedReasons(phases, recordedPhases) {
+  const queues = recordedReasonsByPhase(recordedPhases);
+  const unpaired = unpairedPhaseNames(phases, queues);
+  const paired = phases.map((phase) => {
+    const name = sentPhaseName(phase);
+    const recorded = unpaired.includes(name) ? null : (queues.get(name)?.shift() ?? null);
+    const sent = typeof phase?.reason === "string" && phase.reason.trim() !== "" ? phase.reason : null;
+    return sent !== null || recorded === null ? phase : { ...phase, reason: recorded };
+  });
+  return { phases: paired, unpaired };
 }
 
 // Queues a pipeline run the unavailable database refused into the run's pending-writes file, fully resolved, and answers ok with the warning;
@@ -554,6 +601,20 @@ function describeSchema(inputSchema) {
   ].join("\n");
 }
 
+// Bumps `violated` when a job's save dedups onto a lesson its run was given, answering whether it did; a failed bump never fails the save.
+async function violatedGivenLesson(saved, env) {
+  if (!saved.deduped || callerJobId(env) === null) return false;
+  try {
+    const { sessionId } = await callerContext(env);
+    if (!runInjectedLessonIds(sessionId, env).includes(saved.id)) return false;
+    await openStore(env).lessons.bumpViolation(saved.id);
+    return true;
+  } catch (error) {
+    process.stderr.write(`nightqueue: lesson_save could not count the violation of L${saved.id}: ${error?.message ?? String(error)}\n`);
+    return false;
+  }
+}
+
 // `lesson_save` alone: a missing/empty `title` answers a one-line error naming it, never the multi-line zod dump.
 function lessonSaveTitleError(args) {
   const title = typeof args?.title === "string" ? args.title.trim() : "";
@@ -726,7 +787,7 @@ async function queueCancelAnswer(args, env) {
   return { ok: true, ...(await stopAndCancelJob({ ...cancel, releaseWorktree: args.release_worktree === true })) };
 }
 
-// The twenty-eight tools of the plugin contract, with the parameter names the plugin actually sends.
+// The twenty-nine tools of the plugin contract, with the parameter names the plugin actually sends.
 function toolDefinitions(env, state) {
   return [
     {
@@ -794,6 +855,7 @@ function toolDefinitions(env, state) {
         description:
           "The complete prompt of one /resolve subagent for THIS run, rendered by the runtime from the plugin's templates: the handoff contract, the Brief of `<RUN_DIR>/00-brief.md`, the routing of the run's tier and the context block. " +
           "Pass `prompt` to the `Agent` tool verbatim, with the answered `subagent_type` and `model`, then gate the answered `artifact` with `nightqueue run check <check>`. " +
+          "`reflector` (Phase 9) renders with no artifact and `check` null: launch it and gate nothing. " +
           "`coder` and `verifier` render the fast-track prompt on trivial/simple; `note` is relaunch context (a fix loop, a re-architect, a re-triage), `raw_evidence` is the bug's raw error block (triager only), `group` the hypotheses of one prover. " +
           "Inside a job the run is resolved from the job's own row — passing `project` or `slug` there is refused; outside a job both are required.",
         inputSchema: {
@@ -814,7 +876,9 @@ function toolDefinitions(env, state) {
     {
       name: "lesson_save",
       config: {
-        description: "Records a lesson after fixing an error that was not caught on the first attempt.",
+        description:
+          "Records a lesson after fixing an error that was not caught on the first attempt. " +
+          "Re-saving an existing lesson's exact title answers `deduped: true` and bumps its `attempts`; inside a job, when the run was given that lesson, it also bumps `violated` and answers `violated: true`.",
         inputSchema: {
           title: z.string(),
           root_cause: optionalText,
@@ -844,6 +908,7 @@ function toolDefinitions(env, state) {
           deduped: saved.deduped,
           attempts: saved.attempts,
           incomplete: saved.incomplete,
+          violated: await violatedGivenLesson(saved, env),
         };
       },
     },
@@ -860,6 +925,23 @@ function toolDefinitions(env, state) {
           limit: RECALL_LIMIT,
         });
         return rows.map(memoryView);
+      },
+    },
+    {
+      name: "memory_save",
+      config: {
+        description:
+          "Records one project fact or decision of the code as `key`/`value` (NOT a `decision_*` record). A key the project already has is kept, never overwritten: the answer says `deduped: true` with the stored value. Allowed inside a job.",
+        inputSchema: { project: optionalText, key: z.string(), value: z.string() },
+      },
+      handler: async (args) => {
+        const project = await memoryProject(args.project, env);
+        const saved = await openStore(env).memory.saveMemoryDeduped({
+          projectId: project?.id ?? null,
+          key: args.key,
+          value: args.value,
+        });
+        return { ok: true, id: saved.id, ref: `M${saved.id}`, project: project?.name ?? null, deduped: saved.deduped, value: saved.value };
       },
     },
     {
@@ -907,7 +989,8 @@ function toolDefinitions(env, state) {
           "Inside a job, `project` and `slug` come from the job's own row and are ignored here; outside one, both name the run. " +
           "`tier` is the FINAL tier the run executed, `tier_operator` is the tier the operator declared (omit it when there was none) and `tier_raise_reason` carries the evidence of a raise. " +
           "`tier`, `task_type` and `tier_raise_reason` may be left out when the run already recorded them with `run_set`; the durations and the models the runtime measured in the stream are filled in afterwards and always win over the ones sent here. " +
-          "`investigated` and `queued` are the operator's outcomes (a session that investigated only, or queued a job): outside a job they are recorded, inside a job they are refused.",
+          "`investigated` and `queued` are the operator's outcomes (a session that investigated only, or queued a job): outside a job they are recorded, inside a job they are refused. " +
+          "A `reason` recorded with `run_phase_done` is copied onto the rows of the same phase only when `phases` lists exactly as many rows of that phase as the run recorded. Otherwise none of that phase's reasons are copied and `reasons_unpaired` names the phase. Send `reason` on those rows yourself.",
         inputSchema: {
           project: optionalText,
           slug: optionalText,
@@ -925,6 +1008,8 @@ function toolDefinitions(env, state) {
         refuseOperatorOutcomeInsideJob(args.outcome, env);
         const run = await pipelineLogRun(args, env);
         const recorded = runFacts(run, env);
+        const reasons = withRecordedReasons(args.phases ?? [], recorded.phases);
+        const unpairedField = reasons.unpaired.length > 0 ? { reasons_unpaired: reasons.unpaired } : {};
         const spec = {
           projectId: run.projectId,
           slug: run.slug,
@@ -935,13 +1020,13 @@ function toolDefinitions(env, state) {
           outcome: args.outcome,
           gateStop: args.gate_stop,
           durationS: args.duration_s,
-          phases: args.phases ?? [],
+          phases: reasons.phases,
         };
         try {
           const logged = await openStore(env).runs.logPipelineRun(spec);
-          return { ok: true, runId: logged.runId, project: logged.projectId ? run.project : null, phases: logged.phases };
+          return { ok: true, runId: logged.runId, project: logged.projectId ? run.project : null, phases: logged.phases, ...unpairedField };
         } catch (err) {
-          return queuedPipelineLog(err, spec, env);
+          return { ...queuedPipelineLog(err, spec, env), ...unpairedField };
         }
       },
     },
@@ -1319,19 +1404,22 @@ function toolDefinitions(env, state) {
       config: {
         description:
           "Records one completed phase of the run in `state.json`, so a retry resumes from the next one. The runtime stamps the time and owns the file: never hand-write `state.json`. " +
-          "Inside a job the run is resolved from the job's own row — passing `project` or `slug` there is refused; outside a job both are required.",
+          "Inside a job the run is resolved from the job's own row — passing `project` or `slug` there is refused; outside a job both are required. " +
+          "`reason` = why this phase ran again (a fix loop, a relaunch after `MISSING`, a re-architect, a re-triage); omit it on the first run of a phase.",
         inputSchema: {
           phase: z.enum(RESUME_PHASE_ORDER),
           artifact: optionalText,
           verdict: optionalText,
           note: optionalText,
+          reason: optionalText,
           project: optionalText,
           slug: optionalText,
         },
       },
       handler: async (args) => {
         const run = await callerRun(args, env);
-        return runAnswer(recordPhaseDone({ ...run, phase: args.phase, artifact: args.artifact, verdict: args.verdict, note: args.note, env }), run);
+        const done = { phase: args.phase, artifact: args.artifact, verdict: args.verdict, note: args.note, reason: args.reason };
+        return runAnswer(recordPhaseDone({ ...run, ...done, env }), run);
       },
     },
     {
@@ -1410,7 +1498,7 @@ function toolHandler(tool, env) {
   };
 }
 
-// Builds the MCP server with the twenty-eight tools of the plugin contract.
+// Builds the MCP server with the twenty-nine tools of the plugin contract.
 export function createServer(env = process.env) {
   const server = new McpServer(
     {

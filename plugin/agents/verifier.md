@@ -315,7 +315,8 @@ and why each attempt failed. A named escape: *"I did not try" is not "unavailabl
 with no recorded attempt is not `to confirm`: it blocks Phase 7 until the attempt happens, and
 the one who must try is this step 6.5, not the coder.
 
-**Runtime output.** Write ARTIFACT_PATH with, in this order:
+**Runtime output.** Write ARTIFACT_PATH as one appended `## Round <n>` (the prompt's round rule:
+earlier rounds kept unchanged) with, in this order:
 
 - `## Runtime verdict` — its first line is exactly one of `CONFIRMED` (the change confirmed at
   runtime: every applicable case proven, every (d)/(d2) line `MET` or `NOT MET / to confirm`),
@@ -358,11 +359,13 @@ error (file, line, message) — never dump the whole log.
 ### Step 4 — Verdict
 
 **If ARTIFACT_PATH was provided in the prompt:** write the verdict and the detail
-(Failures included) to ARTIFACT_PATH via Write. If ARTIFACT_PATH already exists
-(re-run 🔁), read it and rewrite it preserving the previous content, appending
-`## Verification — iteration N` at the end; otherwise create it with iteration 1. Also write
+(Failures included) to ARTIFACT_PATH via Write. The artifact is append-only: if ARTIFACT_PATH
+already exists (re-run 🔁), Read it and Write it back with every earlier round unchanged, then
+append `## Round <n>` at the end (n = the number the prompt gives) with this launch's whole output
+(checks, failures, verdict line); never edit an earlier round; otherwise create it with
+`## Round <n>`. Also write
 `<RUN_DIR>/evidence/automated-verification.md` (RUN_DIR = the directory of ARTIFACT_PATH) with
-the final iteration's `## Checks run` + `## Failures` + verdict line. Return to the
+this round's `## Checks run` + `## Failures` + verdict line. Return to the
 orchestrator ≤10 lines: verdict + the handoff file written (`06-verification.md`) + key
 failures — never file contents, never a diff.
 

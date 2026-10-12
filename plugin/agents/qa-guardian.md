@@ -320,7 +320,10 @@ NEVER write the fix of the source. Only PoC/test.
 
 The destination depends on the mode. **If ARTIFACT_PATH was provided in the prompt:**
 - **LITE / ANALYST:** write the complete report (all the sections below) to
-  ARTIFACT_PATH via Write. Return to the orchestrator ≤10 lines: verdict + the handoff
+  ARTIFACT_PATH via Write. The artifact is append-only: if it already exists, Read it and Write
+  it back with every earlier round unchanged, then append `## Round <n>` at the end (n = the
+  number the prompt gives) with this launch's whole report; never edit an earlier round;
+  otherwise create it with `## Round <n>`. Return to the orchestrator ≤10 lines: verdict + the handoff
   file written (`05a-qa-analyst.md` or `05-qa.md`) + open items — never file contents, never
   a diff. Do NOT paste the complete report in the answer.
 - **PROVER:** write only the assigned PoC files (as today) and return the

@@ -3,7 +3,7 @@
 Everything the runtime remembers lives in one SQLite file,
 `$NIGHTQUEUE_HOME/nightqueue.db`, opened in WAL with a five second busy timeout.
 Several processes write to it at the same time - the MCP server, the hooks and
-the reflection worker - so every write is retried while the lock is held by
+the queue runner - so every write is retried while the lock is held by
 someone else, and every transaction starts as `BEGIN IMMEDIATE` instead of being
 promoted from a read. A write that is still refused after the retries comes back
 as a message asking to run the command again, never as a raw SQLite error.
@@ -179,7 +179,7 @@ Twelve tables plus four full text mirrors:
 | `project_index` | the file to responsibility map of a project, with the mtime the file had when it was indexed |
 | `project_libs` | the libraries of a project with the version that was actually resolved |
 | `pipeline_runs` | one row per `/resolve` run: tier, task type, outcome, gate stop, duration, model and session |
-| `pipeline_phases` | one row per phase of a run: sequence, phase, model, status, retry and duration |
+| `pipeline_phases` | one row per phase of a run: sequence, phase, model, status, retry, duration and the `reason` the phase ran again (added on open to an older database, null on a first run) |
 | `jobs` | one row per queue job: project, prompt, priority, status, attempts, lease, slug, session, branch, pull request, notice, usage and cost |
 | `decisions` | one architecture decision per row: number inside its project, title, context, decision, consequences, status, the decision that superseded it, and its embedding |
 | `lessons_fts`, `memory_fts`, `decisions_fts` | FTS5 mirrors of the three text tables, kept in sync by triggers on insert, update and delete |
@@ -199,7 +199,7 @@ project plus the globals, current project first, the violated ones ahead of the
 rest. When a query matched nothing, the same recent list comes back marked
 `via: "fallback"`, which means "this did not match your query".
 
-**Hooks.** Three, all reading the event JSON from stdin:
+**Hooks.** Two, both reading the event JSON from stdin:
 
 - `nightqueue hook session-start` prints the block injected at the start of a
   session: the standing decisions of the project (the accepted ones, its own and
@@ -208,33 +208,66 @@ rest. When a query matched nothing, the same recent list comes back marked
 - `nightqueue hook prompt-context` prints the lessons and memories relevant to the
   prompt that was just submitted, skipping what this session already saw, and
   ignoring prompts too short to carry a request.
-- `nightqueue hook reflect` answers `{}` immediately and leaves a detached worker
-  reading the transcript.
 
-`nightqueue setup` registers the three of them at user scope, and `nightqueue setup
---remove` takes them out again (see [Install](install.md)). The two that inject context
-answer with nothing when the working directory is outside a project registered
-with `nightqueue init`.
+`nightqueue setup` registers the two of them at user scope (next to the `PreToolUse`
+agent-foreground guard), and `nightqueue setup --remove` takes them out again (see
+[Install](install.md)). Both answer with nothing when the working directory is outside a
+project registered with `nightqueue init`. No hook writes a lesson or a memory: there is no
+`SessionEnd` hook any more, and `setup`, `setup --remove` and `update` drop a leftover
+nightqueue `SessionEnd` entry (a third-party one stays).
 
-**Reflection.** The detached worker reads only the bytes appended to the
-transcript since its last run, and only when 60 seconds have passed since the
-previous run of that session and the readable digest of that slice is at least
-800 characters. It then spends one call to the `claude` CLI to extract what the
-session taught (retried once with a shorter digest if it times out) and, only
-when a fresh lesson looks like a stored one, one more call to judge it. Both run
-with no tools at all. That costs tokens from your own subscription, so:
-`NIGHTQUEUE_REFLECT=1` in the environment disables the reflection (and every
-other hook) for that process, and simply not registering the `SessionEnd` hook
-disables it entirely. The read offset only advances after the lessons are
-persisted, so a failed run reprocesses the same slice instead of losing it.
+**Reflection.** What a session or a run learned is saved by one rubric,
+`plugin/skills/reflect/references/rubric.md`, with two consumers:
+
+- `/nightqueue:reflect` - the skill, also offered once by the operator and by the server
+  instructions at the end of a session that changed or learned something. It finds the
+  project (the one the conversation names, else the longest registered `path` prefix of the
+  cwd; with none it offers `project_register` and calls it only on a yes), drafts the
+  candidates, lists them numbered and asks once; it saves ONLY the ones the person confirms
+  and reports their refs.
+- the reflector of `/resolve` - Phase 9, the last phase of every run that reaches Phase 8,
+  delivered or terminated, never at a gate pause. It saves on its own, with no confirmation,
+  and returns at most ten lines whose refs the orchestrator prints as one `🪞 Reflection:`
+  line above `## Notice`. The orchestrator itself never calls `lesson_save` or `memory_save`.
+
+The rubric has three kinds: an `error` or a `correction` becomes a **lesson** (`title`,
+`root_cause`, `solution`, `prevention`, `target`) saved with `lesson_save`; a `decision` of the
+code becomes a **memory** (`key`, `value`) saved with `memory_save` - never a `decision_*`
+record. Each field is one short sentence; a typo, a one-ticket detail, what the code already
+says, a secret and a restatement are skipped. Before proposing, the candidate is looked up
+with `lesson_recall`/`memory_recall`.
+
+`memory_save` records one `key`/`value` for a project (or global) and never overwrites: a key
+the owner already has answers `deduped: true` with the stored value. Like `lesson_save`, it is
+allowed inside a queue job.
+
+**Recurrence.** A lesson that recalls an existing one is re-saved with that lesson's exact
+`title`: the server finds it and bumps its `attempts` instead of adding a row. Inside a queued
+job, when the lesson is one the run was given (injected into its session), the same re-save
+also bumps `violated` and answers `violated: true`. An interactive `/nightqueue:reflect` bumps
+`attempts` only, since outside a job the server cannot tell which lessons the session was
+given.
+
+**What the reflector reads.** The run's handoffs as they are, never the job's raw stream. The
+loop artifacts keep their history: `05a-qa-analyst.md`, `05-qa.md`, `06-verification.md` and
+`06-runtime.md` are append-only, one `## Round n` per launch, and a fix-loop coder appends a
+`### Fix loop n — what was wrong / what changed` block to `04-implementation.md` instead of
+rewriting it (gates read only the last round). Its prompt carries the run timeline - phase,
+model, status and reason in order - from this attempt's `pipeline_phases`: the orchestrator
+passes `reason` to `run_phase_done` on every relaunch, and `pipeline_log` copies the recorded
+reasons into the rows when its table lists exactly as many launches of that phase as the run
+recorded (otherwise it copies none of them and answers `reasons_unpaired`). When `pipeline_log` recorded no run for the attempt, the timeline
+comes from `state.json` and says so.
+
+An old `~/.nightqueue/state/reflect.json` and `reflect.log` from the former `SessionEnd`
+worker are no longer read or written and can be deleted.
 
 **Commands.**
 
 ```sh
-nightqueue mcp                     # start the stdio MCP server with the twenty-eight tools
+nightqueue mcp                     # start the stdio MCP server with the twenty-nine tools
 nightqueue mcp --http --port 4747 --token <t>   # serve the same tools over Streamable HTTP on 127.0.0.1
 nightqueue hook session-start      # run a hook, reading the event JSON from stdin
-nightqueue reflect --transcript <path>   # reflect on a transcript now, in the foreground
 nightqueue embed download          # download the embedding weights (the only network path)
 nightqueue embed backfill          # embed the lessons and the decisions that still have no vector
 nightqueue memory stats [--json]   # counts per project
@@ -251,12 +284,10 @@ nightqueue decision import <file.md> [--status <s>] [--superseded-by <n>] [--sup
 | `NIGHTQUEUE_HOME` | home of the runtime, default `~/.nightqueue` |
 | `NIGHTQUEUE_EMBED_DISABLED` | `1` turns the semantic side off; the recall stays BM25 only |
 | `NIGHTQUEUE_EMBED_DEADLINE_MS` | deadline of the embedding in the prompt hook, default `800` |
-| `NIGHTQUEUE_REFLECT_MODEL` | model of the reflection, default `haiku` |
-| `NIGHTQUEUE_CLAUDE_BIN` | path of the `claude` CLI used by the reflection, by the queue runner, by `nightqueue setup` and by `nightqueue doctor` |
+| `NIGHTQUEUE_CLAUDE_BIN` | path of the `claude` CLI used by the queue runner, by `nightqueue setup` and by `nightqueue doctor` |
 | `NIGHTQUEUE_NPM_BIN` | path of the `npm` CLI that installs the runtime and the embedding prefix |
 | `NIGHTQUEUE_JOB_ID` | set by the runner in the environment of the job it spawns, never read from outside |
 | `CLAUDE_CONFIG_DIR` | configuration directory of the host that `nightqueue setup` and `nightqueue doctor` read and write, default `~/.claude` |
-| `NIGHTQUEUE_REFLECT` | `1` marks a process as the reflection itself: no context block and no new reflection |
 | `NIGHTQUEUE_MODEL`, `NIGHTQUEUE_SESSION_ID` | recorded in `pipeline_runs` by the server process |
 
 **Honest numbers.** Measured in this repository, on macOS arm64 with Node

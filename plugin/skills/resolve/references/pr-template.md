@@ -84,7 +84,7 @@ Every subsection of `## QA` is backed by a non-empty file under
 
 | Subsection | `<method>` | What the file holds |
 | --- | --- | --- |
-| Automated | `automated` | the verifier's real output: a copy of `06-verification.md` (`automated-verification.md`), plus the PoC excerpt of `05-qa.md` when the tier produced one |
+| Automated | `automated` | the verifier's real output: a copy of the last `## Round` of `06-verification.md` (`automated-verification.md`), plus the PoC excerpt of `05-qa.md` when the tier produced one |
 | API | `api` | the HTTP log or the recorded request and response of Phase 6.5 |
 | Browser | `browser` | the screenshot or the page log of Phase 6.5 |
 | Device (Android / iOS emulator or device) | `emulator` | the screenshot or the log of the build or OTA exercised in Phase 6.5 |

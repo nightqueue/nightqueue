@@ -7,7 +7,9 @@ import { LESSON_TARGET_OF, PROMPT_TARGETS, phasePrompt, promptsDir, renderTempla
 import { saveDecision } from "../../src/memory/decisions.mjs";
 import { addJob, claimJobById, persistRunFacts } from "../../src/memory/jobs.mjs";
 import { saveLesson } from "../../src/memory/lessons.mjs";
+import { recordInjected } from "../../src/hooks/state.mjs";
 import { recordRunFields } from "../../src/queue/run-state.mjs";
+import { routingRow } from "../../src/queue/routing.mjs";
 import { ensureProject, makeHome, makeProject, projectIdOf, projectPathOf } from "../../test-support/memory.mjs";
 
 const FIXTURES = new URL("../fixtures/skill-templates/", import.meta.url);
@@ -45,6 +47,8 @@ const FULL = {
   GROUP: "H1, H2 (group: parsing)",
   NOTE: "the verifier failed on the empty title",
   ARTIFACT: "06-runtime.md",
+  ROUND: "2",
+  FIX_LOOP: "1",
 };
 
 // The template each golden fixture was moved into; the attack brief lives inside both QA prompts that paste it.
@@ -164,7 +168,7 @@ test("the lesson target of each context block is the one the old placeholder ord
 
 test("no render leaves a placeholder behind, whatever the type, the coverage and the optional values", () => {
   const empty = Object.fromEntries(Object.entries(FULL).map(([key, value]) => [key, typeof value === "boolean" ? false : value]));
-  for (const optional of ["CLAUDE_MD", "CONTEXT_BLOCK", "INDEX_PATHS", "INDEX_MAP", "RAW_EVIDENCE", "DELIVERY_CONSTRAINTS", "STAGE", "NOTE"]) empty[optional] = "";
+  for (const optional of ["CLAUDE_MD", "CONTEXT_BLOCK", "INDEX_PATHS", "INDEX_MAP", "RAW_EVIDENCE", "DELIVERY_CONSTRAINTS", "STAGE", "NOTE", "ROUND", "FIX_LOOP"]) empty[optional] = "";
   for (const template of TEMPLATES) {
     for (const base of [FULL, empty]) {
       for (const IS_BUG of [true, false]) {
@@ -294,8 +298,68 @@ test("the runtime lane may write another artifact of the run, which then has no 
   const measure = await phasePrompt({ target: "runtime", artifact: "00-main-measure.md" }, { run, env });
   assert.equal(measure.artifact, join(dir, "00-main-measure.md"));
   assert.equal(measure.check, null);
-  assert.ok(measure.prompt.includes(`ARTIFACT_PATH: ${join(dir, "00-main-measure.md")}\n`));
+  assert.ok(measure.prompt.includes(`ARTIFACT_PATH: ${join(dir, "00-main-measure.md")} (append-only: this launch is ## Round 1)\n`));
   await assert.rejects(phasePrompt({ target: "runtime", artifact: "../x.md" }, { run, env }), /invalid `artifact`/);
   await assert.rejects(phasePrompt({ target: "coder", artifact: "x.md" }, { run, env }), /only accepted with `target: "runtime"`/);
   await assert.rejects(phasePrompt({ target: "qa-prover" }, { run, env }), /`group` is required/);
+});
+
+test("a round artifact's prompt names the next `## Round`, counted by the runtime from the file on disk", async (t) => {
+  const { env, run, dir } = makeRun(t, "phase-prompt-round", { tier: "complex" });
+  const first = await phasePrompt({ target: "verifier" }, { run, env });
+  assert.ok(first.prompt.includes("(append-only: this launch is ## Round 1)\n"), first.prompt);
+  writeFileSync(join(dir, "06-verification.md"), "## Round 1\n## Verification: FAILED\n\n## Round 2\n## Verification: FAILED\n");
+  const third = await phasePrompt({ target: "verifier" }, { run, env });
+  assert.ok(third.prompt.includes("(append-only: this launch is ## Round 3)\n"), third.prompt);
+  assert.ok(third.prompt.includes("otherwise create it with `## Round 3`."), third.prompt);
+  const runtime = await phasePrompt({ target: "runtime" }, { run, env });
+  assert.ok(runtime.prompt.includes("06-runtime.md (append-only: this launch is ## Round 1)\n"), runtime.prompt);
+  const architect = await phasePrompt({ target: "architect" }, { run, env });
+  assert.equal(architect.prompt.includes("## Round"), false, architect.prompt);
+});
+
+test("the fix-loop coder appends the next `### Fix loop` block and never rewrites the implementation artifact", async (t) => {
+  const { env, run, dir } = makeRun(t, "phase-prompt-fix-loop", { tier: "complex" });
+  writeFileSync(join(dir, "04-implementation.md"), "## Modified files\n/a.mjs\n\n### Fix loop 1 — what was wrong / what changed\n- What was wrong: x\n");
+  const fix = await phasePrompt({ target: "coder-fix" }, { run, env });
+  assert.ok(fix.prompt.includes("### Fix loop 2 — what was wrong / what changed\n"), fix.prompt);
+  assert.ok(fix.prompt.includes("Do NOT rewrite ARTIFACT_PATH."), fix.prompt);
+  const coder = await phasePrompt({ target: "coder" }, { run, env });
+  assert.equal(coder.prompt.includes("### Fix loop"), false, coder.prompt);
+});
+
+test("the reflector renders in every tier with the tier's coder model, no artifact and no gate", async (t) => {
+  for (const tier of ["trivial", "simple", "complex"]) {
+    const { env, run, dir } = makeRun(t, `phase-prompt-reflector-${tier}`, { tier });
+    const answer = await phasePrompt({ target: "reflector" }, { run, env });
+    assert.equal(answer.subagent_type, "nightqueue:reflector");
+    assert.equal(answer.model, routingRow(tier).models.coder, tier);
+    assert.equal(answer.artifact, null);
+    assert.equal(answer.check, null);
+    assert.equal(answer.open_items.some((item) => item.includes("does not run")), false, String(answer.open_items));
+    assert.ok(answer.prompt.includes("RUBRIC: ") && answer.prompt.includes("/skills/reflect/references/rubric.md\n"), answer.prompt);
+    assert.ok(answer.prompt.includes(`Run directory: ${dir}\n`), answer.prompt);
+    assert.ok(answer.prompt.includes("Project: alpha\n"), answer.prompt);
+    assert.ok(answer.prompt.includes("## Run timeline\n"), answer.prompt);
+  }
+});
+
+test("the reflector lists the lessons the job's session was given, and none outside a job", async (t) => {
+  const { env, home, run } = makeRun(t, "phase-prompt-reflector-lessons", { tier: "complex" });
+  const given = saveLesson({ projectId: run.projectId, title: "renew the lease before the tick", root_cause: "late", solution: "renew", prevention: "renew early" }, home);
+  recordInjected("phase-prompt-reflector-lessons-session", [`l${given.id}`], env);
+  const inJob = await phasePrompt({ target: "reflector" }, { run, env });
+  assert.ok(inJob.prompt.includes(`## Lessons given to this run\n- [L${given.id}] renew the lease before the tick\n`), inJob.prompt);
+  const outside = await phasePrompt({ target: "reflector" }, { run, env: home });
+  assert.ok(outside.prompt.includes("## Lessons given to this run\nnone recorded\n"), outside.prompt);
+});
+
+test("only the reflector's template reads the run timeline and the given lessons", () => {
+  const reflector = renderTemplate("reflector", { ...FULL, TIMELINE: "1. triage · haiku · ok · first run", INJECTED_LESSONS: "none recorded" });
+  assert.ok(reflector.includes("## Run timeline\n1. triage · haiku · ok · first run\n"), reflector);
+  assert.equal(/\{\{|\}\}/.test(reflector), false, reflector);
+  for (const template of TEMPLATES) {
+    const source = readFileSync(join(promptsDir(), `${template}.md`), "utf8");
+    assert.equal(source.includes("{{TIMELINE}}") || source.includes("{{INJECTED_LESSONS}}"), false, template);
+  }
 });

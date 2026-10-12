@@ -323,7 +323,8 @@ test("the tables of Phase 8 and their Time column come from the command the CLI 
   assert.ok(REPORT_LAYOUT.includes("**Total:** ⏱️"), "the report layout no longer prints the Total the report carries");
   assert.ok(CLI_RUN.includes('renderSkillTemplate(skillReferencesDir(), "report"'), "`run report` no longer renders its one layout, references/report.md");
   assert.equal(CLI_RUN.includes("| Step | Agent | Status |"), false, "the CLI carries a copy of the table layout of references/report.md");
-  assert.ok(CLI_RUN.includes("Lessons saved: "), "the CLI no longer prints the lesson-capture audit line");
+  assert.equal(CLI_RUN.includes("Lessons saved"), false, "the CLI still prints the lesson-capture audit line Phase 9 replaced");
+  assert.equal(REPORT_LAYOUT.includes("LESSONS_LINE"), false, "the report layout still carries the lesson-capture audit line");
   assert.equal(SKILL.includes("| Step | Agent | Status | Highlight |"), false, "the skill still carries the table model the report prints");
 });
 
@@ -464,4 +465,43 @@ test("step 0.5 reads the re-run lines of a legacy job queued from an operator ru
     handoff: { slug: "demo-slug", runDir: "/runs/demo/demo-slug", lastPhase: null, fromPhase: "triage", reruns: [{ phase: "triage", reason: "evidence level 2 is below 3 on a bug (operator run)" }] },
   });
   assert.ok(prompt.includes("\nRe-run: triage — evidence level 2 is below 3 on a bug (operator run)\n"), prompt);
+});
+
+test("the round artifacts are append-only and read by their last round, and no template or agent still says `iteration N`", () => {
+  assert.ok(SKILL.includes("**Round artifacts** (`05a-qa-analyst.md`, `05-qa.md`, `06-verification.md`, `06-runtime.md`)"));
+  assert.ok(SKILL.includes("Every gate and every reader reads the LAST round"));
+  assert.ok(QA_PHASE.includes("`## Round <n>` (n = its highest round + 1) holding this consolidation; otherwise `## Round 1`."));
+  assert.ok(promptTemplate("coder-fix").includes("### Fix loop {{FIX_LOOP}} — what was wrong / what changed"));
+  assert.ok(promptTemplate("_round").includes("Never edit an earlier round"));
+  for (const name of ["verifier", "verifier-fast", "runtime", "qa-lite", "qa-analyst"]) {
+    assert.ok(promptTemplate(name).includes("{{>_round}}"), `${name} misses the round rule`);
+  }
+  const prompts = readdirSync(new URL("../plugin/skills/resolve/references/prompts/", import.meta.url)).map((file) => promptTemplate(file.replace(/\.md$/, "")));
+  const agents = ["verifier", "qa-guardian", "coder"].map((name) => readFileSync(new URL(`../plugin/agents/${name}.md`, import.meta.url), "utf8"));
+  for (const text of [...prompts, ...agents, SKILL, QA_PHASE]) {
+    assert.equal(/iteration N\b|Verification — iteration|append per iteration/.test(text), false);
+  }
+});
+
+test("the orchestrator never saves a lesson: no capture rule is left, and Phase 9's reflector is the run's only writer", () => {
+  for (const gone of ["Lesson payload", "Lesson-capture", "lesson-capture", "Lessons saved"]) {
+    assert.equal(SKILL.includes(gone), false, `the skill still carries ${gone}`);
+  }
+  const saves = SKILL.split("\n").filter((line) => line.includes("lesson_save"));
+  assert.deepEqual(saves, ["   - **The orchestrator never calls `lesson_save` or `memory_save`** - not after a loop, not at"]);
+  assert.ok(SKILL.includes("| 🪞 | **Reflector** | Memory |"), "the visual identity misses the reflector");
+});
+
+test("Phase 9 launches the reflector once at the end of every run and lists its refs above `## Notice`", () => {
+  const start = SKILL.indexOf("### Phase 9 — Reflect");
+  assert.ok(start > SKILL.indexOf("### Phase 8 — Report"), "Phase 9 is missing or sits before Phase 8");
+  const phase = SKILL.slice(start);
+  assert.ok(phase.includes('`phase_prompt` with `target: "reflector"`'));
+  assert.ok(phase.includes("BEFORE the final text"));
+  assert.ok(phase.includes("a terminated run"));
+  assert.ok(phase.includes("It does NOT run at a gate-block pause"));
+  assert.ok(phase.includes("There is no artifact, no `nightqueue run check` and no `run_phase_done`"));
+  assert.ok(phase.includes("`🪞 Reflection: not run — <reason>`"));
+  assert.ok(phase.includes("ABOVE `## Notice`: `## Notice` stays\nthe LAST section of the final text"));
+  assert.ok(SKILL.includes("A phase that runs again (🔁) records `reason` = why"), "step 5.3 lost the relaunch reason rule");
 });

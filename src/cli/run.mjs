@@ -6,7 +6,7 @@ import { withMeasuredMtimes } from "../memory/index-paths.mjs";
 import { FILE_LIST } from "../queue/file-list.mjs";
 import { resolveJobRun } from "../queue/job-run.mjs";
 import { appendPendingWrite, PENDING_KEYS } from "../queue/pending-writes.mjs";
-import { PHASE_ARTIFACTS } from "../queue/phase-artifacts.mjs";
+import { lastRound, PHASE_ARTIFACTS } from "../queue/phase-artifacts.mjs";
 import { defaultGitImpl } from "../queue/preflight.mjs";
 import { callerJobId } from "../queue/retry.mjs";
 import { recordPrTemplate } from "../queue/run-state.mjs";
@@ -79,7 +79,7 @@ function readArtifact(path) {
   }
 }
 
-// Whether the artifact carries a section, matched on the heading line so `## Verification — iteration 2` still counts as `## Verification`.
+// Whether the artifact carries a section, matched on the heading line so `## Verification: FAILED` still counts as `## Verification`.
 function hasHeading(text, heading) {
   return text.split("\n").some((line) => line.trimEnd().startsWith(heading));
 }
@@ -164,7 +164,7 @@ function checkArtifact(run, artifact, ctx) {
   const path = join(run.runDir, artifact.file);
   const text = readArtifact(path);
   if (artifact.sections[0] === FILE_LIST) return checkFileList(run, path, text, ctx);
-  const missing = missingParts(text, artifact);
+  const missing = missingParts(artifact.rounds ? lastRound(text) : text, artifact);
   return missing.length === 0 ? "OK" : `MISSING: ${missing.join(", ")}`;
 }
 

@@ -10,7 +10,7 @@ export const OPERATOR_DECISION = "D-58";
 // registry and the queue, the refused ones install, serve, run code, nest a session or act on a run; a new command must land in one.
 export const OPERATOR_CLI_COMMANDS = Object.freeze({
   allowed: Object.freeze(["queue", "decision", "project", "org", "connection", "doctor", "memory", "libs", "version"]),
-  refused: Object.freeze(["setup", "init", "open", "update", "mcp", "studio", "hook", "reflect", "embed", "verify", "sandbox", "run"]),
+  refused: Object.freeze(["setup", "init", "open", "update", "mcp", "studio", "hook", "embed", "verify", "sandbox", "run"]),
 });
 
 // The subcommands of the allowed families that write files or widen the operator's own scope, refused one by one; a new subcommand

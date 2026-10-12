@@ -80,6 +80,7 @@
  * @property {(run: object) => Promise<object>} logPipelineRun
  * @property {(run: object, options: {since: string}) => Promise<object>} logPipelineRunOnce the replay of a queued run: writes it unless a run of the same project and slug was recorded since `since`, then answers `{skipped: true}`
  * @property {(spec: object) => Promise<string|null>} latestRunOutcome the outcome of the latest run recorded for a project and slug at or after an instant, or null when there is none
+ * @property {(spec: {projectId: string|null, slug: string, since?: string|null}) => Promise<{seq: number, phase: string, model: string|null, status: string, retry: boolean, reason: string|null}[]>} runTimeline the phases of the latest run of a project and slug (at or after `since` when given), in order, read-only; no run answers an empty list
  * @property {(telemetry: object) => Promise<object>} updateRunTelemetry fills the durations and the models the RUNTIME measured in the stream over the row the agent recorded: the measured value wins, the agent's survives only where there is none, and a run the agent never recorded is never inserted
  */
 
@@ -96,12 +97,12 @@
  * @property {() => Promise<object[]>} memoryStats
  * @property {(spec?: object) => Promise<object[]>} recallLessons
  * @property {(lesson: object) => Promise<object>} saveLessonDeduped
- * @property {(items: object[], options?: object) => Promise<object>} persistLessons
  */
 
 /**
  * @typedef {object} MemoryDomain
  * @property {(entry: object) => Promise<object>} saveMemory
+ * @property {(entry: object) => Promise<object>} saveMemoryDeduped
  * @property {(spec?: object) => Promise<object[]>} recentMemories
  * @property {(spec?: object) => Promise<object[]>} searchMemories
  * @property {(spec?: object) => Promise<object|null>} memoryByKey
@@ -275,7 +276,7 @@ export const STORE_CONTRACT = Object.freeze({
     "listCloses",
     "lastLogResults",
   ],
-  runs: ["logPipelineRun", "logPipelineRunOnce", "updateRunTelemetry", "latestRunOutcome"],
+  runs: ["logPipelineRun", "logPipelineRunOnce", "updateRunTelemetry", "latestRunOutcome", "runTimeline"],
   lessons: [
     "saveLesson",
     "getLesson",
@@ -288,9 +289,8 @@ export const STORE_CONTRACT = Object.freeze({
     "memoryStats",
     "recallLessons",
     "saveLessonDeduped",
-    "persistLessons",
   ],
-  memory: ["saveMemory", "recentMemories", "searchMemories", "memoryByKey", "recallMemories"],
+  memory: ["saveMemory", "saveMemoryDeduped", "recentMemories", "searchMemories", "memoryByKey", "recallMemories"],
   index: ["saveProjectIndex", "fillProjectIndex", "recallProjectIndex"],
   decisions: [
     "getDecision",

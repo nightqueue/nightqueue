@@ -1,8 +1,10 @@
 ## File handoff (contract — read first)
-ARTIFACT_PATH: {{RUN_DIR}}/{{ARTIFACT}}
+ARTIFACT_PATH: {{RUN_DIR}}/{{ARTIFACT}} (append-only: this launch is ## Round {{ROUND}})
 Read before acting (via Read): {{RUN_DIR}}/01-triage.md (## Validated brief, ## Diagnosis on a bug) ·
-{{RUN_DIR}}/03-plan.md (## Usage coverage when present) · {{RUN_DIR}}/04-implementation.md · {{RUN_DIR}}/06-verification.md
+{{RUN_DIR}}/03-plan.md (## Usage coverage when present) · {{RUN_DIR}}/04-implementation.md ·
+{{RUN_DIR}}/06-verification.md (its last `## Round`)
 Write the COMPLETE output (all your mandatory sections) to ARTIFACT_PATH via Write.
+{{>_round}}
 Return to the orchestrator AT MOST 10 lines: runtime verdict + the handoff file written + open
 items — never file contents, never a diff.
 

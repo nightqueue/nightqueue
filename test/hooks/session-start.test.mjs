@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { test } from "node:test";
-import { dbPath, stateDir } from "../../src/config/paths.mjs";
+import { stateDir } from "../../src/config/paths.mjs";
 import { runSessionStart } from "../../src/hooks/session-start.mjs";
 import { sessionStatePath } from "../../src/hooks/state.mjs";
 import { saveDecision } from "../../src/memory/decisions.mjs";
@@ -96,12 +96,6 @@ test("the preselected project is ignored inside a job, for a non-id value, and w
   const block = await runSessionStart({ input: { session_id: "s3", cwd: repo }, env: { ...env, NIGHTQUEUE_PROJECT: beta } });
   assert.doesNotMatch(block, /Current project/);
   assert.match(block, /the worker leaks a file descriptor/);
-});
-
-test("the reflection process gets no context block and never opens the database", async (t) => {
-  const env = { ...makeHome(t, "hook-start-reflect"), NIGHTQUEUE_REFLECT: "1" };
-  assert.equal(await runSessionStart({ input: { session_id: "s1", cwd: process.cwd() }, env }), "");
-  assert.equal(existsSync(dbPath(env)), false);
 });
 
 test("a corpus larger than the budget is cut at nine thousand characters", async (t) => {

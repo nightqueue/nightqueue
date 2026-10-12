@@ -17,7 +17,6 @@ import * as open from "./open.mjs";
 import * as org from "./org.mjs";
 import * as project from "./project.mjs";
 import * as queue from "./queue.mjs";
-import * as reflect from "./reflect.mjs";
 import * as runCommand from "./run.mjs";
 import * as sandbox from "./sandbox.mjs";
 import { borrowsParentLock } from "./schema-migrate.mjs";
@@ -39,7 +38,6 @@ const COMMANDS = new Map([
   ["mcp", mcp.run],
   ["studio", studio.run],
   ["hook", hook.run],
-  ["reflect", reflect.run],
   ["embed", embed.run],
   ["memory", memory.run],
   ["decision", decision.run],
@@ -61,7 +59,7 @@ const READ_ONLY_COMMANDS = new Set(["doctor", "version", "decision", "verify", "
 
 const READ_ONLY_SUBCOMMANDS = new Set(["list", "test"]);
 
-const SELF_LOCKING_COMMANDS = new Set(["mcp", "studio", "hook", "reflect", "embed", "memory", "queue", "run"]);
+const SELF_LOCKING_COMMANDS = new Set(["mcp", "studio", "hook", "embed", "memory", "queue", "run"]);
 
 const HOME_WRITE_COMMANDS = new Set(["init", "setup", "update"]);
 
@@ -101,11 +99,10 @@ commands:
   connection test <name>                    check a stored connection against its service
   connection list [--json]                  list connections, their type and the orgs using them
   connection remove <name>                  unbind a connection from every org and delete its secret
-  mcp                                       start the stdio MCP server that exposes the twenty-eight memory and queue tools
+  mcp                                       start the stdio MCP server that exposes the twenty-nine memory and queue tools
   mcp --http [--port <n>] [--token <t>]     serve the same tools over Streamable HTTP on 127.0.0.1
   studio [--port <n>] [--api-only] [--no-open]  serve nightqueue studio, the local web cockpit, on 127.0.0.1
-  hook <name>                               run a hook (session-start, prompt-context, reflect, agent-foreground, merger-guard, subagent-stop), reading the event JSON from stdin
-  reflect --transcript <path> [--session]   extract the lessons of a transcript now, in the foreground
+  hook <name>                               run a hook (session-start, prompt-context, agent-foreground, merger-guard, subagent-stop), reading the event JSON from stdin
   embed install                             install the embedding library into the home and download its weights
   embed download                            download the embedding weights into the home (the only network path)
   embed backfill                            compute the embeddings of the lessons and decisions that still have none
@@ -144,7 +141,7 @@ inside a job — each acts on the run of the job it is called from, never on the
   run pr --body-file <path>                 check the body, push THIS run's branch under its final name and open the PR
   run start --tier --type --commit-type     record THIS run's tier and type; print its routing row, phases, tasks and PR template as JSON
   run publish --message-file --body-file    check the body, commit the list once, push THIS run's branch and open the PR
-  run report [--json]                       the tables of THIS run's final report: steps, lessons saved, happy or not
+  run report [--json]                       the tables of THIS run's final report: steps, happy or not
 
 options:
   -h, --help                                show this help

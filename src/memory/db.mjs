@@ -15,6 +15,7 @@ import {
   REGISTRY,
   SCHEMA,
 } from "./ddl.mjs";
+import { addColumnIfMissing } from "./columns.mjs";
 import { hasTable } from "./migration/one-shot.mjs";
 import { MigrationRefused, finishV18, importLegacyRegistry, migrateToV18, schemaState } from "./migration/v18.mjs";
 import { isPendingV19, migrateToV19 } from "./migration/v19.mjs";
@@ -144,6 +145,7 @@ function migrate(db) {
   db.exec(OWNER_KEY_GUARDS);
   migrateV21Columns(db);
   migrateV23(db);
+  addColumnIfMissing(db, "pipeline_phases", "reason", "TEXT");
   ensureDefaultOrg(db);
   if (version < DB_USER_VERSION) db.exec(`PRAGMA user_version = ${DB_USER_VERSION}`);
 }

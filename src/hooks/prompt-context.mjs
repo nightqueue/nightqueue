@@ -57,7 +57,6 @@ async function relevantMemories({ store, body, projectId, seen }) {
 
 // Builds the context block injected on every prompt: lessons and memories relevant to the prompt text.
 export async function runPromptContext({ input, env = process.env }) {
-  if (env?.NIGHTQUEUE_REFLECT === "1") return "";
   const body = promptBody(input?.prompt);
   if (body.length < MIN_PROMPT) return "";
   const cwd = typeof input?.cwd === "string" && input.cwd.trim() ? input.cwd : process.cwd();
