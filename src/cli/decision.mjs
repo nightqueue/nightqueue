@@ -8,7 +8,7 @@ import { DECISION_STATUSES, decisionView, renderDecisionText } from "../memory/d
 import { sqliteToIso } from "../memory/schema.mjs";
 import { parseRef } from "../memory/refs.mjs";
 import { SCOPE_CONFLICT, decisionRef, orgTargetOf, ownerNames, ownerOf, ownerRef, ownerValues, projectTargetOf, rowOwner, targetDecisionRef } from "../memory/scope.mjs";
-import { callerJobId } from "../queue/retry.mjs";
+import { refuseDecisionWriteInsideJob } from "../queue/home-guard.mjs";
 import { openRegistryReader, openStore, openStoreReadOnly } from "../store/open.mjs";
 import { checkArgs, parseCommand } from "./args.mjs";
 
@@ -336,6 +336,7 @@ function stampImportedFile(ctx, path, saved) {
 
 // Runs `nightqueue decision import <file.md>`, the one deliberate decision write of the terminal, reviewed like `decision_save`.
 async function runImport(argv, ctx) {
+  refuseDecisionWriteInsideJob(ctx.env, "`nightqueue decision import`");
   const { values, positionals } = parseCommand(argv, IMPORT_OPTIONS);
   checkArgs(positionals, { min: 1, max: 1, usage: USAGE.import });
   const target = await resolveReadTarget(values, ctx);
@@ -361,7 +362,6 @@ async function runImport(argv, ctx) {
     supersedes,
     unrelated,
     createdAt: parsed.date,
-    jobId: callerJobId(ctx.env),
   });
   if (saved.needsReview) throw new UserError(needsReviewMessage(saved.candidates));
   ctx.out(`imported as ${saved.ref}`);
@@ -398,6 +398,7 @@ async function resolveSuccessorId(store, target, successor) {
 
 // Runs `nightqueue decision update <number>`, the terminal's way to accept, reject or supersede a decision, same as `decision_update`.
 async function runUpdate(argv, ctx) {
+  refuseDecisionWriteInsideJob(ctx.env, "`nightqueue decision update`");
   const { values, positionals } = parseCommand(argv, UPDATE_OPTIONS);
   checkArgs(positionals, { min: 1, max: 1, usage: USAGE.update });
   const address = await decisionAddress(positionals[0], values, ctx, USAGE.update);

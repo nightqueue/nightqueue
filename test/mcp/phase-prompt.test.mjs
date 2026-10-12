@@ -34,9 +34,6 @@ const FULL = {
   INDEX_PATHS: "- src/text.mjs",
   INDEX_MAP: "- src/text.mjs — the text helpers",
   INDEX_LIBS: "zod@4.6.5",
-  STANDING_TITLES: "- D-1 the worker keeps a lease",
-  STANDING_DETAIL: "- D-1 the worker keeps a lease — renew it every tick",
-  PROPOSED_TITLES: "- D-2 the queue gets priorities",
   IS_BUG: true,
   SIMPLE: true,
   TRIAGED: true,
@@ -167,7 +164,7 @@ test("the lesson target of each context block is the one the old placeholder ord
 
 test("no render leaves a placeholder behind, whatever the type, the coverage and the optional values", () => {
   const empty = Object.fromEntries(Object.entries(FULL).map(([key, value]) => [key, typeof value === "boolean" ? false : value]));
-  for (const optional of ["CLAUDE_MD", "CONTEXT_BLOCK", "INDEX_PATHS", "INDEX_MAP", "STANDING_TITLES", "STANDING_DETAIL", "PROPOSED_TITLES", "RAW_EVIDENCE", "DELIVERY_CONSTRAINTS", "STAGE", "NOTE"]) empty[optional] = "";
+  for (const optional of ["CLAUDE_MD", "CONTEXT_BLOCK", "INDEX_PATHS", "INDEX_MAP", "RAW_EVIDENCE", "DELIVERY_CONSTRAINTS", "STAGE", "NOTE"]) empty[optional] = "";
   for (const template of TEMPLATES) {
     for (const base of [FULL, empty]) {
       for (const IS_BUG of [true, false]) {
@@ -264,15 +261,16 @@ test("two phases of one run never get the same lesson, as with `context_for_phas
   assert.deepEqual(lessonIds(verifier.prompt).filter((id) => lessonIds(coder.prompt).includes(id)), []);
 });
 
-test("the architect gets the standing decisions of the project, titled by their ref", async (t) => {
+test("the architect prompt carries no decisions section, even with accepted and proposed rows saved", async (t) => {
   const { env, home, run } = makeRun(t, "phase-prompt-architect", { tier: "complex" });
   saveDecision({ projectId: run.projectId, title: "the worker keeps a lease", context: "c", decision: "renew the lease every tick", status: "accepted" }, home);
   saveDecision({ projectId: run.projectId, title: "the queue gets priorities", context: "c", decision: "p1 first", status: "proposed" }, home);
-  const { prompt, model } = await phasePrompt({ target: "architect", delivery_constraints: "it must not touch native code" }, { run, env });
+  const { prompt, model, open_items } = await phasePrompt({ target: "architect", delivery_constraints: "it must not touch native code" }, { run, env });
   assert.equal(model, "opus");
-  assert.ok(prompt.includes("## Standing decisions\n- D-1 the worker keeps a lease\n"), prompt);
-  assert.ok(prompt.includes("- D-1 the worker keeps a lease — renew the lease every tick"), prompt);
-  assert.ok(prompt.includes("## Proposed (not binding)\n- D-2 the queue gets priorities\n"), prompt);
+  assert.equal(prompt.includes("## Standing decisions"), false, prompt);
+  assert.equal(prompt.includes("## Proposed (not binding)"), false, prompt);
+  assert.equal(prompt.includes("the worker keeps a lease"), false, prompt);
+  assert.equal((open_items ?? []).some((item) => item.includes("decision")), false, String(open_items));
   assert.ok(prompt.includes("Delivery constraints (the limit of what may be delivered — NEVER design; omit the line if there is none):\nit must not touch native code\n"));
 });
 

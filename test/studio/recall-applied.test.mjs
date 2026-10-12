@@ -57,12 +57,12 @@ test("each hit lists every artifact citing it, in file order, and the distinct a
   assert.equal(answer.applied_total, 2);
 });
 
-test("a job's three architect phase prompts read as one context block whose five cited decisions are applied", async (t) => {
+test("a job's three architect phase prompts read as one context block whose cited lessons are applied and whose old decision lines are no hits", async (t) => {
   const env = makeHome(t, "applied-j150");
   runWith(env, {
     "02-explore.md": "D-60 too early for the architect",
-    "03-plan.md": "Unrelated to D-58, D-24, D-7, D-15 and D-57.",
-    "04-implementation.md": "Kept D-58.",
+    "03-plan.md": "Unrelated to D-58, D-24, D-7, D-15 and D-57; follows L1.",
+    "04-implementation.md": "Kept D-58 and L1.",
   });
   const log = [
     attemptMarker(1),
@@ -78,16 +78,14 @@ test("a job's three architect phase prompts read as one context block whose five
     recalls.map((recall) => [recall.kind, recall.phase, recall.agent, recall.calls]),
     [["context", 3, "architect", 3]],
   );
+  assert.deepEqual(
+    recalls[0].hits.map((hit) => hit.ref),
+    ["L1", "L2"],
+  );
   const answer = withApplied(recalls, await appliedRefs({ job: JOB, recalls, env }));
   const cited = Object.fromEntries(answer.recalls[0].hits.filter((hit) => hit.applied.length > 0).map((hit) => [hit.ref, hit.applied]));
-  assert.deepEqual(cited, {
-    "D-7": ["03-plan.md"],
-    "D-15": ["03-plan.md"],
-    "D-24": ["03-plan.md"],
-    "D-57": ["03-plan.md"],
-    "D-58": ["03-plan.md", "04-implementation.md"],
-  });
-  assert.equal(answer.applied_total, 5);
+  assert.deepEqual(cited, { L1: ["03-plan.md", "04-implementation.md"] });
+  assert.equal(answer.applied_total, 1);
 });
 
 test("a hit is applied when an artifact of its phase or later cites its ref; the orchestrator's recalls see every artifact", async (t) => {

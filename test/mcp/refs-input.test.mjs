@@ -141,15 +141,13 @@ test("queue_status finds a job by the pull request it opened: one, none, several
   assert.match(await refusalOf(client, "queue_status", { pr_url: "https://github.com/acme/api/pull/7", job_id: one }), /pass either `job_id` or `pr_url`, never both/);
 });
 
-test("inside a job a ref resolves to the same row as before, so another project's decision is still refused", async (t) => {
+test("inside a job every decision ref is refused by the rule, its own project's included, and no row changes", async (t) => {
   const { env } = makeRefsHome(t, "mcp-refs-visibility");
   const job = addJob({ projectId: projectIdOf(env, "alpha"), prompt: "fix alpha" }, env);
   const client = await connect(t, { ...env, NIGHTQUEUE_JOB_ID: String(job.id) });
 
-  assert.match(await refusalOf(client, "decision_update", { id: "BT/D-1", status: "rejected" }), /refusing to update decision `BT\/D-1`/);
-  assert.equal(getDecision(3, env).status, "accepted", "the refused update reached beta's decision");
-  assert.match(await refusalOf(client, "decision_update", { id: "AC/D-1", status: "rejected" }), /it belongs to org `acme`/);
-
-  const own = payloadOf(await client.callTool({ name: "decision_update", arguments: { id: "D-1", status: "rejected" } }));
-  assert.deepEqual([own.decision.ref, own.decision.status, own.decision.owner], ["D-1", "rejected", "alpha"]);
+  for (const id of ["BT/D-1", "AC/D-1", "D-1"]) {
+    assert.match(await refusalOf(client, "decision_update", { id, status: "rejected" }), /decisions are the operator's record, written only outside a queue run/);
+  }
+  for (const id of [1, 3, 4]) assert.equal(getDecision(id, env).status, "accepted", `the refused update reached decision ${id}`);
 });

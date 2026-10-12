@@ -144,8 +144,6 @@ function decisionsDomain(env, db) {
     updateDecision: async (id, patch) => decisions.updateDecision(id, patch, env),
     listDecisions: async (spec) => decisions.listDecisions(spec, env, db()),
     decisionTitles: async (spec) => decisions.decisionTitles(spec, env, db()),
-    proposalsOfJob: async (jobId) => decisions.proposalsOfJob(jobId, env, db()),
-    staleProposals: async () => decisions.staleProposals(env, db()),
     setDecisionEmbedding: async (spec) => decisions.setDecisionEmbedding(spec, env),
     decisionsMissingEmbedding: async (spec) => decisions.decisionsMissingEmbedding(spec, env),
     recentDecisions: async (spec) => decisions.recentDecisions(spec, env),

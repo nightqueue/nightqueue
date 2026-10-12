@@ -102,21 +102,11 @@ The runtime waits for every subagent and background task of an unattended run; l
      create the worktree, do not record anything, do not launch any subagent.
    - **The tool answers** — including an EMPTY return or a read error → continue. An empty
      memory is the normal state of a fresh install.
-   - **The standing decisions are already in your context** — the `## Standing decisions`
-     section of the `# Nightqueue context` block injected at the start of the session carries
-     them: EVERY accepted title of the project and of its org, org rows first, each already
-     named by its ref, `D-<n>` or `<ORGKEY>/D-<n>`, followed by `## Standing decisions in detail`
-     with the text of the 8 most recently updated. No preflight
-     call fetches them; `decision_recall` stays the way to refine them by query (`phase_prompt` does it for the architect).
-     When the block is absent, ONE `decision_list` with `status: "accepted"` gives the titles.
-     A `## Proposed (not binding)` section of the same block lists, by title only, the
-     decisions still `proposed`: they bind nothing.
-   - One call answers both levels: `decision_recall` with `project` returns the project's
-     decisions AND its org's, org rows first, each carrying `scope` and `owner`.
-   - **A `phase_prompt` answer whose `open_items` names the decision tools** (an older runtime,
-     a failing store) → the architect ran WITHOUT a `## Standing decisions` section: record it
-     as an open item of Phase 8. An empty log is different: the section is simply omitted, with
-     no open item.
+   - **Decisions are the operator's record, never a constraint of this run.** The session
+     block may carry `## Standing decisions`, and `decision_recall`/`decision_list` may be read
+     as optional context. A run never saves or updates a decision (the runtime refuses
+     `decision_save`/`decision_update` inside a job), and a conflict with one is never, by
+     itself, a gate.
 
 0.5. **Run resume (right after the preflight, before interpreting).** If the
    job context brought a block ``RESUME CANDIDATE (slug `<slug>`)``, this run continues a
@@ -172,9 +162,7 @@ The runtime waits for every subagent and background task of an unattended run; l
 
    **The Brief is written once, to a file** — `<RUN_DIR>/00-brief.md`, at step 3, gated by
    `nightqueue run check 00`: every subagent prompt is rendered from that file by `phase_prompt`,
-   so the Brief is never pasted into a prompt by hand. The architect's `## Standing decisions`
-   and `## Proposed (not binding)` sections are built by `phase_prompt` from the store — never
-   copied into the Brief.
+   so the Brief is never pasted into a prompt by hand.
 
    The **raw input is never passed to Explore**. Only the triager (Phase 1), on bugs, may
    receive the raw error/stack trace block, the only agent that needs that detail to
@@ -685,9 +673,7 @@ open item of Phase 8, the same as an empty index.
 
 Launch **1 architect agent** — complex only: `phase_prompt` with `target: "architect"` (plus
 `delivery_constraints` when there is one, and `note` on a relaunch), then `Agent` with the
-answered `subagent_type` (`nightqueue:architect`), `model` and `prompt` verbatim. The prompt
-already carries the `## Standing decisions` and `## Proposed (not binding)` sections, built by
-the runtime.
+answered `subagent_type` (`nightqueue:architect`), `model` and `prompt` verbatim.
 
 **What you may NOT inject into the architect's prompt (a prohibition without exception):** the
 DESIGN is theirs. You inject context and a DELIVERY constraint — never a solution. FORBIDDEN in
@@ -699,9 +685,6 @@ regression surface ("prefer the SMALLEST diff"). The ONLY constraint you may pas
 delivery; "additive fix in the existing listener" is design in disguise) — on the `Delivery
 constraints:` line. The architect decides the fix level in their own Step 1.5 and takes the
 trade-off to the user via `## Requires user confirmation` when the risk deserves it.
-The `## Standing decisions` section of the prompt below is NOT an exception to this
-prohibition: it is binding context, in the same family as `Delivery constraints:`, and it
-never names the mechanism, file or line where THIS task's solution goes.
 
 **How to fill in `Type:`** — it holds whenever a phase needs the Type (3, 5, 6.5), not
 only here. Walk this order and stop at the first one that resolves it:
@@ -730,27 +713,6 @@ that produces the symptom.
 `MISSING` after the 1× relaunch, or an insufficient brief, → inform the user and terminate; on
 the insufficient-brief branch, apply the same gate_stop lesson-capture rule as Phase 1's
 terminal gate, with `target: "architect"`. With the gate closed, read `03-plan.md` via Read.
-
-**Proposed decision (right after that gate, before any other gate and before Phase 4):** if
-`03-plan.md` contains a `## Proposed decision` block, call `decision_save` (MCP `nightqueue`)
-with `project` = the current project, the block's **Title**, **Context**, **Decision** and
-**Consequences** fields and `status: "proposed"`; keep the returned `number` and carry it to
-Phase 7 — saving it here (not at Phase 8) is what survives a run that later stops at a gate.
-The runtime refuses a second proposal from the same job while the first is still `proposed`;
-that refusal is not an error of the run, which keeps the number of the first save.
-A failed `decision_save` NEVER blocks the run — it becomes an open item; the
-block is optional and most plans do not have one:
-no block → nothing is saved, nothing is recorded, and the run proceeds normally. A
-`decision_save` whose `status` is missing or invalid is stored as `proposed` and answers
-`status_defaulted: true`.
-
-**A `needs_review` answer:** `decision_save` answers `status: "needs_review"` with `candidates`
-when the proposal overlaps a standing or proposed decision, and nothing is saved. If the
-block has an `**Unrelated to:**` line whose refs cover EVERY candidate, call
-`decision_save` again ONCE with `unrelated` = those refs. Otherwise do NOT save: record the
-open item `Proposed decision not saved: it touches D-a, D-b (needs_review); the operator decides
-it with decision_save outside the queue` for Phase 8, and the run proceeds. Never pass
-`supersedes` from a run: superseding a decision is the operator's call.
 
 **Coverage gate (bug):** also require `## Symptom coverage`, each vector marked `covered` or
 `not-covered` **with a reason**, and `**How I enumerated:**` filled in with a **re-runnable**
@@ -1050,9 +1012,6 @@ The command below owns the mechanics — staging, the commit, the branch name, t
      produced `05-qa.md`, you may add `automated-qa.md` with Write from its PoC excerpt. A
      method with no evidence file has no row. Repository template: its own test section, in its own
      format.
-   - **A decision proposed by this run is NOT part of the PR body.** When Phase 3
-     saved a `## Proposed decision` block, it is reported only in Phase 8, where the
-     operator decides whether it deserves a ticket.
    - **No bare `#<number>` in the title or body** — GitHub cross-references an unrelated
      issue/PR and notifies it. A decision is named by its ref (`D-1`), never `#1`; the only
      `#<number>` allowed is a real issue of this repository in the `Fixes`/`Closes` line.
@@ -1323,11 +1282,8 @@ block right below the table.
 not count towards the ~30-line cap of the happy path: when `05-qa.md`'s `## Suggestions` has an
 item with the literal `dedicated ticket: yes`, list it with `file:line` + 1 line of the risk —
 the runtime's closing flow opens the ticket, never this pipeline (Phase 7, step 5). The same
-paragraph collects `unconfirmed decisions:` of the QA's `Usage coverage:` line, the `NOT MET /
-to confirm` lines of Phase 6.5 and, when Phase 3 saved a `## Proposed decision` block, one line
-`` Proposed decision <ref>: <title> — recorded as `proposed`; accept or reject it with `decision_update`. ``
-(the `ref` `decision_save` answered, `D-<n>`, never `#<number>`) — this report is the ONLY place it surfaces. All of them become
-open items, reflected in `## Notice`'s "Still open" in user language (no file, no identifier).
+paragraph collects `unconfirmed decisions:` of the QA's `Usage coverage:` line and the `NOT MET /
+to confirm` lines of Phase 6.5. All of them become open items, reflected in `## Notice`'s "Still open" in user language (no file, no identifier).
 
 On both paths, proceed to the Telemetry below.
 

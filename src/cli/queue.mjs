@@ -1136,11 +1136,6 @@ async function runCancel(argv, ctx) {
 
 const CLOSE_OPTIONS = { json: { type: "boolean" }, merged: { type: "boolean" }, force: { type: "boolean" }, foreground: { type: "boolean" }, steps: { type: "string" }, again: { type: "boolean" } };
 
-// The text line a close prints for one decision it accepted.
-function acceptedLine(entry) {
-  return `accepted ${entry.ref}: ${entry.title}`;
-}
-
 // One `closed job #N` line per closed job, each followed by the line of the worktree it released, when it had one.
 function closedJobLines(closed, worktrees = []) {
   return closed.flatMap((job) => {
@@ -1161,21 +1156,20 @@ function isUnchecked(entry) {
   return typeof entry.reason === "string" && entry.reason.startsWith("not checked: over the limit");
 }
 
-// Text lines of `queue close --merged`: one per closed (with its worktree), refused and undetermined job, one per settled proposal, plus a summary when some were left unchecked.
-function closeMergedLines({ closed, refused, undetermined, worktrees, decisions }) {
+// Text lines of `queue close --merged`: one per closed (with its worktree), refused and undetermined job, plus a summary when some were left unchecked.
+function closeMergedLines({ closed, refused, undetermined, worktrees }) {
   if (closed.length + refused.length + undetermined.length === 0) return ["nothing to close"];
   const lines = [
     ...closedJobLines(closed, worktrees),
     ...refused.map(({ id, reason }) => `${jobRef(id)} not closed: ${reason}`),
     ...undetermined.map(({ id, reason }) => `${jobRef(id)} not closed: ${reason}`),
-    ...decisions.map(acceptedLine),
   ];
   const unchecked = undetermined.filter(isUnchecked);
   if (unchecked.length) lines.push(`${unchecked.length} job${unchecked.length === 1 ? "" : "s"} left unchecked; run nightqueue queue close --merged again`);
   return lines;
 }
 
-// Runs `queue close --merged`, which closes every done job the cache and, for the gap, gh itself confirm merged, accepting their proposals; it never fails because one pull request could not be read.
+// Runs `queue close --merged`, which closes every done job the cache and, for the gap, gh itself confirm merged; it never fails because one pull request could not be read.
 async function runCloseMerged(values, ctx) {
   const prStates = ctx.prStates ?? createPrStateCache();
   try {
@@ -1248,20 +1242,15 @@ export function closeStepPrinter(say, tty) {
   };
 }
 
-// Prints how a foreground close ended, plus the decisions it accepted, and answers 0 only when it closed the job.
+// Prints how a foreground close ended and answers 0 only when it closed the job.
 function reportCloseOutcome(id, result, values, ctx) {
-  const { status, step = null, reason = null, mergeSha = null, accepted = [] } = result.outcome;
-  const decisions = accepted.map((entry) => ({ job_id: id, ...entry }));
-  if (values.json) {
-    ctx.out(JSON.stringify({ job: jobView(result.job, { full: true }), outcome: { status, step, reason, mergeSha }, decisions }));
-  } else {
-    ctx.out(closeOutcomeLine(id, result));
-    for (const entry of decisions) ctx.out(acceptedLine(entry));
-  }
+  const { status, step = null, reason = null, mergeSha = null } = result.outcome;
+  if (values.json) ctx.out(JSON.stringify({ job: jobView(result.job, { full: true }), outcome: { status, step, reason, mergeSha } }));
+  else ctx.out(closeOutcomeLine(id, result));
   return status === "closed" ? 0 : 1;
 }
 
-// Runs the closing pipeline of one job in this process, which accepts the job's proposals as it closes it.
+// Runs the closing pipeline of one job in this process.
 async function runCloseForeground(id, values, ctx) {
   const result = await closeInThisProcess(id, values, ctx);
   return reportCloseOutcome(id, result, values, ctx);
@@ -1318,9 +1307,6 @@ async function runCloseSteps(positionals, values, ctx) {
 
 // Runs `queue close`: the closing pipeline on one done job with a pull request, detached unless --foreground, or `--merged` for every done job the pull request state confirms merged.
 async function runClose(argv, ctx) {
-  if (argv.some((arg) => arg === "--decisions" || arg.startsWith("--decisions="))) {
-    throw new UserError(`\`--decisions\` no longer exists: a close accepts the decisions its job proposed; usage: ${USAGE.close}`);
-  }
   const { values, positionals } = parseCommand(argv, CLOSE_OPTIONS);
   if (values.again === true && values.steps === undefined) throw new UserError(`\`--again\` is valid only with --steps; usage: ${USAGE.close}`);
   if (values.steps !== undefined) return await runCloseSteps(positionals, values, ctx);

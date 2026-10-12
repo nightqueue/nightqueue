@@ -127,8 +127,6 @@
  * @property {(id: number, patch?: object) => Promise<object>} updateDecision
  * @property {(spec?: object) => Promise<object[]>} listDecisions
  * @property {(spec?: object) => Promise<object[]>} decisionTitles
- * @property {(jobId: number) => Promise<object[]>} proposalsOfJob
- * @property {() => Promise<object[]>} staleProposals
  * @property {(spec: object) => Promise<boolean>} setDecisionEmbedding
  * @property {(spec?: object) => Promise<object[]>} decisionsMissingEmbedding
  * @property {(spec?: object) => Promise<object[]>} recentDecisions
@@ -305,8 +303,6 @@ export const STORE_CONTRACT = Object.freeze({
     "updateDecision",
     "listDecisions",
     "decisionTitles",
-    "proposalsOfJob",
-    "staleProposals",
     "setDecisionEmbedding",
     "decisionsMissingEmbedding",
     "recentDecisions",
@@ -349,8 +345,6 @@ export const READ_ONLY_METHODS = Object.freeze([
   "jobs.lastLogResults",
   "decisions.listDecisions",
   "decisions.decisionTitles",
-  "decisions.proposalsOfJob",
-  "decisions.staleProposals",
   "decisions.getDecisionByNumber",
   "decisions.decisionOfRef",
   "decisions.decisionIdOfRef",

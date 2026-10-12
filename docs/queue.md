@@ -545,7 +545,7 @@ worktree once the row is closed (see *Worktrees* below): the
 text output adds `worktree removed: <path>` or `worktree kept: <path> - <reason>` right after
 the closed line, `--merged --json` carries `worktrees` (`[{ id, path, status, reason? }]`, one entry per
 closed job that had a worktree, `status` `removed` or `kept`) next to `closed`, `refused`,
-`undetermined` and `decisions`. A kept worktree never fails the close. gh is never asked about more than four pull requests at once. A one-shot
+`undetermined`. A kept worktree never fails the close. gh is never asked about more than four pull requests at once. A one-shot
 `queue status` asks it before it prints and waits one overall 5 s deadline at most -
 what has not answered by then prints `unknown`, and the gh still running is stopped; `--follow` never waits for gh - it asks after drawing a
 frame and picks the answer up on a later one - and the MCP `queue_status` answers from
@@ -1218,7 +1218,7 @@ prints `{ started, jobId, pid, logPath }`. The child registers as a runner of mo
 promised to it. `--foreground` runs the steps in this process, prints one line per step and
 a final `J-<id> closed: PR #<n> merged as <sha7>` (plus what happened to
 the worktree) or the `⛔ close stopped ...` line, and exits `0` only when the job closed;
-with `--json` it prints one `{ job, outcome, decisions }` object and nothing else on stdout.
+with `--json` it prints one `{ job, outcome }` object and nothing else on stdout.
 `queue.closeTimeoutS` (default `1800`, accepted range `60..3600` seconds) is the hard
 timeout of the whole close; a close that passes it, or that `queue run --stop` ends, stops
 with `timeout` or `interrupted` and resumes on the next run. The merger gets at most half
@@ -1228,13 +1228,10 @@ larger merges. A `config.json` that already carries `"closeTimeoutS": 600` (setu
 every default) keeps 600 until you edit it. The close lease lasts the timeout plus 60 s, so a
 close killed hard blocks the next one for up to that long.
 
-**Decisions the job proposed.** The settle step accepts every decision with `status: proposed`
-and the job's id, in the same transaction that sets the job `closed`; there is no flag and no
-question. The close prints one `accepted D-n: <title>` line per decision (`--json` carries them
-in `decisions`), and the `Closed:` notice line ends with
-`, accepted D-60, D-61`. A close that fails before settle, and a job that ends `cancelled` or
-`failed`, write no decision. `--decisions` is refused with the usage line. The MCP `queue_close`
-does the same, with no parameter for it.
+**A close never touches a decision.** Decisions are the operator's record, written only
+outside a queue run. The close writes nothing to the decisions log and prints no decision
+line, `--json` has no `decisions` key, and a `proposed` row stays `proposed` until the operator
+settles it. `--decisions` is an unknown option. The MCP `queue_close` does the same.
 
 **What `--force` does.** `--force` (`force: true` over MCP) means "do not hold me back for
 tests", nothing more: preflight notes the pull request's red, pending or unreadable checks

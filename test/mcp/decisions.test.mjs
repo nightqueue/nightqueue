@@ -24,6 +24,8 @@ const SCHEMAS = {
   decision_recall: { properties: ["id", "limit", "org", "project", "query"], required: [] },
 };
 
+const RULE = /decisions are the operator's record, written only outside a queue run/;
+
 const DECISION = {
   project: "alpha",
   title: "the queue keeps one job per deliverable",
@@ -79,7 +81,7 @@ test("the handshake tells the agent what decisions are for, and names no issue o
 
   const instructions = client.getInstructions();
   for (const line of [
-    "decisions are the project's standing constraints - recall them before proposing architecture and save one when the user settles a design question",
+    "decisions are the operator's record of the project's standing constraints - recall them before proposing architecture and save one, outside a queue run, when the user settles a design question; inside a queue job they are read-only context and never bind the run",
   ]) {
     assert.ok(instructions.includes(line), `\`${line}\` is missing from the instructions:\n${instructions}`);
   }
@@ -187,19 +189,28 @@ function makeTwoProjectHome(t, name) {
   return { env, own, foreign, job };
 }
 
-test("inside a job, decision_update refuses a row of another project and changes nothing", async (t) => {
-  const { env, foreign, job } = makeTwoProjectHome(t, "mcp-decisions-cross-project");
+test("inside a job, decision_update is refused by the rule on its own project and on another one, and changes nothing", async (t) => {
+  const { env, own, foreign, job } = makeTwoProjectHome(t, "mcp-decisions-cross-project");
   const client = await connect(t, { ...env, NIGHTQUEUE_JOB_ID: String(job.id) });
 
-  const decision = await client.callTool({ name: "decision_update", arguments: { id: "BT/D-1", status: "rejected" } });
-  assert.equal(decision.isError, true);
-  assert.match(textOf(decision), new RegExp(`refusing to update decision \`BT/D-1\` from inside job \`${job.id}\``));
-  assert.match(textOf(decision), /it belongs to project `beta`, not `alpha`/);
+  for (const id of ["D-1", "BT/D-1"]) {
+    const refused = await client.callTool({ name: "decision_update", arguments: { id, status: "rejected" } });
+    assert.equal(refused.isError, true, id);
+    assert.match(textOf(refused), new RegExp(`\`decision_update\` inside J-${job.id}: ${RULE.source}`));
+  }
 
+  assert.equal(getDecision(own.id, env).status, "accepted", "the refused update reached the job's own project");
   assert.equal(getDecision(foreign.id, env).status, "accepted", "the refused update reached the other project's decision");
+});
 
-  const mine = payloadOf(await client.callTool({ name: "decision_update", arguments: { id: "D-1", status: "rejected" } }));
-  assert.equal(mine.decision.status, "rejected", "a job must still update its own project");
+test("inside a job, decision_list and decision_recall still answer", async (t) => {
+  const { env, job } = makeTwoProjectHome(t, "mcp-decisions-job-reads");
+  const client = await connect(t, { ...env, NIGHTQUEUE_JOB_ID: String(job.id) });
+
+  const listed = payloadOf(await client.callTool({ name: "decision_list", arguments: { project: "alpha" } }));
+  assert.deepEqual(listed.decisions.map((row) => row.number), [1]);
+  const recalled = payloadOf(await client.callTool({ name: "decision_recall", arguments: { project: "alpha", query: "deliverable" } }));
+  assert.deepEqual(recalled.map((row) => row.number), [1]);
 });
 
 test("outside a job the ownership guard restricts nothing: the operator updates any project", async (t) => {
@@ -232,42 +243,25 @@ test("an overlapping decision_save answers needs_review, writes nothing, and sav
   assert.equal(getDecision(1, env).superseded_by, 2);
 });
 
-test("inside a job decision_save stamps job_id, refuses supersedes, and refuses a second proposal", async (t) => {
+test("inside a job decision_save is refused by the rule, a proposal or a superseding one, and nothing is saved", async (t) => {
   const env = makeDecisionHome(t, "mcp-decisions-job-proposal");
   const job = addJob({ projectId: ensureProject(env, "alpha"), prompt: "rewrite the runner" }, env);
   const client = await connect(t, { ...env, NIGHTQUEUE_JOB_ID: String(job.id) });
 
-  const first = payloadOf(await client.callTool({ name: "decision_save", arguments: { ...DECISION, status: "proposed" } }));
-  assert.equal(first.job_id, job.id);
-  assert.equal(getDecision(first.id, env).job_id, job.id);
-
-  const second = await client.callTool({
-    name: "decision_save",
-    arguments: { ...DECISION, title: "embeddings stay optional", status: "proposed" },
-  });
-  assert.equal(second.isError, true);
-  assert.match(textOf(second), new RegExp(`J-${job.id} already proposed decision D-1; a job proposes at most one decision`));
-
-  const superseding = await client.callTool({
-    name: "decision_save",
-    arguments: { ...DECISION, title: "embeddings stay optional", status: "accepted", supersedes: [1] },
-  });
-  assert.equal(superseding.isError, true);
-  assert.ok(textOf(superseding).includes(`inside J-${job.id} \`supersedes\` is refused`), textOf(superseding));
-  assert.equal(getDecision(first.id, env).status, "proposed");
+  for (const args of [{ ...DECISION, status: "proposed" }, { ...DECISION, status: "accepted", supersedes: [1] }]) {
+    const refused = await client.callTool({ name: "decision_save", arguments: args });
+    assert.equal(refused.isError, true, textOf(refused));
+    assert.match(textOf(refused), new RegExp(`\`decision_save\` inside J-${job.id}: ${RULE.source}`));
+  }
+  assert.equal(openDb(env).prepare("SELECT COUNT(*) AS n FROM decisions").get().n, 0);
 });
 
-test("inside a job missing from this database decision_save is refused naming the job, and nothing is saved", async (t) => {
+test("inside a job missing from this database decision_save gets the same rule, and nothing is saved", async (t) => {
   const env = makeDecisionHome(t, "mcp-decisions-missing-job");
   const client = await connect(t, { ...env, NIGHTQUEUE_JOB_ID: "999" });
 
   const refused = await client.callTool({ name: "decision_save", arguments: { ...DECISION, status: "proposed" } });
   assert.equal(refused.isError, true);
-  assert.ok(
-    textOf(refused).includes(
-      "job `999` is not in the queue of this database, so a decision saved from it cannot record its job of origin; save it outside the job",
-    ),
-    textOf(refused),
-  );
+  assert.match(textOf(refused), new RegExp(`\`decision_save\` inside J-999: ${RULE.source}`));
   assert.equal(openDb(env).prepare("SELECT COUNT(*) AS n FROM decisions").get().n, 0);
 });

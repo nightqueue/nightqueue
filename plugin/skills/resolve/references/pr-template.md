@@ -4,9 +4,9 @@ Standard for the pull request that `/nightqueue:resolve` opens at the end of Pha
 The title and the body are filled with the artifacts of the run that is closing.
 Nothing is invented.
 
-The execution record of the run — phases, models, durations, lesson count, tier,
-proposed decisions — is NOT part of the pull request: that data lives in the telemetry
-and in the report of Phase 8.
+The execution record of the run — phases, models, durations, lesson count, tier — is
+NOT part of the pull request: that data lives in the telemetry and in the report of
+Phase 8.
 
 ## Which template applies
 
@@ -101,9 +101,6 @@ subsection — never a subsection without a file. `nightqueue run pr` answers
 | `## Cause` | `01-triage.md` `## Diagnosis`, `03-plan.md` | For a feature, write what motivated the change — no invented root cause. |
 | `## Changes` | `## Modified files` of `04-implementation.md`, described by the matching line of `**Files to create/modify:**` of `03-plan.md` | One bullet per file or per coherent area, at most 10 bullets, one line each. A path with no matching plan line (a deviation from the plan, or the trivial tier, which has no plan) carries the path alone or the coder's deviation note — never an invented description. More than 10 paths: group by directory or area, one bullet per area with the number of files. Every path of `## Modified files` appears in EXACTLY one bullet — alone or inside a group, never in both and never dropped. |
 | `## QA` | the files under `<RUN_DIR>/evidence/` | One `###` subsection per file-backed method that really ran, one bullet per test; `Not tested:` names what was left out (a `NOT MET` line of Phase 6.5, a `## Suggestions` item with `dedicated ticket: yes`, a part that depends on another system) and its risk. **Never drop a real open item to make the pull request look clean.** |
-
-A decision proposed by this run is NOT part of this body: it goes only to the Phase 8
-report, where the operator decides whether it deserves a ticket.
 
 ## Optional lines
 

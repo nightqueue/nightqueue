@@ -4,7 +4,7 @@ import { test } from "node:test";
 import { dbPath } from "../../src/config/paths.mjs";
 import { openDb } from "../../src/memory/db.mjs";
 import { openStore, openStoreReadOnly } from "../../src/store/open.mjs";
-import { makeHome, makeProject, projectIdOf, seedClosedJob } from "../../test-support/memory.mjs";
+import { makeHome, makeProject, projectIdOf } from "../../test-support/memory.mjs";
 
 test("one store per database path, and one per kind", (t) => {
   const env = makeHome(t, "store-open");
@@ -54,25 +54,6 @@ test("a read-only store answers the decision titles, a pure read", async (t) => 
     titles.map((row) => row.title),
     ["the queue owns the worktree"],
   );
-});
-
-test("a read-only store answers the proposals of a job and the ones left open on closed jobs", async (t) => {
-  const env = makeHome(t, "store-readonly-proposals");
-  makeProject(t, env, "alpha");
-  const writer = openStore(env);
-  const jobId = seedClosedJob(env, { prompt: "propose a rule" });
-  const saved = await writer.decisions.saveDecision({
-    projectId: projectIdOf(env, "alpha"),
-    title: "the queue owns the worktree",
-    context: "two runners raced",
-    decision: "one worktree per job",
-    status: "proposed",
-  });
-  openDb(env).prepare("UPDATE decisions SET job_id = ? WHERE id = ?").run(jobId, saved.id);
-  const store = openStoreReadOnly(env);
-
-  assert.deepEqual((await store.decisions.proposalsOfJob(jobId)).map((row) => row.number), [saved.number]);
-  assert.deepEqual((await store.decisions.staleProposals()).map((row) => [row.number, row.job_id]), [[saved.number, jobId]]);
 });
 
 test("closing a read-write store releases the instance and never closes the connection of the home", async (t) => {

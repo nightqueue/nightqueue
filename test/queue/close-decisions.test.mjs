@@ -68,30 +68,25 @@ function statusOf(env, id) {
   return getDecision(id, env).status;
 }
 
-test("close accepts every proposal of the closed job in one go, says so one line each, and names them in the notice", async (t) => {
-  const env = makeDecisionsHome(t, "close-decisions-accept");
+test("close leaves every proposal of the closed job proposed, prints no accepted line and names none in the notice", async (t) => {
+  const env = makeDecisionsHome(t, "close-decisions-untouched");
   const job = doneJob(env);
-  const other = doneJob(env, "another job");
   const first = proposal(env, { jobId: job, title: "leases are renewed by their owner" });
   const second = proposal(env, { jobId: job, title: "runners register in one table" });
-  const theirs = proposal(env, { jobId: other, title: "heartbeats are configuration" });
 
   const result = await runQueueClose(env, ["queue", "close", String(job), "--foreground"]);
 
   assert.equal(result.code, 0, result.err.join("\n"));
   assert.equal(getJob(job, env).status, "closed");
-  assert.equal(statusOf(env, first.id), "accepted");
-  assert.equal(statusOf(env, second.id), "accepted");
-  assert.equal(statusOf(env, theirs.id), "proposed");
+  assert.equal(statusOf(env, first.id), "proposed");
+  assert.equal(statusOf(env, second.id), "proposed");
   assert.ok(result.out.includes(`J-${job} closed: PR #7 merged as abc1234`), result.out.join("\n"));
-  assert.deepEqual(acceptedLines(result.out), [
-    `accepted D-${first.number}: leases are renewed by their owner`,
-    `accepted D-${second.number}: runners register in one table`,
-  ]);
-  assert.match(getJob(job, env).notice_md, new RegExp(`^Closed: PR #7 merged as abc1234 on \\d{4}-\\d{2}-\\d{2}, accepted D-${first.number}, D-${second.number}$`, "m"));
+  assert.deepEqual(acceptedLines(result.out), []);
+  assert.match(getJob(job, env).notice_md, /^Closed: PR #7 merged as abc1234 on \d{4}-\d{2}-\d{2}$/m);
+  assert.doesNotMatch(getJob(job, env).notice_md, /accepted/);
 });
 
-test("a detached close hands nothing down and its child accepts the proposals", async (t) => {
+test("a detached close hands nothing down and its child leaves the proposals proposed", async (t) => {
   const env = makeDecisionsHome(t, "close-decisions-detached");
   const job = doneJob(env);
   const first = proposal(env, { jobId: job, title: "leases are renewed by their owner" });
@@ -106,23 +101,10 @@ test("a detached close hands nothing down and its child accepts the proposals", 
   const child = await runQueueClose({ ...env, NIGHTQUEUE_CLOSE_WORKER: token }, calls[0].args.slice(1));
   assert.equal(child.code, 0, child.err.join("\n"));
   assert.equal(getJob(job, env).status, "closed");
-  assert.equal(statusOf(env, first.id), "accepted");
+  assert.equal(statusOf(env, first.id), "proposed");
 });
 
-test("a closed job with no proposal prints no accepted line and answers an empty `decisions` under --json", async (t) => {
-  const env = makeDecisionsHome(t, "close-decisions-none");
-  const text = doneJob(env);
-  const json = doneJob(env, "second");
-
-  const textResult = await runQueueClose(env, ["queue", "close", String(text), "--foreground"]);
-  const jsonResult = await runQueueClose(env, ["queue", "close", String(json), "--foreground", "--json"]);
-
-  assert.deepEqual(acceptedLines(textResult.out), []);
-  assert.equal(jsonResult.out.length, 1, jsonResult.out.join("\n"));
-  assert.deepEqual(JSON.parse(jsonResult.out[0]).decisions, []);
-});
-
-test("close --json prints one parseable line carrying the accepted decisions", async (t) => {
+test("close --json prints one parseable line with no `decisions` key, and the proposal stays proposed", async (t) => {
   const env = makeDecisionsHome(t, "close-decisions-json");
   const job = doneJob(env);
   const first = proposal(env, { jobId: job, title: "leases are renewed by their owner" });
@@ -133,11 +115,12 @@ test("close --json prints one parseable line carrying the accepted decisions", a
   assert.equal(result.out.length, 1, result.out.join("\n"));
   const payload = JSON.parse(result.out[0]);
   assert.equal(payload.job.status, "closed");
-  assert.deepEqual(payload.decisions, [{ job_id: job, ref: `D-${first.number}`, title: "leases are renewed by their owner" }]);
-  assert.equal(statusOf(env, first.id), "accepted");
+  assert.equal("decisions" in payload, false);
+  assert.deepEqual(Object.keys(payload).sort(), ["job", "outcome"]);
+  assert.equal(statusOf(env, first.id), "proposed");
 });
 
-test("--decisions is refused with the usage line, detached or not, and nothing closes", async (t) => {
+test("--decisions is an unknown option, detached or not, and nothing closes", async (t) => {
   const env = makeDecisionsHome(t, "close-decisions-removed");
   const job = doneJob(env);
   const first = proposal(env, { jobId: job, title: "leases are renewed by their owner" });
@@ -146,7 +129,7 @@ test("--decisions is refused with the usage line, detached or not, and nothing c
     const calls = [];
     const result = await runQueueClose(env, ["queue", "close", String(job), ...flags, "--decisions", "accept"], { calls });
     assert.equal(result.code, 1);
-    assert.match(result.err.join("\n"), /`--decisions` no longer exists.*usage: nightqueue queue close <id>/);
+    assert.match(result.err.join("\n"), /Unknown option '--decisions'/);
     assert.deepEqual(calls, [], "a refused flag spawned a close");
   }
   assert.equal(getJob(job, env).status, "done");
@@ -181,16 +164,17 @@ test("a job that ends cancelled because its pull request was closed touches no d
   assert.deepEqual(acceptedLines(result.out), []);
 });
 
-test("a decision write that fails rolls the close back: the job stays done and the proposal stays proposed", async (t) => {
-  const env = makeDecisionsHome(t, "close-decisions-write-fails");
+test("a close never writes a decision: with every decision update aborted by a trigger it still ends closed", async (t) => {
+  const env = makeDecisionsHome(t, "close-decisions-frozen");
   const job = doneJob(env);
   const first = proposal(env, { jobId: job, title: "leases are renewed by their owner" });
   openDb(env).exec("CREATE TRIGGER no_decision_update BEFORE UPDATE ON decisions BEGIN SELECT RAISE(ABORT, 'decisions are frozen'); END;");
 
   const result = await runQueueClose(env, ["queue", "close", String(job), "--foreground"]);
 
-  assert.equal(result.code, 1);
-  assert.equal(getJob(job, env).status, "done");
+  assert.equal(result.code, 0, result.err.join("\n"));
+  assert.equal(getJob(job, env).status, "closed");
+  assert.match(getJob(job, env).notice_md, /Closed: PR #7 merged as abc1234 on \d{4}-\d{2}-\d{2}$/);
   assert.equal(statusOf(env, first.id), "proposed");
   assert.deepEqual(acceptedLines(result.out), []);
 });

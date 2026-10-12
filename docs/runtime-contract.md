@@ -426,8 +426,8 @@ The twenty-eight MCP tools, with the parameters `nightqueue mcp` actually accept
 | `queue_cancel` | `job_id`, `reason?`, `stop?`, `release_worktree?` |
 | `queue_close` | `job_id`, `force?` |
 | `queue_retry` | `job_id`, `note?`, `fresh?`, `run?` |
-| `decision_save` | `project`, `title`, `context`, `decision`, `consequences?`, `status?` (`proposed`, `accepted`, `superseded`, `rejected`; default `accepted`) |
-| `decision_update` | `id` (a decision ref), `project?` (the owner of a `D-<n>`), `title?`, `context?`, `decision?`, `consequences?`, `status?`, `superseded_by?` (a decision ref) |
+| `decision_save` | `project`, `title`, `context`, `decision`, `consequences?`, `status?` (`proposed`, `accepted`, `superseded`, `rejected`; default `accepted`) (refused inside a queue job) |
+| `decision_update` | `id` (a decision ref), `project?` (the owner of a `D-<n>`), `title?`, `context?`, `decision?`, `consequences?`, `status?`, `superseded_by?` (a decision ref) (refused inside a queue job) |
 | `decision_list` | `project`, `status?` |
 | `decision_recall` | `project`, `query?`, `limit?` (1-20); or `id` (a decision ref) alone for one decision whole, whatever its status |
 | `run_phase_done` | `phase`, `artifact?`, `verdict?`, `note?`, `project?`, `slug?` |
@@ -481,7 +481,7 @@ whole prompt of one /resolve subagent, rendered from the templates under
 every value from it: the tier and type `nightqueue run start` recorded, the `## Brief` of
 `<RUN_DIR>/00-brief.md` (refused, naming the path, when it is missing), the routing row of
 `src/queue/routing.mjs`, the same context block `context_for_phase` answers (with the same
-per-run lesson exclusion) and, for the architect, the standing decisions. `coder` and
+per-run lesson exclusion); no target carries a decisions section. `coder` and
 `verifier` render the fast-track prompt on `trivial`/`simple`. A placeholder the run cannot
 fill is an error, never a half prompt; a target the tier does not route is rendered with
 an `open_items` line.
@@ -622,7 +622,7 @@ job GitHub still shows and counts as pending. The same head aborted again under 
 a refused re-run or a check with no run id stops the close with
 `checks-aborted`, and `force` lists such checks as `aborted`. A pull request
 closed without merge ends the close by cancelling the job, one merged by hand is recorded as
-`merged outside a close`, and the settle step accepts the job's proposed decisions in the same write that closes it. Inside a job
+`merged outside a close`, and the settle step never writes a decision: a `proposed` row stays `proposed`. Inside a job
 it is refused, like the CLI (see [Queue](queue.md#closing-a-job)).
 
 Worktree disposal after a merged close: the settle step removes the job's worktree with
@@ -654,9 +654,9 @@ suite green; pushed <a> -> <b>`. Everything else aborts the rebase and stops the
 (`{ status: "resolved" | "unresolved" | "not-eligible", reason?, hunks?, files? }`).
 
 Inside a job, a tool that takes a free id only reaches its own: `queue_retry`
-retries the job it is running, and `decision_update` accepts
-only ids belonging to the project of that job - another project's id is refused
-naming both projects, and nothing is written. Outside a job none of these restrictions apply.
+retries the job it is running. `decision_save` and `decision_update` are refused
+inside a job whatever the id - decisions are the operator's record, written only outside a
+queue run - and nothing is written. Outside a job none of these restrictions apply.
 
 Every optional parameter accepts an explicit `null` and treats it exactly like
 an absent one, so a caller that fills its whole argument object never gets an

@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { STANDING_HEADING } from "../../src/memory/decisions.mjs";
-import { DECISIONS_HEADING, jobRecalls, LESSONS_HEADING, MEMORY_HEADING } from "../../src/queue/recalls.mjs";
+import { jobRecalls, LESSONS_HEADING, MEMORY_HEADING } from "../../src/queue/recalls.mjs";
 import { agentToolUseEvent, attemptMarker, taskStartedEvent, toolResultEvent, toolUseEvent } from "../../test-support/streams.mjs";
 
 const LESSON = "mcp__nightqueue__lesson_recall";
@@ -144,7 +143,7 @@ test("a failed recall keeps the tool's error, and other tools or an empty log gi
 const PHASE_PROMPT = "mcp__nightqueue__phase_prompt";
 const CONTEXT = "mcp__nightqueue__context_for_phase";
 
-// A rendered phase prompt: a brief with decision-like lines, the three memory sections, the in-full repeats and the proposed list.
+// A rendered phase prompt: a brief with decision-like lines, the two memory sections, and an old log's decision sections.
 function promptText({ lessons = ["L5"], memories = ["M9"], decisions = ["D-7"] } = {}) {
   return [
     "## File handoff (contract — read first)",
@@ -155,7 +154,7 @@ function promptText({ lessons = ["L5"], memories = ["M9"], decisions = ["D-7"] }
     ...lessons.map((ref) => `- [${ref}] lesson ${ref}`),
     `## ${MEMORY_HEADING}`,
     ...memories.map((ref) => `- [${ref}] memory ${ref}`),
-    `## ${DECISIONS_HEADING}`,
+    "## Standing decisions",
     ...decisions.map((ref) => `- ${ref} decision ${ref}`),
     "### In full (the 8 closest to this Brief)",
     ...decisions.map((ref) => `- ${ref} decision ${ref} — the whole text`),
@@ -170,7 +169,7 @@ function phasePrompt(id, { target, check, parentToolUseId, ...sections }) {
   return [toolUseEvent({ name: PHASE_PROMPT, id, input: { target }, parentToolUseId }), jsonResult(id, answer, { parentToolUseId })];
 }
 
-test("a phase_prompt is a context recall: hits from the three memory sections only, each ref once, phase from its check", async () => {
+test("a phase_prompt is a context recall: hits from the lessons and memory sections only, each ref once, phase from its check", async () => {
   const log = logOf([
     attemptMarker(1),
     ...phasePrompt("p1", { target: "architect", check: "03", lessons: ["L5"], memories: ["M9"], decisions: ["D-7", "ACME/D-3"] }),
@@ -185,22 +184,13 @@ test("a phase_prompt is a context recall: hits from the three memory sections on
   assert.deepEqual(architect.hits, [
     { ref: "L5", title: "lesson L5", score: null, kind: "lesson" },
     { ref: "M9", title: "memory M9", score: null, kind: "memory" },
-    { ref: "D-7", title: "decision D-7", score: null, kind: "decision" },
-    { ref: "ACME/D-3", title: "decision ACME/D-3", score: null, kind: "decision" },
   ]);
   assert.deepEqual([qa.phase, runtime.phase], [5, 6]);
 });
 
-test("an org decision whose key starts with L or M is still a decision, never a lesson or a memory", async () => {
+test("a context call that hands over only an old log's standing decisions yields no context recall", async () => {
   const log = logOf([attemptMarker(1), ...phasePrompt("p1", { target: "architect", check: "03", lessons: [], memories: [], decisions: ["MKT/D-9", "LNK/D-3"] })]);
-  const [context] = await jobRecalls(log);
-  assert.deepEqual(
-    context.hits.map((hit) => [hit.ref, hit.kind]),
-    [
-      ["MKT/D-9", "decision"],
-      ["LNK/D-3", "decision"],
-    ],
-  );
+  assert.deepEqual(await jobRecalls(log), []);
 });
 
 test("a context_for_phase recall reads its block and takes its phase and agent from its target, the caller only without one", async () => {
@@ -260,7 +250,7 @@ test("context calls of the same phase and agent merge into the first one, with t
   );
   assert.deepEqual(
     recalls[1].hits.map((hit) => hit.ref),
-    ["L1", "M9", "D-7", "D-24", "L2", "D-58", "D-57"],
+    ["L1", "M9", "L2"],
   );
 });
 
@@ -287,10 +277,6 @@ test("context calls of another agent or another phase stay apart, and memory rec
       ["d2", "orchestrator", null],
     ],
   );
-});
-
-test("the decisions heading a context call is read by is the one the runtime writes", () => {
-  assert.equal(DECISIONS_HEADING, STANDING_HEADING);
 });
 
 test("a log of tens of megabytes is scanned without stalling the event loop, every recall kept", async () => {

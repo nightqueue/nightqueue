@@ -22,27 +22,6 @@ Delivery constraints (the limit of what may be delivered — NEVER design; omit 
 Project conventions: read `{{REPOSITORY}}/CLAUDE.md` yourself via Read if it exists (the orchestrator no longer reads repository files).
 
 {{>_context}}
-{{#STANDING_TITLES}}
-## Standing decisions
-{{STANDING_TITLES}}
-{{#STANDING_DETAIL}}
-### In full (the 8 closest to this Brief)
-{{STANDING_DETAIL}}
-{{/STANDING_DETAIL}}
-These are the standing constraints of the project and of its org, decided before this task
-(a ref written `<ORGKEY>/D-<n>` belongs to the org and binds every project of it).
-They are binding context, never a proposed solution: a design that contradicts one either
-follows the decision or takes the conflict to `## Requires user confirmation` naming its
-ref.
-
-{{/STANDING_TITLES}}
-{{#PROPOSED_TITLES}}
-## Proposed (not binding)
-{{PROPOSED_TITLES}}
-These decisions were proposed and nobody accepted them yet: they bind nothing, and a design
-may go against them without a confirmation.
-
-{{/PROPOSED_TITLES}}
 {{>_shell-rule}}
 
 {{>_footer}}

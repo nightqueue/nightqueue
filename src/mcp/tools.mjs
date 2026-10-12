@@ -36,7 +36,7 @@ import { memoryView } from "../memory/memory.mjs";
 import { jobRef, parseJobRef, requireKey } from "../memory/refs.mjs";
 import { startAdvisoryLines } from "../queue/advisory.mjs";
 import { claimingRunners, noRunnerWait, onceOnlyLine, parkedBacklogLine, pausedRunnerLine, pendingJobs, runnersOnline, runnersOnlineSplit, staleRuntimeHint, windowWaitingLine } from "../queue/hints.mjs";
-import { refuseHomeWriteInsideJob } from "../queue/home-guard.mjs";
+import { refuseDecisionWriteInsideJob, refuseHomeWriteInsideJob } from "../queue/home-guard.mjs";
 import { blockerLines } from "../queue/claim.mjs";
 import { lastMaintenance } from "../queue/maintenance.mjs";
 import { jobIdOfPrUrl } from "../queue/pr-lookup.mjs";
@@ -99,7 +99,7 @@ const SERVER_INSTRUCTIONS = [
   "Every job ends as an open pull request (`done`) or stopped at a gate with its reason in `notice_md`.",
   "At a gate, read `notice_md` whole with `queue_status`, present it to the person, and answer with `queue_retry` only after the person answers; a done job is closed with `queue_close`.",
   "Call `queue_status` to see what is pending before suggesting a batch.",
-  "decisions are the project's standing constraints - recall them before proposing architecture and save one when the user settles a design question",
+  "decisions are the operator's record of the project's standing constraints - recall them before proposing architecture and save one, outside a queue run, when the user settles a design question; inside a queue job they are read-only context and never bind the run",
   "a constraint the conversation states for two or more repos of the same org is saved ONCE with `org`, never once per repo: a project reads its own decisions and its org's",
   ...trackerInstructionLines(),
 ].join("\n");
@@ -149,19 +149,6 @@ function refuseRegistrationInsideJob(cwd, env) {
 async function callerProject(own, env) {
   const job = await openStore(env).jobs.getJob(own);
   return job?.project_id ? { id: job.project_id, name: job.project } : null;
-}
-
-// Refuses a row of ANOTHER owner from inside an unattended run: a job may only rewrite the decisions of its own project, never its org's.
-async function requireOwnProject({ kind, id, row }, env) {
-  const own = callerJobId(env);
-  if (own === null) return;
-  const mine = await callerProject(own, env);
-  if (mine !== null && row?.scope !== "org" && mine.id === (row?.project_id ?? null)) return;
-  throw new UserError(
-    `refusing to update ${kind} \`${id}\` from inside job \`${own}\`: it belongs to ${ownerDescription(row)}, ` +
-      `not \`${mine?.name ?? "unknown"}\`; an unattended run may only update its own project, ` +
-      "so ask the operator to do it outside the queue",
-  );
 }
 
 // Refuses to write a run named from the outside while inside a job: the state.json of a run belongs to the job that owns it.
@@ -318,7 +305,6 @@ function savedDecisionAnswer(saved) {
     scope: saved.scope,
     owner: saved.org ?? saved.project,
     ...(saved.superseded.length ? { superseded: saved.superseded } : {}),
-    ...(saved.jobId !== null ? { job_id: saved.jobId } : {}),
     ...(saved.statusDefaulted ? { status_defaulted: true } : {}),
   };
 }
@@ -806,7 +792,7 @@ function toolDefinitions(env, state) {
       name: "phase_prompt",
       config: {
         description:
-          "The complete prompt of one /resolve subagent for THIS run, rendered by the runtime from the plugin's templates: the handoff contract, the Brief of `<RUN_DIR>/00-brief.md`, the routing of the run's tier, the context block and, for the architect, the standing decisions. " +
+          "The complete prompt of one /resolve subagent for THIS run, rendered by the runtime from the plugin's templates: the handoff contract, the Brief of `<RUN_DIR>/00-brief.md`, the routing of the run's tier and the context block. " +
           "Pass `prompt` to the `Agent` tool verbatim, with the answered `subagent_type` and `model`, then gate the answered `artifact` with `nightqueue run check <check>`. " +
           "`coder` and `verifier` render the fast-track prompt on trivial/simple; `note` is relaunch context (a fix loop, a re-architect, a re-triage), `raw_evidence` is the bug's raw error block (triager only), `group` the hypotheses of one prover. " +
           "Inside a job the run is resolved from the job's own row — passing `project` or `slug` there is refused; outside a job both are required.",
@@ -1181,8 +1167,7 @@ function toolDefinitions(env, state) {
           "Only a `done` job with a pull request is closed. `closed`, `running`, `pending`, `gate`, `failed`, `cancelled`, a `done` job with no pull request and a job already being closed under a live lease are refused by name, and nothing is written. Refused inside an unattended run. " +
           "A close that stopped keeps its checklist and its reason on the job (`close`, `close_status: failed`); calling this tool again resumes it at the step that failed. " +
           "`force` skips the pull request checks and the rebase test suite only, and never runs the merger; conflicts, a pull request that is not the job's own and the job's status still stop the close. " +
-          "A pull request closed without merge cancels the job and releases its worktree; one merged by hand is recorded as `merged outside a close`. " +
-          "The settle step accepts every decision the job proposed, in the same write that closes it, and the closed notice names their refs.",
+          "A pull request closed without merge cancels the job and releases its worktree; one merged by hand is recorded as `merged outside a close`.",
         inputSchema: { job_id: jobIdField, force: z.boolean().nullable().optional() },
       },
       handler: async (args) => {
@@ -1223,7 +1208,7 @@ function toolDefinitions(env, state) {
           "Before saving, the title is searched against the owner's accepted and proposed decision titles, and the title plus decision text against their meaning. " +
           'When it overlaps any, nothing is saved and the answer is `status: "needs_review"` with `candidates` (id, number, title, status, via). ' +
           "Save again naming EVERY candidate by its `number` or its `ref` (a ref must name a decision of the same owner): in `supersedes` the ones this decision replaces WHOLE (they become `superseded` and point at the new row, so restate in the new text what still holds), in `unrelated` the ones it leaves untouched. " +
-          "Any candidate left unnamed refuses again. Inside a queue job `supersedes` is refused, and a job proposes at most one decision.",
+          "Any candidate left unnamed refuses again. Refused inside a queue job: decisions are the operator's record, written only outside a run.",
         inputSchema: {
           project: optionalText,
           org: optionalText,
@@ -1237,6 +1222,7 @@ function toolDefinitions(env, state) {
         },
       },
       handler: async (args) => {
+        refuseDecisionWriteInsideJob(env, "`decision_save`");
         const store = openStore(env);
         const owner = ownerRef(await ownerArgs(args, env));
         const saved = await store.decisions.saveReviewedDecision({
@@ -1248,7 +1234,6 @@ function toolDefinitions(env, state) {
           status: args.status,
           supersedes: await store.decisions.ownDecisionNumbers(args.supersedes, owner),
           unrelated: await store.decisions.ownDecisionNumbers(args.unrelated, owner),
-          jobId: callerJobId(env),
         });
         return saved.needsReview ? needsReviewAnswer(saved.candidates) : savedDecisionAnswer(saved);
       },
@@ -1258,9 +1243,10 @@ function toolDefinitions(env, state) {
       config: {
         description:
           "Changes a decision by its ref in `id` (`D-7`, `DLW/D-3`, `NQ/D-7`): accept or reject a proposed one, correct its text, or point `superseded_by` at the ref of the decision that replaced it. " +
-          "A bare `D-<n>` is read in `project` (the registered NAME), or inside a job in the job's project; `superseded_by` is read in the updated decision's owner. " +
+          "A bare `D-<n>` is read in `project` (the registered NAME); `superseded_by` is read in the updated decision's owner. " +
           "Only the fields present are touched; an explicit `null` is treated exactly like an absent one. " +
-          '`status: "superseded"` requires `superseded_by`, unless the decision already names its successor.',
+          '`status: "superseded"` requires `superseded_by`, unless the decision already names its successor. ' +
+          "Refused inside a queue job: decisions are the operator's record, written only outside a run.",
         inputSchema: {
           id: decisionRefInput,
           project: optionalText,
@@ -1273,10 +1259,10 @@ function toolDefinitions(env, state) {
         },
       },
       handler: async (args) => {
+        refuseDecisionWriteInsideJob(env, "`decision_update`");
         const store = openStore(env);
         const id = await store.decisions.decisionIdOfRef(args.id, await decisionUpdateContext(args, env));
         const current = await store.decisions.getDecision(id);
-        if (current) await requireOwnProject({ kind: "decision", id: String(args.id).trim(), row: current }, env);
         const row = await store.decisions.updateDecision(id, {
           title: args.title,
           context: args.context,
