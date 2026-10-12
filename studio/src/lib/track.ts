@@ -1,4 +1,4 @@
-import { elapsedClock, formatDurationMs } from "./format.ts";
+import { formatDurationMs } from "./format.ts";
 import { phaseHex, phaseVar } from "./phase-colors.ts";
 import type { AttemptRow, PhaseAttempt, TimelinePhase } from "./types";
 
@@ -27,14 +27,13 @@ function skippedCaption(phase: TimelinePhase, tier: string | null): string {
   return record.reason ? `skipped · ${record.by}: ${record.reason}` : `skipped · ${record.by}`;
 }
 
-// The time caption of one phase: `start · duration` with its attempts past one, `start · gate at mm:ss` where the gate stopped it, `—` before it ran, why it was skipped.
-export function phaseCaption(phase: TimelinePhase, { runElapsedMs, clockMs, tier = null }: CaptionClocks): string {
+// The time caption of one phase: its active time with its attempts past one and a `gate` word where the gate stopped it, blank before it ran, why it was skipped.
+export function phaseCaption(phase: TimelinePhase, { runElapsedMs, tier = null }: CaptionClocks): string {
   if (phase.state === "skipped") return skippedCaption(phase, tier);
-  if (phase.state === "pending") return "—";
-  const start = elapsedClock(phase.startMs ?? null);
-  if (phase.state === "gate") return `${start} · gate at ${elapsedClock(clockMs)}`;
-  const caption = `${start} · ${formatDurationMs(spentMs(phase, runElapsedMs))}`;
-  return phase.attempts > 1 ? `${caption} · ${phase.attempts} att.` : caption;
+  if (phase.state === "pending") return "";
+  const spent = formatDurationMs(spentMs(phase, runElapsedMs));
+  const caption = phase.attempts > 1 ? `${spent} · ${phase.attempts} att.` : spent;
+  return phase.state === "gate" ? `gate · ${caption}` : caption;
 }
 
 // The outcome an attempt ended at, shown only on the phase it stopped in and only when it did not end done.

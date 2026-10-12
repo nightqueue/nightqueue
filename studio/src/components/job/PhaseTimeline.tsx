@@ -192,7 +192,7 @@ function PhaseSegment({ phase, caption, attemptsTitle }: { phase: TimelinePhase;
         <PhaseIcon state={phase.state} />
         <span className="truncate">{label}</span>
       </div>
-      <div className={`truncate font-mono text-xs whitespace-nowrap ${TIME_STYLE[phase.state]}`} title={attemptsTitle || caption}>
+      <div className={`min-h-4 truncate font-mono text-xs whitespace-nowrap ${TIME_STYLE[phase.state]}`} title={attemptsTitle || caption}>
         {caption}
       </div>
       {!skipped && <div className={`font-mono text-xs whitespace-nowrap ${phase.state === "now" ? "text-accent" : "text-muted"}`}>{phaseTokens(phase)}</div>}

@@ -16,22 +16,22 @@ function attemptRow(attempt, outcome) {
   return { attempt, worker: null, session_id: null, started_at: "2026-09-07T19:50:00Z", finished_at: "2026-09-07T20:00:00Z", duration_s: 600, outcome, exit_reason: null, spawns: 0, tokens_in: null, tokens_out: null, cache_read: null, cache_creation: null, cost_usd: null, fresh: true, backfilled: false };
 }
 
-test("a gated phase reads its start and the job clock at the gate, never a duration", () => {
+test("a gated phase reads its active time, never a clock position", () => {
   const gated = phase({ state: "gate", startMs: 150000, durationMs: 411000 });
-  assert.equal(phaseCaption(gated, { runElapsedMs: null, clockMs: 561000 }), "02:30 · gate at 09:21");
+  assert.equal(phaseCaption(gated, { runElapsedMs: null, clockMs: 561000 }), "gate · 6m51s");
 });
 
 test("a phase that ran in two attempts reads start, summed duration and the attempt count", () => {
   const twice = phase({ durationMs: 663000, attempts: 2 });
-  assert.equal(phaseCaption(twice, { runElapsedMs: null, clockMs: null }), "01:30 · 11m03s · 2 att.");
-  assert.equal(phaseCaption(phase(), { runElapsedMs: null, clockMs: null }), "01:30 · 1m00s");
+  assert.equal(phaseCaption(twice, { runElapsedMs: null, clockMs: null }), "11m3s · 2 att.");
+  assert.equal(phaseCaption(phase(), { runElapsedMs: null, clockMs: null }), "1m0s");
 });
 
 test("a pending phase reads a dash, and a running phase counts its open part", () => {
-  assert.equal(phaseCaption(phase({ state: "pending", startMs: null, attempts: 0, byAttempt: [] }), { runElapsedMs: null, clockMs: null }), "—");
+  assert.equal(phaseCaption(phase({ state: "pending", startMs: null, attempts: 0, byAttempt: [] }), { runElapsedMs: null, clockMs: null }), "");
   const running = phase({ state: "now", durationMs: 0, liveSinceMs: 10000 });
   assert.equal(spentMs(running, 40000), 30000);
-  assert.equal(phaseCaption(running, { runElapsedMs: 40000, clockMs: null }), "01:30 · 30s");
+  assert.equal(phaseCaption(running, { runElapsedMs: 40000, clockMs: null }), "30s");
 });
 
 test("the per-attempt hover names each attempt's time and the outcome of the attempt that stopped in the phase", () => {

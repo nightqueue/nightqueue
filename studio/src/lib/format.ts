@@ -7,25 +7,12 @@ export function isoMs(value: string | null | undefined): number | null {
   return Number.isFinite(ms) ? ms : null;
 }
 
-// A duration as the runtime's formatDuration prints it: `9s`, `52m10s`, `1h02m`; `-` when unknown.
+// The one duration format of the studio, minutes and seconds only: `45s`, `5m0s`, `125m3s`; `-` when unknown.
 export function formatDurationMs(ms: number | null): string {
   if (ms === null || !Number.isFinite(ms) || ms < 0) return "-";
   const seconds = Math.round(ms / 1000);
   if (seconds < 60) return `${seconds}s`;
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m${String(seconds % 60).padStart(2, "0")}s`;
-  return `${Math.floor(minutes / 60)}h${String(minutes % 60).padStart(2, "0")}m`;
-}
-
-// The track's active time: always to the second — `9s`, `4m09s`, `1h28m32s`; `-` when unknown. Unlike formatDurationMs it keeps seconds past an hour.
-export function formatActiveMs(ms: number | null): string {
-  if (ms === null || !Number.isFinite(ms) || ms < 0) return "-";
-  const seconds = Math.round(ms / 1000);
-  if (seconds < 60) return `${seconds}s`;
-  const minutes = Math.floor(seconds / 60);
-  const ss = String(seconds % 60).padStart(2, "0");
-  if (minutes < 60) return `${minutes}m${ss}s`;
-  return `${Math.floor(minutes / 60)}h${String(minutes % 60).padStart(2, "0")}m${ss}s`;
+  return `${Math.floor(seconds / 60)}m${seconds % 60}s`;
 }
 
 // The milliseconds a job ran: start to finish, or start to now while it runs; null before it started.

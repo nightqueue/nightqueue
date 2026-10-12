@@ -131,16 +131,23 @@ function TimingLine({ job }: { job: JobDetail }) {
   return <StoppedLine job={job} />;
 }
 
+// The close pipeline's progress under the origin line, only while the close runs.
+function ClosingBadge({ close }: { close: CloseState }) {
+  if (!close.closing) return null;
+  return (
+    <span className="inline-flex w-fit max-w-full items-center rounded-full bg-[#231c36] px-2 py-0.5 text-sm text-closed">{close.closingText ?? "closing…"}</span>
+  );
+}
+
 // The close slot of a done job: the primary Close job, or the close pipeline's progress while it runs.
 function CloseAction({ job, close }: { job: JobDetail; close: CloseState }) {
   if (job.status !== "done") return null;
-  if (close.closing) return <span className="inline-flex min-h-9 items-center text-sm text-muted">{close.closingText ?? "closing…"}</span>;
   const noPr = !job.pr_url;
   return (
-    <span title={noPr ? NO_PR_TOOLTIP : undefined}>
-      <Button variant="primary" disabled={noPr} onClick={close.onClose}>
+    <span title={noPr && !close.closing ? NO_PR_TOOLTIP : undefined}>
+      <Button variant="primary" className="w-28" disabled={noPr || close.closing} onClick={close.onClose}>
         <ActionIcon icon={GitMerge} size={16} />
-        Close job
+        {close.closing ? "Closing" : "Close job"}
       </Button>
     </span>
   );
@@ -180,7 +187,7 @@ function ResumeInTerminal({ job }: { job: JobDetail }) {
 // The header actions: raw log, resume in a terminal, copy the session command, close, cancel.
 function HeaderActions({ job, actions, onCancel }: { job: JobDetail; actions: HeaderStatusActions; onCancel: () => void }) {
   return (
-    <div className="flex shrink-0 flex-wrap gap-2 md:ml-auto">
+    <div className="flex flex-wrap justify-end gap-2">
       {hasLog(job) ? (
         <a href={rawLogUrl(job)} target="_blank" rel="noreferrer" className="inline-flex min-h-9 items-center rounded-md px-3 font-medium text-muted hover:bg-button hover:text-fg">
           Raw log
@@ -207,22 +214,24 @@ function HeaderActions({ job, actions, onCancel }: { job: JobDetail; actions: He
 export function JobHeader({ job, statusLabel, closeState, runTier, actions, onCancel }: JobHeaderProps) {
   const tier = job.tier ?? runTier;
   return (
-    <section aria-label="job header" className="flex flex-col gap-4 md:flex-row md:items-start">
+    <section aria-label="job header" className="flex flex-col gap-4">
+      <HeaderActions job={job} actions={actions} onCancel={onCancel} />
       <div className="flex min-w-0 flex-col gap-1.5">
+        <h1 className="line-clamp-2 text-xl font-semibold break-words">
+          <span className="font-mono font-medium">{jobRef(job.id)}</span> - {jobTitle(job)}
+        </h1>
         <div className="flex flex-wrap items-center gap-2.5">
-          <span className="font-mono text-xl font-medium">{jobRef(job.id)}</span>
-          <span className="min-w-0 text-xl font-semibold break-words">{jobTitle(job)}</span>
           <StatusPill status={job.status} closeState={closeState} closing={actions.close.closing} label={statusLabel} />
           {tier && <HeaderChip>{tier}</HeaderChip>}
           <HeaderChip>{`p${job.priority}`}</HeaderChip>
           <HeaderChip title={BUDGET_COUNTER_TOOLTIP}>{`attempt ${job.attempts} / ${job.max_attempts}`}</HeaderChip>
         </div>
         <OriginLine job={job} />
+        <ClosingBadge close={actions.close} />
         <div className="text-sm break-words text-muted">
           <TimingLine job={job} />
         </div>
       </div>
-      <HeaderActions job={job} actions={actions} onCancel={onCancel} />
     </section>
   );
 }
