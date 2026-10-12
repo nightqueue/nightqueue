@@ -30,7 +30,7 @@ halfway.
 per root group of the hypotheses (never one per symptom). The `description` of each prover's Agent call MUST start with
 `H<N> (group: <group>): ` — the cockpit identifies each prover lane and its verdict by that
 prefix. Single header of the phase: `🛡️ QA-GUARDIAN · complex · PROVERS ×N · ...`. On a resume
-whose block says `From stage: qa-stage-b`, `05a-qa-analyst.md` is already on disk: read it and
+whose block says `From stage: qa-stage-b`, `05a-qa-analyst.md` is already on disk: read its last `## Round` and
 start from here, without rebuilding stage A. The prompt of each one: `phase_prompt` with
 `target: "qa-prover"` and `group` = the IDs/label of its same-root group, passed verbatim.
 
@@ -48,5 +48,7 @@ contract that Phase 6 consumes:
 - Aggregate verdict: any proven break → `NEEDS FIX`; nothing proven and no open item →
   `APPROVED`.
 
-Write the consolidated report to `05-qa.md` via Write and run `nightqueue run check 05`
-(the artifact gate, step 5.2) — the artifact Phase 6 and Phase 8 re-read via Read.
+If `05-qa.md` exists, Read it and Write it back with its earlier rounds unchanged plus
+`## Round <n>` (n = its highest round + 1) holding this consolidation; otherwise `## Round 1`.
+Then run `nightqueue run check 05` (the artifact gate, step 5.2, which reads the last round) —
+the artifact Phase 6 and Phase 8 re-read via Read, its last `## Round`.

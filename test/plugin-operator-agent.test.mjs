@@ -36,11 +36,18 @@ test("the operator agent is `nightqueue-operator`, and `nightqueue open` address
 });
 
 test("the operator's tools carry no edit tool, and the two web reads: it coordinates and never edits", () => {
-  assert.deepEqual(toolsOf(OPERATOR), ["Agent", "Read", "Grep", "Glob", "Bash", "WebFetch", "WebSearch", "TodoWrite", "SendMessage", "mcp__nightqueue__*"]);
+  assert.deepEqual(toolsOf(OPERATOR), ["Agent", "Read", "Grep", "Glob", "Bash", "WebFetch", "WebSearch", "TodoWrite", "SendMessage", "Skill", "mcp__nightqueue__*"]);
 });
 
-test("operator.md is at most 160 lines, names D-58 and its three subagents, and holds nothing of the operator runs", () => {
-  assert.ok(OPERATOR.split("\n").length <= 160, `operator.md has ${OPERATOR.split("\n").length} lines`);
+test("the operator offers the reflect skill in its Reflect section, saving with `project`", () => {
+  const section = OPERATOR.split("\n## Reflect\n")[1]?.split("\n## ")[0] ?? "";
+  assert.ok(section.includes("`nightqueue:reflect`"), "operator.md has no Reflect section naming nightqueue:reflect");
+  assert.ok(section.includes("Only confirmed candidates are saved."));
+  assert.ok(OPERATOR.includes("`lesson_save`, `memory_save`,"));
+});
+
+test("operator.md is at most 170 lines, names D-58 and its three subagents, and holds nothing of the operator runs", () => {
+  assert.ok(OPERATOR.split("\n").length <= 170, `operator.md has ${OPERATOR.split("\n").length} lines`);
   assert.ok(OPERATOR.includes("D-58"));
   for (const role of OPERATOR_ROLES) assert.ok(OPERATOR.includes(`nightqueue:${role}`), `operator.md does not name nightqueue:${role}`);
   for (const gone of ["RUN_DIR", "run_set", "PRIOR RUN", "operator-qa", "run check", "nightqueue:triager", "nightqueue:architect", "nightqueue:verifier"]) {

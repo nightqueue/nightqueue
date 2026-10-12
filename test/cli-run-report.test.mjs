@@ -4,12 +4,11 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { run } from "../src/cli/index.mjs";
 import { jobLogPath, logsDir, runDir } from "../src/config/paths.mjs";
-import { savedLessons } from "../src/cli/run-report.mjs";
 import { openDb } from "../src/memory/db.mjs";
 import { addJob } from "../src/memory/jobs.mjs";
 import { recordOutcome, recordPhaseDone, recordPrUrl, recordRunFields, recordTermination } from "../src/queue/run-state.mjs";
 import { ensureProject, makeHome, makeProject } from "../test-support/memory.mjs";
-import { attemptMarker, toNdjson, toolResultEvent, toolUseEvent } from "../test-support/streams.mjs";
+import { toNdjson, toolResultEvent, toolUseEvent } from "../test-support/streams.mjs";
 
 const SLUG = "add-slugify";
 const PR = "https://github.com/acme/api/pull/7";
@@ -61,7 +60,7 @@ const COMPLEX_CLEAN = [
   ["commit", "ok", "committed"],
 ];
 
-test("a clean simple run prints the compact line, the lesson audit and `Happy: yes`, with no execution table", async (t) => {
+test("a clean simple run prints the compact line and `Happy: yes`, with no execution table", async (t) => {
   const { env, id, run: target } = makeRun(t, "report-simple-happy", { tier: "simple" });
   recordPhases(target, [
     ["implementation", "ok", "slugify added"],
@@ -74,7 +73,6 @@ test("a clean simple run prints the compact line, the lesson audit and `Happy: y
     "",
     `Verification ✅ · PR ${PR}`,
     "",
-    "Lessons saved: 0",
     "Happy: yes",
   ]);
 });
@@ -195,27 +193,19 @@ test("a run with no delivery recorded is not happy", async (t) => {
   assert.ok(lines.includes("Happy: no — 7 Commit/PR ⚠️ no pull request recorded"), lines.join("\n"));
 });
 
-test("the lesson audit counts the orchestrator's successful `lesson_save` calls of the last attempt only", async (t) => {
-  const save = (id, target, extra = {}) => toolUseEvent({ name: "mcp__nightqueue__lesson_save", id, input: { title: "x", target }, ...extra });
-  const log = [
-    attemptMarker(1),
-    toNdjson([save("toolu_old", "qa")]),
-    attemptMarker(2),
-    toNdjson([
-      save("toolu_1", "coder"),
-      toolResultEvent({ toolUseId: "toolu_1" }),
-      save("toolu_2", "architect"),
-      toolResultEvent({ toolUseId: "toolu_2", isError: true }),
-      save("toolu_3", "verifier", { parentToolUseId: "toolu_lane" }),
-      save("toolu_4", "coder"),
-    ]),
-  ].join("\n");
-  assert.deepEqual(savedLessons(log), { count: 2, targets: ["coder"] });
-
-  const { env, id, run: target } = makeRun(t, "report-lessons", { tier: "simple" });
-  recordPhases(target, [["implementation", "ok", "done"], ["verification", "PASSED", "green"]]);
-  recordDelivery(target);
-  mkdirSync(logsDir(env), { recursive: true });
-  writeFileSync(jobLogPath(id, env), log);
-  assert.ok((await report(env, id)).includes("Lessons saved: 2 (targets: coder)"));
+test("the report carries no lesson audit, even when the stream has `lesson_save` calls: Phase 9's reflector reports the saves", async (t) => {
+  const log = toNdjson([
+    toolUseEvent({ name: "mcp__nightqueue__lesson_save", id: "toolu_1", input: { title: "x", target: "coder" } }),
+    toolResultEvent({ toolUseId: "toolu_1" }),
+  ]);
+  for (const tier of ["simple", "complex"]) {
+    const { env, id, run: target } = makeRun(t, `report-no-lessons-${tier}`, { tier });
+    recordPhases(target, tier === "simple" ? [["implementation", "ok", "done"], ["verification", "PASSED", "green"]] : COMPLEX_CLEAN);
+    recordDelivery(target);
+    mkdirSync(logsDir(env), { recursive: true });
+    writeFileSync(jobLogPath(id, env), log);
+    const lines = await report(env, id);
+    assert.equal(lines.some((line) => line.includes("Lessons saved")), false, lines.join("\n"));
+    assert.equal(lines.at(-1), "Happy: yes", tier);
+  }
 });

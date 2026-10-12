@@ -14,8 +14,43 @@ export const PHASE_ARTIFACTS = new Map([
   ["02", { file: "02-explore.md", sections: [] }],
   ["03", { file: "03-plan.md", sections: ["## Implementation plan", "## Assumptions", "## Pre-mortem", "## Identified risks"] }],
   ["04", { file: "04-implementation.md", sections: [FILE_LIST] }],
-  ["05a", { file: "05a-qa-analyst.md", sections: ["## Break hypotheses", "## Test recipe"] }],
-  ["05", { file: "05-qa.md", sections: ["## Validated risks"] }],
-  ["06", { file: "06-verification.md", sections: ["## Verification"] }],
-  ["06.5", { file: "06-runtime.md", sections: ["## Runtime verdict"] }],
+  ["05a", { file: "05a-qa-analyst.md", sections: ["## Break hypotheses", "## Test recipe"], rounds: true }],
+  ["05", { file: "05-qa.md", sections: ["## Validated risks"], rounds: true }],
+  ["06", { file: "06-verification.md", sections: ["## Verification"], rounds: true }],
+  ["06.5", { file: "06-runtime.md", sections: ["## Runtime verdict"], rounds: true }],
 ]);
+
+export const ROUND_HEADING = /^## Round (\d+)\b/i;
+export const FIX_LOOP_HEADING = /^### Fix loop (\d+)\b/;
+
+// The numbers of every line of the text that matches the heading pattern.
+function headingNumbers(text, pattern) {
+  return String(text ?? "")
+    .split("\n")
+    .map((line) => pattern.exec(line.trimEnd()))
+    .filter(Boolean)
+    .map((match) => Number(match[1]))
+    .filter(Number.isFinite);
+}
+
+// The highest heading number of the text plus one, or 1 when it has none.
+function nextNumber(text, pattern) {
+  return Math.max(0, ...headingNumbers(text, pattern)) + 1;
+}
+
+// The last `## Round <n>` heading (anything after the number is decoration) of a round artifact up to its end, or the whole text when it has no round (a legacy artifact).
+export function lastRound(text) {
+  const lines = String(text ?? "").split("\n");
+  const start = lines.findLastIndex((line) => ROUND_HEADING.test(line.trimEnd()));
+  return start === -1 ? lines.join("\n") : lines.slice(start).join("\n");
+}
+
+// The number the next `## Round` of a round artifact takes.
+export function nextRound(text) {
+  return nextNumber(text, ROUND_HEADING);
+}
+
+// The number the next `### Fix loop` block of the implementation artifact takes.
+export function nextFixLoop(text) {
+  return nextNumber(text, FIX_LOOP_HEADING);
+}

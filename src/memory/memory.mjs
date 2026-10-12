@@ -72,6 +72,15 @@ export function memoryByKey({ projectId, key } = {}, env = process.env) {
   return row ? attachNames(db, [row])[0] : null;
 }
 
+// Saves a fact unless its project already has the key, which is kept and answered as deduped.
+export function saveMemoryDeduped({ projectId, key, value, model }, env = process.env) {
+  const owner = projectIdOrNull(projectId);
+  const existing = memoryByKey({ projectId: owner, key }, env);
+  if (existing) return { id: existing.id, projectId: owner, deduped: true, value: existing.value };
+  const saved = saveMemory({ projectId: owner, key, value, model }, env);
+  return { ...saved, deduped: false, value: String(value).trim() };
+}
+
 // Public shape of a memory row.
 export function memoryView(row) {
   return {

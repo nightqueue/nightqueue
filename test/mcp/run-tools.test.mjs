@@ -195,6 +195,48 @@ test("inside a job `pipeline_log` records the run of its own row and the fields 
   );
 });
 
+test("`run_phase_done` records the reason a phase ran again, and `pipeline_log` copies it only when its table lists every launch of that phase", async (t) => {
+  const { env, job } = makeRunningJob(t, "mcp-pipeline-log-reasons");
+  const client = await connect(t, { ...env, NIGHTQUEUE_JOB_ID: String(job.id) });
+  const reason = "fix loop 1: the lint check failed";
+
+  payloadOf(await client.callTool({ name: "run_set", arguments: { tier: "simple" } }));
+  payloadOf(await client.callTool({ name: "run_phase_done", arguments: { phase: "verification", verdict: "FAILED" } }));
+  payloadOf(await client.callTool({ name: "run_phase_done", arguments: { phase: "verification", verdict: "PASSED", reason } }));
+  payloadOf(await client.callTool({ name: "run_phase_done", arguments: { phase: "qa", verdict: "PASSED" } }));
+  assert.deepEqual(readState(env, "alpha", SLUG).phases.map((entry) => entry.reason ?? null), [null, reason, null]);
+
+  const reasonsOf = (runId) =>
+    openDb(env).prepare("SELECT reason FROM pipeline_phases WHERE run_id = ? ORDER BY seq").all(runId).map((row) => row.reason);
+  const log = async (phases) =>
+    payloadOf(await client.callTool({ name: "pipeline_log", arguments: { outcome: "pr_opened", phases } }));
+  const verification = (extra = {}) => ({ phase: "verification", ...extra });
+
+  const equal = await log([verification(), verification(), { phase: "qa" }]);
+  assert.deepEqual(reasonsOf(equal.runId), [null, reason, null], "the recorded reasons were not paired launch by launch");
+  assert.equal("reasons_unpaired" in equal, false, "an answer with every reason paired changed shape");
+
+  const more = await log([verification(), verification(), verification(), { phase: "qa" }]);
+  assert.deepEqual(reasonsOf(more.runId), [null, null, null, null], "a reason landed on a row of another launch");
+  assert.deepEqual(more.reasons_unpaired, ["verification"]);
+
+  const fewer = await log([verification(), { phase: "qa" }]);
+  assert.deepEqual(reasonsOf(fewer.runId), [null, null], "the only row took the reason of a different launch");
+  assert.deepEqual(fewer.reasons_unpaired, ["verification"]);
+
+  const sent = await log([verification(), verification({ reason: "symptom persists" }), { phase: "qa" }]);
+  assert.deepEqual(reasonsOf(sent.runId), [null, "symptom persists", null], "the recorded reason won over the one the call sent");
+  assert.equal("reasons_unpaired" in sent, false);
+
+  const sentFewer = await log([verification({ reason: "X" }), { phase: "qa" }]);
+  assert.deepEqual(reasonsOf(sentFewer.runId), ["X", null], "the sent reason did not win on its own row");
+  assert.deepEqual(sentFewer.reasons_unpaired, ["verification"], "the recorded reason that was not placed went unreported");
+
+  const noReason = await log([verification(), verification(), { phase: "qa" }, { phase: "qa" }]);
+  assert.deepEqual(reasonsOf(noReason.runId), [null, reason, null, null]);
+  assert.equal("reasons_unpaired" in noReason, false, "a phase recorded with no reason was reported unpaired");
+});
+
 test("outside a job `pipeline_log` records the operator's outcomes, and inside a job it refuses them", async (t) => {
   const { env, job } = makeRunningJob(t, "mcp-pipeline-log-operator");
   const outside = await connect(t, env);

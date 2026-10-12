@@ -16,8 +16,9 @@ import {
 } from "../../src/host/settings.mjs";
 
 const ENV = { NIGHTQUEUE_HOME: join(tmpdir(), "nightqueue-settings-fixture") };
-const [SESSION_START, PROMPT, SESSION_END, AGENT_FOREGROUND] = desiredHooks(ENV);
+const [SESSION_START, PROMPT, AGENT_FOREGROUND] = desiredHooks(ENV);
 const LEGACY_SESSION_START = `node ${join(hostPackageRoot(ENV), "bin", "shift.mjs")} hook session-start`;
+const LEFTOVER_REFLECT = { type: "command", command: hookCommand("reflect", ENV), timeout: 15 };
 
 // Settings fixture with one third-party hook per event.
 function thirdPartySettings() {
@@ -31,11 +32,10 @@ function thirdPartySettings() {
   };
 }
 
-test("each event carries its own timeout, and the reflection gets the longest one", () => {
+test("three hooks are wanted, each with its own timeout, and none on SessionEnd", () => {
   assert.deepEqual(desiredHooks(ENV), [
     { event: "SessionStart", command: hookCommand("session-start", ENV), timeout: 10 },
     { event: "UserPromptSubmit", command: hookCommand("prompt-context", ENV), timeout: 10 },
-    { event: "SessionEnd", command: hookCommand("reflect", ENV), timeout: 15 },
     { event: "PreToolUse", command: hookCommand("agent-foreground", ENV), timeout: 5, matcher: "Agent|Task|Bash|Read|Grep|Glob" },
   ]);
 });
@@ -45,15 +45,12 @@ test("the merge appends one group per event and says so", () => {
   assert.deepEqual(mergeHooks(data, ENV), [
     { event: "SessionStart", status: "created" },
     { event: "UserPromptSubmit", status: "created" },
-    { event: "SessionEnd", status: "created" },
     { event: "PreToolUse", status: "created" },
   ]);
   assert.deepEqual(data.hooks.SessionStart, [
     { hooks: [{ type: "command", command: SESSION_START.command, timeout: SESSION_START.timeout }] },
   ]);
-  assert.deepEqual(data.hooks.SessionEnd, [
-    { hooks: [{ type: "command", command: SESSION_END.command, timeout: 15 }] },
-  ]);
+  assert.equal(data.hooks.SessionEnd, undefined);
   assert.deepEqual(data.hooks.PreToolUse, [
     {
       matcher: "Agent|Task|Bash|Read|Grep|Glob",
@@ -69,10 +66,33 @@ test("a second merge changes nothing and reports every event as already present"
   assert.deepEqual(mergeHooks(data, ENV), [
     { event: "SessionStart", status: "already present" },
     { event: "UserPromptSubmit", status: "already present" },
-    { event: "SessionEnd", status: "already present" },
     { event: "PreToolUse", status: "already present" },
   ]);
   assert.deepEqual(data, snapshot);
+});
+
+test("a merge drops our leftover SessionEnd entry, says so, and keeps the third-party one", () => {
+  const data = thirdPartySettings();
+  data.hooks.SessionEnd[0].hooks.push({ ...LEFTOVER_REFLECT });
+  data.hooks.SessionEnd.push({ hooks: [{ type: "command", command: "node /old/bin/shift.mjs hook reflect", timeout: 10 }] });
+  const steps = mergeHooks(data, ENV);
+  assert.deepEqual(steps.at(-1), { event: "SessionEnd", status: "removed" });
+  assert.equal(steps.filter((step) => step.event === "SessionEnd").length, 1);
+  assert.deepEqual(data.hooks.SessionEnd, thirdPartySettings().hooks.SessionEnd);
+  assert.equal(mergeHooks(data, ENV).some((step) => step.event === "SessionEnd"), false, "a clean host reports no SessionEnd step");
+});
+
+test("the removal also drops our leftover SessionEnd entry, event key included when it held nothing else", () => {
+  const data = { hooks: { SessionEnd: [{ hooks: [{ ...LEFTOVER_REFLECT }] }] } };
+  assert.deepEqual(removeHooks(data, ENV).at(-1), { event: "SessionEnd", status: "removed" });
+  assert.equal(data.hooks.SessionEnd, undefined);
+});
+
+test("the job and operator settings carry no SessionEnd hook and keep the PreToolUse guard", () => {
+  for (const settings of [jobSettings(ENV), operatorSettings(ENV)]) {
+    assert.equal(settings.hooks.SessionEnd, undefined);
+    assert.equal(settings.hooks.PreToolUse[0].hooks[0].command, AGENT_FOREGROUND.command);
+  }
 });
 
 test("a stale command is repaired in place, keeping the matcher and the neighbours", () => {
@@ -111,7 +131,6 @@ test("the removal drops the event key only when nothing else is left in it", () 
   assert.deepEqual(removeHooks(data, ENV), [
     { event: "SessionStart", status: "removed" },
     { event: "UserPromptSubmit", status: "removed" },
-    { event: "SessionEnd", status: "removed" },
     { event: "PreToolUse", status: "removed" },
   ]);
   assert.deepEqual(data, thirdPartySettings());
@@ -122,26 +141,26 @@ test("the removal drops the event key only when nothing else is left in it", () 
   assert.deepEqual(removeHooks(clean, ENV), [
     { event: "SessionStart", status: "not present" },
     { event: "UserPromptSubmit", status: "not present" },
-    { event: "SessionEnd", status: "not present" },
     { event: "PreToolUse", status: "not present" },
   ]);
 });
 
 test("the status of the hooks compares the registered command with the wanted one", () => {
   const data = thirdPartySettings();
-  data.hooks.SessionEnd[0].hooks.push({ type: "command", command: "node /old/bin/nightqueue.mjs hook reflect" });
+  data.hooks.UserPromptSubmit[0].hooks.push({ type: "command", command: "node /old/bin/nightqueue.mjs hook prompt-context" });
   const status = hookStatus(data, ENV);
+  assert.equal(status.length, 3);
   assert.deepEqual(status[0], { event: "SessionStart", expected: SESSION_START.command, current: null, matcherCurrent: true });
-  assert.deepEqual(status[2], {
-    event: "SessionEnd",
-    expected: SESSION_END.command,
-    current: "node /old/bin/nightqueue.mjs hook reflect",
+  assert.deepEqual(status[1], {
+    event: "UserPromptSubmit",
+    expected: PROMPT.command,
+    current: "node /old/bin/nightqueue.mjs hook prompt-context",
     matcherCurrent: true,
   });
-  assert.deepEqual(status[3], { event: "PreToolUse", expected: AGENT_FOREGROUND.command, current: null, matcherCurrent: true });
+  assert.deepEqual(status[2], { event: "PreToolUse", expected: AGENT_FOREGROUND.command, current: null, matcherCurrent: true });
   mergeHooks(data, ENV);
-  assert.equal(hookStatus(data, ENV)[2].current, SESSION_END.command);
-  assert.equal(hookStatus(data, ENV)[3].current, AGENT_FOREGROUND.command);
+  assert.equal(hookStatus(data, ENV)[1].current, PROMPT.command);
+  assert.equal(hookStatus(data, ENV)[2].current, AGENT_FOREGROUND.command);
 });
 
 test("a package path with a space is reported, because the hook command is not quoted", () => {
@@ -243,9 +262,9 @@ test("operatorSettings fences the edit tools and sweeps qa worktrees on Subagent
 
 test("the status flags our own group registered with an older matcher, never a group shared with a third party", () => {
   const stale = { hooks: { PreToolUse: [{ matcher: "Agent|Task|Bash", hooks: [{ type: "command", command: AGENT_FOREGROUND.command, timeout: 5 }] }] } };
-  assert.equal(hookStatus(stale, ENV)[3].matcherCurrent, false);
+  assert.equal(hookStatus(stale, ENV)[2].matcherCurrent, false);
   mergeHooks(stale, ENV);
-  assert.equal(hookStatus(stale, ENV)[3].matcherCurrent, true);
+  assert.equal(hookStatus(stale, ENV)[2].matcherCurrent, true);
 
   const shared = {
     hooks: {
@@ -254,7 +273,7 @@ test("the status flags our own group registered with an older matcher, never a g
       ],
     },
   };
-  assert.equal(hookStatus(shared, ENV)[3].matcherCurrent, true);
+  assert.equal(hookStatus(shared, ENV)[2].matcherCurrent, true);
 });
 
 test("the matcher of a group shared with a third-party entry is left alone", () => {

@@ -277,6 +277,36 @@ test("`run check` answers OK on a complete artifact and names every section the 
   assert.deepEqual(runtime.out, ["OK"]);
 });
 
+test("`run check` of a round artifact reads only its last `## Round`, and a legacy artifact with no round whole", async (t) => {
+  const env = makeQueue(t, "cli-run-check-rounds");
+  const id = boundJob(env);
+  const check = async (phase) => (await runCli(env, ["run", "check", phase], { jobId: id })).out;
+
+  writeArtifact(env, "06-verification.md", "## Round 1\n\n## Verification: FAILED\n\n## Round 2\n\n## Checks run\n- Tests: PASSED\n");
+  assert.deepEqual(await check("06"), ["MISSING: ## Verification"]);
+  writeArtifact(env, "06-verification.md", "## Round 1\n\n## Verification: FAILED\n\n## Round 2\n\n## Verification: PASSED\n");
+  assert.deepEqual(await check("06"), ["OK"]);
+  writeArtifact(env, "06-verification.md", "# Verification\n\n## Verification: PASSED\n");
+  assert.deepEqual(await check("06"), ["OK"]);
+  const decorated = "## Round 1\n\n## Verification: PASSED\n\n## Round 2 — retry\n\n## Checks run\n- Tests: FAILED\n";
+  writeArtifact(env, "06-verification.md", decorated);
+  assert.deepEqual(await check("06"), ["MISSING: ## Verification"], "a decorated round heading passed on round 1's verdict");
+  writeArtifact(env, "06-verification.md", `${decorated}\n## Verification: FAILED\n`);
+  assert.deepEqual(await check("06"), ["OK"]);
+
+  writeArtifact(env, "05-qa.md", "## Round 1\n\n## Validated risks\n- R1 HELD\n\n## Round 2\n\n## Proven breaks\nNone\n");
+  assert.deepEqual(await check("05"), ["MISSING: ## Validated risks"]);
+  writeArtifact(env, "05-qa.md", "## Round 1\n\n## Proven breaks\nNone\n\n## Round 2\n\n## Validated risks\n- R1 HELD\n");
+  assert.deepEqual(await check("05"), ["OK"]);
+
+  writeArtifact(env, "06-runtime.md", "## Round 1\n\n## Runtime verdict\nCONFIRMED\n\n## Round 2\n\nDiff applies plan: yes\n");
+  assert.deepEqual(await check("06.5"), ["MISSING: ## Runtime verdict"]);
+  writeArtifact(env, "06-runtime.md", "## Round 1\n\nDiff applies plan: no\n\n## Round 2\n\n## Runtime verdict\nCONFIRMED\n");
+  assert.deepEqual(await check("06.5"), ["OK"]);
+  writeArtifact(env, "06-runtime.md", "## Round 2\n");
+  assert.deepEqual(await check("06.5"), ["MISSING: ## Runtime verdict"]);
+});
+
 test("`run check 00` answers the missing brief, and OK once the brief carries ## Brief", async (t) => {
   const env = makeQueue(t, "cli-run-check-brief");
   const id = boundJob(env);

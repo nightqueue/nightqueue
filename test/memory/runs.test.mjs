@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { UserError } from "../../src/config/errors.mjs";
-import { openDb } from "../../src/memory/db.mjs";
+import { closeDb, openDb } from "../../src/memory/db.mjs";
 import { logPipelineRun, updateRunTelemetry } from "../../src/memory/runs.mjs";
 import { makeHome, makeProject, projectIdOf } from "../../test-support/memory.mjs";
 
@@ -50,6 +50,39 @@ test("a run and its phases are stored with the sequence of the call", (t) => {
     ],
   );
   assert.equal(stored.phases[0].run_id, logged.runId);
+});
+
+test("the reason a phase ran again is stored trimmed, and a phase with none stores null", (t) => {
+  const env = makeHome(t, "runs-reason");
+  makeProject(t, env, "alpha");
+  logPipelineRun(
+    run(env, {
+      phases: [
+        { phase: "verification", status: "failed" },
+        { phase: "verification", retry: true, reason: "  fix loop 1: lint failed  " },
+        { phase: "commit", reason: "   " },
+      ],
+    }),
+    env,
+  );
+  assert.deepEqual(
+    telemetry(env).phases.map((phase) => phase.reason),
+    [null, "fix loop 1: lint failed", null],
+  );
+});
+
+test("a database whose phases table lacks `reason` gains the column on open, and a second open is a no-op", (t) => {
+  const env = makeHome(t, "runs-reason-column");
+  makeProject(t, env, "alpha");
+  const columns = (db) => db.prepare("PRAGMA table_info(pipeline_phases)").all().map((column) => column.name);
+  const db = openDb(env);
+  db.exec("ALTER TABLE pipeline_phases DROP COLUMN reason");
+  assert.equal(columns(db).includes("reason"), false);
+  closeDb(env);
+
+  assert.deepEqual(columns(openDb(env)).filter((name) => name === "reason"), ["reason"]);
+  closeDb(env);
+  assert.deepEqual(columns(openDb(env)).filter((name) => name === "reason"), ["reason"]);
 });
 
 test("the operator tier and the reason of a raise are stored beside the final tier, and the raise is derived from them", (t) => {

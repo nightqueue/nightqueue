@@ -59,7 +59,7 @@ What a runtime has to provide, and what it can rely on:
     rewritten and never read to find the run.
   - `updatedAt` and the `at` of every record: the runtime's UTC clock, one stamp per
     write.
-  - `phases[{phase, at, artifact?, verdict?, note?}]`: `run_phase_done`, append-only,
+  - `phases[{phase, at, artifact?, verdict?, note?, reason?}]`: `run_phase_done`, append-only,
     so a phase recorded twice never erases the first record.
   - `termination{phase, reason, at}`: `run_terminate`; a run terminated this way is
     never resumed by a retry.
@@ -403,18 +403,19 @@ a worktree another live session holds is never dropped. It always answers nothin
 fails the session. What it misses, `nightqueue open` and `nightqueue doctor --fix` drop once the
 worktree is stale (see [the CLI](cli.md#sandbox)).
 
-The twenty-eight MCP tools, with the parameters `nightqueue mcp` actually accepts:
+The twenty-nine MCP tools, with the parameters `nightqueue mcp` actually accepts:
 
 | tool | parameters |
 |---|---|
 | `lesson_recall` | `query?`, `project?`, `target?`, `exclude_ids?` |
 | `context_for_phase` | `target` (`triager`, `architect`, `coder`, `qa`, `verifier`, `explore`), `query?`, `project?`, `repo_root?`, `exclude_ids?` |
-| `phase_prompt` | `target` (`triager`, `explore`, `architect`, `coder`, `coder-fix`, `verifier`, `runtime`, `qa-lite`, `qa-analyst`, `qa-prover`), `query?`, `stage?`, `delivery_constraints?`, `raw_evidence?`, `group?` (required for `qa-prover`), `note?`, `artifact?` (`runtime` only), `project?`, `slug?` |
-| `lesson_save` | `title`, `root_cause`, `solution`, `prevention`, `attempts?`, `project?`, `target?` |
+| `phase_prompt` | `target` (`triager`, `explore`, `architect`, `coder`, `coder-fix`, `verifier`, `runtime`, `qa-lite`, `qa-analyst`, `qa-prover`, `reflector` - no artifact, `check` null), `query?`, `stage?`, `delivery_constraints?`, `raw_evidence?`, `group?` (required for `qa-prover`), `note?`, `artifact?` (`runtime` only), `project?`, `slug?` |
+| `lesson_save` | `title`, `root_cause`, `solution`, `prevention`, `attempts?`, `project?`, `target?` (a title the owner already has bumps its `attempts`; answers `deduped` and `violated` - `true` only inside a queue job, on a dedup onto a lesson this run was given, which also bumps the lesson's `violated`) |
 | `memory_recall` | `query?`, `project?` |
+| `memory_save` | `key`, `value`, `project?` (a key the owner already has is kept, never overwritten: answers `deduped: true` with the stored value; answers `{id, ref: "M<id>", project, deduped, value}`; allowed inside a queue job) |
 | `index_save` | `project`, `repo_root`, `files[{path, responsibility}]`, `libs?[{lib, version}]` |
 | `index_recall` | `project`, `repo_root?`, `query?` |
-| `pipeline_log` | `outcome`, `project?`, `slug?`, `tier?`, `tier_operator?`, `tier_raise_reason?`, `task_type?`, `gate_stop?`, `duration_s?`, `phases?[{phase, model?, status?, retry?, duration_s?, note?}]` |
+| `pipeline_log` | `outcome`, `project?`, `slug?`, `tier?`, `tier_operator?`, `tier_raise_reason?`, `task_type?`, `gate_stop?`, `duration_s?`, `phases?[{phase, model?, status?, retry?, duration_s?, note?, reason?}]` (a phase sent with no `reason` takes the one `run_phase_done` recorded for it, paired by phase name in order, only when `phases` lists exactly as many rows of that phase as the run recorded; otherwise none of that phase's reasons are copied and the answer's `reasons_unpaired` names it) |
 | `queue_add` | `project?`, `prompt`, `cwd?`, `register?`, `key?` (with `register`), `priority?` (1-9), `max_attempts?` (1-10), `timeout_s?` (60-86400), `tier?` (`trivial`, `simple`, `complex`), `origin?` (`{kind, ref}`) |
 | `project_register` | `cwd`, `name?`, `key?`, `org?` (registers the repository of `cwd`, a linked worktree as its main checkout, only after the person said yes; answers `{registered, project, key, org, path, hint}`; nothing is queued) |
 | `project_integrations` | `project`, `action` (`show`, `set`, `unset`), `key?` (`<kind>.<setting>`, required by `set`/`unset`), `value?` (text, required by `set`) (answers `{project, integrations, providers: [{kind, keys}]}` with the settings each provider of the build declares; `set` validates against the provider, `unset` of the last key leaves the project without integrations; `set`/`unset` refused from inside a job; never a secret) |
@@ -430,7 +431,7 @@ The twenty-eight MCP tools, with the parameters `nightqueue mcp` actually accept
 | `decision_update` | `id` (a decision ref), `project?` (the owner of a `D-<n>`), `title?`, `context?`, `decision?`, `consequences?`, `status?`, `superseded_by?` (a decision ref) (refused inside a queue job) |
 | `decision_list` | `project`, `status?` |
 | `decision_recall` | `project`, `query?`, `limit?` (1-20); or `id` (a decision ref) alone for one decision whole, whatever its status |
-| `run_phase_done` | `phase`, `artifact?`, `verdict?`, `note?`, `project?`, `slug?` |
+| `run_phase_done` | `phase`, `artifact?`, `verdict?`, `note?`, `reason?` (why the phase ran again; omitted on its first run), `project?`, `slug?` |
 | `run_terminate` | `phase`, `reason`, `project?`, `slug?` |
 | `run_skip` | `phase`, `by`, `reason`, `project?`, `slug?` |
 | `run_outcome` | `status` (`done`, `gate`), `notice?`, `project?`, `slug?` |

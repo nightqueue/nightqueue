@@ -4,7 +4,7 @@
 their secrets), and it drives the memory runtime.
 
 - `nightqueue --help` lists every command: `setup`, `doctor`, `init`, `org`,
-  `project`, `update`, `connection`, `mcp`, `hook`, `reflect`, `embed`,
+  `project`, `update`, `connection`, `mcp`, `hook`, `embed`,
   `memory`, `queue`, `open`, `verify`, `sandbox`, `libs`, `run` and `version`.
 - `nightqueue --version` (same as `nightqueue version`) prints the installed version
   and exits `0`.
@@ -70,8 +70,7 @@ lines as the two commands, which keep working unchanged.
 
 `run report [--json]` renders the tables of Phase 8 from `state.json`, the job log
 and `03-plan.md`: the step table (complex) or the compact `Verification ✅ · PR
-<url>` line (trivial/simple), the `Lessons saved:` audit line (the orchestrator's
-`lesson_save` calls of the last attempt that did not error), a `Happy: yes|no —
+<url>` line (trivial/simple), a `Happy: yes|no —
 <first failing gate>` line decided by the fail-safe rule (a termination, a failed
 verdict, a re-run, a planned phase never recorded, a plan with `## Requires user
 confirmation`, no delivery recorded), and, when not happy, the execution table with
@@ -85,7 +84,10 @@ sections required are `## Brief` (`00`, the `00-brief.md` the orchestrator write
 `## Modified files` (`04`), `## Break hypotheses` + `## Test recipe` (`05a`),
 `## Validated risks` (`05`), `## Verification` (`06`) and `## Runtime verdict`
 (`06.5`, the runtime lane's `06-runtime.md`); `02` is checked for
-existence alone. `04` is the only artifact with a fallback: with no file list,
+existence alone. `05a`, `05`, `06` and `06.5` are append-only, one `## Round <n>` per
+launch: their sections are required in the LAST `## Round` (to the end of the file),
+so an earlier round's verdict never passes a later launch; a file with no round
+heading is checked whole. `04` is the only artifact with a fallback: with no file list,
 the command derives one from the changes of the run's worktree (`git diff
 --name-only HEAD` plus `git ls-files --others --exclude-standard`), writes the
 artifact and prints `GENERATED` - and a worktree with no change at all prints
@@ -231,7 +233,7 @@ there to unlock anything.
 A command that writes holds the directory `$NIGHTQUEUE_HOME.lock` while it
 runs, so two `nightqueue` processes never overwrite each other's changes; read-only
 commands such as `list` never take it. The memory and queue commands (`mcp`,
-`hook`, `reflect`, `embed`, `memory`, `queue`) never take it either: they rely
+`hook`, `embed`, `memory`, `queue`) never take it either: they rely
 on SQLite for concurrency, so a running server - or a runner that works all
 night - never blocks a `nightqueue init`. The one exception is the registration
 `nightqueue queue add` (and `queue_add`) offers inside an unregistered
@@ -596,7 +598,7 @@ missing shortcut only warns), a shim left over from a previous command name (`sh
 the `rm -rf` command; nothing deletes it), the
 MCP registration, the registration in the Claude Desktop app (`claude desktop
 mcp`, which is a `warn` when the app is installed and does not know the server
-and an `ok` when the app is not installed at all), each of the four hooks, the
+and an `ok` when the app is not installed at all), each of the three hooks, the
 plugin, the embedding weights,
 the optional embedding
 library, the schema version of the database, the pause sentinel of the queue,
@@ -1063,7 +1065,7 @@ refused with one line naming `nightqueue setup`. A project is only *preselected*
 checkout is gone still opens), else the one registered for the current directory, else none.
 The preselection reaches the session as `NIGHTQUEUE_PROJECT=<project id>` and nothing else; the
 SessionStart hook then opens its context block with `Current project (preselected by nightqueue
-open): <name>`, even when the project has no memory yet, and the memory hooks and the reflection
+open): <name>`, even when the project has no memory yet, and the memory hooks and `/nightqueue:reflect`
 read that project. With no project the operator lists the registered ones and asks which.
 `NIGHTQUEUE_OPERATOR_PID` carries the pid of the `nightqueue open` process, which owns the qa
 worktrees the session creates. A `NIGHTQUEUE_PROJECT`, `NIGHTQUEUE_MODE` or

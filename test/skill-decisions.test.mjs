@@ -12,7 +12,21 @@ const PR_TEMPLATE = read("plugin/skills/resolve/references/pr-template.md");
 const PHASE_PROMPT = read("src/mcp/phase-prompt.mjs");
 
 // Reflect files the pipeline must keep away from the decisions table.
-const REFLECT_FILES = ["src/hooks/reflect.mjs", "src/hooks/reflect-worker.mjs", "src/cli/reflect.mjs", "src/memory/dedup.mjs"];
+const REFLECT_FILES = [
+  "src/memory/dedup.mjs",
+  "plugin/skills/reflect/SKILL.md",
+  "plugin/skills/reflect/references/rubric.md",
+  "plugin/agents/reflector.md",
+  "plugin/skills/resolve/references/prompts/reflector.md",
+];
+
+// The only phrases a reflect file may name a decision write tool in: the prohibitions themselves.
+const NEVER_PHRASES = ["NEVER saved with `decision_save` or `decision_update`", "never `decision_save`"];
+
+// Text of a file with its whitespace collapsed and every allowed prohibition phrase taken out.
+function withoutProhibitions(text) {
+  return NEVER_PHRASES.reduce((rest, phrase) => rest.split(phrase).join(""), text.replace(/\s+/g, " "));
+}
 
 const PIPELINE_FILES = {
   "plugin/skills/resolve/SKILL.md": SKILL,
@@ -64,9 +78,17 @@ test("every decisions tool the pipeline markdown names is a tool the server real
   }
 });
 
-test("the reflect worker stays out of the decisions table", () => {
+test("the reflect files stay out of the decisions table", () => {
   for (const file of REFLECT_FILES) {
     const source = read(file);
     assert.equal(source.includes("decisions.mjs"), false, `${file} imports the decisions module`);
+    assert.doesNotMatch(withoutProhibitions(source), /decision_(?:save|update)\b/, `${file} grants or calls a decision write tool`);
   }
+});
+
+test("the rubric and the reflector template name the decision write tools only to forbid them", () => {
+  const rubric = read("plugin/skills/reflect/references/rubric.md").replace(/\s+/g, " ");
+  const template = read("plugin/skills/resolve/references/prompts/reflector.md").replace(/\s+/g, " ");
+  assert.ok(rubric.includes(NEVER_PHRASES[0]), "the rubric lost its NEVER sentence");
+  assert.ok(template.includes(NEVER_PHRASES[1]), "the reflector template lost its never rule");
 });

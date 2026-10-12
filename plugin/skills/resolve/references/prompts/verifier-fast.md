@@ -1,6 +1,7 @@
 ## File handoff (contract — read first)
-ARTIFACT_PATH: {{RUN_DIR}}/06-verification.md (append per iteration)
+ARTIFACT_PATH: {{RUN_DIR}}/06-verification.md (append-only: this launch is ## Round {{ROUND}})
 Read before acting (via Read): {{RUN_DIR}}/04-implementation.md — ## Modified files
+{{>_round}}
 {{>_handoff}}
 
 {{>_shell-rule}}

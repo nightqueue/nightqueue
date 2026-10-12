@@ -9,9 +9,10 @@ const OWN_COMMAND_MARKS = ["bin/nightqueue.mjs hook", "bin/shift.mjs hook"];
 const HOOK_EVENTS = [
   { event: "SessionStart", hook: "session-start", timeout: 10 },
   { event: "UserPromptSubmit", hook: "prompt-context", timeout: 10 },
-  { event: "SessionEnd", hook: "reflect", timeout: 15 },
   { event: "PreToolUse", hook: "agent-foreground", timeout: 5, matcher: "Agent|Task|Bash|Read|Grep|Glob" },
 ];
+
+const RETIRED_HOOK_EVENTS = ["SessionEnd"];
 
 const OPERATOR_TOOL_MATCHER = "Agent|Task|Bash|Read|Grep|Glob|Edit|Write|MultiEdit|NotebookEdit";
 
@@ -29,7 +30,7 @@ export function spacedRootWarning(root) {
   return `nightqueue: warning: the package path contains a space (${root}); the host may fail to run the hook command`;
 }
 
-// The four hook entries this package wants in the host settings, each with the timeout its work needs and, when it applies, the matcher restricting it.
+// The three hook entries this package wants in the host settings, each with the timeout its work needs and, when it applies, the matcher restricting it.
 export function desiredHooks(env = process.env) {
   return HOOK_EVENTS.map(({ event, hook, timeout, matcher }) => ({
     event,
@@ -129,14 +130,23 @@ function removeEvent(data, event) {
   return "removed";
 }
 
-// Brings the four hook entries of this package into the settings object, in place.
-export function mergeHooks(data, env = process.env) {
-  return desiredHooks(env).map((hook) => ({ event: hook.event, status: mergeEvent(data, hook) }));
+// Drops this package's entries of the events it no longer registers, reporting only the events that had one.
+function dropRetiredHooks(data) {
+  return RETIRED_HOOK_EVENTS.map((event) => ({ event, status: removeEvent(data, event) })).filter(
+    (step) => step.status === "removed",
+  );
 }
 
-// Takes the four hook entries of this package out of the settings object, in place.
+// Brings the three hook entries of this package into the settings object, in place, dropping a retired one left behind.
+export function mergeHooks(data, env = process.env) {
+  const merged = desiredHooks(env).map((hook) => ({ event: hook.event, status: mergeEvent(data, hook) }));
+  return [...merged, ...dropRetiredHooks(data)];
+}
+
+// Takes the hook entries of this package out of the settings object, in place, a retired one left behind included.
 export function removeHooks(data, env = process.env) {
-  return desiredHooks(env).map((hook) => ({ event: hook.event, status: removeEvent(data, hook.event) }));
+  const removed = desiredHooks(env).map((hook) => ({ event: hook.event, status: removeEvent(data, hook.event) }));
+  return [...removed, ...dropRetiredHooks(data)];
 }
 
 // State of each hook of this package in the settings object, for a diagnosis that writes nothing.

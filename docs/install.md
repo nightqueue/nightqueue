@@ -199,8 +199,10 @@ echo "$LINEAR_API_KEY" | nightqueue connection add linear --type linear   # opti
    (`claude_desktop_config.json`), when that app is installed - an app that is
    not installed is a `skipped` step and never a directory this CLI creates.
    `--no-desktop` skips it.
-6. the four hooks in `<claude config>/settings.json`: `SessionStart`,
-   `UserPromptSubmit`, `SessionEnd` and `PreToolUse`, pointing at that same entry.
+6. the three hooks in `<claude config>/settings.json`: `SessionStart`,
+   `UserPromptSubmit` and the `PreToolUse` agent-foreground guard, pointing at that
+   same entry. A leftover nightqueue `SessionEnd` entry from an older version is
+   removed (a third-party `SessionEnd` hook stays).
 7. the runtime as a local marketplace, plus the plugin installed from it.
 8. the semantic recall: the embedding library in `$NIGHTQUEUE_HOME/embedding`
    and its weights - the only step that opens the network, and the only one
@@ -211,7 +213,7 @@ runtime that is not there would break every session of the host.
 
 `--remove` undoes steps 3 to 7 - the shims, the marked PATH block, the MCP server,
 its entry in the Claude Desktop configuration,
-the four hook entries, the plugin and the marketplace - and asks before
+the three hook entries (and a leftover `SessionEnd` one), the plugin and the marketplace - and asks before
 deleting `runtime/` and `embedding/`. It never touches `config.json`,
 `secrets.json` or the database; only `--remove --purge` deletes
 `$NIGHTQUEUE_HOME` whole.
@@ -226,9 +228,10 @@ is not valid JSON stops the step with an error instead of being overwritten.
 
 The hooks are registered at user scope, so they run in **every** Claude Code
 session of the machine - but the two that inject context produce no output at
-all outside a directory registered with `nightqueue init`. The exception is
-`SessionEnd`, the reflection, which spends tokens on any session it sees: not
-registering it, or `NIGHTQUEUE_REFLECT=1`, turns it off (see [Memory](memory.md)).
+all outside a directory registered with `nightqueue init`. No hook spends tokens:
+there is no `SessionEnd` reflection any more. `setup`, `setup --remove` and `update`
+drop a leftover nightqueue `SessionEnd` entry; what a session learned is saved by
+`/nightqueue:reflect`, only after the person confirms (see [Memory](memory.md)).
 
 If the `claude` CLI is missing or one of its subcommands fails, the setup does
 not stop: it prints the step as `failed`, prints the exact command to run by

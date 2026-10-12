@@ -4,11 +4,13 @@ import { UserError } from "../config/errors.mjs";
 import { runDir } from "../config/paths.mjs";
 import { packageRoot } from "../host/paths.mjs";
 import { registeredProject } from "../memory/registry-access.mjs";
+import { nextFixLoop, nextRound } from "../queue/phase-artifacts.mjs";
 import { isStateObject, readRunState } from "../queue/resume.mjs";
 import { phasesFor, routingRow } from "../queue/routing.mjs";
 import { renderSkillTemplate, skillReferencesDir } from "../queue/skill-template.mjs";
 import { openStore } from "../store/open.mjs";
-import { indexLine, phaseContextBlock } from "./phase-context.mjs";
+import { callerContext, indexLine, phaseContextBlock, runInjectedLessonIds } from "./phase-context.mjs";
+import { runTimelineLines } from "./run-timeline.mjs";
 
 // The subagent every target launches, the routing row that names its model, the pipeline phase it belongs to, and its artifact gate.
 const TARGETS = {
@@ -22,6 +24,7 @@ const TARGETS = {
   "qa-lite": { agent: "nightqueue:qa-guardian", model: "qaGuardian", phase: "qa", artifact: "05-qa.md", check: "05" },
   "qa-analyst": { agent: "nightqueue:qa-guardian", model: "qaGuardian", phase: "qa", artifact: "05a-qa-analyst.md", check: "05a" },
   "qa-prover": { agent: "nightqueue:qa-guardian", model: "qaGuardian", phase: "qa", artifact: null, check: null },
+  reflector: { agent: "nightqueue:reflector", model: "coder", phase: null, artifact: null, check: null },
 };
 
 export const PROMPT_TARGETS = Object.keys(TARGETS);
@@ -43,6 +46,9 @@ const FAST_TIERS = ["trivial", "simple"];
 const INDEX_LIMIT = 40;
 const BRIEF_FILE = "00-brief.md";
 const ARTIFACT_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*\.md$/;
+const ROUND_TARGETS = ["verifier", "runtime", "qa-lite", "qa-analyst"];
+const INJECTED_LIMIT = 40;
+const NONE_RECORDED = "none recorded";
 
 // The directory the prompt templates ship in, inside the plugin of this runtime.
 export function promptsDir() {
@@ -151,6 +157,44 @@ function runtimeArtifact(target, artifact) {
   return name;
 }
 
+// The text of one handoff of the run directory, or an empty text when it was never written.
+function readHandoff(dir, file) {
+  try {
+    return readFileSync(join(dir, file), "utf8");
+  } catch {
+    return "";
+  }
+}
+
+// The `## Round` number this launch appends to its append-only artifact, or an empty text for a target that writes none.
+function roundOf(target, dir, artifact) {
+  return ROUND_TARGETS.includes(target) ? String(nextRound(readHandoff(dir, artifact))) : "";
+}
+
+// The `### Fix loop` number a fix-loop coder appends to the implementation artifact, or an empty text for any other target.
+function fixLoopOf(target, dir) {
+  return target === "coder-fix" ? String(nextFixLoop(readHandoff(dir, TARGETS["coder-fix"].artifact))) : "";
+}
+
+// The lessons this job's session was given, one `- [L<id>] <title>` line each; none outside a job.
+async function injectedLessonLines(env) {
+  const { sessionId } = await callerContext(env);
+  const ids = runInjectedLessonIds(sessionId, env).slice(0, INJECTED_LIMIT);
+  const store = openStore(env);
+  const lessons = await Promise.all(ids.map((id) => store.lessons.getLesson(id)));
+  const lines = lessons.filter(Boolean).map((lesson) => `- [L${lesson.id}] ${lesson.title}`);
+  return lines.length ? lines.join("\n") : NONE_RECORDED;
+}
+
+// The reflector's run timeline and given lessons; every other template gets empty texts.
+async function reflectorValues({ template, run, state, env, openItems }) {
+  if (template !== "reflector") return { TIMELINE: "", INJECTED_LESSONS: "" };
+  return {
+    TIMELINE: await runTimelineLines({ run, state, env, openItems }),
+    INJECTED_LESSONS: await tolerant(openItems, "the lessons given to this run", NONE_RECORDED, () => injectedLessonLines(env)),
+  };
+}
+
 // A text argument of the call, trimmed, or an empty text.
 function text(value) {
   return typeof value === "string" ? value.trim() : "";
@@ -166,6 +210,8 @@ async function promptValues({ args, template, run, state, env, openItems }) {
   const query = text(args.query) || briefField(brief, "Affected area");
   const lookup = { template, row, query, run, repo, env, openItems };
   if (args.target === "qa-prover" && !text(args.group)) throw new UserError("`group` is required with `target: \"qa-prover\"`: the IDs/label of the same-root group");
+  const artifact = runtimeArtifact(args.target, args.artifact);
+  const ownArtifact = args.target === "runtime" ? artifact : TARGETS[args.target]?.artifact;
   return {
     RUN_DIR: dir,
     REPOSITORY: repo,
@@ -191,12 +237,16 @@ async function promptValues({ args, template, run, state, env, openItems }) {
     STAGE: text(args.stage),
     GROUP: text(args.group),
     NOTE: text(args.note),
-    ARTIFACT: runtimeArtifact(args.target, args.artifact),
+    ARTIFACT: artifact,
+    ROUND: roundOf(args.target, dir, ownArtifact),
+    FIX_LOOP: fixLoopOf(args.target, dir),
+    ...(await reflectorValues({ template, run, state, env, openItems })),
   };
 }
 
-// The model of the target's agent in the run's tier; an agent the tier does not route takes the complex model, with an open item.
+// The model of the target's agent in the run's tier; a lane outside the phases takes its tier's model, an agent the tier does not route the complex one, with an open item.
 function modelFor(spec, { tier, type }, openItems) {
+  if (spec.phase === null) return routingRow(tier).models[spec.model];
   const planned = phasesFor(tier, type).includes(spec.phase);
   const model = routingRow(tier).models[spec.model];
   if (planned && model) return model;

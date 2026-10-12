@@ -65,7 +65,7 @@ function callsMatching(calls, prefix) {
   return calls.filter((call) => prefix.every((value, index) => call[index] === value));
 }
 
-test("setup creates the four hook entries when settings.json does not exist", async (t) => {
+test("setup creates the three hook entries when settings.json does not exist, none on SessionEnd", async (t) => {
   const host = makeHostEnv(t, "setup-fresh");
   const { ctx, out } = makeCtx(host.env);
 
@@ -77,15 +77,14 @@ test("setup creates the four hook entries when settings.json does not exist", as
   assert.deepEqual(settings.hooks.UserPromptSubmit, [
     { hooks: [{ type: "command", command: hookCommandOf(host, "prompt-context"), timeout: 10 }] },
   ]);
-  assert.deepEqual(settings.hooks.SessionEnd, [
-    { hooks: [{ type: "command", command: hookCommandOf(host, "reflect"), timeout: 15 }] },
-  ]);
+  assert.equal(settings.hooks.SessionEnd, undefined);
   assert.deepEqual(settings.hooks.PreToolUse, [
     { matcher: "Agent|Task|Bash|Read|Grep|Glob", hooks: [{ type: "command", command: hookCommandOf(host, "agent-foreground"), timeout: 5 }] },
   ]);
-  for (const event of ["SessionStart", "UserPromptSubmit", "SessionEnd", "PreToolUse"]) {
+  for (const event of ["SessionStart", "UserPromptSubmit", "PreToolUse"]) {
     assert.ok(out.includes(`hook ${event}: created`), out.join("\n"));
   }
+  assert.equal(out.some((line) => line.startsWith("hook SessionEnd")), false, out.join("\n"));
   assert.deepEqual(host.backups(), []);
 });
 
@@ -153,35 +152,61 @@ test("a package path that changed updates only the entry of this package", async
   assert.deepEqual(group.hooks[1], { type: "command", command: hookCommandOf(host, "session-start"), timeout: 10 });
   assert.deepEqual(settings.hooks.Stop, THIRD_PARTY_SETTINGS.hooks.Stop);
   assert.ok(out.includes("hook SessionStart: updated"), out.join("\n"));
-  assert.ok(out.includes("hook SessionEnd: created"), out.join("\n"));
+  assert.ok(out.includes("hook UserPromptSubmit: created"), out.join("\n"));
 });
 
-test("a reflect hook left at the shorter timeout is raised to fifteen, and the neighbours stay put", async (t) => {
-  const host = makeHostEnv(t, "setup-timeout-raised");
-  const stale = {
+// Settings holding our leftover reflect entry on SessionEnd, next to a third-party one.
+function leftoverReflectSettings(host) {
+  return {
     hooks: {
       SessionEnd: [
         {
           hooks: [
             { type: "command", command: "other-tool end", timeout: 5 },
-            { type: "command", command: hookCommandOf(host, "reflect"), timeout: 10 },
+            { type: "command", command: hookCommandOf(host, "reflect"), timeout: 15 },
           ],
         },
       ],
       Stop: THIRD_PARTY_SETTINGS.hooks.Stop,
     },
   };
-  writeSettingsFixture(host.configDir, stale);
+}
+
+// Asserts that our SessionEnd entry is gone and the third-party one stayed.
+function assertLeftoverDropped(host, out) {
+  const settings = readSettingsFile(host.configDir);
+  assert.equal(ownEntries(settings, "SessionEnd").length, 0);
+  assert.deepEqual(settings.hooks.SessionEnd, [{ hooks: [{ type: "command", command: "other-tool end", timeout: 5 }] }]);
+  assert.deepEqual(settings.hooks.Stop, THIRD_PARTY_SETTINGS.hooks.Stop);
+  assert.ok(out.includes("hook SessionEnd: removed"), out.join("\n"));
+}
+
+test("setup drops a leftover reflect entry on SessionEnd and keeps the third-party one", async (t) => {
+  const host = makeHostEnv(t, "setup-leftover-reflect");
+  writeSettingsFixture(host.configDir, leftoverReflectSettings(host));
   const { ctx, out } = makeCtx(host.env);
 
   assert.equal(await run(SETUP, ctx), 0);
-  const settings = readSettingsFile(host.configDir);
-  const group = settings.hooks.SessionEnd[0];
-  assert.deepEqual(group.hooks[0], stale.hooks.SessionEnd[0].hooks[0]);
-  assert.deepEqual(group.hooks[1], { type: "command", command: hookCommandOf(host, "reflect"), timeout: 15 });
-  assert.equal(ownEntries(settings, "SessionEnd").length, 1);
-  assert.deepEqual(settings.hooks.Stop, THIRD_PARTY_SETTINGS.hooks.Stop);
-  assert.ok(out.includes("hook SessionEnd: updated"), out.join("\n"));
+  assertLeftoverDropped(host, out);
+});
+
+test("setup --remove drops a leftover reflect entry on SessionEnd and keeps the third-party one", async (t) => {
+  const host = makeHostEnv(t, "setup-remove-leftover-reflect");
+  writeSettingsFixture(host.configDir, leftoverReflectSettings(host));
+  const { ctx, out } = makeCtx(host.env);
+
+  assert.equal(await run(["setup", "--remove"], ctx), 0);
+  assertLeftoverDropped(host, out);
+});
+
+test("update drops a leftover reflect entry on SessionEnd and keeps the third-party one", async (t) => {
+  const host = makeHostEnv(t, "update-leftover-reflect");
+  assert.equal(await run(SETUP, makeCtx(host.env).ctx), 0);
+  writeSettingsFixture(host.configDir, leftoverReflectSettings(host));
+  const { ctx, out } = makeCtx(host.env);
+
+  assert.equal(await run(["update"], ctx), 0);
+  assertLeftoverDropped(host, out);
 });
 
 test("a settings.json closed with chmod 600 keeps that mode, and so does its backup", async (t) => {
@@ -255,10 +280,10 @@ test("a setup over an installation of the previous command name updates it in pl
   for (const [event, hook] of [
     ["SessionStart", "session-start"],
     ["UserPromptSubmit", "prompt-context"],
-    ["SessionEnd", "reflect"],
   ]) {
     assert.deepEqual(ownEntries(settings, event).map((entry) => entry.command), [hookCommandOf(host, hook)]);
   }
+  assert.equal(settings.hooks.SessionEnd, undefined, "the legacy reflect entry was kept");
   assert.deepEqual(callsMatching(host.calls(), ["mcp"]).map((call) => call[1]), ["remove", "add"]);
   assert.deepEqual(
     JSON.parse(readFileSync(join(host.configDir, ".claude.json"), "utf8")).mcpServers.nightqueue.args,

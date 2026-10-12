@@ -31,11 +31,17 @@ export async function callerContext(env) {
   return { sessionId: session || null, project: row?.project ?? null, projectId: row?.project_id ?? null, slug: row?.slug ?? null, prompt };
 }
 
-// Lesson ids this run already saw - the whole session, not a rolling window - merged with the ones the call excluded by hand.
+// Lesson ids this run's session was given - the whole session, not a rolling window; none without a session.
+export function runInjectedLessonIds(sessionId, env = process.env) {
+  if (!sessionId) return [];
+  return lessonIdsFromRefs(seenRefs(sessionId, WHOLE_RUN, env));
+}
+
+// Lesson ids this run already saw, merged with the ones the call excluded by hand.
 function excludedIds(sessionId, excludeIds, env) {
   const asked = Array.isArray(excludeIds) ? excludeIds : [];
   if (!sessionId) return asked;
-  return [...new Set([...asked, ...lessonIdsFromRefs(seenRefs(sessionId, WHOLE_RUN, env))])];
+  return [...new Set([...asked, ...runInjectedLessonIds(sessionId, env)])];
 }
 
 // Marks the lessons as seen by this run, so the next phase asks for other ones; a run the runtime cannot name records nothing.

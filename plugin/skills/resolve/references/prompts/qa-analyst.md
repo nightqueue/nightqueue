@@ -1,5 +1,6 @@
 ## File handoff (contract — read first)
-ARTIFACT_PATH: {{RUN_DIR}}/05a-qa-analyst.md
+ARTIFACT_PATH: {{RUN_DIR}}/05a-qa-analyst.md (append-only: this launch is ## Round {{ROUND}})
+{{>_round}}
 Read before acting (via Read):
 - `{{RUN_DIR}}/04-implementation.md` — ## Modified files (the files to attack).
 - `{{RUN_DIR}}/03-plan.md` (open it only AFTER step 0 of the Access map (QA), when it

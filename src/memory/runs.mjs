@@ -71,8 +71,8 @@ function rollbackQuietly(db) {
 // Inserts the phases of a run that is already inside the transaction.
 function insertPhases(db, runId, phases) {
   const statement = db.prepare(
-    `INSERT INTO pipeline_phases (run_id, seq, phase, model, status, retry, duration_s, note)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO pipeline_phases (run_id, seq, phase, model, status, retry, duration_s, note, reason)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
   phases.forEach((phase, i) => {
     statement.run(
@@ -84,6 +84,7 @@ function insertPhases(db, runId, phases) {
       phase.retry === true || phase.retry === "true" ? 1 : 0,
       optionalSeconds(phase.duration_s ?? phase.durationS),
       optionalText(phase.note),
+      optionalText(phase.reason),
     );
   });
 }
@@ -250,6 +251,30 @@ export function latestRunOutcome({ projectId, slug, since } = {}, env = process.
     .prepare("SELECT outcome FROM pipeline_runs WHERE project_id = ? AND slug = ? AND datetime(created_at) >= datetime(?) ORDER BY id DESC LIMIT 1")
     .get(owner, cleanSlug, from);
   return row?.outcome ?? null;
+}
+
+// An optional `since` instant in the database's format: absent answers null, an invalid one is refused.
+function optionalSince(since) {
+  if (since === undefined || since === null) return null;
+  const from = isoToSqlite(since);
+  if (!from) throw new UserError(`invalid \`since\` instant: ${String(since)}`);
+  return from;
+}
+
+// The phases of the latest run recorded for a project id and slug (at or after `since` when given), in `seq` order, read-only; no run answers an empty list.
+export function runTimeline({ projectId, slug, since } = {}, env = process.env, db = openDb(env)) {
+  const owner = projectIdOrNull(projectId);
+  const cleanSlug = optionalText(slug);
+  if (!cleanSlug) throw new UserError("runTimeline needs a slug");
+  const from = optionalSince(since);
+  const run = db
+    .prepare("SELECT id FROM pipeline_runs WHERE project_id IS ? AND slug = ? AND (? IS NULL OR datetime(created_at) >= datetime(?)) ORDER BY id DESC LIMIT 1")
+    .get(owner, cleanSlug, from, from);
+  if (!run) return [];
+  return db
+    .prepare("SELECT seq, phase, model, status, retry, reason FROM pipeline_phases WHERE run_id = ? ORDER BY seq")
+    .all(run.id)
+    .map((row) => ({ seq: Number(row.seq), phase: row.phase, model: row.model ?? null, status: row.status, retry: Number(row.retry) === 1, reason: row.reason ?? null }));
 }
 
 // Persists the telemetry of one pipeline run of a project id (null for a global one): the run and its phases in a single transaction.

@@ -62,6 +62,7 @@ announcing phases, building the execution log and the final report.
 | ✅ | **Verifier** | Verification & delivery | Runs real checks (final gate) |
 | 📱 | **Runtime** | Verification & delivery | Runs the app (emulator/device), screenshot, confirms the fix |
 | 🚀 | **Commit/PR** | Verification & delivery | Commit, push and PR |
+| 🪞 | **Reflector** | Memory | Saves the run's lessons and memories (final phase) |
 
 **Phase header (mandatory):** when starting any phase that launches an
 agent, print a line in this format first:
@@ -107,6 +108,9 @@ The runtime waits for every subagent and background task of an unattended run; l
      as optional context. A run never saves or updates a decision (the runtime refuses
      `decision_save`/`decision_update` inside a job), and a conflict with one is never, by
      itself, a gate.
+   - **The orchestrator never calls `lesson_save` or `memory_save`** - not after a loop, not at
+     a gate, not because the session block's footer suggests it; Phase 9's reflector is the
+     run's only writer of lessons and memories.
 
 0.5. **Run resume (right after the preflight, before interpreting).** If the
    job context brought a block ``RESUME CANDIDATE (slug `<slug>`)``, this run continues a
@@ -121,7 +125,7 @@ The runtime waits for every subagent and background task of an unattended run; l
    - Skip every phase up to `Last completed phase:` and read its artifact in `RUN_DIR` via
      Read — do NOT re-triage, do NOT re-explore, do NOT re-architect.
    - **`From stage: qa-stage-b`** → Phase 5 re-enters straight at **Stage B (provers)**:
-     read `<RUN_DIR>/05a-qa-analyst.md` via Read and move on to the consolidation normally,
+     read the last `## Round` of `<RUN_DIR>/05a-qa-analyst.md` via Read and move on to the consolidation normally,
      without relaunching the analyst. Any other value → run the whole of Phase 5, from Stage A.
    - **Read-fail fallback (fail-safe):** an artifact of a phase the block declares completed
      that is missing or unreadable via Read → ignore the block and **start clean** from step 1.
@@ -298,10 +302,7 @@ The runtime waits for every subagent and background task of an unattended run; l
    3.5, never this gate.
 
    After the user's answer (`PROPOSE-ALTERNATIVE`/`ASK`): update the
-   affected fields of the Brief with the decision and proceed from step 3. If the gate avoided
-   a wrong execution (the user accepted the alternative or reformulated the request),
-   record it via `lesson_save`, building the payload with every field of the **Lesson payload**
-   block of `Lessons per phase` — that is the kind of hit that should become a pattern.
+   affected fields of the Brief with the decision and proceed from step 3.
 
    **In the `simple` tier the critique is ONE line**, not the block above:
    `## Request critique — <EXECUTE | PROPOSE-ALTERNATIVE | ASK>: <the core assumption,
@@ -400,11 +401,17 @@ The runtime waits for every subagent and background task of an unattended run; l
    | `01-triage.md` | 🔍 triager | 📐 architect (P3) |
    | `02-explore.md` | 🧭 explore | 📐 architect (P3) |
    | `03-plan.md` | 📐 architect | ⚙️ coder (P4), 🛡️ qa (P5), orchestrator (gate/pause) |
-   | `04-implementation.md` | ⚙️ coder (every tier) | 🛡️ qa (P5), ✅ verifier (P6), coder-loop (P6) |
-   | `05a-qa-analyst.md` | 🛡️ qa-guardian (ANALYST, complex only) | provers (P5-B) |
-   | `05-qa.md` | 🛡️ qa-guardian (LITE) OR **orchestrator** (consolidation, complex) | ✅ verifier (P6), coder-loop (P6), Phase 8 |
-   | `06-verification.md` | ✅ verifier (append per iteration, every tier; also `evidence/automated-verification.md`) | coder-loop (P6), Phase 8 |
-   | `06-runtime.md` | 📱 runtime lane (✅ verifier, Mode: RUNTIME; also `evidence/api-*`, `browser-*`, `emulator-*`) | orchestrator (6.5 gate), Phase 7, Phase 8 |
+   | `04-implementation.md` | ⚙️ coder (every tier; a fix loop appends `### Fix loop <n>`) | 🛡️ qa (P5), ✅ verifier (P6), coder-loop (P6) |
+   | `05a-qa-analyst.md` | 🛡️ qa-guardian (ANALYST, complex only; append-only, one `## Round n` per launch) | provers (P5-B) |
+   | `05-qa.md` | 🛡️ qa-guardian (LITE) OR **orchestrator** (consolidation, complex); append-only, one `## Round n` per launch | ✅ verifier (P6), coder-loop (P6), Phase 8 |
+   | `06-verification.md` | ✅ verifier (append-only, one `## Round n` per launch, every tier; also `evidence/automated-verification.md`) | coder-loop (P6), Phase 8 |
+   | `06-runtime.md` | 📱 runtime lane (✅ verifier, Mode: RUNTIME; append-only, one `## Round n` per launch; also `evidence/api-*`, `browser-*`, `emulator-*`) | orchestrator (6.5 gate), Phase 7, Phase 8 |
+
+   **Round artifacts** (`05a-qa-analyst.md`, `05-qa.md`, `06-verification.md`, `06-runtime.md`)
+   are append-only: every launch adds `## Round n` at the end and never edits an earlier round.
+   Every gate and every reader reads the LAST round - `nightqueue run check`, the Phase 5
+   validations, the 6.5 `Diff applies plan:` line, Phase 7's PR body and Phase 8. The earlier
+   rounds are the run's history.
 
    Each subagent prompt comes from `phase_prompt` (Context per phase, below) with the
    **handoff contract** at its TOP (stable block) and the variable data (RUN_DIR, brief,
@@ -439,7 +446,13 @@ The runtime waits for every subagent and background task of an unattended run; l
      and `verdict` = the verdict of the phase (`note` = anything else worth keeping). The
      `phase` is one of the 8 canonical names — `triage`, `explore`, `architecture`,
      `implementation`, `qa`, `verification`, `runtime`, `commit`. **NEVER** record a phase that
-     ended in `gate_stop`.
+     ended in `gate_stop`. A phase that runs again (🔁) records `reason` = why, in one line:
+     `fix loop <n>: <the failure>`, `artifact MISSING`, `QA coverage mismatch`,
+     `assumption invalidated: <P>`, `symptom persists`, `runtime NOT-MET`. Its first run sends
+     none. `pipeline_log` copies the recorded reasons into its rows by itself when its table
+     lists every launch of that phase, which the complete table always does. If its answer
+     carries `reasons_unpaired`, that table dropped or added a launch of the named phase. Its
+     reasons were not guessed.
    - **The fields of the run itself.** `nightqueue run start` records `type` and `tier` (step 3).
      Call `run_set` ONCE for a field only when it changes afterwards — the corrected `type` of the
      Phase 3 divergence valve, `tier` on a raise — and, in an interactive step 4, `branch` +
@@ -541,7 +554,7 @@ order never changes.
 
 Every subagent prompt comes from ONE `phase_prompt` call (MCP `nightqueue`) with `target` = the
 prompt of the phase (`triager` | `explore` | `architect` | `coder` | `coder-fix` | `verifier` |
-`runtime` | `qa-lite` | `qa-analyst` | `qa-prover`) and, optionally, `query` = 2–4 keywords from
+`runtime` | `qa-lite` | `qa-analyst` | `qa-prover` | `reflector`) and, optionally, `query` = 2–4 keywords from
 the brief. The context block (`## Applicable lessons`, `## Project memory` and, for the explore,
 `## Structural index`) is already inside the prompt: inside a job the server excludes by itself the lessons already
 injected in earlier phases of this session, so the same lesson is not handed to two phases —
@@ -557,48 +570,6 @@ A host that answers `unknown` for `phase_prompt` is a runtime older than this pl
 target's template under `references/prompts/` of this skill by hand (`coder-fast.md`/`verifier-fast.md` on
 trivial/simple), with the `block` of `context_for_phase` as its context block, and record it as
 an open item of Phase 8.
-
-#### Lesson payload
-
-Every `lesson_save` call, at any of the points below, builds its payload from these fields —
-one per line, in this order:
-
-- `title` — one line, the pattern (what went wrong, as a class).
-- `root_cause` — why it failed the first time.
-- `solution` — what fixed it.
-- `prevention` — the rule that avoids it next time; this is the line that gets injected into
-  future runs.
-- `attempts` — the real count of attempts, an integer; `1` means there is no lesson to save,
-  so do not call the tool at all.
-- `project` — the current project.
-- `target` — the phase the lesson belongs to (`triager` | `architect` | `coder` | `qa` |
-  `verifier`).
-
-`title`, `root_cause`, `solution` and `prevention` are mandatory strings. A rejected call is
-fixed ONCE by rebuilding the payload from this list — never retried as it was sent.
-
-### Lesson-capture filter (shared rule for the four points below)
-
-Four points in this pipeline relaunch an agent or end the run with no delivery because of a
-finding: Phase 5's invalidated-assumption return to the architect, Phase 6's fix loop back to
-the coder, Phase 6.5's symptom-persisting return to the triager, and the gate_stop points of
-Phase 1 (triager refuses) and Phase 3 (architect refuses) — the last two counted together as a
-single block. At each of those points, apply both conditions below before recording anything;
-record only if both hold:
-
-- **(a) Real correction loop:** an agent was actually relaunched (marked by the re-run icon) or
-  the run ended at a gate with no delivery (`gate_stop`) — not a cosmetic tweak or a first-pass
-  improvement.
-- **(b) Cause generalizes:** the root cause would recur on another task in this project, not
-  something isolated to this one ticket; the record describes a class of error, not a one-off.
-  Positive example: "the plan assumed the session payload always includes a field the backend
-  sometimes omits — defensive reads on optional backend fields become mandatory in this
-  project." Negative example: "a typo on line 42 caught by the verifier" — an isolated slip, no
-  class in other tasks, do not record.
-
-One capture per loop, not one per individual finding inside it. A failed capture call never
-blocks the run: record it as an open item in Phase 8 and continue, the same way a
-`pipeline_log` failure is handled (step 5.3 / Phase 8 Telemetry).
 
 ### Phase 1 — Triage-Gate
 
@@ -634,10 +605,7 @@ guess about data the logged-in emulator would allow confirming, is invalid: reje
 it back to the triager. NOT-REPRODUCIBLE or NEEDS-CLARIFICATION → **terminate the pipeline**
 and take `## Open items` to the user. BEFORE terminating, record it (step 5.3):
 `run_phase_done` with `phase: "triage"` **and** `run_terminate` with `phase: "triage"` and the
-verdict as `reason`. Apply the lesson-capture filter above before terminating; if both
-conditions hold, call `lesson_save` with `target: "triager"`, building the payload with every
-field of **Lesson payload** above. This same gate_stop rule covers Phase 3's
-insufficient-brief gate below, with `target: "architect"` there instead of `triager`.
+verdict as `reason`.
 
 If the triager's return signals that it emitted `## Intent note` or `## Depth note`, the
 architect reads them straight from `01-triage.md` in Phase 3 — neither blocks the advance; the
@@ -710,9 +678,8 @@ that produces the symptom.
 
 **Gate:** run `nightqueue run check 03` (the artifact gate, step 5.2 — it requires
 `## Implementation plan`, `## Assumptions`, `## Pre-mortem` and `## Identified risks`).
-`MISSING` after the 1× relaunch, or an insufficient brief, → inform the user and terminate; on
-the insufficient-brief branch, apply the same gate_stop lesson-capture rule as Phase 1's
-terminal gate, with `target: "architect"`. With the gate closed, read `03-plan.md` via Read.
+`MISSING` after the 1× relaunch, or an insufficient brief, → inform the user and terminate.
+With the gate closed, read `03-plan.md` via Read.
 
 **Coverage gate (bug):** also require `## Symptom coverage`, each vector marked `covered` or
 `not-covered` **with a reason**, and `**How I enumerated:**` filled in with a **re-runnable**
@@ -822,15 +789,15 @@ validations below audit. The LITE/ANALYST/PROVER prompts come from `phase_prompt
 `qa-analyst`, `qa-prover` with its `group`).
 
 **Validation of the coverage (only when `Type = bug/error` — LITE and complex):** confront
-`05-qa.md`'s `Symptom coverage: ...` line (opening `## Validated risks`) with the `## Symptom
+the last `## Round` of `05-qa.md`: its `Symptom coverage: ...` line (opening `## Validated risks`) with the `## Symptom
 coverage` table of `03-plan.md`, using the QA attack brief's `N vectors of the plan's table` and
 `omitted:` definitions in `references/prompts/_qa-attack-brief.md` — N matches the table's total, the re-enumeration cites a concrete
 method (not "I reviewed the plan"), `omitted:` is filled in. Any mismatch or missing line → the
 QA skipped the attack: fail the phase and relaunch the QA (🔁).
 
 **Validation of the usage coverage (when `03-plan.md` has `## Usage coverage` — LITE and
-complex, also mandatory with `**Always-gate class:** yes`):** confront `05-qa.md`'s `##
-Access map (QA)` and its `Usage coverage: ...` line with `## Usage coverage` of `03-plan.md`,
+complex, also mandatory with `**Always-gate class:** yes`):** confront the last `## Round` of
+`05-qa.md`: its `## Access map (QA)` and its `Usage coverage: ...` line with `## Usage coverage` of `03-plan.md`,
 using the brief's `N` and `M` definitions in `references/prompts/_qa-attack-brief.md` — `N` and `M` match, `divergences:` and
 `unconfirmed decisions:` are filled in, and no `## What to avoid`/`source=pipeline` item shows
 up as `HELD`. Any mismatch or missing piece → fail the phase and relaunch the QA (🔁), exactly
@@ -847,9 +814,7 @@ assumptions` is not "None", the plan was designed on a false base — patching i
 masking. Relaunch the **architect** (🔁, the same model as Phase 3) with the original plan +
 the invalidated assumption(s) + the QA's evidence, obtain the revised plan and go back to
 Phase 4 with it. **At most 1 return to the architect per pipeline** — if an assumption falls
-again, terminate without a commit and take it to the user (Phase 8). Apply the lesson-capture
-filter above before relaunching; if both conditions hold, call `lesson_save` with
-`target: "architect"`, building the payload with every field of **Lesson payload** above.
+again, terminate without a commit and take it to the user (Phase 8).
 
 ### Phase 6 — Verification (final gate + correction loop)
 
@@ -875,11 +840,7 @@ verifier is the one who confirms.
 - If it is `## Verification: FAILED` (a project check OR a QA PoC failing) →
   relaunch the coder on the **same model** as Phase 4 passing the verifier's failures +
   the QA's `## Proven breaks` still open + the validated brief, then
-  relaunch the verifier (the same `model` as Phase 6 for the tier). Apply the
-  lesson-capture filter above before relaunching; if both conditions hold, call
-  `lesson_save` with `target: "coder"`, building the payload with every field of
-  **Lesson payload** above — the lesson is the implementation pattern that
-  failed verification plus what the verifier confirmed passing.
+  relaunch the verifier (the same `model` as Phase 6 for the tier).
 - **Maximum of iterations**: the `Max fix iterations` of this tier's `routing` row (step 6).
   If it still fails after the limit, **do not mask it**: skip Phase 7 (no commit),
   go to Phase 8 and report the remaining failures/breaks to the user.
@@ -933,7 +894,7 @@ the rules the lane followed (a scenario with no recorded attempt is not `to conf
 **Symptom persisting — diagnosis before a loop (bug):** if the execution shows
 the bug STILL present, do NOT relaunch the coder automatically. First discriminate:
 
-1. **Does the diff apply the plan?** Read the `Diff applies plan:` line of `06-runtime.md` —
+1. **Does the diff apply the plan?** Read the `Diff applies plan:` line of the last `## Round` of `06-runtime.md` —
    never the diff itself. `no` → relaunch the coder (the Phase 6 loop).
 2. **The diff applies the plan AND the symptom persists → the CAUSE is wrong.** Hammering
    the coder with the same plan is guaranteed waste. Relaunch the **triager** (🔁,
@@ -943,10 +904,7 @@ the bug STILL present, do NOT relaunch the coder automatically. First discrimina
    incomplete; look for the underestimated path (order of gates, preceding branch,
    race, data source)". With the new diagnosis, follow Phase 3 → 4 → 6 → 6.5.
    **At most 1 re-triage per pipeline** — if it persists again, terminate without a commit and
-   take the complete history to the user (Phase 8). Apply the lesson-capture filter above
-   before relaunching; if both conditions hold, call `lesson_save` with `target: "triager"`,
-   building the payload with every field of **Lesson payload** above — the lesson is why the
-   confirmed cause was incomplete and which underestimated path the new diagnosis had to cover.
+   take the complete history to the user (Phase 8).
 
 **Gate:** only move on to Phase 7 with the change confirmed at runtime — case (a)
 the 2 proofs, case (b) the screenshot, case (c) the user's verdict, case (d) every item
@@ -999,8 +957,8 @@ The command below owns the mechanics — staging, the commit, the branch name, t
      (`source: "repo"`, its `label`) or nightqueue's fallback — with its `headings` in order: never
      decide it yourself, and never Read the repository's template file. Assemble the title and the
      body per `references/pr-template.md` for THAT template, filling every section with this run's
-     artifacts (`01-triage.md`, `03-plan.md`, `04-implementation.md`, `05-qa.md`,
-     `06-verification.md`). Invent nothing. In the PR description, identify the automation, when
+     artifacts (`01-triage.md`, `03-plan.md`, `04-implementation.md`, and the last `## Round` of
+     `05-qa.md` and `06-verification.md`). Invent nothing. In the PR description, identify the automation, when
      needed, by the nickname `nightqueue` — never an agent, model or vendor name, and no
      `Co-Authored-By` trailer.
    - **How it was validated goes inside the template's own test section.** Nightqueue template:
@@ -1009,7 +967,7 @@ The command below owns the mechanics — staging, the commit, the branch name, t
      `browser`, `emulator`), then the `Not tested:` line. The evidence files are already there: the
      verifier wrote `automated-verification.md` (Phase 6, every tier) and the runtime lane wrote
      `api-*.log`, `browser-*.png|.log`, `emulator-*.png|.log` (Phase 6.5); when the tier
-     produced `05-qa.md`, you may add `automated-qa.md` with Write from its PoC excerpt. A
+     produced `05-qa.md`, you may add `automated-qa.md` with Write from its last round's PoC excerpt. A
      method with no evidence file has no row. Repository template: its own test section, in its own
      format.
    - **No bare `#<number>` in the title or body** — GitHub cross-references an unrelated
@@ -1069,19 +1027,11 @@ Use the visual identity of the legend and the status icons throughout the report
 one, with `--project <project> --slug <slug>`). It prints the `## 🗂️ Report — <slug>` header, then
 the summary table per step on the Standard Track (complex) — every step, a step the tier does not
 run marked ⏭️ — or, on the fast tracks (trivial and simple), the compact
-`Verification ✅/❌ · PR <url>` line; then the lesson-capture audit line and a
+`Verification ✅/❌ · PR <url>` line; then a
 `Happy: yes|no — <first failing gate>` line decided by the fail-safe rule below from the run's
 own records and, when the run is not happy, the complete execution table with the Time column the
 runtime measured and its `**Total:**`. Your judgment may only turn a `Happy: yes` into not
 happy — never the reverse — and then names the gate right below the pasted output.
-
-**Lesson-capture audit line (mandatory on BOTH paths; it does not count towards the ~30-line cap
-of the happy path — the same exemption the `## Notice` section already gets):** `run report`
-counts every lesson successfully recorded during this run through the correction-loop capture
-points (Phase 5, Phase 6's fix loop, Phase 6.5's symptom-persisting loop, and the gate_stop block
-of Phase 1/Phase 3) and prints `Lessons saved: N (targets: <unique target list>)` or
-`Lessons saved: 0`. A failed capture call does not count towards N; record it as a separate
-open item and keep the run going, exactly like a `pipeline_log` failure.
 
 **Decide the outcome before continuing — the fail-safe rule.** A **happy** run requires
 POSITIVE confirmation of a clean success in EACH gate below, by the real verdict
@@ -1165,7 +1115,7 @@ confirmation` block verbatim, followed by the answer line, with NO length cap.
   delivery, and the choice between the two forms is DERIVED from the run's artifacts, not
   judged again here (never the dry label):
   - `Still open — a DIFFERENT problem, does not affect this fix:` when the
-    open item comes out of `## Suggestions` of the `05-qa.md` with the literal
+    open item comes out of `## Suggestions` of the last `## Round` of `05-qa.md` with the literal
     `dedicated ticket: yes` — a distinct defect (even if of a similar cause or
     discovered in this investigation), and each bullet says in one sentence that it will be
     handled separately.
@@ -1243,18 +1193,18 @@ a bug) and the verification
 evidence in `06-verification.md`. Do NOT print the complete execution table
 nor the 🔍 Diagnosis / QA / Verification / 🛡️ Prevention sections — the phase records
 and the phase artifacts continue to exist and feed the telemetry below;
-only the display to the user is cut. Print also the `## Notice` section and the
-lesson-capture audit line (rules above); both are mandatory and do not enter the ~30-line cap.
+only the display to the user is cut. Print also the `🪞 Reflection:` line (Phase 9) and the
+`## Notice` section (rules above); both are mandatory and do not enter the ~30-line cap.
 
 **Non-happy path (any ⚠️, ❌, 🔁 or gate_stop) — keep today's complete
-output:** the `run report` output already carries, right after the summary, the lesson-capture
-audit line and the **complete execution table** — one line per phase recorded, including loop
+output:** the `run report` output already carries, right after the summary, the **complete
+execution table** — one line per phase recorded, including loop
 re-entries (🔁), with the Time column the runtime measured and its `**Total:**`.
 Never compute a duration and never write a timestamp: the times belong to the runtime.
 
 **Re-read the artifacts via Read when assembling the detail** — legitimate here because the
 handoff already dropped their content from context: `01-triage.md` (## Diagnosis), `05-qa.md`
-(breaks/risks/PoCs), `06-verification.md` (checks/iterations) and `03-plan.md` when necessary.
+(breaks/risks/PoCs, last round), `06-verification.md` (checks/rounds) and `03-plan.md` when necessary.
 A missing artifact (a pipeline ended at a gate before generating it) → record the ⚠️ open item
 on the corresponding line, without trying to reconstruct the content nor failing the report.
 
@@ -1279,7 +1229,7 @@ limit of iterations), leave the corresponding line with ❌/⚠️ and explain t
 block right below the table.
 
 **A finding out of scope (a dedicated ticket to open) — mandatory on BOTH paths**, and it does
-not count towards the ~30-line cap of the happy path: when `05-qa.md`'s `## Suggestions` has an
+not count towards the ~30-line cap of the happy path: when the `## Suggestions` of `05-qa.md`'s last round has an
 item with the literal `dedicated ticket: yes`, list it with `file:line` + 1 line of the risk —
 the runtime's closing flow opens the ticket, never this pipeline (Phase 7, step 5). The same
 paragraph collects `unconfirmed decisions:` of the QA's `Usage coverage:` line and the `NOT MET /
@@ -1305,3 +1255,28 @@ The rest of the record is the runtime's, not yours:
   record afterwards; a `duration_s` assembled here would only be overwritten.
 
 A failure in `pipeline_log` does not block the report: record the ⚠️ open item and continue.
+
+### Phase 9 — Reflect (every run that reaches Phase 8)
+
+It runs ONCE per attempt, after `nightqueue run report` and the `pipeline_log` Telemetry (so the
+run timeline has this attempt's rows), and BEFORE the final text. It runs on a delivered run, a
+`no_commit` run and a terminated run (`run_terminate`, a `gate_stop`, an artifact `MISSING`, the
+loop limits). It does NOT run at a gate-block pause (step 2.5, the Confirmation pause, the
+usage-coverage gate, NEEDS-DEVICE): the resumed run reflects at its end.
+
+Launch:
+1. Print the header `🪞 REFLECTOR · <tier> · reflecting over the run`.
+2. `phase_prompt` with `target: "reflector"`.
+3. `Agent` with the answered `subagent_type` (`nightqueue:reflector`) and `model`, and the
+   `prompt` verbatim.
+
+There is no artifact, no `nightqueue run check` and no `run_phase_done` for this phase; the
+reflector applies the rubric and saves the run's lessons and memories on its own.
+
+**Report line:** from the reflector's return, ONE line: `🪞 Reflection: L<id>, M<id>, …` with
+every ref it returned, or `🪞 Reflection: none` when it saved nothing. If `phase_prompt` or
+`Agent` failed, or the host answers `unknown` for `phase_prompt`:
+`🪞 Reflection: not run — <reason>` - it is never retried and never blocks. The line sits
+after the `run report` output and the 🎯 Objective block, ABOVE `## Notice`: `## Notice` stays
+the LAST section of the final text. The line does not count towards the ~30-line cap, never
+enters the Notice, and never turns a run `Happy`.

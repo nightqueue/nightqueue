@@ -87,11 +87,6 @@ test("a working directory outside every registered project leaks nothing into th
   assert.equal(await runPromptContext({ input: { session_id: "s1", cwd: outside, prompt: LEAK_PROMPT }, env }), "");
 });
 
-test("the reflection process gets no prompt block", async (t) => {
-  const env = { ...makeHome(t, "hook-prompt-reflect"), NIGHTQUEUE_REFLECT: "1" };
-  assert.equal(await runPromptContext({ input: { session_id: "s1", prompt: LEAK_PROMPT }, env }), "");
-});
-
 test("a block larger than the budget is cut at three thousand characters", async (t) => {
   const env = makeHome(t, "hook-prompt-clip");
   const repo = makeProject(t, env, "alpha");
