@@ -45,7 +45,7 @@ async function runAdd(argv, ctx) {
 }
 
 // The listing shape of a project: its key and old keys, its checkout path, when it has one, and whether that path still exists.
-function listedProject(project, aliases) {
+export function projectListing(project, aliases) {
   return {
     id: project.id,
     name: project.name,
@@ -68,7 +68,7 @@ export async function listedProjects(ctx) {
   const store = await openRegistryReader(ctx.env);
   if (!store) return [];
   const aliases = await store.projects.keyAliases();
-  return (await store.projects.list()).map((project) => listedProject(project, aliases));
+  return (await store.projects.list()).map((project) => projectListing(project, aliases));
 }
 
 // Runs `project list`: every registered project, path-less ones included.
@@ -127,12 +127,18 @@ async function confirmPurge(ctx, project, footprint, yes) {
   if (answer === "no") throw new UserError("purge cancelled; nothing was removed");
 }
 
-// Purges a project: the rows in one transaction, and its run directory only after that commits.
+// Deletes a project's rows in one transaction, then its run directory once that committed; answers what the purge removed.
+export async function purgeProjectRows(env, store, project) {
+  const purged = await store.projects.purge(project.id);
+  rmSync(join(runsDir(env), project.id), { recursive: true, force: true });
+  return purged;
+}
+
+// Purges a project after the terminal confirmed it.
 async function purgeProject(ctx, store, project, yes) {
   const footprint = await store.projects.footprint(project.id);
   await confirmPurge(ctx, project, footprint, yes);
-  await store.projects.purge(project.id);
-  rmSync(join(runsDir(ctx.env), project.id), { recursive: true, force: true });
+  await purgeProjectRows(ctx.env, store, project);
   ctx.out(`purged project \`${project.name}\` and everything it owned`);
 }
 

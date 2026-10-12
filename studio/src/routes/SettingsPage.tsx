@@ -4,6 +4,7 @@ import { AddWebhookDialog } from "../components/settings/AddWebhookDialog";
 import type { ConnectionHandlers } from "../components/settings/ConnectionRow";
 import { LinkProjectsDialog } from "../components/settings/LinkProjectsDialog";
 import { ModuleCard } from "../components/settings/ModuleCard";
+import { ProjectsSection } from "../components/settings/projects/ProjectsSection";
 import { RemoveConnectionDialog, type RemoveTarget } from "../components/settings/RemoveConnectionDialog";
 import { SettingsError } from "../components/settings/SettingsError";
 import { SettingsSections } from "../components/settings/SettingsSections";
@@ -130,6 +131,9 @@ export function SettingsPage() {
       <section id="integrations" aria-label="integrations" className="flex min-w-0 flex-col gap-3.5">
         <IntegrationsHeader {...headerNote(query)} />
         <IntegrationsBody query={query} handlers={handlers} onAdd={onAdd} />
+      </section>
+      <section id="projects" aria-label="projects and orgs" className="flex min-w-0 scroll-mt-[72px] flex-col gap-3.5 lg:col-start-2">
+        <ProjectsSection />
       </section>
       {query.data && <PageDialog dialog={dialog} view={query.data} open={open} />}
     </div>

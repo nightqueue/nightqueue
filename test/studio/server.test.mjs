@@ -34,6 +34,16 @@ const GATED_REQUESTS = [
   { method: "DELETE", path: "/api/integrations/x?unlink=1" },
   { method: "POST", path: "/api/integrations/x/link", headers: { "content-type": "application/json" }, body: "{\"projectIds\":[\"p\"]}" },
   { method: "PUT", path: "/api/projects/p/destination", headers: { "content-type": "application/json" }, body: "{\"connectionId\":null}" },
+  { method: "GET", path: "/api/orgs" },
+  { method: "GET", path: "/api/fs/dirs" },
+  { method: "GET", path: "/api/fs/repo?path=/x" },
+  { method: "GET", path: "/api/keys/suggest?kind=org&name=x" },
+  { method: "POST", path: "/api/projects", headers: { "content-type": "application/json" }, body: "{\"path\":\"/x\"}" },
+  { method: "PATCH", path: "/api/projects/p", headers: { "content-type": "application/json" }, body: "{\"name\":\"x\"}" },
+  { method: "DELETE", path: "/api/projects/p" },
+  { method: "POST", path: "/api/orgs", headers: { "content-type": "application/json" }, body: "{\"name\":\"x\"}" },
+  { method: "PATCH", path: "/api/orgs/o", headers: { "content-type": "application/json" }, body: "{\"name\":\"x\"}" },
+  { method: "DELETE", path: "/api/orgs/o" },
   { method: "POST", path: "/mcp", headers: { "content-type": "application/json" }, body: "{}" },
 ];
 

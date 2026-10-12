@@ -261,6 +261,7 @@ nightqueue org key acme AC                         # change its key; the old one
 nightqueue org list --json                         # orgs (with their id, key and old keys), connection slots, project counts
 nightqueue org rename acme acme-inc                # one row: its projects, decisions and bindings follow
 nightqueue org remove acme-inc                     # refused while it still owns projects or rows
+nightqueue org default acme                        # where init, project add and project_register put a project when no org is named
 
 nightqueue project add ~/code/api --key API        # register a repository under an explicit key
 nightqueue project key api AP                      # change its key; API-<n> refs keep resolving

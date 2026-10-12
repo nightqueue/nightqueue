@@ -65,6 +65,14 @@ export async function renameOrg(store, oldName, newName) {
   return await store.orgs.rename(org.id, newName);
 }
 
+// Makes a registered org the default one in the config the caller saves under the lock it already holds; an unknown org is refused.
+export async function setDefaultOrg(store, config, name) {
+  const org = await requireOrg(store, name);
+  const previous = await defaultOrg(store, config);
+  config.defaultOrg = org.id;
+  return { config, org, changed: previous.id !== org.id };
+}
+
 // Removes an org that is not the default one; the registry refuses one still owning projects or rows, and the config drops its bindings.
 export async function removeOrg(store, config, name) {
   const org = await requireOrg(store, name);

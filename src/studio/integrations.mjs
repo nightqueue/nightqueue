@@ -143,7 +143,7 @@ export async function integrationsView(env) {
 }
 
 // The writable store of a home that already has a database; a home without one has no org nor project to change.
-async function writableStore(env) {
+export async function writableStore(env) {
   if (!existsSync(dbPath(env))) throw new UserError("this home has no registry yet; run `nightqueue setup` first");
   return await openRegistryWriter(env);
 }
@@ -160,7 +160,7 @@ async function destinationRefusal(store, err) {
 }
 
 // Runs a write inside the configuration lock with the writable store; refused inside a job before anything is read.
-async function lockedWrite(env, write) {
+export async function lockedWrite(env, write) {
   refuseHomeWriteInsideJob(env);
   return await withLock(env, async () => {
     const store = await writableStore(env);

@@ -66,7 +66,7 @@ const SELF_LOCKING_COMMANDS = new Set(["mcp", "studio", "hook", "reflect", "embe
 const HOME_WRITE_COMMANDS = new Set(["init", "setup", "update"]);
 
 const HOME_WRITE_SUBCOMMANDS = new Map([
-  ["org", new Set(["add", "rename", "key", "remove"])],
+  ["org", new Set(["add", "rename", "key", "remove", "default"])],
   ["project", new Set(["add", "key", "remove", "move"])],
   ["connection", new Set(["add", "bind", "remove"])],
   ["embed", new Set(["install", "download", "backfill"])],
@@ -88,6 +88,7 @@ commands:
   org rename <old> <new>                    rename an org (one row: its projects and bindings follow)
   org key <name> <KEY>                      change an org's key; the old key keeps resolving
   org remove <name>                         remove an empty, non-default org
+  org default <name>                        make an org the default: where init, project add and project_register put a project when no org is named
   project add <path> [--org] [--name] [--key <KEY>]  register a project (same behaviour as init)
   project list [--json]                     list projects, their key, their org and whether the path still exists
   project rename <old> <new>                rename a project (one row: its jobs, decisions and memory follow)
