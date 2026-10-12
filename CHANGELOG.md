@@ -50,6 +50,17 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **The studio track has role colours and skipped slots.** The job's pipeline card always shows
+  the nine slots from second 0 (`tier pending` until the tier is known), each a role dot and bar
+  in its agent's colour (`studio/src/lib/phase-colors.ts`, the `--ph-*` variables). A slot the
+  run does not go through is narrower, hatched, with a ring dot and a caption saying why
+  (`skipped · simple tier`, `skipped · architect: docs only`); the header counts `N skipped`
+  (simple bug 3, simple feature 4, trivial 4, complex 0). The token share bar uses the same role
+  colours, stripes the running segment and lists the top three shares.
+- **`run_skip` MCP tool and the `skips` key of `state.json`.** The runtime records a `tier` skip
+  for each phase off the run's routing on every tier/type write; `run_skip { phase, by, reason }`
+  records an agent's. Both are display only: routing and resume never read them, and a phase
+  that still runs shows as run.
 - **The operator reads the web.** `WebFetch` and `WebSearch` join the operator's tools and are
   pre-approved in the session's `permissions.allow`, so it reads a linked page, an issue or a
   library's docs without a prompt. Still no edit and no execution (D-58).
@@ -138,6 +149,9 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- close: a pull request main moved past during the checks wait is rebased, waited on and
+  merged in the same run instead of stopping at `merge-without-sha`; a base that keeps moving
+  stops at `base-moved`.
 - A job that was gated or released and retried now shows all of its attempts instead of the
   last one. Schema v23 keeps one `job_attempts` row per claim (start, end, outcome, exit reason,
   inner `spawns`, tokens and cost), and the job's `tokens_*`, `cache_*`, `cost_usd`, host and
@@ -182,6 +196,34 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **The operator reads anything on disk but the secrets.** Read, Grep and Glob in an operator
+  session (main thread and the three subagents) no longer stop at the registered checkouts,
+  `<home>/qa|runs|worktrees` and the plugin: `<home>/logs`, `config.json`, the database, another
+  repository or an installed library are readable for a diagnosis. Still refused: the home's
+  `secrets.json`, any `.env*` file, a Grep whose `path` is the home or a parent of it (the sweep
+  would read the secrets file), and a path that cannot be resolved. Edit and Write stay refused
+  on the operator's thread (D-58).
+- **The pull request footer names the job.** A job's body ends with `Opened by nightqueue · J-<n>`,
+  then ` · <kind> <ref>` when the job has an origin (`Opened by nightqueue · J-12 · linear MK-42`);
+  a run outside a job keeps `Opened by nightqueue`.
+- **The triager's `## Related jobs` pins the jobs a prompt cites.** A `J-<n>` or a GitHub pull
+  request URL in the job prompt or the query resolves, by exact lookup within the project, to a
+  `cited` line (status, PR URL, branch, first notice line) above the search hits, which never
+  repeat it; a citation of no job of the project gets one line saying so, and the caller's own
+  job adds nothing.
+- The studio timeline wire always carries the nine slots, with the run `tier` and, per slot, its
+  routing `agent` and a `skipped` record; the passed-over state is renamed `skip` → `skipped`.
+- **The studio Files card and file drawer.** Each file is one button row (`path · kind icon ·
+  +N −M`, a missing side absent, the open row marked `aria-current`) with no proportion blocks
+  and no text kind tag. The new 480px `FileDrawer` shows the file's `+/−` with a 120×8
+  proportion bar and the unified hunks, steps through the job's files with `‹ i / n ›` or ↑/↓,
+  and closes with Esc or ✕; it replaces `DiffDrawer`.
+- **`GET /api/jobs/<ref>/diff?path=` answers parsed hunks.** The answer is `{ path, from, kind,
+  source, base, adds, dels, hunks, truncated, binary, note }` (the raw `diff` text is gone),
+  parsed on the server and cut at 2000 lines (`truncated: true`). A path that is not one of the
+  job's files is now a 400 (was 404). Once the worktree is released, a closed job's recorded
+  file is read from its merge commit in the project checkout (`source: "merge"`), read-only, with
+  no fetch, and with fsmonitor, hooks, external diff and textconv off.
 - `plugin/agents/operator.md` is rewritten to 159 lines around D-58: the operator names
   `project` in every owner-taking call, recalls memory per project when one comes up, delegates
   to `triage`, `qa` and `reviewer`, and queues only after an explicit go. `nightqueue open`,

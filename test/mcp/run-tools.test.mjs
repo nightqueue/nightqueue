@@ -78,6 +78,23 @@ test("inside a job the run tools resolve the run from the job's own row", async 
   assert.match(state.phases[0].at, UTC_ISO);
 });
 
+test("run_skip records an agent skip of a later phase and refuses a phase that already ran", async (t) => {
+  const { env, job } = makeRunningJob(t, "mcp-run-tools-skip");
+  const client = await connect(t, { ...env, NIGHTQUEUE_JOB_ID: String(job.id) });
+
+  payloadOf(await client.callTool({ name: "run_phase_done", arguments: { phase: "triage", artifact: "01-triage.md" } }));
+  const skipped = payloadOf(await client.callTool({ name: "run_skip", arguments: { phase: "qa", by: "architect", reason: "docs only" } }));
+  assert.deepEqual({ ok: skipped.ok, slug: skipped.slug }, { ok: true, slug: SLUG });
+  const state = readState(env, "alpha", SLUG);
+  assert.deepEqual({ by: state.skips.qa.by, reason: state.skips.qa.reason }, { by: "architect", reason: "docs only" });
+  assert.match(state.skips.qa.at, UTC_ISO);
+  assert.deepEqual(state.phases.map((entry) => entry.phase), ["triage"], "a skip went into phases");
+
+  const refused = await client.callTool({ name: "run_skip", arguments: { phase: "triage", by: "architect", reason: "late" } });
+  assert.equal(refused.isError, true);
+  assert.match(textOf(refused), /`triage` already ran: only a later phase can be skipped/);
+});
+
 test("inside a job a run named from the outside is refused, and nothing is written for it", async (t) => {
   const { env, job } = makeRunningJob(t, "mcp-run-tools-foreign");
   const client = await connect(t, { ...env, NIGHTQUEUE_JOB_ID: String(job.id) });

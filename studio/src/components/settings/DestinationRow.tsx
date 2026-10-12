@@ -8,6 +8,7 @@ import { useDestinationControl, type DestinationControl } from "./useDestination
 interface DestinationRowProps {
   project: ProjectDestination;
   view: IntegrationsView;
+  locked: boolean;
 }
 
 interface ControlledProps extends DestinationRowProps {
@@ -20,14 +21,14 @@ function refusalId(project: ProjectDestination): string {
 }
 
 // The destination select of a project; red while a refusal is shown.
-function DestinationSelect({ project, view, control }: ControlledProps) {
+function DestinationSelect({ project, view, locked, control }: ControlledProps) {
   const refused = control.refusal !== null;
   return (
     <select
       aria-label={`destination of ${project.name}`}
       aria-invalid={refused}
       aria-describedby={refused ? refusalId(project) : undefined}
-      disabled={control.pending}
+      disabled={control.pending || locked}
       value={control.value}
       onChange={(event) => control.pick(event.target.value)}
       className={`${SELECT_CLASS} ${control.value === NO_DESTINATION ? "text-muted" : ""}`}
@@ -54,7 +55,7 @@ function NoticeText({ project, empty }: { project: ProjectDestination; empty: st
 }
 
 // The red note under a refused pick, with the one-click allow and apply.
-function RefusalNote({ project, control }: Omit<ControlledProps, "view">) {
+function RefusalNote({ project, control }: Pick<ControlledProps, "project" | "control">) {
   const refusal = control.refusal;
   if (!refusal) return null;
   const stays = project.destination ? (
@@ -87,14 +88,14 @@ function RefusalNote({ project, control }: Omit<ControlledProps, "view">) {
 }
 
 // One project of the destination table on a desktop, with its refusal row when a pick was refused.
-export function DesktopDestinationRow({ project, view }: DestinationRowProps) {
+export function DesktopDestinationRow({ project, view, locked }: DestinationRowProps) {
   const control = useDestinationControl(project);
   return (
     <>
       <tr>
         <td className="border-b border-[#1b2030] px-3 py-2 font-mono">{project.name}</td>
         <td className="border-b border-[#1b2030] px-3 py-2">
-          <DestinationSelect project={project} view={view} control={control} />
+          <DestinationSelect project={project} view={view} locked={locked} control={control} />
         </td>
         <td className="border-b border-[#1b2030] px-3 py-2">
           <NoticeText project={project} empty="—" />
@@ -119,7 +120,7 @@ export function DesktopDestinationRow({ project, view }: DestinationRowProps) {
 }
 
 // One project of the destination list on a phone: name and last notice, then a full-width select.
-export function PhoneDestinationRow({ project, view }: DestinationRowProps) {
+export function PhoneDestinationRow({ project, view, locked }: DestinationRowProps) {
   const control = useDestinationControl(project);
   return (
     <div className="flex flex-col gap-2 border-t border-[#1b2030] px-3.5 py-3">
@@ -129,7 +130,7 @@ export function PhoneDestinationRow({ project, view }: DestinationRowProps) {
           <NoticeText project={project} empty="never notified" />
         </span>
       </div>
-      <DestinationSelect project={project} view={view} control={control} />
+      <DestinationSelect project={project} view={view} locked={locked} control={control} />
       <RefusalNote project={project} control={control} />
     </div>
   );

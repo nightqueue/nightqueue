@@ -45,9 +45,9 @@ denial: do not rephrase the command and do not reach for another tool. Hand the 
 subagent that owns it.
 
 - **Edit, Write, MultiEdit and NotebookEdit** are always refused on your thread.
-- **Read, Grep and Glob** work only under the registered checkouts, `<home>/qa`, `<home>/runs`,
-  `<home>/worktrees` and the plugin. Always pass an absolute `path`: your cwd is the home,
-  and the home itself (config, secrets, database) is refused.
+- **Read, Grep and Glob** read anything on disk (checkouts, `<home>/logs`, `config.json`, other
+  repositories, installed libraries) except the home's `secrets.json` and any `.env*` file; a
+  Grep over the home or a parent of it is refused. Always pass an absolute `path`: your cwd is the home.
 - **Bash** runs only one bare command, with no `&&`, `|`, `;`, redirection, `$(…)` or `\`:
   - `nightqueue|nq queue|decision|project|org|connection|doctor|memory|libs|version …`.
     Refused: `queue session`, `decision export|import`, `project add|move`,

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { closeDb, openDb } from "../../src/memory/db.mjs";
-import { searchJobs } from "../../src/memory/job-search.mjs";
+import { jobsByIds, searchJobs } from "../../src/memory/job-search.mjs";
 import { addJob, recoverJob } from "../../src/memory/jobs.mjs";
 import { ensureProject, makeHome, seedDoneJob } from "../../test-support/memory.mjs";
 
@@ -134,4 +134,43 @@ test("a recovered job whose id has a stale index row is recovered, not refused",
 
   assert.equal(outcome, "recovered");
   assert.equal(orphanRows(env), 0);
+});
+
+test("jobsByIds answers the project's jobs in the asked order, with branch and first notice line, skipping unknown and foreign ids", (t) => {
+  const env = makeHome(t, "job-search-by-ids");
+  const done = seedDoneJob(env, { prompt: "fix the runner lease renewal", prUrl: "https://github.com/o/r/pull/42", noticeMd: "\n  Stopped at the gate: lease  \nsecond line" });
+  openDb(env).prepare("UPDATE jobs SET branch = ? WHERE id = ?").run("fix/runner-lease", done);
+  const pending = queue(env, "alpha", "rework the worker");
+  const foreign = queue(env, "beta", "a beta job");
+
+  const rows = jobsByIds({ projectId: ensureProject(env, "alpha"), ids: [pending, 999, foreign, done, pending] }, env);
+
+  assert.deepEqual(
+    rows.map((row) => row.id),
+    [pending, done],
+  );
+  assert.deepEqual(rows[1], {
+    id: done,
+    ref: `J-${done}`,
+    slug: null,
+    title: "fix the runner lease renewal",
+    status: "done",
+    pr_url: "https://github.com/o/r/pull/42",
+    finished_at: rows[1].finished_at,
+    branch: "fix/runner-lease",
+    notice: "Stopped at the gate: lease",
+  });
+  assert.equal(rows[0].branch, null);
+  assert.equal(rows[0].notice, null);
+  assert.equal("prompt" in rows[0], false);
+});
+
+test("jobsByIds answers nothing for no valid id and refuses a missing project", (t) => {
+  const env = makeHome(t, "job-search-by-ids-empty");
+  const projectId = ensureProject(env, "alpha");
+
+  assert.deepEqual(jobsByIds({ projectId, ids: [] }, env), []);
+  assert.deepEqual(jobsByIds({ projectId, ids: [0, -1, 1.5, "2", null] }, env), []);
+  assert.deepEqual(jobsByIds({ projectId, ids: null }, env), []);
+  assert.throws(() => jobsByIds({ ids: [1] }, env), /projectId/);
 });

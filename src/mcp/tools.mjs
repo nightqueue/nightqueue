@@ -56,8 +56,10 @@ import {
   recordOutcome,
   recordPhaseDone,
   recordRunFields,
+  recordSkip,
   recordTermination,
   RUN_OUTCOME_STATUSES,
+  SKIP_AGENTS,
 } from "../queue/run-state.mjs";
 import { startQueueRunner } from "../queue/start.mjs";
 import {
@@ -738,7 +740,7 @@ async function queueCancelAnswer(args, env) {
   return { ok: true, ...(await stopAndCancelJob({ ...cancel, releaseWorktree: args.release_worktree === true })) };
 }
 
-// The twenty-seven tools of the plugin contract, with the parameter names the plugin actually sends.
+// The twenty-eight tools of the plugin contract, with the parameter names the plugin actually sends.
 function toolDefinitions(env, state) {
   return [
     {
@@ -1360,6 +1362,20 @@ function toolDefinitions(env, state) {
       },
     },
     {
+      name: "run_skip",
+      config: {
+        description:
+          "Records that an agent skips a later phase of the run, with who decided it and why, so the studio track shows the slot as skipped. " +
+          "It only records: it changes no routing and no resume, and a phase that still runs shows as run. A phase that already ran is refused. " +
+          "Inside a job the run is resolved from the job's own row — passing `project` or `slug` there is refused; outside a job both are required.",
+        inputSchema: { phase: z.enum(RESUME_PHASE_ORDER), by: z.enum(SKIP_AGENTS), reason: z.string(), project: optionalText, slug: optionalText },
+      },
+      handler: async (args) => {
+        const run = await callerRun(args, env);
+        return runAnswer(recordSkip({ ...run, phase: args.phase, by: args.by, reason: args.reason, env }), run);
+      },
+    },
+    {
       name: "run_outcome",
       config: {
         description:
@@ -1408,7 +1424,7 @@ function toolHandler(tool, env) {
   };
 }
 
-// Builds the MCP server with the twenty-seven tools of the plugin contract.
+// Builds the MCP server with the twenty-eight tools of the plugin contract.
 export function createServer(env = process.env) {
   const server = new McpServer(
     {

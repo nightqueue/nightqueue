@@ -1,9 +1,16 @@
 import { elapsedClock, formatDurationMs } from "./format.ts";
+import { phaseHex, phaseVar } from "./phase-colors.ts";
 import type { AttemptRow, PhaseAttempt, TimelinePhase } from "./types";
 
 export interface CaptionClocks {
   runElapsedMs: number | null;
   clockMs: number | null;
+  tier?: string | null;
+}
+
+export interface TrackCounts {
+  running: TimelinePhase[];
+  skipped: number;
 }
 
 // The time a phase has spent so far: its summed duration, plus the part still open while it runs.
@@ -12,9 +19,18 @@ export function spentMs(phase: TimelinePhase, runElapsedMs: number | null): numb
   return (phase.durationMs ?? 0) + Math.max(0, runElapsedMs - phase.liveSinceMs);
 }
 
-// The time caption of one phase: `start · duration` with its attempts past one, `start · gate at mm:ss` where the gate stopped it, `—` before it ran.
-export function phaseCaption(phase: TimelinePhase, { runElapsedMs, clockMs }: CaptionClocks): string {
-  if (phase.state === "pending" || phase.state === "skip") return "—";
+// The caption of a skipped slot: the tier that routes around it, the agent that skipped it with its reason, or a bare `skipped`.
+function skippedCaption(phase: TimelinePhase, tier: string | null): string {
+  const record = phase.skipped;
+  if (!record) return "skipped";
+  if (record.by === "tier") return tier ? `skipped · ${tier} tier` : "skipped · tier";
+  return record.reason ? `skipped · ${record.by}: ${record.reason}` : `skipped · ${record.by}`;
+}
+
+// The time caption of one phase: `start · duration` with its attempts past one, `start · gate at mm:ss` where the gate stopped it, `—` before it ran, why it was skipped.
+export function phaseCaption(phase: TimelinePhase, { runElapsedMs, clockMs, tier = null }: CaptionClocks): string {
+  if (phase.state === "skipped") return skippedCaption(phase, tier);
+  if (phase.state === "pending") return "—";
   const start = elapsedClock(phase.startMs ?? null);
   if (phase.state === "gate") return `${start} · gate at ${elapsedClock(clockMs)}`;
   const caption = `${start} · ${formatDurationMs(spentMs(phase, runElapsedMs))}`;
@@ -36,21 +52,21 @@ export function phaseAttemptsTitle(phase: TimelinePhase, attemptsLog: AttemptRow
   return entries.map((entry) => `attempt ${entry.attempt}: ${formatDurationMs(entry.durationMs)}${stoppedOutcome(entry, rows)}`).join(" · ");
 }
 
-const PHASE_COLORS = ["#6b7a8f", "#5a8fd0", "#4fb0b8", "#5aa07a", "#8cc05a", "#d0b84f", "#d08a4f", "#c8605a", "#a672c8"];
-
 export interface ShareEntry {
   number: number;
   name: string;
   color: string;
+  hex: string;
   percent: string;
   share: number;
   running: boolean;
 }
 
-// The color of a phase, stable for the whole job because it is keyed by the phase number alone.
-export function phaseColor(number: number): string {
-  const index = Number.isInteger(number) && number >= 0 ? number % PHASE_COLORS.length : 0;
-  return PHASE_COLORS[index];
+// The slots that run and the count of the skipped ones, so every counter of the track ignores the skipped slots.
+export function trackCounts(phases: readonly TimelinePhase[]): TrackCounts {
+  const list = Array.isArray(phases) ? phases : [];
+  const running = list.filter((phase) => phase.state !== "skipped");
+  return { running, skipped: list.length - running.length };
 }
 
 // A share of the total as a whole percent; `<1%` for any share above zero and below one percent.
@@ -59,12 +75,18 @@ export function sharePercent(share: number): string {
   return share < 0.01 ? "<1%" : `${Math.round(share * 100)}%`;
 }
 
-// The phases that spent tokens, in bar order, each with its color, share of the total and percent label.
+// The phases that spent tokens, in bar order, each with its role colour, share of the total and percent label.
 export function shareEntries(phases: readonly TimelinePhase[]): ShareEntry[] {
   const spent = phases.filter((phase) => Number.isFinite(phase.tokens) && phase.tokens > 0);
   const sum = spent.reduce((total, phase) => total + phase.tokens, 0);
   return spent.map((phase) => {
     const share = phase.tokens / sum;
-    return { number: phase.number, name: phase.name, color: phaseColor(phase.number), percent: sharePercent(share), share, running: phase.state === "now" };
+    return { number: phase.number, name: phase.name, color: phaseVar(phase.agent), hex: phaseHex(phase.agent), percent: sharePercent(share), share, running: phase.state === "now" };
   });
+}
+
+// The legend of the share bar: the largest shares up to the limit, ties broken by phase order, listed in phase order.
+export function legendEntries(entries: readonly ShareEntry[], limit: number): ShareEntry[] {
+  const ranked = [...entries].sort((left, right) => right.share - left.share || left.number - right.number);
+  return ranked.slice(0, Math.max(0, limit)).sort((left, right) => left.number - right.number);
 }

@@ -200,7 +200,7 @@ test("`run pr` renames the branch the worktree mangled, pushes it, opens the pul
   assert.deepEqual(ghCalls(env), [
     ["pr", "create", "--title", "feat(auth): log in with google", "--body-file", publishedPath(env), "--head", "feat/login-google"],
   ]);
-  assert.equal(readFileSync(publishedPath(env), "utf8"), `${readFileSync(body, "utf8").trimEnd()}\n\nOpened by nightqueue\n`);
+  assert.equal(readFileSync(publishedPath(env), "utf8"), `${readFileSync(body, "utf8").trimEnd()}\n\nOpened by nightqueue · J-${id}\n`);
   assert.deepEqual(
     { status: readRunState({ projectId: ensureProject(env, "alpha"), slug: SLUG, env }).outcome.status, prUrl: readRunState({ projectId: ensureProject(env, "alpha"), slug: SLUG, env }).outcome.prUrl },
     { status: "done", prUrl: FAKE_GH_PR_URL },
@@ -210,7 +210,7 @@ test("`run pr` renames the branch the worktree mangled, pushes it, opens the pul
   assert.equal(existsSync(worktree), true);
 });
 
-test("`run pr` inside a job with a job block publishes on an unavailable database with the bare footer, an item ref a pre-update block carries ignored", async (t) => {
+test("`run pr` inside a job with a job block publishes on an unavailable database with the job-ref footer, an item ref a pre-update block carries ignored", async (t) => {
   const { env, id } = makeRun(t, "run-pr-sick-home");
   const block = { id, projectKey: "AP", createdAt: new Date().toISOString() };
   assert.equal(recordJobBlock({ projectId: ensureProject(env, "alpha"), slug: SLUG, block, env }).status, "written");
@@ -226,13 +226,13 @@ test("`run pr` inside a job with a job block publishes on an unavailable databas
 
   assert.equal(code, 0, `${text}\n${errText}`);
   assert.deepEqual(ghCalls(env).at(-1).slice(4, 6), ["--body-file", published]);
-  assert.equal(readFileSync(published, "utf8"), `${BODY.trimEnd()}\n\nOpened by nightqueue\n`);
+  assert.equal(readFileSync(published, "utf8"), `${BODY.trimEnd()}\n\nOpened by nightqueue · J-${id}\n`);
 });
 
-test("`run pr` inside a job, or outside the queue, ends with only `Opened by nightqueue`", async (t) => {
+test("`run pr` inside a job ends with `Opened by nightqueue · J-<n>`, and outside the queue with only `Opened by nightqueue`", async (t) => {
   const inside = makeRun(t, "run-pr-free-prompt");
   const free = await publishedBody(t, { env: inside.env, jobId: inside.id, name: "run-pr-free-prompt-body" });
-  assert.equal(free, `${BODY.trimEnd()}\n\nOpened by nightqueue\n`);
+  assert.equal(free, `${BODY.trimEnd()}\n\nOpened by nightqueue · J-${inside.id}\n`);
 
   const outside = makeRun(t, "run-pr-outside");
   const argv = ["--project", "alpha", "--slug", SLUG];
@@ -240,11 +240,11 @@ test("`run pr` inside a job, or outside the queue, ends with only `Opened by nig
   assert.equal(operator, `${BODY.trimEnd()}\n\nOpened by nightqueue\n`);
 });
 
-test("`run pr` inside a job with an origin ends with the footer naming the origin's kind and ref", async (t) => {
+test("`run pr` inside a job with an origin ends with the footer naming the job, then the origin's kind and ref", async (t) => {
   const { env, id } = makeRun(t, "run-pr-origin");
   openDb(env).prepare("UPDATE jobs SET origin = ? WHERE id = ?").run(JSON.stringify({ kind: "linear", ref: "MK-42" }), id);
   const published = await publishedBody(t, { env, jobId: id, name: "run-pr-origin-body" });
-  assert.equal(published, `${BODY.trimEnd()}\n\nOpened by nightqueue · linear MK-42\n`);
+  assert.equal(published, `${BODY.trimEnd()}\n\nOpened by nightqueue · J-${id} · linear MK-42\n`);
 });
 
 test("a body carrying the footer, a `Refs` line, a job id or the run slug is REJECTED naming the line, and nothing is pushed", async (t) => {
@@ -304,7 +304,7 @@ test("decoys of the traceability shapes pass: prose, a fenced block, a code span
 
   const published = await publishedBody(t, { env, jobId: id, name: "run-pr-decoys-body", body });
 
-  assert.ok(published.endsWith("\n\nOpened by nightqueue\n"), published);
+  assert.ok(published.endsWith(`\n\nOpened by nightqueue · J-${id}\n`), published);
 });
 
 test("a repository template in the worktree is the one the body follows: its headings in its order, and no nightqueue heading it lacks", async (t) => {

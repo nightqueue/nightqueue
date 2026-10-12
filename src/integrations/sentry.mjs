@@ -174,7 +174,7 @@ export const sentry = {
   kind: "sentry",
   label: "Sentry",
   description: "Reads the issues jobs come from and resolves them as the jobs close, per org.",
-  card: { order: 4 },
+  card: { order: 3, icon: "sentry" },
   connection: {
     cardinality: "one",
     secretFields: ["token"],

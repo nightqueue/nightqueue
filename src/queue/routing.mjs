@@ -139,12 +139,44 @@ export function phasesFor(tier, type) {
   return [...phases];
 }
 
-// The numbers of the pipeline phases the tier's track runs, read from its "Phases that run" cell; null for a tier outside the pipeline.
+// The nine slots of the studio track, in order: the number, the label, the routing agent key and the canonical phase of each.
+export const TRACK_SLOTS = [
+  { number: 0, name: "brief", agent: null, phase: null },
+  { number: 1, name: "triager", agent: "triager", phase: "triage" },
+  { number: 2, name: "explore", agent: "explore", phase: "explore" },
+  { number: 3, name: "architect", agent: "architect", phase: "architecture" },
+  { number: 4, name: "coder", agent: "coder", phase: "implementation" },
+  { number: 5, name: "qa-guardian", agent: "qaGuardian", phase: "qa" },
+  { number: 6, name: "verifier", agent: "verifier", phase: "verification" },
+  { number: 7, name: "runtime", agent: null, phase: "runtime" },
+  { number: 8, name: "commit · PR", agent: null, phase: "commit" },
+];
+
+const PHASE_SLOTS = TRACK_SLOTS.filter((slot) => slot.phase !== null);
+
+// The track slot number of a canonical phase; throws on a phase with no slot.
+export function slotNumberOf(phase) {
+  const slot = TRACK_SLOTS.find((candidate) => candidate.phase === phase);
+  if (!slot) throw new Error(`no track slot for phase "${phase}"`);
+  return slot.number;
+}
+
+// The phases of the phase slots (1 to 8) the run does not go through: from its tier and type, from the tier alone while the type is unknown, none for an unknown tier.
+export function offTierPhases(tier, type) {
+  if (!PIPELINE_TIERS.includes(tier)) return [];
+  if (PIPELINE_TASK_TYPES.includes(type)) {
+    const phases = phasesFor(tier, type);
+    return PHASE_SLOTS.filter((slot) => !phases.includes(slot.phase)).map((slot) => slot.phase);
+  }
+  const numbers = trackPhaseNumbers(tier);
+  return PHASE_SLOTS.filter((slot) => !numbers.includes(slot.number)).map((slot) => slot.phase);
+}
+
+// The track slot numbers the tier's track runs, the brief's 0 first, derived from the tier's phases (the triager kept on simple); null for a tier outside the pipeline.
 export function trackPhaseNumbers(tier) {
   if (!PIPELINE_TIERS.includes(tier)) return null;
-  const cell = cellOf("Phases that run", tier);
-  if (cell.startsWith("every phase")) return Array.from({ length: 9 }, (_, number) => number);
-  return cell.split("·").map((part) => Number.parseInt(part, 10));
+  const phases = tier === "simple" ? ["triage", ...TIER_PHASES.simple] : TIER_PHASES[tier];
+  return [0, ...PHASE_SLOTS.filter((slot) => phases.includes(slot.phase)).map((slot) => slot.number)];
 }
 
 // The emoji of an agent's row in the routing table, or null for a name with no row (the orchestrator).

@@ -43,11 +43,24 @@ async function baselineOf(tier, store) {
   }
 }
 
-// The tier the run executed: the one its state.json records, else the row's; null while neither knows it.
-export function runTierOf(job, env) {
-  const recorded = readRunState({ projectId: job?.project_id, slug: job?.slug, env })?.tier;
+// The tier a read run state records, else the row's; null while neither knows it.
+function tierFrom(state, job) {
+  const recorded = state?.tier;
   if (typeof recorded === "string" && recorded.trim()) return recorded.trim();
   return job?.tier ?? null;
+}
+
+// The tier the run executed: the one its state.json records, else the row's; null while neither knows it.
+export function runTierOf(job, env) {
+  return tierFrom(readRunState({ projectId: job?.project_id, slug: job?.slug, env }), job);
+}
+
+// The run facts the track reads on every send, from one state.json read: its tier, its skip records and its task type.
+export function runTrackFacts(job, env) {
+  const state = readRunState({ projectId: job?.project_id, slug: job?.slug, env });
+  const skips = state?.skips;
+  const validSkips = skips && typeof skips === "object" && !Array.isArray(skips) ? skips : {};
+  return { tier: tierFrom(state, job), skips: validSkips, type: typeof state?.type === "string" ? state.type : null };
 }
 
 // What the job screen shows beside the row: the run paths, its artifact names, the recorded files, the run tier and its baseline; pure reads only.

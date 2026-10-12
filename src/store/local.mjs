@@ -47,6 +47,7 @@ function jobsDomain(env, db) {
     jobSpawnRefs: async (id) => jobs.jobSpawnRefs(id, env, db()),
     listJobs: async (options) => jobs.listJobs(options, env, db()),
     searchJobs: async (spec) => jobSearch.searchJobs(spec, env, db()),
+    jobsByIds: async (spec) => jobSearch.jobsByIds(spec, env, db()),
     countsByStatus: async () => jobs.countsByStatus(env, db()),
     countBlockedGates: async () => jobs.countBlockedGates(env, db()),
     countActiveJobs: async () => jobs.countActiveJobs(env, db()),

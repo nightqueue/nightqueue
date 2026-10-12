@@ -379,13 +379,13 @@ function filesOf(env) {
   return [configPath(env), secretsPath(env)].map((path) => (existsSync(path) ? readFileSync(path, "utf8") : null));
 }
 
-test("with zero connections the view answers the four module cards in Discord, Linear, GitHub, Sentry order", async (t) => {
+test("with zero connections the view answers the four module cards in GitHub, Linear, Sentry, Discord order", async (t) => {
   const home = await integrationsHome(t, "integrations-modules");
   const view = await home.call("GET", "/api/integrations");
   assert.equal(view.status, 200);
   assert.deepEqual(view.body.connections, []);
-  assert.deepEqual(view.body.modules.map((module) => [module.kind, module.place]), [["discord", "org"], ["linear", "home"], ["github", "machine"], ["sentry", "org"]]);
-  assert.deepEqual(view.body.modules[2].ambient, { statusPath: "/api/integrations/github/status", command: "gh auth login --web" });
+  assert.deepEqual(view.body.modules.map((module) => [module.kind, module.place]), [["github", "machine"], ["linear", "home"], ["sentry", "org"], ["discord", "org"]]);
+  assert.deepEqual(view.body.modules[0].ambient, { statusPath: "/api/integrations/github/status", command: "gh auth login --web" });
 });
 
 test("an add of a kind read from the machine is a 409, an unknown kind a 404, and neither writes", async (t) => {

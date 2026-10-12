@@ -5,7 +5,7 @@ import { jobLogPath, queuePausedPath } from "../config/paths.mjs";
 import { packageRoot } from "../host/paths.mjs";
 import { EMBEDDING_MODEL_ID } from "../memory/embedding.mjs";
 import { jobView } from "../memory/jobs.mjs";
-import { parseJobRef } from "../memory/refs.mjs";
+import { jobRef, parseJobRef } from "../memory/refs.mjs";
 import { RECALL_COS_CUT } from "../memory/search.mjs";
 import { respond } from "../mcp/transports/http-gate.mjs";
 import { listedProjects } from "../cli/project.mjs";
@@ -215,7 +215,7 @@ async function sendJobDiffstat(res, { env, ref }) {
   return sendJson(res, 200, await jobDiffstat(jobView(row, { full: true }), env));
 }
 
-// Answers the diff of one file a job changed, named by `?path=`; 404 when the job does not exist or the path is not one of its files.
+// Answers the hunks of one file a job changed, named by `?path=`; 404 when the job does not exist, 400 when the path is not one of its files.
 async function sendJobDiff(req, res, { env, ref }) {
   const id = parseJobRef(ref);
   const path = new URL(req.url ?? "/", "http://x").searchParams.get("path");
@@ -223,7 +223,7 @@ async function sendJobDiff(req, res, { env, ref }) {
   const row = await withReadOnlyStore(env, (store) => store.jobs.getJob(id));
   if (!row) return respond(res, 404, `no job \`${id}\``);
   const answer = await jobFileDiff(jobView(row, { full: true }), path, env);
-  if (!answer) return respond(res, 404, `no change to that path in job \`${id}\``);
+  if (!answer) return respond(res, 400, `\`${path}\` is not one of the files of job ${jobRef(id)}`);
   return sendJson(res, 200, answer);
 }
 

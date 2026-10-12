@@ -51,6 +51,7 @@ const CONTRACT_TOOLS = [
   "run_outcome",
   "run_phase_done",
   "run_set",
+  "run_skip",
   "run_terminate",
   "tracker_issues",
 ];
@@ -89,12 +90,12 @@ function textOf(result) {
   return result.content.map((block) => block.text).join("\n");
 }
 
-test("the server exposes exactly the twenty-seven tools of the contract", async (t) => {
+test("the server exposes exactly the twenty-eight tools of the contract", async (t) => {
   const env = makeHome(t, "mcp-tools");
   const client = await connect(t, env);
   const names = (await client.listTools()).tools.map((tool) => tool.name).sort();
   assert.deepEqual(names, CONTRACT_TOOLS);
-  assert.equal(names.length, 27, "the contract list and the server disagree on how many tools there are");
+  assert.equal(names.length, 28, "the contract list and the server disagree on how many tools there are");
 });
 
 test("tracker_issues with no tracker connection is a normal answer carrying the refusal and the contract", async (t) => {

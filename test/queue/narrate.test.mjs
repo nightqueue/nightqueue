@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
-import { createNarrator, formatNarration, lastNarratedLine, liveState, narrateLog } from "../../src/queue/narrate.mjs";
+import { createNarrator, formatNarration, lastNarratedLine, liveState, narrateLog, RUNTIME_PROMPT_RE } from "../../src/queue/narrate.mjs";
 import {
   agentToolUseEvent,
   assistantEvent,
@@ -168,6 +169,43 @@ test("the lane label carries the model of the `tool_use` that launched it, the o
   );
   assert.ok(lines.includes("00:01  ▶ coder (phase 4, opus) — apply the plan"), lines.join("\n"));
   assert.ok(lines.includes("00:01  ◀ coder (phase 4, opus) completed (4s · 3 tools · edits unknown)"), lines.join("\n"));
+});
+
+const RUNTIME_PROMPT = "Phase 6.5 of the job.\n\nMode: RUNTIME\n\nRun the change for real.";
+
+// The phase of the laneOpen and laneClose events of one Agent lane launched with the given agent and prompt.
+function lanePhases(subagentType, prompt) {
+  const events = narrateLog(attemptLog([
+    agentToolUseEvent({ id: "toolu_p", subagentType, prompt, model: "sonnet", description: "check it", timestamp: secondsIntoAttempt(1) }),
+    taskStartedEvent({ toolUseId: "toolu_p", subagentType }),
+    taskNotificationEvent({ toolUseId: "toolu_p", toolUses: 1, durationMs: 1000 }),
+  ]), { rich: true });
+  return ["laneOpen", "laneClose"].map((kind) => events.find((event) => event.kind === kind).phase);
+}
+
+test("the runtime lane is the verifier launched with a `Mode: RUNTIME` prompt: phase 7, in its label and its events", () => {
+  assert.deepEqual(lanePhases("nightqueue:verifier", RUNTIME_PROMPT), [7, 7]);
+  const lines = narrate(attemptLog([agentToolUseEvent({ id: "toolu_p", subagentType: "nightqueue:verifier", prompt: RUNTIME_PROMPT, model: "sonnet", description: "run it", timestamp: secondsIntoAttempt(1) })]));
+  assert.ok(lines.includes("00:01  ▶ verifier (phase 7, sonnet) — run it"), lines.join("\n"));
+});
+
+test("a verifier without the runtime line stays phase 6, and a coder quoting it stays phase 4", () => {
+  assert.deepEqual(lanePhases("nightqueue:verifier", "Run the checks.\nmode: runtime is not the line"), [6, 6]);
+  assert.deepEqual(lanePhases("nightqueue:coder", RUNTIME_PROMPT), [4, 4]);
+});
+
+test("the runtime discriminator matches the shipped runtime template and neither verifier template", () => {
+  const template = (name) => readFileSync(new URL(`../../plugin/skills/resolve/references/prompts/${name}`, import.meta.url), "utf8");
+  assert.equal(RUNTIME_PROMPT_RE.test(template("runtime.md")), true);
+  assert.equal(RUNTIME_PROMPT_RE.test(template("verifier.md")), false);
+  assert.equal(RUNTIME_PROMPT_RE.test(template("verifier-fast.md")), false);
+});
+
+test("the runtime line is still found behind a leading BOM or indentation, and only at a line start of a verifier", () => {
+  assert.deepEqual(lanePhases("nightqueue:verifier", "﻿Mode: RUNTIME\nRun the app."), [7, 7]);
+  assert.deepEqual(lanePhases("nightqueue:verifier", "# Runtime\n  \tMode: RUNTIME\r\nRun the app."), [7, 7]);
+  assert.deepEqual(lanePhases("nightqueue:verifier", "Note: Mode: RUNTIME"), [6, 6]);
+  assert.deepEqual(lanePhases("nightqueue:coder", "﻿  Mode: RUNTIME"), [4, 4]);
 });
 
 test("parallel lanes label every indented line, and a single lane does not", () => {
@@ -403,16 +441,25 @@ test("liveState between lanes and before the first lane belongs to the orchestra
   assert.equal(between.agent, "orchestrator");
   assert.equal(between.intent, "Triage is done.");
   assert.deepEqual(between.last, { kind: "text", text: "Triage is done.", at: secondsIntoAttempt(10) });
-  assert.deepEqual([between.phase, between.phases], [2, 6]);
+  assert.deepEqual([between.phase, between.phases], [2, 5]);
 });
 
 test("liveState follows the nightqueue run markers of the orchestrator Bash, with or without a description", () => {
   const publish = live([toolUseEvent({ input: { command: "nightqueue run publish --slug x", description: "open the PR" }, timestamp: secondsIntoAttempt(3) })]);
   assert.equal(publish.last.text, "open the PR — Bash nightqueue run publish --slug x");
-  assert.deepEqual([publish.phase, publish.phases], [8, 9]);
+  assert.deepEqual([publish.phase, publish.phases], [9, 9]);
   const report = live([toolUseEvent({ input: { command: "nightqueue run report" }, timestamp: secondsIntoAttempt(3) })]);
   assert.equal(report.last.text, "Bash nightqueue run report");
   assert.equal(report.phase, 9);
+});
+
+test("liveState counts the runtime lane as slot 7 and publish as commit · PR, on complex and trivial tracks", () => {
+  const runtime = live([agentToolUseEvent({ subagentType: "nightqueue:verifier", prompt: RUNTIME_PROMPT, timestamp: secondsIntoAttempt(2) })]);
+  assert.deepEqual([runtime.agent, runtime.phase, runtime.phases], ["verifier", 8, 9]);
+  const verifier = live([agentToolUseEvent({ subagentType: "nightqueue:verifier", timestamp: secondsIntoAttempt(2) })], "trivial");
+  assert.deepEqual([verifier.phase, verifier.phases], [3, 4]);
+  const publish = live([toolUseEvent({ input: { command: "nightqueue run publish --slug x" }, timestamp: secondsIntoAttempt(3) })], "trivial");
+  assert.deepEqual([publish.phase, publish.phases], [4, 4]);
 });
 
 test("liveState of a lane opened before the window has no identity but keeps its last event", () => {

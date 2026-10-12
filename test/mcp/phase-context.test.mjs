@@ -136,3 +136,77 @@ test("the triager of a job never sees its own job among the related ones", async
   assert.ok(triager.block.includes("## Related jobs\n- [J-2] the runner drops its lease [pending]"), triager.block);
   assert.equal(triager.block.includes("[J-1]"), false);
 });
+
+// Turns a home made by makeDoneJob into a run of a second alpha job whose prompt is the given one, answering the run's env.
+function runCiting(env, prompt) {
+  const job = addJob({ projectId: projectIdOf(env, "alpha"), prompt }, env);
+  claimJobById(job.id, { worker: WORKER, cap: 4 }, env);
+  persistRunFacts(job.id, { worker: WORKER, slug: "citing-run", sessionId: SESSION }, env);
+  return { ...env, NIGHTQUEUE_JOB_ID: String(job.id) };
+}
+
+const CITED_LINE =
+  "- [J-1] fix the runner lease renewal [cited · done · PR https://github.com/o/r/pull/42 · branch fix/runner-lease · 2026-09-30] notice: the lease is renewed before it expires";
+
+// A done alpha job J-1 that also records its branch.
+function makeDoneJobWithBranch(t, name) {
+  const env = makeDoneJob(t, name);
+  openDb(env).prepare("UPDATE jobs SET branch = 'fix/runner-lease' WHERE id = 1").run();
+  return env;
+}
+
+test("a job cited by ref in the job prompt is pinned first, marked cited, and not repeated by the search", async (t) => {
+  const env = makeDoneJobWithBranch(t, "phase-context-cited-ref");
+  const run = runCiting(env, "follow up on J-1 about the runner lease");
+  const triager = await phaseContextBlock({ target: "triager", query: "runner lease" }, run);
+  assert.ok(triager.block.includes(`## Related jobs\n${CITED_LINE}`), triager.block);
+  assert.equal(triager.block.match(/\[J-1\]/g).length, 1, triager.block);
+});
+
+test("a job cited by its pull request URL gives the same cited line, even with an empty query", async (t) => {
+  const env = makeDoneJobWithBranch(t, "phase-context-cited-url");
+  const run = runCiting(env, "see https://github.com/o/r/pull/42.");
+  const triager = await phaseContextBlock({ target: "triager", query: "" }, run);
+  assert.ok(triager.block.includes(`## Related jobs\n${CITED_LINE}`), triager.block);
+});
+
+test("an unknown ref gets a not found line, and the search hits still follow", async (t) => {
+  const env = makeDoneJob(t, "phase-context-cited-missing");
+  const run = runCiting(env, "compare with J-999999");
+  const triager = await phaseContextBlock({ target: "triager", query: "runner lease" }, run);
+  assert.ok(
+    triager.block.includes("## Related jobs\n- [J-999999] cited, not found in this project\n- [J-1] fix the runner lease renewal [done · PR #42 · 2026-09-30]"),
+    triager.block,
+  );
+});
+
+test("another project's job, by ref or by URL, reads like an unknown one and is never listed", async (t) => {
+  const env = makeDoneJob(t, "phase-context-cited-foreign");
+  const beta = addJob({ projectId: ensureProject(env, "beta"), prompt: "a secret beta change" }, env);
+  openDb(env).prepare("UPDATE jobs SET status = 'done', pr_url = ?, branch = 'beta/branch' WHERE id = ?").run("https://github.com/b/b/pull/9", beta.id);
+  const run = runCiting(env, `look at J-${beta.id} and https://github.com/b/b/pull/9`);
+  const triager = await phaseContextBlock({ target: "triager", query: "" }, run);
+  assert.ok(
+    triager.block.includes(
+      `## Related jobs\n- [J-${beta.id}] cited, not found in this project\n- [PR] https://github.com/b/b/pull/9 cited, no job of this project opened it`,
+    ),
+    triager.block,
+  );
+  assert.equal(/secret beta|beta\/branch/.test(triager.block), false, triager.block);
+});
+
+test("a cited job's notice line is clipped to 200 characters", async (t) => {
+  const env = makeDoneJob(t, "phase-context-cited-notice");
+  openDb(env).prepare("UPDATE jobs SET notice_md = ? WHERE id = 1").run(`${"x".repeat(5000)}\nsecond line`);
+  const run = runCiting(env, "J-1");
+  const triager = await phaseContextBlock({ target: "triager", query: "" }, run);
+  assert.ok(triager.block.includes(` notice: ${"x".repeat(197)}...`), triager.block);
+  assert.equal(triager.block.includes("x".repeat(198)), false);
+});
+
+test("the caller's own job cited in its prompt adds no line", async (t) => {
+  const env = makeDoneJob(t, "phase-context-cited-own");
+  const run = runCiting(env, "this is J-2, the job itself");
+  const triager = await phaseContextBlock({ target: "triager", query: "" }, run);
+  assert.equal(triager.block.includes("## Related jobs"), false, triager.block);
+});

@@ -28,7 +28,7 @@ test("the footer is the bare signature", () => {
   assert.equal(PR_FOOTER, "Opened by nightqueue");
 });
 
-test("a job publishes a copy ending with the bare signature, the same on a second call, and the agent's file is unchanged", (t) => {
+test("a job publishes a copy ending with the signature and its job ref, the same on a second call, and the agent's file is unchanged", (t) => {
   const { env, runDir, bodyFile } = makeFooterHome(t, "pr-footer-job");
   const job = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix it" }, env);
   const before = hashOf(bodyFile);
@@ -38,7 +38,7 @@ test("a job publishes a copy ending with the bare signature, the same on a secon
 
   assert.equal(first, join(runDir, PUBLISHED_BODY_FILE));
   assert.equal(second, first);
-  assert.equal(readFileSync(first, "utf8"), "## Report\n\nthe thing is done.\n\nOpened by nightqueue\n");
+  assert.equal(readFileSync(first, "utf8"), `## Report\n\nthe thing is done.\n\nOpened by nightqueue · J-${job.id}\n`);
   assert.equal(hashOf(bodyFile), before, "the agent's body file was edited");
 });
 
@@ -48,15 +48,28 @@ test("a run outside the queue ends with the bare signature too", (t) => {
   assert.equal(readFileSync(published, "utf8"), "## Report\n\nthe thing is done.\n\nOpened by nightqueue\n");
 });
 
-test("a job with an origin ends with the signature naming its kind and ref; a partial origin keeps the bare signature", (t) => {
+test("a job with an origin ends with the signature, its job ref, then the origin's kind and ref; a partial origin keeps only the job ref", (t) => {
   const { runDir, bodyFile } = makeFooterHome(t, "pr-footer-origin");
   const linear = publishedBodyFile({ bodyFile, runDir, jobId: 4, origin: { kind: "linear", ref: "MK-42" } });
-  assert.equal(readFileSync(linear, "utf8"), "## Report\n\nthe thing is done.\n\nOpened by nightqueue · linear MK-42\n");
+  assert.equal(readFileSync(linear, "utf8"), "## Report\n\nthe thing is done.\n\nOpened by nightqueue · J-4 · linear MK-42\n");
   const sentry = publishedBodyFile({ bodyFile, runDir, jobId: 4, origin: { kind: "sentry", ref: "4507" } });
-  assert.equal(readFileSync(sentry, "utf8"), "## Report\n\nthe thing is done.\n\nOpened by nightqueue · sentry 4507\n");
-  assert.equal(footerLine(null), "Opened by nightqueue");
-  assert.equal(footerLine({ kind: "linear", ref: "" }), "Opened by nightqueue");
-  assert.equal(footerLine({ kind: "", ref: "MK-42" }), "Opened by nightqueue");
+  assert.equal(readFileSync(sentry, "utf8"), "## Report\n\nthe thing is done.\n\nOpened by nightqueue · J-4 · sentry 4507\n");
+  assert.equal(footerLine({ jobId: 4, origin: { kind: "linear", ref: "" } }), "Opened by nightqueue · J-4");
+  assert.equal(footerLine({ jobId: 4, origin: { kind: "", ref: "MK-42" } }), "Opened by nightqueue · J-4");
+});
+
+test("the footer line names the job, then the origin, and stays bare without either", () => {
+  assert.equal(footerLine({ jobId: 156 }), "Opened by nightqueue · J-156");
+  assert.equal(footerLine({ jobId: 156, origin: { kind: "linear", ref: "MK-42" } }), "Opened by nightqueue · J-156 · linear MK-42");
+  assert.equal(footerLine({ jobId: null }), "Opened by nightqueue");
+  assert.equal(footerLine(), "Opened by nightqueue");
+  assert.equal(footerLine({ origin: { kind: "linear", ref: "MK-42" } }), "Opened by nightqueue · linear MK-42");
+});
+
+test("an invalid job id adds no job ref to the footer line", () => {
+  for (const jobId of [0, -3, 1.5, Number.NaN, "7", Number.MAX_SAFE_INTEGER + 1]) {
+    assert.equal(footerLine({ jobId }), "Opened by nightqueue", String(jobId));
+  }
 });
 
 test("a body that cannot be read refuses the publication, naming the job", (t) => {

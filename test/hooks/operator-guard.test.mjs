@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { COMMAND_NAMES } from "../../src/cli/index.mjs";
 import { idTime, newId } from "../../src/config/ids.mjs";
-import { qaDir, runsDir, secretsPath } from "../../src/config/paths.mjs";
+import { configPath, dbPath, qaDir, runsDir, secretsPath } from "../../src/config/paths.mjs";
 import { operatorDecision } from "../../src/hooks/operator-guard.mjs";
 import { operatorSettings, desiredHooks } from "../../src/host/settings.mjs";
 import { SUBCOMMAND_NAMES as DECISION_SUBCOMMANDS } from "../../src/cli/decision.mjs";
@@ -144,33 +144,56 @@ test("the main thread runs only the D-58 Bash list", (t) => {
   for (const command of refused) assertDenied(main("Bash", { command }), env);
 });
 
-test("the main thread reads the checkouts, qa, runs and the plugin, never the home root", (t) => {
+test("the main thread reads anything on disk but the secrets file and `.env*` files", (t) => {
   const { env, checkout, qaWorktree } = operatorFixture(t);
   assertAllowed(main("Read", { file_path: join(checkout, "src", "app.mjs") }), env);
   assertAllowed(main("Read", { file_path: join(qaWorktree, "x") }), env);
   assertAllowed(main("Grep", { pattern: "x", path: join(runsDir(env), "p") }), env);
+  assertAllowed(main("Read", { file_path: configPath(env) }), env);
+  assertAllowed(main("Read", { file_path: dbPath(env) }), env);
+  assertAllowed(main("Read", { file_path: "/etc/hosts" }), env);
+  assertAllowed(main("Read", { file_path: join(checkout, "src", "env.mjs") }), env);
+  assertAllowed(main("Read", { file_path: join(checkout, ".envrc") }), env);
+  assertAllowed(main("Glob", { pattern: "*" }, join(env.NIGHTQUEUE_HOME)), env);
+  assertAllowed(main("Grep", { pattern: "x", path: join(env.NIGHTQUEUE_HOME, "logs") }), env);
   assertDenied(main("Read", { file_path: secretsPath(env) }), env);
-  assertDenied(main("Glob", { pattern: "*" }, join(env.NIGHTQUEUE_HOME)), env);
+  assertDenied(main("Read", { file_path: join(checkout, ".env") }), env);
+  assertDenied(main("Read", { file_path: join(checkout, "apps", "web", ".env.local") }), env);
+  assertDenied(main("Read", {}), env);
+});
+
+test("a Grep over the home or a parent of it is refused: the sweep would read the secrets file below", (t) => {
+  const { env, checkout } = operatorFixture(t);
+  assertDenied(main("Grep", { pattern: "x", path: env.NIGHTQUEUE_HOME }), env);
+  assertDenied(main("Grep", { pattern: "x", path: join(env.NIGHTQUEUE_HOME, "..") }), env);
+  assertDenied(main("Grep", { pattern: "x" }, env.NIGHTQUEUE_HOME), env);
+  assertAllowed(main("Grep", { pattern: "x", path: checkout }), env);
+  assertAllowed(main("Glob", { pattern: "**/*.json", path: env.NIGHTQUEUE_HOME }), env);
+  assert.match(operatorDecision({ input: main("Grep", { pattern: "x", path: env.NIGHTQUEUE_HOME }), env }), /narrow `path`/);
 });
 
 test("an absolute Glob pattern or Grep glob is judged by its own prefix, whatever path the call names", (t) => {
   const { env, checkout } = operatorFixture(t);
   assertAllowed(main("Glob", { path: checkout, pattern: "src/**/*.mjs" }), env);
   assertAllowed(main("Glob", { path: checkout, pattern: `${checkout}/src/*.mjs` }), env);
-  assertDenied(main("Glob", { path: checkout, pattern: `${env.NIGHTQUEUE_HOME}/*` }), env);
-  assertDenied(main("Glob", { path: checkout, pattern: "/etc/*" }), env);
-  assertDenied(main("Grep", { path: checkout, pattern: "x", glob: `${env.NIGHTQUEUE_HOME}/**` }), env);
-  assertDenied(sub("nightqueue:triage", "Glob", { path: checkout, pattern: "/etc/*" }), env);
+  assertAllowed(main("Glob", { path: checkout, pattern: `${env.NIGHTQUEUE_HOME}/*` }), env);
+  assertAllowed(main("Glob", { path: checkout, pattern: "/etc/*" }), env);
+  assertDenied(main("Glob", { path: checkout, pattern: secretsPath(env) }), env);
+  assertDenied(main("Grep", { path: checkout, pattern: "x", glob: `${checkout}/.env` }), env);
+  assertDenied(main("Glob", { pattern: "../src/*.mjs", path: checkout }), env);
+  assertDenied(sub("nightqueue:triage", "Glob", { path: checkout, pattern: secretsPath(env) }), env);
 });
 
-test("the subagents read only where the operator reads, so delegation never widens the read scope", (t) => {
+test("the subagents read exactly where the operator reads, so delegation never reaches the secrets or a `.env*` file", (t) => {
   const { env, checkout, qaWorktree } = operatorFixture(t);
   for (const type of ["nightqueue:triage", "nightqueue:reviewer", "nightqueue:qa"]) {
     assertAllowed(sub(type, "Read", { file_path: join(checkout, "src", "app.mjs") }), env);
     assertAllowed(sub(type, "Grep", { pattern: "x", path: qaWorktree }), env);
+    assertAllowed(sub(type, "Read", { file_path: "/etc/hosts" }), env);
+    assertAllowed(sub(type, "Read", { file_path: configPath(env) }), env);
     assertDenied(sub(type, "Read", { file_path: secretsPath(env) }), env);
-    assertDenied(sub(type, "Read", { file_path: "/etc/hosts" }), env);
-    assertDenied(sub(type, "Glob", { pattern: "*" }), env);
+    assertDenied(sub(type, "Read", { file_path: join(checkout, ".env.production") }), env);
+    assertDenied(sub(type, "Grep", { pattern: "x", path: env.NIGHTQUEUE_HOME }), env);
   }
 });
 

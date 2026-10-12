@@ -17,12 +17,28 @@ export function formatDurationMs(ms: number | null): string {
   return `${Math.floor(minutes / 60)}h${String(minutes % 60).padStart(2, "0")}m`;
 }
 
+// The track's active time: always to the second — `9s`, `4m09s`, `1h28m32s`; `-` when unknown. Unlike formatDurationMs it keeps seconds past an hour.
+export function formatActiveMs(ms: number | null): string {
+  if (ms === null || !Number.isFinite(ms) || ms < 0) return "-";
+  const seconds = Math.round(ms / 1000);
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  const ss = String(seconds % 60).padStart(2, "0");
+  if (minutes < 60) return `${minutes}m${ss}s`;
+  return `${Math.floor(minutes / 60)}h${String(minutes % 60).padStart(2, "0")}m${ss}s`;
+}
+
+// The milliseconds a job ran: start to finish, or start to now while it runs; null before it started.
+export function spanMs(startedAt: string | null, finishedAt: string | null, nowMs: number): number | null {
+  const started = isoMs(startedAt);
+  if (started === null) return null;
+  return (isoMs(finishedAt) ?? nowMs) - started;
+}
+
 // How long a job ran: since its start while it runs, start to finish once it stopped, `-` before it started.
 export function durationLabel(startedAt: string | null, finishedAt: string | null, nowMs: number): string {
-  const started = isoMs(startedAt);
-  if (started === null) return "-";
-  const finished = isoMs(finishedAt);
-  return formatDurationMs((finished ?? nowMs) - started);
+  const span = spanMs(startedAt, finishedAt, nowMs);
+  return span === null ? "-" : formatDurationMs(span);
 }
 
 type AttemptTiming = Pick<Job, "started_at" | "attempt_started_at" | "attempts_log" | "active_s">;
@@ -170,18 +186,6 @@ export function tokensTotalLabel(job: TokenSource): string {
   if (total < 1000) return `${mark}${total}`;
   if (total < 1_000_000) return `${mark}${Math.round(total / 1000)}k`;
   return `${mark}${(total / 1_000_000).toFixed(1)}M`;
-}
-
-// GitHub's five-block proportion of a change: green for additions, red for deletions, grey when nothing changed.
-export function blocks5(added: number | null | undefined, deleted: number | null | undefined): { green: number; red: number } {
-  const adds = finiteOrZero(added);
-  const dels = finiteOrZero(deleted);
-  const total = adds + dels;
-  if (total <= 0) return { green: 0, red: 0 };
-  const green = Math.round((5 * adds) / total);
-  if (adds > 0 && green === 0) return { green: 1, red: 4 };
-  if (dels > 0 && green === 5) return { green: 4, red: 1 };
-  return { green, red: 5 - green };
 }
 
 // The number of a GitHub pull request URL, null when the URL carries none.

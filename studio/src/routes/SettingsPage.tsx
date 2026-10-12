@@ -2,7 +2,6 @@ import { useCallback, useState } from "react";
 import { AddConnectionDialog } from "../components/settings/AddConnectionDialog";
 import { AddWebhookDialog } from "../components/settings/AddWebhookDialog";
 import type { ConnectionHandlers } from "../components/settings/ConnectionRow";
-import { DestinationsCard } from "../components/settings/DestinationsCard";
 import { LinkProjectsDialog } from "../components/settings/LinkProjectsDialog";
 import { ModuleCard } from "../components/settings/ModuleCard";
 import { RemoveConnectionDialog, type RemoveTarget } from "../components/settings/RemoveConnectionDialog";
@@ -107,7 +106,6 @@ function IntegrationsBody({ query, handlers, onAdd }: { query: ReturnType<typeof
       {query.data.modules.map((module) => (
         <ModuleCard key={module.kind} module={module} view={query.data} handlers={handlers} onAdd={onAdd} />
       ))}
-      <DestinationsCard view={query.data} />
     </>
   );
 }

@@ -1329,3 +1329,275 @@ test("checks gh read on another head than the one judged are unreadable, and not
   assert.match(result.note, /belong to 9999999, not 1111111/);
   assert.equal(fake.log.merges.length, 0);
 });
+
+const BEHIND_CTX = { headSha: HEAD_SHA, ciGreenSha: HEAD_SHA, checksOnHead: 1, baseBranch: "main" };
+const NOT_UP_TO_DATE = "not mergeable: the head branch is not up to date with the base branch";
+
+// The pushes a fake close made.
+function pushesOf(log) {
+  return gitLines(log).filter((line) => line.startsWith("push"));
+}
+
+// A fake merge step whose pull request reads as given and whose push leaves it at the pushed head with the given merge state.
+function mergeBehindFake({ pr = openPr({ mergeStateStatus: "BEHIND" }), pushedState = "CLEAN", ...changes } = {}) {
+  const fake = fakeCloseDeps({ pr, checks: GREEN, ...changes });
+  fake.world.git.push = () => {
+    fake.world.pr = openPr({ headRefOid: PUSHED_SHA, mergeStateStatus: pushedState });
+    return gitOk();
+  };
+  return fake;
+}
+
+// Scripts every push to leave the pull request BEHIND (or the given state) at a new head, as when main keeps moving.
+function baseKeepsMoving(fake, mergeStateStatus = "BEHIND") {
+  let tip = 0;
+  fake.world.git.push = () => {
+    tip += 1;
+    fake.world.pr = openPr({ headRefOid: `333333${tip}`, mergeStateStatus });
+    return gitOk();
+  };
+  fake.world.git["rev-parse HEAD"] = () => gitOk(`333333${tip}\n`);
+  return fake;
+}
+
+// A merge call refused as not up to date the first time, leaving the pull request open at its head as `after`, then a merge.
+function refusedOnce(after, stderr = NOT_UP_TO_DATE) {
+  let calls = 0;
+  return (world) => {
+    calls += 1;
+    if (calls > 1) {
+      world.pr = mergedPr();
+      return { ok: true, stderr: "" };
+    }
+    world.pr = after;
+    return { ok: false, stderr };
+  };
+}
+
+test("J-168 replay: main moves during the checks wait after the conflict step's update, and the merge step updates again and merges in one run", async (t) => {
+  const home = closeHome(t, "close-steps-behind-again");
+  const { fake, now } = behindWorld();
+  let pushes = 0;
+  fake.world.git.push = () => {
+    pushes += 1;
+    fake.world.pr = pushes === 1 ? openPr({ headRefOid: PUSHED_SHA, mergeStateStatus: "BEHIND" }) : openPr({ headRefOid: "3333333" });
+    return gitOk();
+  };
+  fake.world.git["rev-parse HEAD"] = () => gitOk(pushes === 1 ? `${PUSHED_SHA}\n` : "3333333\n");
+  const { outcome, checklist } = await close(home, fake, { now });
+  assert.equal(outcome.status, "closed", JSON.stringify(outcome));
+  assert.deepEqual(fake.log.merges, [{ url: CLOSE_PR_URL, matchHeadCommit: "3333333" }]);
+  assert.equal(pushesOf(fake.log).length, 2);
+  assert.match(checklist.steps.merge.note, /^main moved past 2222222: rebased onto origin\/main/);
+  assert.match(checklist.steps.merge.note, /checks green on 3333333/);
+  assert.match(checklist.steps.merge.note, /squash-merged as abc1234/);
+});
+
+test("a merge turn reading BEHIND on a CI-green head rebases, waits for the new head's checks and merges it, never the behind head", async () => {
+  const fake = mergeBehindFake();
+  const result = await mergeStep({ ctx: ctxFor(BEHIND_CTX), deps: fake.deps });
+  assert.equal(result.status, "done", result.note);
+  assert.deepEqual(fake.log.merges.map((call) => call.matchHeadCommit), [PUSHED_SHA]);
+  assert.equal(pushesOf(fake.log).length, 1);
+  assert.equal(fake.log.tests.length, 0, "the suite ran though CI gates the head");
+  assert.equal(result.data.headSha, PUSHED_SHA);
+  assert.equal(result.data.pushedBy, "close");
+  assert.equal(result.data.ciGreenSha, PUSHED_SHA);
+  assert.equal(result.reopen, undefined);
+  assert.match(result.note, /^main moved past 1111111: rebased onto origin\/main, suite skipped \(CI gates the head\), pushed 1111111 -> 2222222; 2 checks green on 2222222; squash-merged/);
+});
+
+test("a merge gh refuses as not up to date at the same open head is updated and merged, never merge-without-sha", async () => {
+  const behind = mergeBehindFake({ pr: openPr(), merge: refusedOnce(openPr({ mergeStateStatus: "BEHIND" }), "merge refused") });
+  const result = await mergeStep({ ctx: ctxFor(BEHIND_CTX), deps: behind.deps });
+  assert.equal(result.status, "done", result.note);
+  assert.deepEqual(behind.log.merges.map((call) => call.matchHeadCommit), [HEAD_SHA, PUSHED_SHA]);
+  assert.equal(pushesOf(behind.log).length, 1);
+
+  const unknown = openPr({ mergeable: "UNKNOWN", mergeStateStatus: "UNKNOWN" });
+  const lagging = mergeBehindFake({ pr: openPr() });
+  lagging.world.merge = (world) => {
+    lagging.world.merge = (current) => {
+      current.pr = mergedPr();
+      return { ok: true, stderr: "" };
+    };
+    world.reads.push(unknown, unknown, unknown, openPr({ mergeStateStatus: "BEHIND" }));
+    return { ok: false, stderr: "merge refused" };
+  };
+  const waited = await mergeStep({ ctx: ctxFor(BEHIND_CTX), deps: lagging.deps });
+  assert.equal(waited.status, "done", waited.note);
+  assert.ok(lagging.log.sleeps.includes(3000), `no pause before reading the mergeability again: ${lagging.log.sleeps}`);
+  assert.equal(pushesOf(lagging.log).length, 1);
+
+  const byMessage = mergeBehindFake({ pr: openPr(), merge: refusedOnce(openPr()) });
+  const merged = await mergeStep({ ctx: ctxFor(BEHIND_CTX), deps: byMessage.deps });
+  assert.equal(merged.status, "done", merged.note);
+  assert.deepEqual(byMessage.log.merges.map((call) => call.matchHeadCommit), [HEAD_SHA, PUSHED_SHA]);
+});
+
+test("a refusal at the same head reading BLOCKED without gh's not-up-to-date message is still merge-without-sha, pushing nothing", async () => {
+  const fake = mergeBehindFake({ pr: openPr(), merge: refusedOnce(openPr({ mergeStateStatus: "BLOCKED" }), "Required status check is expected") });
+  const result = await mergeStep({ ctx: ctxFor(BEHIND_CTX), deps: fake.deps });
+  assert.equal(result.reason, "merge-without-sha");
+  assert.equal(pushesOf(fake.log).length, 0);
+  assert.equal(fake.log.merges.length, 1);
+});
+
+test("a base that keeps moving stops the merge with base-moved after two updates, merging nothing, never merge-without-sha", async () => {
+  const fake = baseKeepsMoving(mergeBehindFake());
+  const result = await mergeStep({ ctx: ctxFor(BEHIND_CTX), deps: fake.deps });
+  assert.equal(result.reason, "base-moved");
+  assert.match(result.note, /main moved past 1111111: .*main moved past 3333331: .*main keeps moving: the base main moved past the branch 2 times/);
+  assert.deepEqual(result.reopen, ["preflight", "conflict"]);
+  assert.equal(pushesOf(fake.log).length, 2);
+  assert.equal(fake.log.merges.length, 0);
+  assert.equal(result.data.pushedBy, "close");
+  assert.equal(result.data.headSha, "3333332");
+
+  const refused = baseKeepsMoving(mergeBehindFake({ pr: openPr(), merge: () => ({ ok: false, stderr: NOT_UP_TO_DATE }) }), "CLEAN");
+  const left = await mergeStep({ ctx: ctxFor(BEHIND_CTX), deps: refused.deps });
+  assert.equal(left.reason, "base-moved");
+  assert.equal(refused.log.merges.length, 3);
+  assert.equal(pushesOf(refused.log).length, 2);
+  assert.equal(left.data.merged, undefined);
+});
+
+test("a merge that finds the pull request CLEAN is neither rebased nor waited on", async () => {
+  const fake = fakeCloseDeps();
+  const result = await mergeStep({ ctx: ctxFor(BEHIND_CTX), deps: fake.deps });
+  assert.equal(result.status, "done", result.note);
+  assert.equal(pushesOf(fake.log).length, 0);
+  assert.equal(gitLines(fake.log).some((line) => line.startsWith("rebase")), false);
+  assert.equal(fake.log.tempDirs.length, 0);
+  assert.deepEqual(fake.log.sleeps, []);
+  assert.equal(fake.log.merges.length, 1);
+});
+
+test("a close stopped at base-moved resumes with queue close: the conflict step runs again and the pushed head is merged once", async (t) => {
+  const home = closeHome(t, "close-steps-base-moved");
+  const { fake, now } = behindWorld();
+  baseKeepsMoving(fake);
+  const first = await close(home, fake, { now });
+  assert.equal(first.outcome.status, "failed", JSON.stringify(first.outcome));
+  assert.equal(first.outcome.reason, "base-moved");
+  assert.equal(first.outcome.step, "merge");
+  assert.match(first.checklist.steps.merge.note, /main keeps moving/);
+  assert.equal(fake.log.merges.length, 0);
+  const pushed = pushesOf(fake.log).length;
+
+  fake.world.pr = openPr({ headRefOid: "3333333" });
+  const second = await close(reacquire(home, "close:test:2:bbbb"), fake, { now });
+  assert.equal(second.outcome.status, "closed", JSON.stringify(second.outcome));
+  assert.deepEqual(fake.log.merges, [{ url: CLOSE_PR_URL, matchHeadCommit: "3333333" }]);
+  assert.equal(second.checklist.steps.conflict.status, "skipped");
+  assert.match(second.checklist.steps.conflict.note, /mergeable \(CLEAN\)/);
+  assert.equal(pushesOf(fake.log).length, pushed, "the resumed close pushed again");
+});
+
+test("a close aborted once the merge step found the head behind pushes nothing and merges nothing", async () => {
+  const controller = new AbortController();
+  const fake = mergeBehindFake();
+  fake.world.git["fetch origin fix/worker"] = () => {
+    controller.abort();
+    return gitOk();
+  };
+  const result = await mergeStep({ ctx: ctxFor(BEHIND_CTX, "/work/alpha", { signal: controller.signal }), deps: fake.deps });
+  assert.equal(result.reason, "interrupted");
+  assert.equal(pushesOf(fake.log).length, 0);
+  assert.equal(fake.log.merges.length, 0);
+});
+
+test("with --force, a head behind at merge is rebased and pushed with no suite and no wait, and merged at the pushed head", async () => {
+  const fake = mergeBehindFake();
+  const result = await mergeStep({ ctx: ctxFor(BEHIND_CTX, "/work/alpha", { force: true }), deps: fake.deps });
+  assert.equal(result.status, "done", result.note);
+  assert.equal(pushesOf(fake.log).length, 1);
+  assert.equal(fake.log.tests.length, 0);
+  assert.equal(fake.log.checkReads, 0);
+  assert.deepEqual(fake.log.merges.map((call) => call.matchHeadCommit), [PUSHED_SHA]);
+  assert.doesNotMatch(result.note, /the head moved/);
+});
+
+test("a failed update in the merge step stops with its own reason, reopens conflict and merges nothing", async () => {
+  const red = mergeBehindFake({ suite: { ok: false, output: "boom", timedOut: false } });
+  const suiteRed = await mergeStep({ ctx: ctxFor({ headSha: HEAD_SHA, ciGreenSha: HEAD_SHA }), deps: red.deps });
+  assert.equal(suiteRed.reason, "suite-red");
+  assert.deepEqual(suiteRed.reopen, ["preflight", "conflict"]);
+  assert.match(suiteRed.note, /^main moved past 1111111: npm test failed/);
+  assert.equal(red.log.merges.length, 0);
+  assert.equal(pushesOf(red.log).length, 0);
+
+  const failing = mergeBehindFake({ checks: RED });
+  const checksRed = await mergeStep({ ctx: ctxFor(BEHIND_CTX), deps: failing.deps });
+  assert.equal(checksRed.reason, "checks-red");
+  assert.deepEqual(checksRed.reopen, ["preflight", "conflict"]);
+  assert.match(checksRed.note, /^main moved past 1111111: /);
+  assert.equal(checksRed.data.pushedBy, "close");
+  assert.equal(checksRed.data.headSha, PUSHED_SHA);
+  assert.equal(failing.log.merges.length, 0);
+});
+
+test("a gh refusal as not up to date with a BEHIND reread at the same head is updated and merged at the pushed head", async () => {
+  const fake = mergeBehindFake({ pr: openPr(), merge: refusedOnce(openPr({ mergeStateStatus: "BEHIND" })) });
+  const result = await mergeStep({ ctx: ctxFor(BEHIND_CTX), deps: fake.deps });
+  assert.equal(result.status, "done", result.note);
+  assert.deepEqual(fake.log.merges.map((call) => call.matchHeadCommit), [HEAD_SHA, PUSHED_SHA]);
+  assert.equal(pushesOf(fake.log).length, 1);
+});
+
+test("GitHub still showing the replaced head on every read after the in-step push neither pushes again nor records a moved head", async () => {
+  const fake = mergeBehindFake();
+  fake.world.git.push = () => {
+    fake.world.reads = [0, 1, 2].map(() => openPr({ mergeStateStatus: "BEHIND" }));
+    fake.world.pr = openPr({ headRefOid: PUSHED_SHA, mergeStateStatus: "CLEAN" });
+    fake.world.git.push = () => gitOk();
+    return gitOk();
+  };
+  const result = await mergeStep({ ctx: ctxFor(BEHIND_CTX), deps: fake.deps });
+  assert.equal(result.status, "done", result.note);
+  assert.equal(pushesOf(fake.log).length, 1);
+  assert.deepEqual(fake.log.merges.map((call) => call.matchHeadCommit), [PUSHED_SHA]);
+  assert.doesNotMatch(result.note, /the head moved from/);
+  assert.equal(result.data.headSha, PUSHED_SHA);
+  assert.equal(result.data.pushedBy, "close");
+});
+
+test("a pull request GitHub never shows at the pushed head stops with base-moved after two pushes, merging nothing", async () => {
+  const neverShown = mergeBehindFake();
+  neverShown.world.git.push = () => gitOk();
+  const stale = await mergeStep({ ctx: ctxFor(BEHIND_CTX), deps: neverShown.deps });
+  assert.equal(stale.reason, "base-moved", stale.note);
+  assert.deepEqual(stale.reopen, ["preflight", "conflict"]);
+  assert.equal(pushesOf(neverShown.log).length, 2);
+  assert.equal(neverShown.log.merges.length, 0);
+
+  const sameHead = mergeBehindFake({ pushedState: "BEHIND" });
+  const behind = await mergeStep({ ctx: ctxFor(BEHIND_CTX), deps: sameHead.deps });
+  assert.equal(behind.reason, "base-moved", behind.note);
+  assert.deepEqual(behind.reopen, ["preflight", "conflict"]);
+  assert.equal(pushesOf(sameHead.log).length, 2);
+  assert.equal(sameHead.log.merges.length, 0);
+});
+
+test("checks still pending at the end of the in-step wait keep the pushed head recorded and reopen conflict, merging nothing", async () => {
+  const fake = mergeBehindFake({ checks: HALF });
+  const result = await mergeStep({ ctx: ctxFor(BEHIND_CTX, "/work/alpha", { remainingMs: () => 1 }), deps: fake.deps });
+  assert.equal(pushesOf(fake.log).length, 1);
+  assert.equal(result.reason, "checks-pending", result.note);
+  assert.equal(result.data.pushedBy, "close");
+  assert.equal(result.data.headSha, PUSHED_SHA);
+  assert.deepEqual(result.reopen, ["preflight", "conflict"]);
+  assert.match(result.note, /^main moved past 1111111/);
+  assert.equal(fake.log.merges.length, 0);
+});
+
+test("a real conflict in the in-step rebase stops the merge, pushes nothing and records the conflicted files", async () => {
+  const fake = mergeBehindFake({ git: { "rebase origin/": gitFail("CONFLICT (content): Merge conflict in src/a.mjs"), "diff --name-only --diff-filter=U": gitOk("src/a.mjs\n") } });
+  const result = await mergeStep({ ctx: ctxFor(BEHIND_CTX), deps: fake.deps });
+  assert.equal(result.reason, "real-conflict", result.note);
+  assert.deepEqual(result.reopen, ["preflight", "conflict"]);
+  assert.match(result.note, /^main moved past 1111111/);
+  assert.deepEqual(result.data.conflict?.files, ["src/a.mjs"]);
+  assert.equal(pushesOf(fake.log).length, 0);
+  assert.equal(fake.log.merges.length, 0);
+});

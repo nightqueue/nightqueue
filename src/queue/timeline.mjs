@@ -1,26 +1,7 @@
 import { compactTokens } from "./last-cell.mjs";
-import { routingRow, trackPhaseNumbers } from "./routing.mjs";
+import { offTierPhases, routingRow, TRACK_SLOTS, trackPhaseNumbers } from "./routing.mjs";
 
-const PHASE_NAMES = new Map([
-  [0, "brief"],
-  [1, "triager"],
-  [2, "explore"],
-  [3, "architect"],
-  [4, "coder"],
-  [5, "qa-guardian"],
-  [6, "verifier"],
-  [7, "runtime"],
-  [8, "commit · PR"],
-]);
-
-const ROUTING_AGENTS = new Map([
-  [1, "triager"],
-  [2, "explore"],
-  [3, "architect"],
-  [4, "coder"],
-  [5, "qaGuardian"],
-  [6, "verifier"],
-]);
+const ALL_SLOT_NUMBERS = TRACK_SLOTS.map((slot) => slot.number);
 
 // The elapsed time of a narration event, null when the narrator had no clock for it.
 function offsetOf(event) {
@@ -171,11 +152,11 @@ function pushEvent(state, event) {
   else if (isMarker(event)) onMarker(state, event, atMs);
 }
 
-// The model a phase runs on: the one its lane was opened with, else the routing row's for the tier, null for the orchestrator phases.
-function phaseModel(number, entry, models) {
+// The model a phase runs on: the one its lane was opened with, else the routing row's for the tier, null for the orchestrator phases and a skipped slot.
+function phaseModel(slot, { entry, models, skipped }) {
   if (entry?.model) return entry.model;
-  const agent = ROUTING_AGENTS.get(number);
-  return agent ? (models[agent] ?? null) : null;
+  if (skipped || !slot.agent) return null;
+  return models[slot.agent] ?? null;
 }
 
 // The clock reading since which a phase is still accruing time, null when nothing of it is open.
@@ -191,15 +172,32 @@ function openTime(state, number) {
   return since === null ? 0 : span(since, state.lastElapsed);
 }
 
-// The state of one phase of the track, from what the job reached across every attempt and the status of the job.
-function phaseState(number, { state, status, lastReachedIndex, index, gatePhase }) {
+// The state of a phase the job reached, from every attempt and the status of the job; null for a phase it never reached.
+function reachedState(number, { state, status, gatePhase }) {
   const running = status === "running";
   const open = [...state.openLanes.values()].some((lane) => lane.phase === number);
   if (number === state.current && running) return "now";
   if (number === gatePhase && status === "gate") return "gate";
   if (open && running) return "now";
-  if (state.phases.has(number)) return "done";
-  return index < lastReachedIndex ? "skip" : "pending";
+  return state.phases.has(number) ? "done" : null;
+}
+
+// The skip record of a slot: an agent's, else the tier's while the slot is off the run's routing, recorded or derived; null for any other slot.
+function skipRecordOf(slot, { skips, offTier }) {
+  const recorded = slot.phase ? (skips[slot.phase] ?? null) : null;
+  if (recorded && recorded.by !== "tier") return recorded;
+  if (!offTier.includes(slot.phase)) return null;
+  return recorded ?? { by: "tier", reason: null, at: null };
+}
+
+// The state of one slot and its skip record: reached wins, then a skip record, then an in-track slot passed over, else pending.
+function slotState(slot, context) {
+  const reached = reachedState(slot.number, context);
+  if (reached) return { state: reached, skipped: null };
+  const skipped = skipRecordOf(slot, context);
+  if (skipped) return { state: "skipped", skipped };
+  const index = context.inTrack.indexOf(slot.number);
+  return { state: index !== -1 && index < context.lastReachedIndex ? "skipped" : "pending", skipped: null };
 }
 
 // The time a phase spent in each attempt that reached it, in attempt order; once the job stopped, its current attempt takes the still open time and the stopped phase is marked last.
@@ -213,17 +211,22 @@ function attemptsWire(state, number, entry, running) {
     });
 }
 
-// One phase of the wire: name, model, state, summed duration, the clock its open part runs from, where it started on the job's clock, its attempts and its estimated tokens.
-function phaseWire(number, { state, status, models, lastReachedIndex, index, gatePhase }) {
+// One phase of the wire: name, routing agent, model, state, skip record, summed duration, the clock its open part runs from, where it started on the job's clock, its attempts and its estimated tokens.
+function phaseWire(slot, context) {
+  const { state, status, models } = context;
+  const number = slot.number;
   const entry = state.phases.get(number) ?? null;
   const running = status === "running";
   const durationMs = entry ? entry.durationMs + (running ? 0 : openTime(state, number)) : null;
   const tokens = entry ? entry.tokens : 0;
+  const { state: slotStateName, skipped } = slotState(slot, context);
   return {
     number,
-    name: PHASE_NAMES.get(number),
-    model: phaseModel(number, entry, models),
-    state: phaseState(number, { state, status, lastReachedIndex, index, gatePhase }),
+    name: slot.name,
+    agent: slot.agent,
+    model: phaseModel(slot, { entry, models, skipped: slotStateName === "skipped" }),
+    state: slotStateName,
+    skipped,
     durationMs,
     liveSinceMs: running ? liveSince(state, number) : null,
     startMs: entry ? entry.startMs : null,
@@ -239,15 +242,28 @@ function clockOf(state) {
   return state.attempt === null ? null : state.base + (state.lastElapsed ?? 0);
 }
 
-// The phase track of a job as it stands: every phase of the tier's track with what every attempt so far reached.
-function snapshotOf(state, { tier, status }) {
+// A text field of a skip record, or null when it is absent or not text.
+function skipText(value) {
+  return typeof value === "string" && value ? value : null;
+}
+
+// The skip records of a run as the track reads them: only entries naming their author, with their reason and time as text or null.
+function readSkips(skips) {
+  if (!skips || typeof skips !== "object" || Array.isArray(skips)) return {};
+  const valid = Object.entries(skips).filter(([, entry]) => entry && typeof entry === "object" && typeof entry.by === "string" && entry.by);
+  return Object.fromEntries(valid.map(([phase, entry]) => [phase, { by: entry.by, reason: skipText(entry.reason), at: skipText(entry.at) }]));
+}
+
+// The phase track of a job as it stands: all nine slots, each with what every attempt so far reached or why it is skipped.
+function snapshotOf(state, { tier, type, status, skips }) {
   const numbers = trackPhaseNumbers(tier);
-  if (!numbers) return { track: null, phases: [], clockMs: clockOf(state) };
-  const { track, models } = routingRow(tier);
-  const lastReachedIndex = Math.max(-1, ...numbers.map((number, index) => (state.phases.has(number) ? index : -1)));
-  const gatePhase = state.current ?? numbers[0];
-  const phases = numbers.map((number, index) => phaseWire(number, { state, status, models, lastReachedIndex, index, gatePhase }));
-  return { track, phases, clockMs: clockOf(state) };
+  const { track, models } = numbers ? routingRow(tier) : { track: null, models: {} };
+  const inTrack = numbers ?? ALL_SLOT_NUMBERS;
+  const lastReachedIndex = Math.max(-1, ...inTrack.map((number, index) => (state.phases.has(number) ? index : -1)));
+  const gatePhase = state.current ?? inTrack[0];
+  const context = { state, status, models, inTrack, lastReachedIndex, gatePhase, skips: readSkips(skips), offTier: offTierPhases(tier, type) };
+  const phases = TRACK_SLOTS.map((slot) => phaseWire(slot, context));
+  return { track, tier: numbers ? tier : null, phases, clockMs: clockOf(state) };
 }
 
 // An accumulator of a job's phase track: narration events of every attempt go in one by one, a snapshot comes out at any time.
@@ -255,13 +271,13 @@ export function createTimeline({ tier = null } = {}) {
   const state = freshState();
   return {
     push: (event) => pushEvent(state, event),
-    snapshot: ({ status, tier: snapshotTier = tier } = {}) => snapshotOf(state, { tier: snapshotTier, status }),
+    snapshot: ({ status, tier: snapshotTier = tier, type = null, skips = null } = {}) => snapshotOf(state, { tier: snapshotTier, type, status, skips }),
   };
 }
 
-// The phase track of a job from a list of its narration events, every attempt included; never read from state.json.
-export function phaseTimeline(events, { tier, status }) {
+// The phase track of a job from a list of its narration events, every attempt included, with the run's recorded skips and type when given.
+export function phaseTimeline(events, { tier, type = null, status, skips = null }) {
   const timeline = createTimeline({ tier });
   for (const event of Array.isArray(events) ? events : []) timeline.push(event);
-  return timeline.snapshot({ status });
+  return timeline.snapshot({ status, type, skips });
 }
