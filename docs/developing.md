@@ -17,6 +17,7 @@ nightqueue setup --from ~/code/nightqueue   # install the runtime from a checkou
 nightqueue update --from ~/code/nightqueue  # ...and again, after a change
 nightqueue update --from ./nightqueue.tgz   # install a tarball exactly as it is
 npm test                                    # the whole suite, hermetic, no network
+npm run test:shard                          # one CI shard: TEST_SHARD=1/3 npm run test:shard
 npm run release:check                       # the suite, then the tarball and the versions
 ```
 

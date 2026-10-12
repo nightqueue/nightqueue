@@ -296,6 +296,8 @@ test("a clean rebase of a head that had checks skips the suite and pushes, leavi
   assert.equal(result.note, `rebased onto origin/main, suite skipped (CI gates the head), pushed ${HEAD_SHA.slice(0, 7)} -> ${PUSHED_SHA.slice(0, 7)}`);
   assert.deepEqual(fake.log.tests, [], "a repository with CI ran the local suite on a clean rebase");
   assert.ok(gitLines(fake.log).some((line) => line.startsWith("push")), "the clean rebase was never pushed");
+  assert.equal("verifiedSha" in result.data, false, "a CI-gated push recorded a head no suite ran on as verified");
+  assert.deepEqual(result.data, { headShaBefore: HEAD_SHA, headSha: PUSHED_SHA, pushedBy: "close" });
 });
 
 test("a clean rebase of a head with no checks runs the suite", async () => {
@@ -975,16 +977,200 @@ test("with --force, a failed Actions check is listed as failing and never re-run
   assert.equal(fake.log.reruns.length, 0);
 });
 
-test("a BEHIND update after a preflight wait spends only what is left of the one close budget", async (t) => {
+// Records how many sleeps the fake close had made when it pushed.
+function sleepsAtPush(fake) {
+  const seen = [];
+  const push = fake.world.git.push;
+  fake.world.git.push = (args) => {
+    seen.push(fake.log.sleeps.length);
+    return push(args);
+  };
+  return seen;
+}
+
+test("a BEHIND pull request with pending checks skips the preflight wait and spends the one budget on the new head", async (t) => {
   const home = closeHome(t, "close-steps-preflight-then-behind");
-  const firstWait = [HALF, HALF, HALF, HALF, HALF, HALF, HALF];
-  const { fake, now } = behindWorld({ checkReads: [HALF, ...firstWait, GREEN], checks: HALF });
-  const { outcome } = await close(home, fake, { now });
+  const { fake, now } = behindWorld({ checkReads: [HALF], checks: HALF });
+  const pushes = sleepsAtPush(fake);
+  const { outcome, checklist } = await close(home, fake, { now });
   assert.equal(outcome.reason, "checks-pending");
+  assert.match(checklist.steps.preflight.note, /checks still running on 1111111, not waited: the pull request is BEHIND main/);
+  assert.match(checklist.steps.conflict.note, /branch updated to 2222222, checks still running/);
+  assert.deepEqual(fake.log.tests, [], "the suite ran though CI gates the updated head");
+  assert.deepEqual(pushes, [0], "the close slept before it pushed the updated head");
   const spent = fake.log.sleeps.reduce((sum, ms) => sum + ms, 0);
-  assert.equal(spent <= (600 - 30) * 1000 && spent > 550000, true, `the two waits spent ${spent}ms of one 600s budget`);
-  assert.deepEqual(fake.log.sleeps.slice(0, 7), [10000, 20000, 40000, 60000, 60000, 60000, 60000]);
+  assert.equal(spent <= (600 - 30) * 1000, true, `the wait spent ${spent}ms of one 600s budget`);
   assert.equal(fake.log.merges.length, 0);
+});
+
+test("a BEHIND pull request with pending checks is updated, waits once on the new head and merges", async (t) => {
+  const home = closeHome(t, "close-steps-behind-pending");
+  const { fake, now } = behindWorld({ checkReads: [HALF, HALF, GREEN] });
+  const lines = [];
+  const { outcome, checklist } = await close(home, fake, { now, onStep: (step) => lines.push(`${step.status} ${step.note}`) });
+  assert.equal(outcome.status, "closed", JSON.stringify(outcome));
+  assert.deepEqual(fake.log.tests, []);
+  assert.ok(checklist.steps.conflict.note.includes("rebased onto origin/main, suite skipped (CI gates the head), pushed 1111111 -> 2222222"), checklist.steps.conflict.note);
+  assert.ok(lines.includes("running waiting for checks on 2222222: 1/2 done"), lines.join("\n"));
+  assert.equal(lines.some((line) => line.includes("waiting for checks on 1111111")), false, lines.join("\n"));
+  assert.deepEqual(fake.log.sleeps, [10000]);
+  assert.deepEqual(fake.log.merges, [{ url: CLOSE_PR_URL, matchHeadCommit: PUSHED_SHA }]);
+});
+
+// Records, when the close's suite runs, the verified head already recorded and the sleeps made since the last step before merge ended.
+function watchSuite(home, fake) {
+  const seen = { stepEndSleeps: 0, runs: [] };
+  const runTest = fake.deps.runTest;
+  fake.deps.runTest = async (options) => {
+    const recorded = JSON.parse(getJob(home.id, home.env).close).data;
+    seen.runs.push({ verifiedSha: recorded.verifiedSha, mergeSleeps: fake.log.sleeps.slice(seen.stepEndSleeps) });
+    return await runTest(options);
+  };
+  const onStep = (step) => {
+    if (step.name !== "merge" && step.status === "done") seen.stepEndSleeps = fake.log.sleeps.length;
+  };
+  return { seen, onStep };
+}
+
+// The check reads of a BEHIND head still running whose rebased head never reports a check, fresh for each fake.
+function neverReports() {
+  return [HALF, NO_CHECKS, NO_CHECKS, NO_CHECKS];
+}
+
+test("a BEHIND pull request whose rebased head reports no check is merged only after the close's own suite verifies it", async (t) => {
+  const home = closeHome(t, "close-steps-behind-noci");
+  const { fake, now } = behindWorld({ checkReads: neverReports(), checks: NO_CHECKS });
+  const { seen, onStep } = watchSuite(home, fake);
+  const { outcome, checklist } = await close(home, fake, { now, onStep });
+  assert.equal(outcome.status, "closed", JSON.stringify(outcome));
+  assert.equal(fake.log.tests.length, 1, "the rebased head was merged without the close's suite");
+  assert.deepEqual(fake.log.merges, [{ url: CLOSE_PR_URL, matchHeadCommit: PUSHED_SHA }]);
+  assert.match(checklist.steps.merge.note, /no CI on 2222222: rebased onto origin\/main, suite green/);
+  assert.ok(checklist.steps.conflict.note.includes("suite skipped (CI gates the head)"), checklist.steps.conflict.note);
+  assert.equal(seen.runs[0].verifiedSha, undefined, "the CI-gated conflict push recorded a verified head");
+});
+
+test("a BEHIND pull request whose rebased head reports no check on a branch with workflows waits the empty window, then runs the suite", async (t) => {
+  const home = closeHome(t, "close-steps-behind-noci-workflows");
+  const { fake, now } = behindWorld({ checkReads: neverReports(), checks: NO_CHECKS, git: { ...WORKFLOWS } });
+  const { seen, onStep } = watchSuite(home, fake);
+  const { outcome } = await close(home, fake, { now, onStep });
+  assert.equal(outcome.status, "closed", JSON.stringify(outcome));
+  assert.equal(fake.log.tests.length, 1);
+  const waited = seen.runs[0].mergeSleeps.reduce((sum, ms) => sum + ms, 0);
+  assert.equal(waited >= 60000, true, `the merge step waited ${waited}ms before the suite`);
+  assert.deepEqual(fake.log.merges, [{ url: CLOSE_PR_URL, matchHeadCommit: PUSHED_SHA }]);
+});
+
+test("a BEHIND pull request whose rebased head reports no check and whose suite goes red merges nothing", async (t) => {
+  const home = closeHome(t, "close-steps-behind-noci-red");
+  const { fake, now } = behindWorld({ checkReads: neverReports(), checks: NO_CHECKS, suite: { ok: false, output: "not ok 1", timedOut: false } });
+  const { outcome } = await close(home, fake, { now });
+  assert.notEqual(outcome.status, "closed");
+  assert.equal(outcome.reason, "suite-red");
+  assert.equal(fake.log.merges.length, 0);
+});
+
+test("a BEHIND pull request with green checks whose rebased head reports no check runs the suite before the merge", async (t) => {
+  const home = closeHome(t, "close-steps-behind-green-noci");
+  const { fake, now } = behindWorld({ checkReads: [GREEN, NO_CHECKS, NO_CHECKS, NO_CHECKS], checks: NO_CHECKS });
+  const { outcome } = await close(home, fake, { now });
+  assert.equal(outcome.status, "closed", JSON.stringify(outcome));
+  assert.equal(fake.log.tests.length, 1, "the rebased head was merged without the close's suite");
+  assert.deepEqual(fake.log.merges, [{ url: CLOSE_PR_URL, matchHeadCommit: PUSHED_SHA }]);
+});
+
+test("the merge step's no-CI suite runs even when the previous head had checks", async () => {
+  const fake = suiteVerifies(fakeCloseDeps({ pr: openPr({ headRefOid: "9999999" }), checks: NO_CHECKS }), "9999999");
+  const result = await mergeStep({ ctx: ctxFor({ headSha: HEAD_SHA, checksOnHead: 2 }), deps: fake.deps });
+  assert.equal(result.status, "done", result.note);
+  assert.equal(fake.log.tests.length, 1, "checksOnHead skipped the suite the close runs in place of CI");
+  assert.equal(result.data.verifiedSha, "9999999");
+  assert.deepEqual(fake.log.merges, [{ url: CLOSE_PR_URL, matchHeadCommit: "9999999" }]);
+  assert.match(result.note, /suite green/);
+  assert.doesNotMatch(result.note, /suite skipped \(CI gates the head\)/);
+});
+
+// A step context whose remaining time shrinks with every fake sleep, so a wait ends on its own.
+function spendingCtx(fake, data, budgetMs) {
+  const spent = { ms: 0 };
+  const sleep = fake.deps.sleep;
+  fake.deps.sleep = async (ms) => {
+    spent.ms += ms;
+    await sleep(ms);
+  };
+  return ctxFor(data, "/work/alpha", { remainingMs: () => Math.max(0, budgetMs - spent.ms) });
+}
+
+test("a BEHIND pull request whose failed check was re-run skips the wait once, and the merge refuses the head until it is green", async () => {
+  const fake = fakeCloseDeps({ pr: openPr({ mergeStateStatus: "BEHIND" }), checkReads: [FAILED_ACTIONS, HALF], checks: HALF });
+  const ctx = spendingCtx(fake, { headSha: HEAD_SHA }, 300000);
+  const result = await preflightStep({ ctx, deps: fake.deps });
+  assert.equal(fake.log.reruns.length, 1);
+  assert.equal(result.status, "done", result.note);
+  assert.match(result.note, /not waited: the pull request is BEHIND main/);
+  assert.equal(result.data.ciGreenSha, undefined);
+
+  const later = fakeCloseDeps({ pr: openPr({ mergeStateStatus: "BEHIND" }), checks: HALF });
+  await mergeStep({ ctx: spendingCtx(later, { ...ctx.data, ...result.data }, 300000), deps: later.deps });
+  assert.equal(later.log.merges.length, 0, "the merge took a head CI never reported green");
+});
+
+const UNKNOWN_PR = openPr({ mergeable: "UNKNOWN", mergeStateStatus: "UNKNOWN" });
+
+test("preflight with no budget left clamps the UNKNOWN pause and stops at checks-pending", async () => {
+  const fake = fakeCloseDeps({ reads: [UNKNOWN_PR, UNKNOWN_PR], checks: HALF });
+  const result = await preflightStep({ ctx: ctxFor({}, "/work/alpha", { remainingMs: () => 0 }), deps: fake.deps });
+  assert.equal(result.reason, "checks-pending");
+  assert.equal(fake.log.sleeps.every((ms) => ms === 0), true, `slept ${fake.log.sleeps}`);
+  assert.equal(fake.log.prReads, 2);
+});
+
+test("preflight reads an UNKNOWN merge state once more and skips the wait only when the head shows BEHIND", async () => {
+  const behind = fakeCloseDeps({ reads: [UNKNOWN_PR, openPr({ mergeStateStatus: "BEHIND" })], checks: HALF });
+  const skipped = await preflightStep({ ctx: ctxFor(), deps: behind.deps });
+  assert.equal(skipped.status, "done", skipped.note);
+  assert.match(skipped.note, /not waited: the pull request is BEHIND main/);
+  assert.deepEqual(behind.log.sleeps, [3000]);
+  assert.equal(behind.log.prReads, 2);
+  assert.equal(behind.log.checkReads, 1);
+  assert.equal(skipped.data.checksOnHead, 2);
+  assert.equal(skipped.data.ciGreenSha, undefined);
+
+  const unknown = fakeCloseDeps({ reads: [UNKNOWN_PR, UNKNOWN_PR], checkReads: [HALF, HALF, GREEN] });
+  const waited = await preflightStep({ ctx: ctxFor(), deps: unknown.deps });
+  assert.equal(waited.status, "done", waited.note);
+  assert.match(waited.note, /2 checks green on 1111111/);
+  assert.deepEqual(unknown.log.sleeps, [3000, 10000]);
+});
+
+test("preflight waits when the UNKNOWN re-read shows BEHIND at another head or no head at all", async () => {
+  for (const reread of [openPr({ mergeStateStatus: "BEHIND", headRefOid: "9999999" }), openPr({ mergeStateStatus: "BEHIND", headRefOid: "" })]) {
+    const fake = fakeCloseDeps({ reads: [UNKNOWN_PR, reread], checkReads: [HALF, HALF, GREEN] });
+    const result = await preflightStep({ ctx: ctxFor(), deps: fake.deps });
+    assert.equal(result.status, "done", result.note);
+    assert.doesNotMatch(result.note, /not waited/);
+    assert.deepEqual(fake.log.sleeps, [3000, 10000]);
+  }
+});
+
+test("a BEHIND pull request with green, red or --force checks keeps today's preflight and never reads it again", async () => {
+  const behindPr = openPr({ mergeStateStatus: "BEHIND" });
+  const green = fakeCloseDeps({ pr: behindPr, checks: GREEN });
+  const greenResult = await preflightStep({ ctx: ctxFor(), deps: green.deps });
+  assert.match(greenResult.note, /PR #7 open; 2 checks green; canonical checkout clean/);
+  assert.equal(green.log.prReads, 1);
+
+  const red = fakeCloseDeps({ pr: behindPr, checks: RED });
+  const redResult = await preflightStep({ ctx: ctxFor(), deps: red.deps });
+  assert.equal(redResult.reason, "checks-red");
+  assert.equal(red.log.prReads, 1);
+
+  const forced = fakeCloseDeps({ pr: behindPr, checks: HALF });
+  const forcedResult = await preflightStep({ ctx: ctxFor({}, "/work/alpha", { force: true }), deps: forced.deps });
+  assert.match(forcedResult.note, /checks ignored with --force: pending: b/);
+  assert.equal(forced.log.prReads, 1);
+  assert.deepEqual(forced.log.sleeps, []);
 });
 
 const PUSHED = { headSha: PUSHED_SHA, pushedBy: "close" };

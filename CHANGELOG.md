@@ -168,6 +168,8 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- close: the close no longer merges a head it rebased without running the suite when CI never
+  reported on it: the merge waits for green CI or runs the suite itself.
 - close: a pull request main moved past during the checks wait is rebased, waited on and
   merged in the same run instead of stopping at `merge-without-sha`; a base that keeps moving
   stops at `base-moved`.
@@ -215,6 +217,19 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **The close of a BEHIND pull request waits for one CI cycle, not two.** When preflight reads
+  checks still running and GitHub shows the pull request `BEHIND` its base at that head (read
+  once more after ~3 s when its merge state is `UNKNOWN`), it no longer waits on the stale head:
+  it notes `checks still running on <sha>, not waited: the pull request is BEHIND <base>, ...`, the
+  conflict step updates the branch (the suite stays skipped, CI gates the head) and waits once,
+  for the new head. A red check still stops the close, `--force` is unchanged, and the merge is
+  still pinned to a head CI or the close verified.
+- **CI runs the suite in 3 shards per job.** `test` and `test-worktree` are matrices over
+  `shard: 1/3, 2/3, 3/3` running the new `npm run test:shard` (Node's `--test-shard`, set by
+  `TEST_SHARD`); `npm test` is unchanged and still runs the whole suite. The checks are now the 9
+  contexts `test (22, 1/3)`, `test (22, 2/3)`, `test (22, 3/3)`, `test (24, 1/3)`,
+  `test (24, 2/3)`, `test (24, 3/3)`, `test-worktree (1/3)`, `test-worktree (2/3)` and
+  `test-worktree (3/3)`: the required checks of the branch protection must be updated to them.
 - **The operator reads anything on disk but the secrets.** Read, Grep and Glob in an operator
   session (main thread and the three subagents) no longer stop at the registered checkouts,
   `<home>/qa|runs|worktrees` and the plugin: `<home>/logs`, `config.json`, the database, another

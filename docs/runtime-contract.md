@@ -611,8 +611,10 @@ reads `closing`, `close failed` or `close stalled` alone (the step and the reaso
 in `queue status <id>`); the studio rows carry the same as `studio.status_label` plus
 `studio.close_state` (`null`, `closing`, `stalled`, `failed` or `closed`), which styles the cell. A clean rebase (no conflict, no merger) of a head that had
 at least one check (`checksOnHead` in the preflight data) skips the local suite and leaves CI to
-gate the new head, with the note `rebased onto origin/<base>, suite skipped (CI gates the head),
-pushed <a> -> <b>`; with no checks, or after a merger resolution, the suite runs. `force: true` skips the pull request checks and the
+gate the new head (the pushed head is not recorded as verified: the merge step merges it only on
+green CI, or runs the suite on it when no CI reports), with the note `rebased onto origin/<base>,
+suite skipped (CI gates the head), pushed <a> -> <b>`; with no checks, or after a merger
+resolution, the suite runs, and the close's no-CI suite always runs, whatever the previous head's checks. `force: true` skips the pull request checks and the
 rebase suite only - status and attribution still stop the close, and a conflict stops a forced
 close (the merger never runs under force). A check GitHub cancelled before it ran
 (`cancelled`, `timed_out`, `startup_failure` or `stale`) is `aborted`, never red: with no real
