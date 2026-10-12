@@ -376,13 +376,18 @@ function RecallList({ answer, job, onOpen }: { answer: RecallsAnswer; job: JobDe
   );
 }
 
+// The footer's embedding line: the model, with the threshold when there is one.
+function embeddingText(model: string, threshold: string | null | undefined): string {
+  return `embedding ${model}${threshold ? ` · threshold ${threshold}` : ""}`;
+}
+
 // The footer: the embedding the hits were ranked with and the link to the run's whole recall record.
 function MemoryFooter({ answer, jobRefText }: { answer: RecallsAnswer; jobRefText: string }) {
   const embedding = answer.embedding;
   const threshold = scoreLabel(embedding?.threshold);
   return (
     <div className="flex items-center gap-2.5 border-t border-line px-3.5 py-2 text-xs text-dim">
-      {embedding && <span className="min-w-0">{`embedding ${embedding.model}${threshold ? ` · threshold ${threshold}` : ""}`}</span>}
+      {embedding && <span className="min-w-0 truncate" title={embeddingText(embedding.model, threshold)}>{embeddingText(embedding.model, threshold)}</span>}
       <a href={`/api/jobs/${encodeURIComponent(jobRefText)}/recalls`} target="_blank" rel="noreferrer" className="ml-auto shrink-0 text-link no-underline">
         All memory ↗
       </a>
