@@ -8,6 +8,14 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Breaking
 
+- **A queue job never writes a decision.** Decisions are the operator's record, written only
+  outside a queue run, and they never bind the pipeline. Inside a queue job `decision_save`,
+  `decision_update`, `nightqueue decision import` and `nightqueue decision update` are refused
+  with a message naming that rule. A close no longer accepts proposals: no `accepted D-n` line,
+  no `decisions` key in `queue close --json` or `queue close --merged --json`, and `--decisions`
+  is now an unknown option. Doctor's `decision proposals` check is removed. The architect's phase
+  prompt has no `## Standing decisions` or `## Proposed (not binding)` section, and the resolve
+  skill no longer proposes decisions. Existing `proposed` rows stay as they are.
 - **Tool contract 5.** The MCP server adds the `tracker_issues` tool; MCP clients must restart.
 - **The issue tracker is removed.** Gone: the `nightqueue issues` CLI, `queue add --issue`, the five
   `issue_*` MCP tools, `queue_add`'s `issue_id`, doctor's issue drift check, the item ref of the

@@ -7,10 +7,9 @@ const RECALL_TOOL_RE = /__(lesson_recall|memory_recall|decision_recall|index_rec
 const CONTEXT_TOOL_RE = /__(phase_prompt|context_for_phase)$/;
 export const LESSONS_HEADING = "Applicable lessons";
 export const MEMORY_HEADING = "Project memory";
-export const DECISIONS_HEADING = "Standing decisions";
-const CONTEXT_SECTIONS = new Set([LESSONS_HEADING, MEMORY_HEADING, DECISIONS_HEADING]);
+const CONTEXT_SECTIONS = new Set([LESSONS_HEADING, MEMORY_HEADING]);
 const SECTION_RE = /^## (.+?)\s*$/;
-const CONTEXT_HIT_RE = /^- (?:\[([LM]\d+)\]|((?:[A-Z][A-Z0-9]*\/)?D-\d+))\s+(.*?)\s*$/;
+const CONTEXT_HIT_RE = /^- \[([LM]\d+)\]\s+(.*?)\s*$/;
 const KIND_OF_PREFIX = { L: "lesson", M: "memory" };
 const LIST_KEYS = ["items", "hits", "results", "files", "decisions"];
 const REF_PREFIX = { lesson_recall: "L", memory_recall: "M" };
@@ -114,16 +113,16 @@ function parseRecallResult(tool, block) {
   return { hits };
 }
 
-// One hit of a context line `- [L5] title`, `- [M9] title` or `- D-7 title`, null for any other line.
+// One hit of a context line `- [L5] title` or `- [M9] title`, null for any other line.
 function contextHit(line) {
   const match = CONTEXT_HIT_RE.exec(line);
   if (!match) return null;
-  const ref = match[1] ?? match[2];
-  const kind = match[1] ? KIND_OF_PREFIX[match[1][0]] : "decision";
-  return { ref, title: truncateByCodePoint(match[3] || null, TITLE_LIMIT), score: null, kind };
+  const ref = match[1];
+  const kind = KIND_OF_PREFIX[ref[0]];
+  return { ref, title: truncateByCodePoint(match[2] || null, TITLE_LIMIT), score: null, kind };
 }
 
-// The lessons, memories and decisions a context text hands over, each ref once, from its three memory sections only.
+// The lessons and memories a context text hands over, each ref once, from its two memory sections only.
 function contextHits(text) {
   const hits = [];
   const seen = new Set();

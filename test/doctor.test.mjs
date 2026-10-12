@@ -710,64 +710,17 @@ test("the orchestrator check reads a database without the counter columns as zer
   assert.equal(raw.prepare("PRAGMA table_info(jobs)").all().some((column) => column.name === "orch_turns"), false, "the doctor migrated the database");
 });
 
-// A decision proposed by the given job, stamped straight in the database.
-function proposedByJob(env, { title, jobId }) {
-  const saved = saveDecision({ projectId: projectIdOf(env, "alpha"), title, context: "why", decision: "what", status: "proposed" }, env);
-  openDb(env).prepare("UPDATE decisions SET job_id = ? WHERE id = ?").run(jobId, saved.id);
-  return saved;
-}
-
-// The report row of the decision proposals check.
-function proposalsCheck(report) {
-  return report.checks.find((entry) => entry.name === "decision proposals");
-}
-
-test("the decision proposals check warns on a proposal of a closed job, never on one of an open job, and only once the database exists", async (t) => {
+test("doctor has no decision proposals check: a proposal left on a closed job is the operator's to settle, not a warning", async (t) => {
   const host = makeHostEnv(t, "doctor-proposals");
-  const { report: noDatabase } = await diagnose(host.env);
-  assert.equal(proposalsCheck(noDatabase), undefined, "the check ran without a database");
-
   makeProject(t, host.env, "alpha");
-  const open = addJob({ projectId: ensureProject(host.env, "alpha"), prompt: "still open" }, host.env).id;
-  proposedByJob(host.env, { title: "the open job proposes this", jobId: open });
-  closeDb(host.env);
-  const { report: none } = await diagnose(host.env);
-  assert.deepEqual(
-    { status: proposalsCheck(none).status, detail: proposalsCheck(none).detail },
-    { status: "ok", detail: "no proposal left open on a closed job" },
-  );
-
   const closed = seedClosedJob(host.env, { project: "alpha", prompt: "closed one" });
-  const first = proposedByJob(host.env, { title: "the closed job proposes this", jobId: closed });
-  closeDb(host.env);
-  const { report: one } = await diagnose(host.env);
-  assert.equal(proposalsCheck(one).status, "warn");
-  assert.equal(proposalsCheck(one).detail, `1 proposed decision of closed jobs: D-${first.number} (J-${closed})`);
-  assert.doesNotMatch(proposalsCheck(one).hint, /--decisions/);
-
-  const second = proposedByJob(host.env, { title: "and a second one from it", jobId: closed });
-  closeDb(host.env);
-  const { report: two } = await diagnose(host.env);
-  assert.equal(
-    proposalsCheck(two).detail,
-    `2 proposed decisions of closed jobs: D-${first.number} (J-${closed}), D-${second.number} (J-${closed})`,
-  );
-});
-
-test("the decision proposals check warns with the migrate hint on a database without decisions.job_id, and leaves it as it was", async (t) => {
-  const host = makeHostEnv(t, "doctor-proposals-v10");
-  makeProject(t, host.env, "alpha");
-  openDb(host.env).exec("DROP INDEX decisions_job_idx; ALTER TABLE decisions DROP COLUMN job_id; PRAGMA user_version = 10;");
+  const saved = saveDecision({ projectId: projectIdOf(host.env, "alpha"), title: "left proposed", context: "why", decision: "what", status: "proposed" }, host.env);
+  openDb(host.env).prepare("UPDATE decisions SET job_id = ? WHERE id = ?").run(closed, saved.id);
   closeDb(host.env);
 
   const { report } = await diagnose(host.env);
 
-  assert.equal(proposalsCheck(report).status, "warn");
-  assert.match(proposalsCheck(report).hint, /run `nightqueue update` to migrate the database/);
-  const raw = new DatabaseSync(dbPath(host.env), { readOnly: true });
-  t.after(() => raw.close());
-  const columns = raw.prepare("SELECT name FROM pragma_table_info('decisions')").all().map((row) => row.name);
-  assert.equal(columns.includes("job_id"), false, "the diagnosis migrated the database");
+  assert.equal(report.checks.some((entry) => entry.name === "decision proposals"), false);
 });
 
 test("--json is the only thing on stdout of the real process, and the exit code follows the report", (t) => {

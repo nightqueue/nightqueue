@@ -107,7 +107,7 @@ test("decision_list and decision_recall answer the union for a project and the o
   assert.deepEqual(foreign.decisions, [], "a acme decision reached a orbit project");
 });
 
-test("inside a job, an org row is refused by name while the job's own project is still writable", async (t) => {
+test("inside a job, an org row and the job's own project row are both refused by the rule, and the org row stays readable", async (t) => {
   const env = makeOrgHome(t, "mcp-org-write-guard");
   const orgDecision = saveDecision({ ...ORG_DECISION, orgId: orgIdOf(env, "acme"), status: "accepted" }, env);
   const own = saveDecision(
@@ -117,13 +117,12 @@ test("inside a job, an org row is refused by name while the job's own project is
   const job = addJob({ projectId: ensureProject(env, "acme-mobile-app"), prompt: "rewrite the runner" }, env);
   const client = await connect(t, { ...env, NIGHTQUEUE_JOB_ID: String(job.id) });
 
-  const decision = await client.callTool({ name: "decision_update", arguments: { id: orgDecision.ref, status: "rejected" } });
-  assert.equal(decision.isError, true);
-  assert.match(textOf(decision), /it belongs to org `acme`, not `acme-mobile-app`/);
-
-  assert.equal(getDecision(orgDecision.id, env).status, "accepted", "the refused update reached the org decision");
-  const mine = payloadOf(await client.callTool({ name: "decision_update", arguments: { id: own.ref, status: "rejected" } }));
-  assert.equal(mine.decision.status, "rejected", "a job must still update its own project");
+  for (const row of [orgDecision, own]) {
+    const refused = await client.callTool({ name: "decision_update", arguments: { id: row.ref, status: "rejected" } });
+    assert.equal(refused.isError, true, row.ref);
+    assert.match(textOf(refused), /decisions are the operator's record, written only outside a queue run/);
+    assert.equal(getDecision(row.id, env).status, "accepted", `the refused update reached ${row.ref}`);
+  }
 
   const recalled = payloadOf(
     await client.callTool({ name: "decision_recall", arguments: { project: "acme-mobile-app", query: "queue" } }),

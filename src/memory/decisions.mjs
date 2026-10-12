@@ -295,20 +295,6 @@ async function probeVector({ title, decision, embedder, deadlineMs }, env) {
   return vector ? { vector, model: resolved.model } : null;
 }
 
-// Refuses a second proposal from a job while its first one is still proposed.
-function refuseSecondProposal(db, spec) {
-  if (spec.jobId === null || spec.status !== "proposed") return;
-  const first = namedRow(
-    db,
-    db
-      .prepare("SELECT scope, project_id, org_id, number FROM decisions WHERE job_id = ? AND status = 'proposed' ORDER BY id LIMIT 1")
-      .get(spec.jobId),
-  );
-  if (first) {
-    throw new UserError(`${jobRef(spec.jobId)} already proposed decision ${decisionRef(first)}; a job proposes at most one decision`);
-  }
-}
-
 // Rows of an owner by number, refusing any number that owner never used.
 function rowsByNumber(db, target, numbers) {
   if (!numbers.length) return new Map();
@@ -446,7 +432,6 @@ function refuseUnknownJob(db, spec) {
 // The synchronous body of a reviewed save: refusals, the overlap review, the insert and the supersedes, all in one transaction.
 function reviewAndInsert(db, spec, embedded) {
   refuseUnknownJob(db, spec);
-  refuseSecondProposal(db, spec);
   const successor = spec.supersededBy === null ? [] : [spec.supersededBy];
   const named = rowsByNumber(db, spec.target, [...new Set([...spec.replaced, ...spec.untouched, ...successor])]);
   const replacedRows = spec.replaced.map((number) => named.get(number));
@@ -555,34 +540,6 @@ export function decisionTitles({ projectId, orgId, status = "accepted" } = {}, e
        WHERE ${visible.clause} AND status = ? ORDER BY ${ORG_FIRST}, number ASC`,
     )
     .all(...visible.values, requireStatus(status));
-  return named(connection, rows);
-}
-
-// The decisions a queue job proposed and nobody settled yet, in numbering order.
-export function proposalsOfJob(jobId, env = process.env, db = null) {
-  if (!Number.isInteger(jobId) || jobId <= 0) {
-    throw new UserError(`expected a positive integer job id, got \`${String(jobId)}\``);
-  }
-  const connection = db ?? openDb(env);
-  const rows = connection
-    .prepare(
-      `SELECT id, scope, project_id, org_id, number, title, status, job_id FROM decisions
-       WHERE job_id = ? AND status = 'proposed' ORDER BY number ASC`,
-    )
-    .all(jobId);
-  return named(connection, rows);
-}
-
-// The proposals still open on a job that is already closed, the ones nobody will settle by closing it.
-export function staleProposals(env = process.env, db = null) {
-  const connection = db ?? openDb(env);
-  const rows = connection
-    .prepare(
-      `SELECT d.id, d.scope, d.project_id, d.org_id, d.number, d.title, d.job_id FROM decisions d
-       JOIN jobs j ON j.id = d.job_id
-       WHERE d.status = 'proposed' AND j.status = 'closed' ORDER BY d.job_id, d.number`,
-    )
-    .all();
   return named(connection, rows);
 }
 

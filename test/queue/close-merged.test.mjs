@@ -174,8 +174,8 @@ async function mergedCache(env, prUrl) {
   return prStates;
 }
 
-test("close --merged accepts the proposals of every job it closed and prints one line each", async (t) => {
-  const env = makeCloseHome(t, "close-merged-decisions-accept");
+test("close --merged leaves the proposals of every job it closed proposed and prints no accepted line", async (t) => {
+  const env = makeCloseHome(t, "close-merged-decisions-untouched");
   const prUrl = "https://github.com/acme/api/pull/1";
   const merged = terminalJob(env, { prUrl });
   const first = proposal(env, { jobId: merged, title: "leases are renewed by their owner" });
@@ -183,11 +183,11 @@ test("close --merged accepts the proposals of every job it closed and prints one
   const result = await runQueueClose(env, ["queue", "close", "--merged"], { prStates: await mergedCache(env, prUrl) });
 
   assert.equal(result.code, 0, result.err.join("\n"));
-  assert.equal(getDecision(first.id, env).status, "accepted");
-  assert.deepEqual(result.out, [`closed J-${merged}`, `accepted D-${first.number}: leases are renewed by their owner`]);
+  assert.equal(getDecision(first.id, env).status, "proposed");
+  assert.deepEqual(result.out, [`closed J-${merged}`]);
 });
 
-test("close --merged --json carries the accepted decisions in one parseable line", async (t) => {
+test("close --merged --json answers one parseable line with no `decisions` key", async (t) => {
   const env = makeCloseHome(t, "close-merged-decisions-json");
   const prUrl = "https://github.com/acme/api/pull/1";
   const json = terminalJob(env, { prUrl });
@@ -197,11 +197,11 @@ test("close --merged --json carries the accepted decisions in one parseable line
 
   assert.equal(result.code, 0, result.err.join("\n"));
   assert.equal(result.out.length, 1, result.out.join("\n"));
-  assert.deepEqual(JSON.parse(result.out[0]).decisions, [{ job_id: json, ref: `D-${first.number}`, title: "runners register in one table" }]);
-  assert.equal(getDecision(first.id, env).status, "accepted");
+  assert.deepEqual(Object.keys(JSON.parse(result.out[0])).sort(), ["closed", "refused", "undetermined", "worktrees"]);
+  assert.equal(getDecision(first.id, env).status, "proposed");
 });
 
-test("close --merged --decisions is refused with the usage line and closes nothing", async (t) => {
+test("close --merged --decisions is an unknown option and closes nothing", async (t) => {
   const env = makeCloseHome(t, "close-merged-decisions-removed");
   const prUrl = "https://github.com/acme/api/pull/1";
   const merged = terminalJob(env, { prUrl });
@@ -209,7 +209,7 @@ test("close --merged --decisions is refused with the usage line and closes nothi
   const result = await runQueueClose(env, ["queue", "close", "--merged", "--decisions", "accept"], { prStates: await mergedCache(env, prUrl) });
 
   assert.equal(result.code, 1);
-  assert.match(result.err.join("\n"), /usage: nightqueue queue close <id>/);
+  assert.match(result.err.join("\n"), /Unknown option '--decisions'/);
   assert.equal(getJob(merged, env).status, "done");
 });
 

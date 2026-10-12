@@ -3,8 +3,6 @@ import { join } from "node:path";
 import { UserError } from "../config/errors.mjs";
 import { runDir } from "../config/paths.mjs";
 import { packageRoot } from "../host/paths.mjs";
-import { decisionTitleLine } from "../memory/decisions.mjs";
-import { decisionRef } from "../memory/refs.mjs";
 import { registeredProject } from "../memory/registry-access.mjs";
 import { isStateObject, readRunState } from "../queue/resume.mjs";
 import { phasesFor, routingRow } from "../queue/routing.mjs";
@@ -43,7 +41,6 @@ export const LESSON_TARGET_OF = {
 const BUG = "bug/error";
 const FAST_TIERS = ["trivial", "simple"];
 const INDEX_LIMIT = 40;
-const DECISION_LIMIT = 8;
 const BRIEF_FILE = "00-brief.md";
 const ARTIFACT_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*\.md$/;
 
@@ -136,31 +133,6 @@ async function indexValues({ template, row, query, run, repo, env, openItems }) 
   return { ...empty, INDEX_MAP: files.map(indexLine).join("\n"), INDEX_LIBS: libText || "none" };
 }
 
-// One detail line of a standing decision, the whole `decision` on one line.
-function decisionDetailLine(row) {
-  const title = String(row?.title ?? "").replace(/\s+/g, " ").trim();
-  const decision = String(row?.decision ?? "").replace(/\s+/g, " ").trim();
-  return `- ${decisionRef(row)} ${title} — ${decision}`;
-}
-
-// The architect's standing and proposed decisions, built by the session block's own title line and one recall of the 8 closest.
-async function decisionValues({ template, brief, run, env, openItems }) {
-  const empty = { STANDING_TITLES: "", STANDING_DETAIL: "", PROPOSED_TITLES: "" };
-  if (template !== "architect" || !run.projectId) return empty;
-  const decisions = openStore(env).decisions;
-  const query = `${briefField(brief, "Affected area")} ${briefField(brief, "Objective")}`.trim();
-  return await tolerant(openItems, "the decision tools (the architect got no `## Standing decisions`)", empty, async () => {
-    const titles = await decisions.decisionTitles({ projectId: run.projectId, status: "accepted" });
-    const closest = await decisions.recallDecisions({ projectId: run.projectId, query, limit: DECISION_LIMIT });
-    const proposed = await decisions.decisionTitles({ projectId: run.projectId, status: "proposed" });
-    return {
-      STANDING_TITLES: titles.map(decisionTitleLine).join("\n"),
-      STANDING_DETAIL: closest.filter((row) => row?.via !== "fallback").map(decisionDetailLine).join("\n"),
-      PROPOSED_TITLES: proposed.map(decisionTitleLine).join("\n"),
-    };
-  });
-}
-
 // True when the plan of the run carries a `## Usage coverage` section.
 function planHasUsageCoverage(dir) {
   try {
@@ -192,7 +164,7 @@ async function promptValues({ args, template, run, state, env, openItems }) {
   const row = routingRow(tier);
   const repo = repositoryOf({ run, state, env, openItems });
   const query = text(args.query) || briefField(brief, "Affected area");
-  const lookup = { template, row, query, run, repo, env, openItems, brief };
+  const lookup = { template, row, query, run, repo, env, openItems };
   if (args.target === "qa-prover" && !text(args.group)) throw new UserError("`group` is required with `target: \"qa-prover\"`: the IDs/label of the same-root group");
   return {
     RUN_DIR: dir,
@@ -209,7 +181,6 @@ async function promptValues({ args, template, run, state, env, openItems }) {
     CLAUDE_MD: row.claudeMd && existsSync(join(repo, "CLAUDE.md")) ? join(repo, "CLAUDE.md") : "",
     CONTEXT_BLOCK: await contextBlock(lookup),
     ...(await indexValues(lookup)),
-    ...(await decisionValues(lookup)),
     IS_BUG: type === BUG,
     SIMPLE: tier === "simple",
     TRIAGED: existsSync(join(dir, "01-triage.md")),

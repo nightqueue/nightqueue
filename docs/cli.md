@@ -363,8 +363,8 @@ nightqueue queue session 42 --prompt "look at the gate"   # resume it with a req
 
 nightqueue queue close 42                             # merge a done job's pull request and close the job, detached
 nightqueue queue close 42 --foreground                # run the four steps in this process, one line per step
-nightqueue queue close 42 --foreground --json         # JSON on stdout, with the decisions the close accepted
-nightqueue queue close --merged                       # close every done job gh confirms merged, accepting each one's proposals
+nightqueue queue close 42 --foreground --json         # JSON on stdout, the job and the close outcome
+nightqueue queue close --merged                       # close every done job gh confirms merged
 nightqueue queue close 42 --force                     # skip the pull request checks and the rebase suite, nothing else
 nightqueue queue close 42 --steps origin,log          # re-run only the post-close steps of a closed job, in this process
 nightqueue queue close 42 --steps log --again         # clear the named steps' done marks first, so they post again (only with --steps)
@@ -452,10 +452,8 @@ nightqueue queue close --merged again` when some could not be checked within the
 deadline. A `failed`, `gate` or `cancelled` job is never closed, whatever its pull request
 says: retry it, or cancel it.
 
-The settle step accepts every decision the job proposed, in the same transaction that closes
-the job. Each one prints `accepted <D-ref>: <title>`, and `--json` carries them under
-`decisions`; the detached child does the same into its log. `--decisions` no longer exists and
-is refused with the usage line.
+A close never touches the decisions log: a `proposed` decision stays `proposed` until the
+operator settles it (`nightqueue decision update` / `decision_update`).
 
 `queue cancel <id>` accepts a `pending`, gated, orphaned, `done` or `failed` job. For a `done`
 or `failed` one it also releases the job's worktree, printing `worktree removed: <path>` or
@@ -475,7 +473,7 @@ merge (`gh pr merge --squash`, confirmed by re-reading the merge commit) and set
 job and append `Closed: PR #<n> merged as <sha7> on <date>` to its notice). It starts detached
 and prints the pid and its log, `<home>/logs/close-<id>-<stamp>.log`; `--foreground` runs it here
 and exits `0` only when the job closed; `--json` prints `{ started, jobId, pid, logPath }`
-detached, or one `{ job, outcome, decisions }` object in the foreground. A close that stops shows `close failed` in the STATUS cell (the step and reason are in LAST) and prints `⛔ close stopped at <step>:
+detached, or one `{ job, outcome }` object in the foreground. A close that stops shows `close failed` in the STATUS cell (the step and reason are in LAST) and prints `⛔ close stopped at <step>:
 <reason> - run again with: nightqueue queue close J-<id>`, leaves the job `done`, and running it
 again resumes at that step - never merging twice. A pull request closed without merge cancels
 the job instead (`J-<id> cancelled: PR #<n> was closed without being merged; nothing to
@@ -534,7 +532,7 @@ its owner by key, needs no flag and is refused next to a flag naming another own
 nothing was ever saved reads as an empty one instead of a SQLite error.
 
 `decision update <number> --status accepted|rejected|superseded [--superseded-by <n>]`
-is the terminal's way to settle a proposal a closed job left behind, or to change a
+is the terminal's way to settle a proposal, or to change a
 decision's status by hand - the same write `decision_update` does. `superseded` requires
 `--superseded-by <n>`, the number of the decision that replaced it (of the same owner);
 any other status refuses that flag. It prints the updated decision the same way `show`
@@ -557,6 +555,11 @@ the candidates it found; the caller names EVERY one of them before anything is w
 point at the new row, so the new text has to restate whatever of theirs still holds),
 `unrelated <n,...>` for the ones it leaves untouched. A candidate left unnamed refuses the save
 again, naming it once more.
+
+Decisions are the operator's record, written only outside a queue run: inside a queue job
+(`NIGHTQUEUE_JOB_ID` set) `decision import` and `decision update` are refused, like the MCP
+`decision_save` and `decision_update`, and nothing is written. `list`, `show` and `export`
+stay available everywhere.
 
 ## Doctor
 
@@ -768,11 +771,6 @@ cleanup is `nightqueue queue close`, or `nightqueue queue cancel` for a `done` o
 are not reported. When the queue cannot be read, one `worktrees` row says the owner is unknown
 and nothing is listed; when git cannot list the worktrees of a checkout, one
 `worktrees <project>` row says so. The owners are read through a read-only store.
-
-One more `warn` row, `decision proposals`, names every decision a queue job proposed and nobody
-settled before its job was closed, by number and job - settle it with `decision_update`
-(`status: accepted|rejected`) or `nightqueue decision update <number> --status
-accepted|rejected`.
 
 The diagnosis is offline: without `--check-updates` it opens no network
 connection at all. With the flag it adds one last check, `registry`, which asks

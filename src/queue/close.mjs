@@ -1204,8 +1204,8 @@ function markReopened(checklist, name) {
 }
 
 // The outcome of an attempt, in the shape every caller reads.
-function outcomeOf(status, { step = null, reason = null, checklist, worktree = null, accepted = [] }) {
-  return { status, step, reason, mergeSha: checklist.data.mergeSha ?? null, worktree, ...(accepted.length ? { accepted } : {}) };
+function outcomeOf(status, { step = null, reason = null, checklist, worktree = null }) {
+  return { status, step, reason, mergeSha: checklist.data.mergeSha ?? null, worktree };
 }
 
 // Stops the close as failed at a step, releasing the lease; a lease that is not this worker's any more answers `lost`.
@@ -1262,7 +1262,7 @@ async function settleRun(run) {
   }
   if (!closed?.job) return await refuseSettle(run, refusal);
   if (closed.worktree) await store.jobs.noteCloseWorktree(job.id, { worktree: closed.worktree });
-  return outcomeOf("closed", { step: "settle", checklist, worktree: closed.worktree ?? null, accepted: closed.job.accepted_decisions ?? [] });
+  return outcomeOf("closed", { step: "settle", checklist, worktree: closed.worktree ?? null });
 }
 
 // Records a close the store refused as a settle failure, naming the job's status as it is now.

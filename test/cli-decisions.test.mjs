@@ -348,6 +348,25 @@ test("decision update refuses an unknown decision number and an unknown successo
   assert.equal(getDecisionByNumber({ projectId: projectIdOf(env, "alpha"), number: 1 }, env).status, "proposed");
 });
 
+test("inside a queue job decision import and update are refused by the rule, and nothing is written", (t) => {
+  const { env, cwd } = makeCliHome(t, "decision-job-refusal");
+  seedDecisions(env);
+  const dir = makeDir(t, "decision-job-refusal-dir");
+  const file = exportedFile(runCli(env, ["decision", "export", "1", "--dir", dir], { cwd }), dir);
+  const target = makeCliHome(t, "decision-job-refusal-target");
+  const inJob = (home) => ({ ...home, NIGHTQUEUE_JOB_ID: "7" });
+
+  const imported = runCli(inJob(target.env), ["decision", "import", file, "--project", "alpha"], { cwd: target.cwd });
+  assert.equal(imported.status, 1, imported.stdout);
+  assert.match(imported.stderr, /`nightqueue decision import` inside J-7: decisions are the operator's record, written only outside a queue run/);
+  assert.equal(getDecisionByNumber({ projectId: projectIdOf(target.env, "alpha"), number: 1 }, target.env), null);
+
+  const updated = runCli(inJob(env), ["decision", "update", "1", "--status", "rejected"], { cwd });
+  assert.equal(updated.status, 1, updated.stdout);
+  assert.match(updated.stderr, /`nightqueue decision update` inside J-7: decisions are the operator's record, written only outside a queue run/);
+  assert.equal(getDecisionByNumber({ projectId: projectIdOf(env, "alpha"), number: 1 }, env).status, "accepted");
+});
+
 test("export never writes the database", (t) => {
   const { env, cwd } = makeCliHome(t, "export-read-only");
   seedDecisions(env);

@@ -295,16 +295,17 @@ owner (`D-1`, `D-2`, ... per project; `DLW/D-1`, `DLW/D-2` per org, and the numb
 of one owner never touches another's): a title, the `context` that forced the
 choice, the `decision` itself, the `consequences` it costs, and a status among
 `proposed`, `accepted`, `superseded` and `rejected`. A decision that was replaced points at the one that replaced it
-through `superseded_by`. Only `accepted` decisions are ever recalled as standing
-constraints, and every one of them reaches a prompt: the block the `SessionStart`
-hook injects lists the title of EVERY accepted decision of the project and of its
-org under `## Standing decisions`, org rows first, followed by
-`## Standing decisions in detail` with the text of the 8 most recently updated.
-A `proposed` decision reaches a prompt by its title only, under a separate
-`## Proposed (not binding)` section, because nobody accepted it yet and it binds
-nothing. The other two statuses are read with `decision_list`,
-`nightqueue decision list` and `nightqueue decision show`, and never reach a
-prompt.
+through `superseded_by`. Decisions are the operator's own record, written only
+outside a queue run, and they never bind the pipeline. Only `accepted` decisions
+are recalled: the block the `SessionStart` hook injects lists the title of EVERY
+accepted decision of the project and of its org under `## Standing decisions`,
+org rows first, followed by `## Standing decisions in detail` with the text of the
+8 most recently updated. A `proposed` decision is listed by its title only, under
+a separate `## Proposed (not binding)` section. Inside a queue job that block is
+context only, never a constraint of the run, and no phase prompt the runtime
+builds carries a decisions section. The other two statuses are read with
+`decision_list`, `nightqueue decision list` and `nightqueue decision show`, and
+never reach a prompt.
 
 **Related jobs.** The triager phase of `/resolve` gets a lexical search over the job
 history of the job's project - each job's slug, brief and notice - as a `## Related jobs`
@@ -353,8 +354,8 @@ refused, so a re-run imports nothing twice. The runtime itself never reads
 
 | tool | what it does |
 |---|---|
-| `decision_save` | records one decision: `project` or `org`, `title`, `context`, `decision`, `consequences?`, `status?` (default `accepted`), `supersedes?`, `unrelated?`; answers the `id`, the `number`, the `ref` and the owner it got. When the title overlaps an accepted or proposed title of the same owner, or the title plus decision is close in meaning to one, nothing is saved and it answers `status: "needs_review"` with the `candidates`; saving again names every candidate by `number` or `ref` (of the same owner), in `supersedes` (they become `superseded` and point at the new row, in the same transaction) or in `unrelated`. Inside a queue job it stamps `job_id`, refuses `supersedes`, and refuses a second proposal while the first is still `proposed` |
-| `decision_update` | changes a decision by `id`, its ref (`D-7` in `project?` or the running job's project, `DLW/D-3` anywhere): any of `title`, `context`, `decision`, `consequences`, `status`, `superseded_by` — this is how a `proposed` one is accepted or rejected; `status: "superseded"` requires `superseded_by`, unless the row already names its successor; the row it answers is a compact one, truncated like `decision_list` |
+| `decision_save` | records one decision: `project` or `org`, `title`, `context`, `decision`, `consequences?`, `status?` (default `accepted`), `supersedes?`, `unrelated?`; answers the `id`, the `number`, the `ref` and the owner it got. When the title overlaps an accepted or proposed title of the same owner, or the title plus decision is close in meaning to one, nothing is saved and it answers `status: "needs_review"` with the `candidates`; saving again names every candidate by `number` or `ref` (of the same owner), in `supersedes` (they become `superseded` and point at the new row, in the same transaction) or in `unrelated`. Refused inside a queue job, and nothing is written |
+| `decision_update` | changes a decision by `id`, its ref (`D-7` in `project?`, `DLW/D-3` anywhere): any of `title`, `context`, `decision`, `consequences`, `status`, `superseded_by` — this is how a `proposed` one is accepted or rejected; `status: "superseded"` requires `superseded_by`, unless the row already names its successor; the row it answers is a compact one, truncated like `decision_list`. Refused inside a queue job, and nothing is changed |
 | `decision_list` | the log in numbering order: `project` or `org`, `status?`; compact rows, org rows first |
 | `decision_recall` | the standing constraints: `project` or `org`, `query?`, `limit?`; only `accepted` decisions, hybrid BM25 plus semantic, org rows first, and the text comes back untruncated because it feeds prompts. With `id` (a decision ref) alone, that one decision whole whatever its status (a `proposed`, `rejected` or `superseded` one too) with `job_ref` of the job that proposed it; a bare `D-<n>` is read in `project` (inside a job, the job's project), `query` or `limit` beside `id` is refused, and inside a job only a decision of the job's project or of its org is readable |
 
@@ -365,13 +366,13 @@ included - with `unknown project` and the list of the known ones, and nothing is
 written; only the lesson, memory and index tools also accept a path, which
 means the project whose checkout contains it, or the global scope when no
 checkout does.
-`decision_update` takes a ref and no owner, so inside an
-unattended run it is restricted to the project of the job that is running:
-a ref naming a row of another project is refused, naming both projects, the same
-way `queue_retry` only retries its own job. An org row is refused there too,
-naming its org — a job reads its org's decisions and never rewrites one.
-Outside a job the restriction does not exist, and the operator updates
-any project from anywhere.
+Decisions are written only outside a queue run. Inside a job (`NIGHTQUEUE_JOB_ID`
+set) `decision_save` and `decision_update`, like `nightqueue decision import` and
+`nightqueue decision update`, are refused with a message naming the rule -
+`decisions are the operator's record, written only outside a queue run` - before
+anything is opened or written, whatever the home. A job reads decisions
+(`decision_recall`, `decision_list`) and never writes one. Outside a job the
+operator saves and updates any project from anywhere.
 
 Rows point at their owner by id: a decision carries
 `project_id` or `org_id`, and every other table carries `project_id` alone (a
@@ -381,31 +382,15 @@ row, and every view shows the new name at once. An org or a project that still
 owns rows cannot be removed: the database refuses the removal, and the message
 names how many rows of which table it still owns - nothing is removed.
 
-**How `/resolve` uses them.** The standing decisions are already in the block the
-`SessionStart` hook injected, so the Phase 0 preflight pings `lesson_recall` alone:
-the Brief copies EVERY accepted title from that section (or from one
-`decision_list` with `status: "accepted"` when the section is absent), and adds
-in full the 8 closest to the task, from one `decision_recall` with the affected
-area and the objective as the query - the project's and its org's, in one call,
-org rows first and written `DLW/D-3` when they belong to the org. Both parts become
-the `## Standing decisions` section of the Brief. That section
-is passed to the architect as binding context - a design that contradicts a
-standing decision either follows it or takes the conflict to
-`## Requires user confirmation` naming its number. When a plan takes a
-structural decision no standing decision covers, the architect emits a
-`## Proposed decision` block, and the orchestrator saves it right after Phase 3 with
-`status: "proposed"`, so it survives a run that later stops at a gate; the Phase 8
-report lists it among the open items for the operator to accept or reject with
-`decision_update` - it is not part of the pull request body. A `decision_recall` that fails is fail-open: the run
-continues without the section and records it as an open item.
+**How `/resolve` uses them.** As optional context, never as a constraint of the run.
+The session block may carry `## Standing decisions`, and a phase may read
+`decision_recall` or `decision_list`; a conflict with a decision is never, by
+itself, a gate. A run never saves or updates a decision, the architect never
+proposes one, and the architect's phase prompt carries no decisions section.
 
-**A proposal ends when its job is closed.** The proposal a job saved carries
-that job's id: proposed by a job, accepted when the job closes. The settle step of
-`nightqueue queue close <id>`, `nightqueue queue close --merged` and the MCP `queue_close`
-accepts every proposal of the job in the transaction that closes it, prints an
-`accepted D-n: <title>` line for each, and `--json` carries them in `decisions`. A job that
-ends cancelled or failed accepts nothing. A proposal still open on a closed job (from before
-this rule) is a warning
-of the `decision proposals` line of `nightqueue doctor`, which names each by
-number and job.
+**A close never touches a decision.** `nightqueue queue close <id>`,
+`nightqueue queue close --merged` and the MCP `queue_close` write nothing to the
+decisions log, print no decision line, and their `--json` has no `decisions` key. A
+`proposed` row - one a job saved before this rule included - stays `proposed` until the
+operator accepts or rejects it with `decision_update` or `nightqueue decision update`.
 

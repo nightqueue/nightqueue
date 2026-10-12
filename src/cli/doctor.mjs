@@ -41,7 +41,6 @@ import { EMBEDDING_MODEL_TAG, embeddingLibraryEntry, isModelCached } from "../me
 import { HOST_COMMANDS_SAMPLE_SIZE } from "../memory/jobs.mjs";
 import { hasLegacyRegistry } from "../memory/migration/v18.mjs";
 import { DB_USER_VERSION } from "../memory/schema.mjs";
-import { decisionRef } from "../memory/scope.mjs";
 import { keepAwakeMode, resolveCaffeinateBin } from "../queue/keep-awake.mjs";
 import { findLostJobs, logOnlyTail, scanDisk } from "../queue/lost-rows.mjs";
 import { isRegistryFailure, killProcess, listRunnerRecords, liveRunnersReport, registryReadError } from "../queue/registry.mjs";
@@ -899,32 +898,6 @@ async function checkQueueJobs(ctx) {
   }
 }
 
-// The detail of the proposals left open on closed jobs: how many, then each by number and job.
-function staleProposalsDetail(rows) {
-  const noun = rows.length === 1 ? "proposed decision" : "proposed decisions";
-  const items = rows.map((row) => `${decisionRef(row)} (${jobRef(row.job_id)})`).join(", ");
-  return `${rows.length} ${noun} of closed jobs: ${items}`;
-}
-
-// Reports the decisions a queue job proposed and nobody settled before the job was closed, reading the database read-only.
-async function checkDecisionProposals(ctx) {
-  const store = openStoreReadOnly(ctx.env);
-  try {
-    const rows = await store.decisions.staleProposals();
-    if (!rows.length) return check("decision proposals", "ok", "no proposal left open on a closed job");
-    return check(
-      "decision proposals",
-      "warn",
-      staleProposalsDetail(rows),
-      "accept or reject each with `decision_update` (`status: accepted|rejected`) or `nightqueue decision update <number> --status accepted|rejected`",
-    );
-  } catch (err) {
-    return check("decision proposals", "warn", err?.message ?? String(err), QUEUE_JOBS_MIGRATE_HINT);
-  } finally {
-    await store.close();
-  }
-}
-
 // What a live registration does, as the report adds it: a watcher's cadence, the job a close is closing, nothing otherwise.
 function runnerCadenceDetail(info) {
   if (Number.isInteger(info.intervalS)) return `, ${info.mode} every ${info.intervalS} s`;
@@ -1079,7 +1052,7 @@ async function checkCloses(ctx) {
 // Checks the queue: the pause sentinel and the runners always, the orphaned jobs, the closes and the open proposals of closed jobs only once the database exists.
 async function checkQueue(ctx) {
   const checks = [checkQueuePause(ctx), checkKeepAwake(ctx), checkJobEnvironment(ctx), ...checkRunners(ctx)];
-  if (existsSync(dbPath(ctx.env))) checks.push(await checkQueueJobs(ctx), await checkCloses(ctx), await checkDecisionProposals(ctx));
+  if (existsSync(dbPath(ctx.env))) checks.push(await checkQueueJobs(ctx), await checkCloses(ctx));
   checks.push(await checkHostCommands(ctx), await checkOrchestrator(ctx));
   return checks;
 }

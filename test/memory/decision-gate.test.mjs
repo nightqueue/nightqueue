@@ -7,7 +7,6 @@ import {
   saveDecision,
   saveReviewedDecision,
   setDecisionEmbedding,
-  updateDecision,
 } from "../../src/memory/decisions.mjs";
 import { fakeEmbedder, makeHome, makeProject, orgIdOf, projectIdOf } from "../../test-support/memory.mjs";
 
@@ -127,23 +126,17 @@ test("two back-to-back saves of one title: the second is held back naming the fi
   assert.deepEqual(candidateNumbers(second), [first.number]);
 });
 
-test("a job proposes at most one decision while the first is still proposed, and its rows carry the job id", async (t) => {
+test("rows saved with a job id carry it, and the memory layer no longer caps proposals per job", async (t) => {
   const env = makeChainHome(t, "gate-job-proposal");
   openDb(env).prepare("INSERT INTO jobs (id, project_id, prompt) VALUES (7, ?, 'the job')").run(projectIdOf(env, "alpha"));
   const first = await review(env, { title: "logs are rotated daily", status: "proposed", jobId: 7 });
   assert.equal(first.jobId, 7);
   assert.equal(getDecision(first.id, env).job_id, 7);
 
-  await assert.rejects(
-    review(env, { title: "embeddings stay optional", status: "proposed", jobId: 7 }),
-    /J-7 already proposed decision D-5; a job proposes at most one decision/,
-  );
-  assert.equal(rowCount(env), 5);
-
-  updateDecision(first.id, { status: "rejected" }, env);
-  const again = await review(env, { title: "embeddings stay optional", status: "proposed", jobId: 7 });
-  assert.equal(again.number, 6);
-  assert.equal(getDecision(again.id, env).job_id, 7);
+  const second = await review(env, { title: "embeddings stay optional", status: "proposed", jobId: 7 });
+  assert.equal(second.number, 6);
+  assert.equal(getDecision(second.id, env).job_id, 7);
+  assert.equal(rowCount(env), 6);
 });
 
 test("inside a job supersedes is refused before anything is read or written", async (t) => {

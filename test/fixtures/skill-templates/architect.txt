@@ -21,22 +21,5 @@ Project conventions: read `<CWD>/CLAUDE.md` yourself via Read if it exists (the 
 [Paste the `block` of `context_for_phase` (target: "architect") — omit when it came back empty:]
 [CONTEXT BLOCK]
 
-[Include only if the Standing decisions section of the Brief exists:]
-## Standing decisions
-- D-<n> <title>
-### In full (the 8 closest to this Brief)
-- D-<n> <title> — <decision>
-These are the standing constraints of the project and of its org, decided before this task
-(a ref written `<ORGKEY>/D-<n>` belongs to the org and binds every project of it).
-They are binding context, never a proposed solution: a design that contradicts one either
-follows the decision or takes the conflict to `## Requires user confirmation` naming its
-ref.
-
-[Include only if the Proposed (not binding) section of the Brief exists:]
-## Proposed (not binding)
-- D-<n> <title>
-These decisions were proposed and nobody accepted them yet: they bind nothing, and a design
-may go against them without a confirmation.
-
 Repository: [CWD PATH]
 Project: [PROJECT — the name on the Project: line of the prompt]
