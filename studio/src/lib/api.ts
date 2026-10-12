@@ -1,5 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
-import type { Project, StudioInfo } from "./types";
+import { normalizeProjectsAnswer } from "./projects";
+import type { Project, ProjectsAnswer, StudioInfo } from "./types";
 
 type ErrorBody = Record<string, unknown>;
 
@@ -33,8 +34,8 @@ async function apiError(response: Response): Promise<ApiError> {
 }
 
 // Reads one JSON route of the studio API, throwing an ApiError with the server's message on failure.
-export async function getJson<T>(path: string): Promise<T> {
-  const response = await fetch(path, { headers: { accept: "application/json" }, credentials: "same-origin" });
+export async function getJson<T>(path: string, signal?: AbortSignal): Promise<T> {
+  const response = await fetch(path, { headers: { accept: "application/json" }, credentials: "same-origin", signal });
   if (!response.ok) throw await apiError(response);
   return (await response.json()) as T;
 }
@@ -47,7 +48,7 @@ export async function getText(path: string): Promise<string> {
 }
 
 // Sends a JSON body with one method to one route of the studio API, throwing an ApiError with the server's message on failure.
-async function sendJson<T>(method: "POST" | "PUT", path: string, body: unknown): Promise<T> {
+async function sendJson<T>(method: "POST" | "PUT" | "PATCH", path: string, body: unknown): Promise<T> {
   const response = await fetch(path, {
     method,
     headers: { "content-type": "application/json", accept: "application/json" },
@@ -68,6 +69,11 @@ export function putJson<T>(path: string, body: unknown = {}): Promise<T> {
   return sendJson<T>("PUT", path, body);
 }
 
+// Patches one resource of the studio API with a JSON body, throwing an ApiError with the server's message on failure.
+export function patchJson<T>(path: string, body: unknown = {}): Promise<T> {
+  return sendJson<T>("PATCH", path, body);
+}
+
 // Deletes one resource of the studio API, throwing an ApiError with the server's message on failure.
 export async function deleteJson<T>(path: string): Promise<T> {
   const response = await fetch(path, { method: "DELETE", headers: { accept: "application/json" }, credentials: "same-origin" });
@@ -80,13 +86,14 @@ export function useStudioInfo() {
   return useQuery({ queryKey: ["info"], queryFn: () => getJson<StudioInfo>("/api/info"), staleTime: 60_000 });
 }
 
-// Reads the registered projects, an empty list when the answer carries none.
-async function fetchProjects(): Promise<Project[]> {
-  const body = await getJson<{ projects?: unknown }>("/api/projects");
-  return Array.isArray(body?.projects) ? (body.projects as Project[]) : [];
+export const PROJECTS_KEY = ["projects"] as const;
+
+// Reads the registered projects with their facts and the settings each provider offers, hostile fields dropped.
+export async function fetchProjectsAnswer(): Promise<ProjectsAnswer> {
+  return normalizeProjectsAnswer(await getJson<unknown>("/api/projects"));
 }
 
 // The projects registered in this home, for the project select of the queue and the add drawer.
 export function useProjects() {
-  return useQuery({ queryKey: ["projects"], queryFn: fetchProjects, staleTime: 60_000 });
+  return useQuery({ queryKey: PROJECTS_KEY, queryFn: fetchProjectsAnswer, staleTime: 60_000, select: (answer): Project[] => answer.projects });
 }

@@ -474,3 +474,89 @@ export interface IntegrationsView {
   projects: ProjectDestination[];
   modules: ModuleCard[];
 }
+
+export interface FootprintEntry {
+  table: string;
+  total: number;
+}
+
+export type Integrations = Record<string, unknown>;
+
+export interface SettingsProject extends Project {
+  aliases: string[];
+  origin: string | null;
+  integrations: Integrations | null;
+  footprint: FootprintEntry[];
+  runningJob: { ref: string } | null;
+  unlinkedByMove: Record<string, string[]>;
+}
+
+export interface ProviderSettingKey {
+  key: string;
+  type: string;
+  values?: string[];
+  default?: unknown;
+}
+
+export interface ProviderSettings {
+  kind: string;
+  keys: ProviderSettingKey[];
+}
+
+export interface ProjectsAnswer {
+  projects: SettingsProject[];
+  providers: ProviderSettings[];
+}
+
+export interface OrgRow {
+  id: string;
+  name: string;
+  key: string;
+  aliases: string[];
+  isDefault: boolean;
+  connections: Record<string, string | string[] | null>;
+  projects: number;
+}
+
+export interface ProjectRef {
+  id: string;
+  name: string;
+}
+
+export interface WorktreeOf {
+  path: string;
+  project: string | null;
+}
+
+export interface DirEntry {
+  name: string;
+  path: string;
+  git: boolean;
+  registeredAs?: ProjectRef;
+  worktreeOf?: WorktreeOf;
+}
+
+export interface DirListing {
+  path: string;
+  home: string;
+  parent: string | null;
+  entries: DirEntry[];
+  truncated: boolean;
+}
+
+export interface RepoFacts {
+  path: string;
+  mainCheckout: string;
+  worktreeOf: WorktreeOf | null;
+  registeredAs: ProjectRef | null;
+  origin: string | null;
+  branch: string | null;
+  suggested: { name: string | null; key: string | null };
+}
+
+export interface StepRefusal {
+  code: string | null;
+  step: string;
+  reason: string;
+  applied: string[];
+}

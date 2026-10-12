@@ -8,7 +8,6 @@ import { jobView } from "../memory/jobs.mjs";
 import { jobRef, parseJobRef } from "../memory/refs.mjs";
 import { RECALL_COS_CUT } from "../memory/search.mjs";
 import { respond } from "../mcp/transports/http-gate.mjs";
-import { listedProjects } from "../cli/project.mjs";
 import { runtimeLabel } from "../cli/runtime-versions.mjs";
 import { readVersion } from "../cli/version.mjs";
 import { blockerLines } from "../queue/claim.mjs";
@@ -25,6 +24,7 @@ import { connectLinear } from "./connect.mjs";
 import { jobDiffstat } from "./diffstat.mjs";
 import { jobFileDiff } from "./file-diff.mjs";
 import { ApiRefusal, serveIntegrations } from "./integrations.mjs";
+import { serveProjects } from "./projects.mjs";
 import { runDirOf } from "./job-extras.mjs";
 import { appliedRefs, withApplied } from "./recall-applied.mjs";
 import { TerminalRefusal } from "./terminal.mjs";
@@ -282,13 +282,14 @@ async function routeApi(req, res, { env, origin, path, terminals, fetchImpl }) {
   const isGet = req.method === "GET";
   const isPost = req.method === "POST";
   if (path === "/api/info" && isGet) return sendJson(res, 200, infoAnswer({ env, origin }));
-  if (path === "/api/projects" && isGet) return sendJson(res, 200, { projects: await listedProjects({ env }) });
   if (path === "/api/runners/start" && isPost) return sendJson(res, 200, await startRunner(req, env));
   if (path === "/api/queue/pause" && isPost) return sendJson(res, 200, setPaused(env, true));
   if (path === "/api/queue/resume" && isPost) return sendJson(res, 200, setPaused(env, false));
   if (path === "/api/connections/linear" && isPost) {
     return sendJson(res, 200, await connectLinear({ body: await readJsonBody(req), env, fetchImpl: fetchImpl ?? globalThis.fetch }));
   }
+  const projects = await serveProjects(req, { path, env, readBody: readJsonBody });
+  if (projects) return sendJson(res, projects.status, projects.body);
   const integrations = await serveIntegrations(req, { path, env, fetchImpl, readBody: readJsonBody });
   if (integrations) return sendJson(res, integrations.status, integrations.body);
   const log = JOB_LOG_PATH.exec(path);

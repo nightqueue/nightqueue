@@ -1,5 +1,5 @@
 import { UserError } from "../config/errors.mjs";
-import { addOrg, listOrgs, removeOrg, renameOrg, setOrgKey } from "../config/orgs.mjs";
+import { addOrg, listOrgs, removeOrg, renameOrg, setDefaultOrg, setOrgKey } from "../config/orgs.mjs";
 import { loadConfig } from "../config/store.mjs";
 import { openRegistryReader, openRegistryWriter, openStore } from "../store/open.mjs";
 import { checkArgs, parseCommand } from "./args.mjs";
@@ -91,12 +91,24 @@ async function runRemove(argv, ctx) {
   ctx.out(`removed org \`${name}\``);
 }
 
+// Runs `org default`: config.json names the org new projects land in when none is named.
+async function runDefault(argv, ctx) {
+  const { positionals } = parseCommand(argv);
+  checkArgs(positionals, { min: 1, max: 1, usage: "nightqueue org default <name>" });
+  const name = positionals[0];
+  const store = await openRegistryWriter(ctx.env);
+  const { config, changed } = await setDefaultOrg(store, loadConfig(ctx.env, { warn: ctx.err }), name);
+  ctx.saveConfig(config, ctx.env);
+  ctx.out(changed ? `default org is now \`${name}\`` : `org \`${name}\` is already the default org`);
+}
+
 const SUBCOMMANDS = new Map([
   ["add", runAdd],
   ["list", runList],
   ["rename", runRename],
   ["key", runKey],
   ["remove", runRemove],
+  ["default", runDefault],
 ]);
 
 // Dispatches the subcommands of `nightqueue org`.

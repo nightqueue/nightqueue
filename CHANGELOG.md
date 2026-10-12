@@ -58,6 +58,17 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Studio Settings › Projects & orgs.** The settings page lists every org (key, default pill,
+  project count) and every project (path and whether it exists, origin, integrations, old keys),
+  registers a repository from a home-bounded folder browser, edits a project in a drawer (name,
+  key, org, checkout, integrations) and removes one, typing its name when it owns rows. Every
+  write is the runtime's own (`project add/rename/key/move/remove --purge`, `org
+  add/rename/key/remove`) under the config lock. New routes: `GET/POST /api/orgs`,
+  `PATCH/DELETE /api/orgs/:id`, `POST /api/projects`, `PATCH/DELETE /api/projects/:id`,
+  `GET /api/fs/dirs`, `GET /api/fs/repo`, `GET /api/keys/suggest`. A PATCH applies its fields in
+  order and stops at the first refusal with `{step, reason, applied}`.
+- **`nightqueue org default <name>`.** Makes an org the default one (config.json `defaultOrg`),
+  where `init`, `project add` and `project_register` put a project when no org is named.
 - **The studio track has role colours and skipped slots.** The job's pipeline card always shows
   the nine slots from second 0 (`tier pending` until the tier is known), each a role dot and bar
   in its agent's colour (`studio/src/lib/phase-colors.ts`, the `--ph-*` variables). A slot the

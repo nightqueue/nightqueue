@@ -6,17 +6,19 @@ interface SettingsErrorProps {
   error: unknown;
   retrying: boolean;
   onRetry: () => void;
+  title?: string;
+  kept?: string;
 }
 
-// The error state of Settings › Integrations: what failed, that nothing changed, and how to retry.
-export function SettingsError({ error, retrying, onRetry }: SettingsErrorProps) {
+// The error state of a settings section: what failed, that nothing changed, and how to retry.
+export function SettingsError({ error, retrying, onRetry, title = "Couldn't read the integrations", kept = "connections and destinations stay as they were" }: SettingsErrorProps) {
   return (
     <section role="alert" className="flex flex-col items-start gap-4 rounded-lg border border-line bg-surface px-6 py-7 max-sm:px-4">
       <div className="w-full">
         <Note tone="err" icon="⚠">
-          <div className="font-semibold text-red">Couldn't read the integrations</div>
+          <div className="font-semibold text-red">{title}</div>
           <div>
-            Studio couldn't reach the runtime at <span className="font-mono">{window.location.host}</span> ({errorText(error)}). Nothing was changed — connections and destinations stay as they were.
+            Studio couldn't reach the runtime at <span className="font-mono">{window.location.host}</span> ({errorText(error)}). Nothing was changed — {kept}.
           </div>
         </Note>
       </div>

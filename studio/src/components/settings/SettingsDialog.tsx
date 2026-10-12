@@ -2,7 +2,7 @@ import { ArrowLeft, X } from "lucide-react";
 import type { FormEvent, ReactNode } from "react";
 import { useEscape } from "../../lib/useEscape";
 
-export type DialogWidth = "narrow" | "medium" | "wide";
+export type DialogWidth = "narrow" | "medium" | "wide" | "xwide";
 
 export type PhoneLayout = "sheet" | "full";
 
@@ -18,7 +18,7 @@ interface SettingsDialogProps {
   footer: ReactNode;
 }
 
-const WIDTHS: Record<DialogWidth, string> = { narrow: "sm:max-w-[520px]", medium: "sm:max-w-[560px]", wide: "sm:max-w-[640px]" };
+const WIDTHS: Record<DialogWidth, string> = { narrow: "sm:max-w-[520px]", medium: "sm:max-w-[560px]", wide: "sm:max-w-[640px]", xwide: "sm:max-w-[680px]" };
 
 const OVERLAY_PHONE: Record<PhoneLayout, string> = { sheet: "max-sm:items-end", full: "max-sm:items-stretch" };
 
