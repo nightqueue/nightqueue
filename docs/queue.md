@@ -14,7 +14,7 @@ nightqueue queue add "fix the flaky worker"                    # same, for the p
 nightqueue queue add fix the flaky worker --run                # enqueue and start the runner on it, detached
 nightqueue queue add "fix the flaky worker" --yes              # register the repository of the current directory without asking
 nightqueue queue add "fix the flaky worker" --tier simple      # declare the risk tier; the pipeline may only raise it
-nightqueue queue add "fix it" --origin <kind>:<ref>            # name the service the job came from instead of detecting it
+nightqueue queue add "fix it" --origin <kind>:<ref>...         # name the services the job came from (repeatable) instead of detecting them
 nightqueue queue status [--limit 10] [--json]                  # the state of the runner, the table of the queue and the counts
 nightqueue queue status --follow [2] [--until-idle]            # the same table, redrawn in place until Ctrl-C (or until the queue is idle)
 nightqueue queue status --blocked                              # only the gated jobs a preflight block stopped
@@ -75,31 +75,48 @@ Operator runs no longer exist (D-58):
 `--run-dir` (`queue_add`'s `run_dir`) is refused with a reason naming D-58, and what an
 investigation found goes in the prompt.
 
-**A job records where it came from.** Every queued job gets an `origin` (`{kind, ref}`)
-when its prompt names a service a provider of this build recognizes - the first provider,
-in registry order, whose parser matches the prompt - or the one `--origin <kind>:<ref>`
-(`queue_add`'s `origin: {kind, ref}`) names explicitly, split on the first `:`.
-An explicit origin wins over detection; one whose kind no provider knows, or whose ref
-the provider does not read as its own, is refused and nothing is queued. A prompt that
-names no service queues a job with no origin, exactly as before. `origin: false` queues a job
-with no origin; detection runs only when `origin` is omitted or null. The answer names the
-origin and the org (or, for a home-scoped provider, home) connection that covers it: `queue add` prints a line of its own,
+**A job records where it came from.** Every queued job carries `origin`, a list of
+`{kind, ref}` (empty = none). An explicit list wins: each repeated `--origin <kind>:<ref>`
+(split on the first `:`), or `queue_add`'s `origin: [{kind, ref}, ...]`. Without one, the
+list is every link of the prompt a provider of this build recognizes - providers in registry
+order, every match of each, one entry per distinct kind and ref - ignoring the quoted
+`<comment-thread>...</comment-thread>` blocks (an unclosed one hides the rest of the prompt).
+An explicit origin whose kind no provider knows, or whose ref the provider does not read as
+its own, is refused and nothing is queued. A prompt that names no service queues a job with
+no origin. `origin: []` queues a job with no origin; detection runs only when `origin` is
+omitted or null. `queue_add` refuses the old single shapes (`origin: {kind, ref}` or
+`origin: false`) as a client with the tool definitions of an older nightqueue (tool contract 6).
+The answer names each origin and the org (or, for a home-scoped provider, home) connection
+that covers it: `queue add` prints one line per origin,
 `origin: <kind> <ref> (connection: <name|none>)`, and `queue_add` answers
-`origin: {kind, ref, connection, detail?}` plus `Origin: ...` in its hint (`none` with the
-reason in `detail`, e.g. `project has no <kind> integration`). `queue status <id>` shows an
-`origin` line and the `--json`/`queue_status` detail carries `origin` (null when none).
+`origin: [{kind, ref, connection, detail?}, ...]` (always a list) plus `Origins: ...` in its
+hint when there is one (`none` with the reason in `detail`, e.g. `project has no <kind>
+integration`). `queue status <id>` shows an `origin` line (`<kind> <ref>, <kind> <ref>`, left
+out when the list is empty) and the `--json`/`queue_status` detail carries `origin` as the list
+(`[]` when none). An origin stored before the list existed is rewritten once, at the first
+open of the database, into a one-element list; a value that is not a well-formed origin
+becomes no origin.
 
-**The runner enriches the origin at claim.** A claimed job with an origin writes one
-`origin: <kind> <ref> (connection: <name|none>)` line in its job log (the narrated log
-shows it). When the project enabled that provider (`projects.integrations` has its kind)
-or the provider is home-scoped (Linear), the provider can read, a connection covers the
-origin (the org's, or the home's for a home-scoped provider) and the run has no
-`origin/<kind>.md` yet, the runner fetches what the service knows about it (20 s in all)
-into `<run_dir>/origin/<kind>.md`, mode 0600, capped at 16 KiB (cut on a character, marked
-`[truncated]`). The fetch never fails the job: a refusal, a timeout or a network failure
-is one `origin enrichment skipped: <reason>` line, with a status and never a secret, URL
-or error text. The triager reads the file through `context_for_phase` as a `## Job origin`
-section, fenced and labelled as evidence, never instructions.
+**The runner enriches the origins at claim.** A claimed job writes one
+`origin: <kind> <ref> (connection: <name|none>)` line per origin in its job log (the narrated
+log shows it). For each origin, when the project enabled that provider
+(`projects.integrations` has its kind) or the provider is home-scoped (Linear), the provider
+can read, a connection covers the origin (the org's, or the home's for a home-scoped
+provider) and the run has no `origin/<kind>-<ref>.md` yet (any character of the ref outside
+`A-Za-z0-9._-` becomes `_`), the runner fetches what the service knows about it (20 s per
+fetch) into `<run_dir>/origin/<kind>-<ref>.md`, mode 0600, capped at 16 KiB (cut on a
+character, marked `[truncated]`). A reading provider may also link further origins from the
+issue's own attachments (Linear: each attachment URL another provider's parser recognizes,
+never a link in the description or comments); they are appended after the stored ones, in
+attachment order, written back to the job row only while the job is still `running` under the
+same worker, logged `origin linked by <kind> <ref>: <kind> <ref>, ...`, and enriched in turn
+(one level: their own links are not followed). When that write-back is refused (the job moved
+on) the log says `linked origins not recorded: the claim moved on` and the linking origin's
+file is not written, so a retry fetches it again. The fetch never fails the job: a refusal, a
+timeout or a network failure is one `origin enrichment skipped: <reason>` line, with a status
+and never a secret, URL or error text. The triager reads every file through
+`context_for_phase` as a `## Job origin` section with one `### <kind>-<ref>` heading per file,
+fenced and labelled as evidence, never instructions.
 
 **Sentry.** A prompt with a Sentry issue link (`https://acme.sentry.io/issues/4507/`,
 `https://sentry.io/organizations/acme/issues/4507/` or a regional `*.sentry.io` host) gets the
@@ -109,7 +126,7 @@ dash, right after the word sentry (`sentry API-12`, `Sentry: API-12`) or given a
 own `J-86`, `D-55` refs have that shape) nor a word such as `sentry error-handling`. The org's `sentry`
 connection (`connection add --type sentry --set org=<slug>`) covers it. With
 `project integrations <project> set sentry.onClosed=resolved` (or `resolvedInNextRelease`;
-`resolved` is the default) the runner writes `origin/sentry.md` at claim - the issue's title,
+`resolved` is the default) the runner writes `origin/sentry-<ref>.md` at claim - the issue's title,
 culprit, level, status, counts and dates, then one line per recent event (up to 5: date, event
 id, title), then the latest event's exception, up to 30 frames
 (in-app first), the last 20 breadcrumbs and its allow-listed tags (environment, release,
@@ -128,19 +145,26 @@ with a Linear issue link (`https://linear.app/<workspace>/issue/MK-42/...`) gets
 `linear MK-42`; an identifier counts only written in upper case right after the word linear
 (`linear MK-42`, `Linear: MK-42`) or given as `--origin linear:mk-42` (any case, stored upper),
 never a bare `MK-42` in prose (the same rule as Sentry, so `J-86` and `D-55` stay safe). With
-the connection, the runner writes `origin/linear.md` at claim - identifier, title, state, team,
+the connection, the runner writes `origin/linear-MK-42.md` at claim - identifier, title, state, team,
 priority, assignee, dates, URL, parent, the description verbatim, labels, attachments and up to
-20 comments oldest first (each cut at 2000 characters); never an email or an avatar - and the
-close's **origin** step moves the issue to its team's `completed` state of lowest position, then
-comments `Merged <pr url> (<job ref>, nightqueue)`. An issue already completed or canceled when
-its pull request merges keeps its state and only gets the comment; any other issue moves to its
-team's first completed state (lowest position) plus the comment. A team with no `completed` state still gets
-the comment (a `warning`); a failed move is a `warning` that leaves the job not notified, so
-`queue close <id> --steps origin` retries both. With no Linear connection the coverage is
+20 comments oldest first (each cut at 2000 characters); never an email or an avatar - and links
+the issue's attachments other providers recognize (a Sentry issue, a Discord message) as further
+origins of the job. The close's **origin** step moves the issue to its team's `completed` state
+of lowest position, attaches the pull request to the issue (a Linear attachment titled
+`Pull request #<n>`, subtitle `merged · <job ref> · nightqueue`; Linear updates the same
+attachment on a re-run instead of adding a second one), then comments
+`Merged <pr url> (<job ref>, nightqueue)`. An issue already completed or canceled when
+its pull request merges keeps its state and only gets the attachment and the comment; any other
+issue moves to its team's first completed state (lowest position) plus both. A team with no
+`completed` state still gets them (a `warning`); an attachment or a comment that fails is a
+`warning` naming it (`PR not attached (...)`, `comment not posted (...)`) that leaves the issue
+not notified, its progress recorded, so `queue close <id> --steps origin` retries only the missing
+action (the comment is never posted twice); a failed move is a `warning` that the same re-run
+retries whole. With no Linear connection the coverage is
 `none` (`no linear connection in the home`), enrichment logs one skipped line and the close step
 is `skipped`; the job never fails for it. The Studio's Issues card and the `tracker_issues` MCP
 tool list the workspace's issues by Linear team and project; queueing from one sends
-`origin: {kind: "linear", ref}` and the nightqueue `project` the operator picks.
+`origin: [{kind: "linear", ref}]` and the nightqueue `project` the operator picks.
 
 **Discord.** A prompt with a Discord message link
 (`https://discord.com/channels/<guild>/<channel>/<message>`, also `ptb.`/`canary.` and
@@ -1088,20 +1112,31 @@ The job's status is untouched until settle: a close that stops leaves it `done`,
 pull request closed without merge, which cancels it.
 
 **Post-close steps: origin and log.** After settle, two more steps run on the job that is
-now `closed`: **origin** tells the service the job came from (its recorded `origin`) that the
-pull request merged, through the provider of that kind, and **log** posts the close to every
+now `closed`: **origin** tells each service the job came from (every entry of its recorded
+`origin` list) that the pull request merged, through the provider of each kind, one origin at a
+time in registry order (Sentry, then Linear, then Discord) whatever the stored order, and
+**log** posts the close to every
 provider whose `<kind>.log.connection` the project set and whose `<kind>.log.events` (default
 `closed`) includes `closed`. They run only for a project with integrations (`nightqueue project
-integrations`) or a job whose origin is home-scoped (Linear, which then runs the origin step and
+integrations`) or a job with a home-scoped origin (Linear, which then runs the origin step and
 skips the log step): a project without them closes exactly as before, with no extra step, line or
 write. They never stop, fail or reopen a close and never change the job's status: each records
 `done`, `skipped` or `warning` (a failure, an exception or the budget is a `warning`) under a
 post-close lease held in `close_worker` (a closed row never carries a `close_status`), with a
 budget of its own of 60 s. A warning, and a skip worth telling (an origin with no connection in
 the org, or in the home for a home-scoped kind), appends `After close: <step> <status> - <note>` to the notice; a later success of the
-same step appends its own line. Both steps are idempotent: `data.originNotified` and
-`data.logged` (one flag per provider) make a re-run answer `already notified` / `already
-logged` without a request. `nightqueue queue close <id> --steps origin,log` re-runs only the
+same step appends its own line. The origin step acts on each origin independently: one that
+fails, throws or has no connection never keeps the next from running; the step records the
+worst status of its origins, with every note prefixed `<kind> <ref>: `, and the notice gets one
+`After close: origin ...` line per origin worth telling and acted on in this run (an origin
+already notified adds no line). Each origin's HTTP leaves 3 s of the
+budget, and an origin the budget no longer covers is a `warning` `not attempted, the post-close
+budget ran out`, so the origins already done are still recorded. Both steps are idempotent:
+`data.originsNotified` (one flag per origin, keyed `<kind> <ref>`) and `data.logged` (one flag
+per provider) make a re-run answer `already notified` / `already logged` without a request, so
+a re-run after a partial failure calls only the origins that are not notified yet;
+`data.originsProgress` keeps what a partly done origin already did (Linear: `attached`,
+`commented`), so its retry resumes from there. `nightqueue queue close <id> --steps origin,log` re-runs only the
 named post-close steps of a closed job in this process (a pre-close step name, `--merged` or
 `--force` is refused, and so is a job that is not closed or whose post-close steps another
 process is running); it prints each step and `J-<id> post-close: origin done, log skipped`,

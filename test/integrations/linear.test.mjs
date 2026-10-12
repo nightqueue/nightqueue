@@ -6,10 +6,10 @@ import { Readable } from "node:stream";
 import { test } from "node:test";
 import { defaultContext, run } from "../../src/cli/index.mjs";
 import { loadSecrets, saveSecrets } from "../../src/config/store.mjs";
-import { ORIGIN_MAX_BYTES, enrichJobOrigin } from "../../src/integrations/enrich.mjs";
+import { ORIGIN_MAX_BYTES, enrichJobOrigins } from "../../src/integrations/enrich.mjs";
 import { requestJson } from "../../src/integrations/http.mjs";
 import { linear } from "../../src/integrations/linear.mjs";
-import { detectOrigin, explicitOrigin } from "../../src/integrations/origin.mjs";
+import { detectOrigins, explicitOrigin } from "../../src/integrations/origin.mjs";
 import { openDb } from "../../src/memory/db.mjs";
 import { acquireClose, claimJobById, finishJob, getJob } from "../../src/memory/jobs.mjs";
 import { CLOSE_STEPS, runClosePipeline } from "../../src/queue/close.mjs";
@@ -36,7 +36,7 @@ const STATES = [
 // The GraphQL operation a request body carries, named by its root field.
 function operationOf(body) {
   const query = JSON.parse(body ?? "{}").query ?? "";
-  for (const name of ["viewer", "issueUpdate", "commentCreate", "issues(", "teams", "issue("]) {
+  for (const name of ["viewer", "issueUpdate", "attachmentCreate", "commentCreate", "issues(", "teams", "issue("]) {
     if (query.includes(name)) return name.replace("(", "");
   }
   return "unknown";
@@ -88,18 +88,19 @@ function fullIssue({ description = "The login breaks.\n\nSteps: open it.", state
   };
 }
 
-// The routes of a close: the issue read (with its current state, if any), the state move and the comment, each answerable with a status or errors.
-function closeRoutes({ states = STATES, current, update = { success: true }, comment = { success: true }, updateStatus = 200 } = {}) {
+// The routes of a close: the issue read (with its current state, if any), the state move, the PR attachment and the comment, each answerable with a status or errors.
+function closeRoutes({ states = STATES, current, update = { success: true }, attach = { success: true }, comment = { success: true }, updateStatus = 200 } = {}) {
   const state = current === undefined ? {} : { state: current };
   return {
     issue: { body: { data: { issue: { id: "uuid-42", identifier: "MK-42", ...state, team: { states: { nodes: states } } } } } },
     issueUpdate: { status: updateStatus, body: { data: { issueUpdate: update } } },
+    attachmentCreate: attach.status ? { status: attach.status } : { body: { data: { attachmentCreate: attach } } },
     commentCreate: comment.errors ? { body: { errors: [{ message: SECRET_MESSAGE }] } } : { body: { data: { commentCreate: comment } } },
   };
 }
 
 // Calls the provider's onClosed with a fake fetch, answering the result and the calls made.
-async function close(routes, slot = { ...RECORD, name: "linear" }) {
+async function close(routes, slot = { ...RECORD, name: "linear" }, progress = undefined) {
   const fetch = fakeFetch(routes);
   const answer = await linear.onClosed({
     ref: "MK-42",
@@ -109,6 +110,7 @@ async function close(routes, slot = { ...RECORD, name: "linear" }) {
     slot,
     connections: [],
     http: httpOf(fetch),
+    progress,
   });
   return { answer, calls: fetch.calls };
 }
@@ -183,9 +185,11 @@ test("a linear link or an upper-case key named after the word linear is an origi
   assert.equal(parse("mk-42", { explicit: true }), "MK-42");
   assert.equal(parse("not a key", { explicit: true }), null);
   assert.deepEqual(explicitOrigin({ kind: "linear", ref: "mk-42" }), { kind: "linear", ref: "MK-42" });
-  assert.deepEqual(detectOrigin(`crash ${ISSUE_URL}`), { kind: "linear", ref: "MK-42" });
-  assert.deepEqual(detectOrigin(`see https://acme.sentry.io/issues/4507/ and ${ISSUE_URL}`), { kind: "sentry", ref: "4507" });
-  assert.equal(detectOrigin("bare MK-42 in prose"), null);
+  assert.deepEqual(detectOrigins(`crash ${ISSUE_URL}`), [{ kind: "linear", ref: "MK-42" }]);
+  assert.deepEqual(detectOrigins(`see https://acme.sentry.io/issues/4507/ and ${ISSUE_URL}`), [{ kind: "sentry", ref: "4507" }, { kind: "linear", ref: "MK-42" }]);
+  assert.deepEqual(detectOrigins("bare MK-42 in prose"), []);
+  assert.deepEqual(linear.origin.find(`Linear: MK-7 then https://linear.app/acme/issue/mk-42/x and bare MK-9`), ["MK-7", "MK-42"]);
+  assert.deepEqual(linear.origin.find("nothing here"), []);
 });
 
 test("the connection test reads the viewer with the bare key, and a refusal or GraphQL error carries no message", async () => {
@@ -203,7 +207,8 @@ test("the connection test reads the viewer with the bare key, and a refusal or G
 
 test("enrichment reads the whole issue into markdown: facts, description, labels, attachments, comments oldest first and cut", async () => {
   const fetch = fakeFetch({ issue: { body: { data: { issue: fullIssue() } } } });
-  const markdown = await linear.origin.enrich("MK-42", { connection: RECORD, http: httpOf(fetch) });
+  const { markdown, linked } = await linear.origin.enrich("MK-42", { connection: RECORD, http: httpOf(fetch) });
+  assert.deepEqual(linked, [], "no link reader means no linked origin");
   assert.deepEqual(fetch.calls.map((call) => [call.operation, call.variables]), [["issue", { id: "MK-42" }]]);
   const lines = markdown.split("\n");
   assert.equal(lines[0], "# Linear issue MK-42: Fix the login");
@@ -234,10 +239,13 @@ test("the runner's enrichment writes the capped linear file for a project with n
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const fetch = fakeFetch({ issue: { body: { data: { issue: fullIssue({ description: "é".repeat(20000) }) } } } });
   const lines = [];
-  const enrich = () => enrichJobOrigin({ origin: { kind: "linear", ref: "MK-42" }, orgId: home.orgId, integrations: null, dir, env: home.env, fetchImpl: fetch.impl, log: (line) => lines.push(line) });
+  const recorded = [];
+  const onLinked = async (list) => recorded.push(list) > 0;
+  const enrich = () => enrichJobOrigins({ origins: [{ kind: "linear", ref: "MK-42" }], orgId: home.orgId, integrations: null, dir, env: home.env, fetchImpl: fetch.impl, log: (line) => lines.push(line), onLinked });
   await enrich();
-  assert.deepEqual(lines, ["origin: linear MK-42 (connection: linear)"]);
-  const file = join(dir, "linear.md");
+  assert.deepEqual(lines, ["origin: linear MK-42 (connection: linear)", "origin linked by linear MK-42: sentry 4507", "origin: sentry 4507 (connection: none)"]);
+  assert.deepEqual(recorded, [[{ kind: "linear", ref: "MK-42" }, { kind: "sentry", ref: "4507" }]]);
+  const file = join(dir, "linear-MK-42.md");
   const written = readFileSync(file, "utf8");
   assert.ok(Buffer.byteLength(written, "utf8") <= ORIGIN_MAX_BYTES);
   assert.equal(statSync(file).mode & 0o777, 0o600);
@@ -251,16 +259,17 @@ test("enrichment with no linear connection in the home logs one skipped line and
   const dir = mkdtempSync(join(tmpdir(), "nq-linear-none-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const lines = [];
-  await enrichJobOrigin({ origin: { kind: "linear", ref: "MK-42" }, orgId: home.orgId, integrations: null, dir, env: home.env, fetchImpl: fakeFetch().impl, log: (line) => lines.push(line) });
+  await enrichJobOrigins({ origins: [{ kind: "linear", ref: "MK-42" }], orgId: home.orgId, integrations: null, dir, env: home.env, fetchImpl: fakeFetch().impl, log: (line) => lines.push(line) });
   assert.deepEqual(lines, ["origin: linear MK-42 (connection: none)", "origin enrichment skipped: no linear connection in the home"]);
 });
 
-test("onClosed moves the issue to the lowest-position completed state, then comments naming the merge", async () => {
+test("onClosed moves the issue to the lowest-position completed state, attaches the PR, then comments naming the merge", async () => {
   const { answer, calls } = await close(closeRoutes());
   assert.deepEqual(answer, { status: "done", note: "issue MK-42 moved to Done" });
   assert.deepEqual(calls.map((call) => [call.operation, call.variables]), [
     ["issue", { id: "MK-42" }],
     ["issueUpdate", { id: "uuid-42", stateId: "s-done" }],
+    ["attachmentCreate", { issueId: "uuid-42", url: "https://github.com/acme/api/pull/7", title: "Pull request #7", subtitle: "merged · J-1 · nightqueue" }],
     ["commentCreate", { issueId: "uuid-42", body: "Merged https://github.com/acme/api/pull/7 (J-1, nightqueue)" }],
   ]);
   assert.ok(calls.every((call) => call.auth === API_KEY));
@@ -269,7 +278,7 @@ test("onClosed moves the issue to the lowest-position completed state, then comm
 test("onClosed comments only when the team has no completed state, and a failed move stops before the comment", async () => {
   const noState = await close(closeRoutes({ states: STATES.filter((state) => state.type !== "completed") }));
   assert.deepEqual(noState.answer, { status: "warning", note: "issue MK-42 has no completed state; comment posted", notified: true });
-  assert.deepEqual(noState.calls.map((call) => call.operation), ["issue", "commentCreate"]);
+  assert.deepEqual(noState.calls.map((call) => call.operation), ["issue", "attachmentCreate", "commentCreate"]);
 
   const unmoved = await close(closeRoutes({ update: { success: false } }));
   assert.deepEqual(unmoved.answer, { status: "warning", note: "issue MK-42 not moved to Done (the service did not confirm)" });
@@ -281,10 +290,18 @@ test("onClosed comments only when the team has no completed state, and a failed 
 
 test("onClosed reports a failed comment, a failed read and a missing connection, never with a message or the key", async () => {
   const commentFailed = await close(closeRoutes({ comment: { errors: true } }));
-  assert.deepEqual(commentFailed.answer, { status: "warning", note: "issue MK-42 moved to Done; comment not posted (the service refused the query)", notified: true });
+  assert.deepEqual(commentFailed.answer, {
+    status: "warning",
+    note: "issue MK-42 moved to Done; comment not posted (the service refused the query)",
+    progress: { attached: true, commented: false },
+  });
 
   const both = await close(closeRoutes({ states: [], comment: { success: false } }));
-  assert.deepEqual(both.answer, { status: "warning", note: "issue MK-42 has no completed state; comment not posted (the service did not confirm)" });
+  assert.deepEqual(both.answer, {
+    status: "warning",
+    note: "issue MK-42 has no completed state; comment not posted (the service did not confirm)",
+    progress: { attached: true, commented: false },
+  });
 
   const unread = await close({ issue: { status: 401 } });
   assert.deepEqual(unread.answer, { status: "warning", note: "issue MK-42 not read (HTTP 401)" });
@@ -299,15 +316,84 @@ test("onClosed reports a failed comment, a failed read and a missing connection,
   assert.ok(!all.includes(API_KEY) && !all.includes("lin_api_") && !all.includes(SECRET_MESSAGE));
 });
 
+test("a PR not attached keeps the move and the comment but answers an unnotified warning carrying the progress to resume from", async () => {
+  const commented = { attached: false, commented: true };
+  const refused = await close(closeRoutes({ attach: { status: 400 } }));
+  assert.deepEqual(refused.answer, { status: "warning", note: "issue MK-42 moved to Done; PR not attached (HTTP 400)", progress: commented });
+  assert.deepEqual(refused.calls.map((call) => call.operation), ["issue", "issueUpdate", "attachmentCreate", "commentCreate"]);
+
+  const both = await close(closeRoutes({ attach: { success: false }, comment: { errors: true } }));
+  assert.deepEqual(both.answer, {
+    status: "warning",
+    note: "issue MK-42 moved to Done; PR not attached (the service did not confirm); comment not posted (the service refused the query)",
+    progress: { attached: false, commented: false },
+  });
+
+  const noState = await close(closeRoutes({ states: [], attach: { success: false } }));
+  assert.deepEqual(noState.answer, { status: "warning", note: "issue MK-42 has no completed state; comment posted; PR not attached (the service did not confirm)", progress: commented });
+
+  const released = await close(closeRoutes({ current: { name: "Released", type: "completed" }, attach: { success: false } }));
+  assert.deepEqual(released.answer, { status: "warning", note: "issue MK-42 already Released; comment posted; PR not attached (the service did not confirm)", progress: commented });
+});
+
+test("a close resuming from an earlier progress skips the attachment or the comment already done", async () => {
+  const attachOnly = await close(closeRoutes({ current: { name: "Done", type: "completed" } }), undefined, { attached: false, commented: true });
+  assert.deepEqual(attachOnly.calls.map((call) => call.operation), ["issue", "attachmentCreate"]);
+  assert.equal(attachOnly.answer.status, "done");
+
+  const commentOnly = await close(closeRoutes({ current: { name: "Done", type: "completed" } }), undefined, { attached: true, commented: false });
+  assert.deepEqual(commentOnly.calls.map((call) => call.operation), ["issue", "commentCreate"]);
+  assert.equal(commentOnly.answer.status, "done");
+
+  const noState = await close(closeRoutes({ states: [] }), undefined, { attached: false, commented: true });
+  assert.deepEqual(noState.calls.map((call) => call.operation), ["issue", "attachmentCreate"]);
+  assert.deepEqual(noState.answer, { status: "warning", note: "issue MK-42 has no completed state; comment posted", notified: true });
+});
+
+test("a failed PR attach is retried by a plain --steps origin re-run that attaches without commenting again", async (t) => {
+  const home = linearHome(t, "linear-attach-retry");
+  const id = seedDoneJob(home.env, { prompt: `the login breaks, see ${ISSUE_URL}` });
+  const failed = fakeFetch(closeRoutes({ attach: { success: false } }));
+  const { row } = await closeLinearJob(home, id, failed);
+  const data = JSON.parse(row.close).data;
+  assert.deepEqual(data.originsNotified, {});
+  assert.deepEqual(data.originsProgress, { "linear MK-42": { attached: false, commented: true } });
+
+  const retry = fakeFetch(closeRoutes({ current: { name: "Done", type: "completed" } }));
+  const answer = await runPostCloseSteps({ store: openStore(home.env), id, names: ["origin"], env: home.env, deps: { fetch: retry.impl } });
+  assert.deepEqual(answer.steps, [{ name: "origin", status: "done", note: "linear MK-42: issue MK-42 already Done; comment posted" }]);
+  assert.deepEqual(retry.calls.map((call) => call.operation), ["issue", "attachmentCreate"]);
+  const after = JSON.parse(getJob(id, home.env).close).data;
+  assert.deepEqual(after.originsNotified, { "linear MK-42": true });
+  assert.deepEqual(after.originsProgress, {});
+});
+
+// Calls the provider's onClosed with a given merge result, answering the result and the calls made.
+async function closeWithResult(result) {
+  const fetch = fakeFetch(closeRoutes());
+  const answer = await linear.onClosed({ ref: "MK-42", job: { id: 1, ref: "J-1" }, result, settings: null, slot: { ...RECORD, name: "linear" }, connections: [], http: httpOf(fetch) });
+  return { answer, calls: fetch.calls };
+}
+
+test("a close with no pull request url attaches nothing and still comments; one with no PR number titles it plainly", async () => {
+  const noUrl = await closeWithResult({ prUrl: null });
+  assert.deepEqual(noUrl.answer, { status: "warning", note: "issue MK-42 moved to Done; PR not attached (no pull request url)", notified: true });
+  assert.deepEqual(noUrl.calls.map((call) => call.operation), ["issue", "issueUpdate", "commentCreate"]);
+
+  const unnumbered = await closeWithResult({ prUrl: "https://github.com/acme/api/pull/7" });
+  assert.equal(unnumbered.answer.status, "done");
+  assert.equal(unnumbered.calls[2].variables.title, "Pull request");
+});
+
 test("closing a job queued from a linear link in a project with no integrations moves the issue and comments once", async (t) => {
   const home = linearHome(t, "linear-close");
   const fetch = fakeFetch(closeRoutes());
   const id = seedDoneJob(home.env, { prompt: `the login breaks, see ${ISSUE_URL}` });
   const { outcome, row } = await closeLinearJob(home, id, fetch);
   assert.equal(outcome.status, "closed");
-  assert.deepEqual(outcome.postClose.steps[0], { name: "origin", status: "done", note: "issue MK-42 moved to Done" });
-  assert.deepEqual(fetch.calls.map((call) => call.operation), ["issue", "issueUpdate", "commentCreate"]);
-  assert.equal(JSON.parse(row.close).data.originNotified, true);
+  assert.deepEqual(outcome.postClose.steps[0], { name: "origin", status: "done", note: "linear MK-42: issue MK-42 moved to Done" });
+  assert.deepEqual(fetch.calls.map((call) => call.operation), ["issue", "issueUpdate", "attachmentCreate", "commentCreate"]);
+  assert.deepEqual(JSON.parse(row.close).data.originsNotified, { "linear MK-42": true });
   assert.ok(!JSON.stringify(row).includes(API_KEY));
 });
 
@@ -324,12 +410,12 @@ test("smoke: connection add, queue add --origin and close move the issue and com
 
   const fetch = fakeFetch(closeRoutes());
   const { outcome } = await closeLinearJob(home, id, fetch);
-  assert.deepEqual(outcome.postClose.steps[0], { name: "origin", status: "done", note: "issue MK-42 moved to Done" });
-  assert.deepEqual(fetch.calls.map((call) => call.operation), ["issue", "issueUpdate", "commentCreate"]);
+  assert.deepEqual(outcome.postClose.steps[0], { name: "origin", status: "done", note: "linear MK-42: issue MK-42 moved to Done" });
+  assert.deepEqual(fetch.calls.map((call) => call.operation), ["issue", "issueUpdate", "attachmentCreate", "commentCreate"]);
 
   const again = fakeFetch(closeRoutes());
   const rerun = await runPostCloseSteps({ store: openStore(home.env), id, names: ["origin"], env: home.env, deps: { fetch: again.impl } });
-  assert.deepEqual(rerun.steps, [{ name: "origin", status: "done", note: "already notified" }]);
+  assert.deepEqual(rerun.steps, [{ name: "origin", status: "done", note: "linear MK-42: already notified" }]);
   assert.equal(again.calls.length, 0, "a repeat close posted again");
   assert.ok(![...added.out, ...queued.out].join("\n").includes(API_KEY));
 });
@@ -344,25 +430,25 @@ test("a close whose move failed is retried whole by --steps origin, and the comm
 
   const retry = fakeFetch(closeRoutes());
   const answer = await runPostCloseSteps({ store: openStore(home.env), id, names: ["origin"], env: home.env, deps: { fetch: retry.impl } });
-  assert.deepEqual(answer.steps, [{ name: "origin", status: "done", note: "issue MK-42 moved to Done" }]);
-  assert.deepEqual(retry.calls.map((call) => call.operation), ["issue", "issueUpdate", "commentCreate"]);
+  assert.deepEqual(answer.steps, [{ name: "origin", status: "done", note: "linear MK-42: issue MK-42 moved to Done" }]);
+  assert.deepEqual(retry.calls.map((call) => call.operation), ["issue", "issueUpdate", "attachmentCreate", "commentCreate"]);
 });
 
-test("the close reads the issue's current state in the same issue query, and every request is one of the six operations", async () => {
+test("the close reads the issue's current state in the same issue query, and every request is one of the seven operations", async () => {
   const { calls } = await close(closeRoutes({ current: { name: "In Progress", type: "started" } }));
   assert.ok(calls[0].query.includes("state { name type }"), calls[0].query);
-  const roots = ["viewer", "teams", "issue", "issues", "issueUpdate", "commentCreate"];
+  const roots = ["viewer", "teams", "issue", "issues", "issueUpdate", "attachmentCreate", "commentCreate"];
   assert.ok(calls.every((call) => roots.includes(call.operation)), calls.map((call) => call.operation).join(","));
 });
 
-test("an issue already completed (Released) or canceled keeps its state and only gets the comment", async () => {
+test("an issue already completed (Released) or canceled keeps its state and only gets the PR attached and the comment", async () => {
   const released = await close(closeRoutes({ current: { name: "Released", type: "completed" } }));
   assert.deepEqual(released.answer, { status: "done", note: "issue MK-42 already Released; comment posted" });
-  assert.deepEqual(released.calls.map((call) => call.operation), ["issue", "commentCreate"]);
+  assert.deepEqual(released.calls.map((call) => call.operation), ["issue", "attachmentCreate", "commentCreate"]);
 
   const canceled = await close(closeRoutes({ current: { name: "Canceled", type: "canceled" } }));
   assert.deepEqual(canceled.answer, { status: "done", note: "issue MK-42 already Canceled; comment posted" });
-  assert.deepEqual(canceled.calls.map((call) => call.operation), ["issue", "commentCreate"]);
+  assert.deepEqual(canceled.calls.map((call) => call.operation), ["issue", "attachmentCreate", "commentCreate"]);
 
   const unnamed = await close(closeRoutes({ current: { name: null, type: "canceled" } }));
   assert.deepEqual(unnamed.answer, { status: "done", note: "issue MK-42 already canceled; comment posted" });
@@ -371,21 +457,25 @@ test("an issue already completed (Released) or canceled keeps its state and only
 test("a started issue or one with no state read moves to the lowest-position completed state, never a later one", async () => {
   const started = await close(closeRoutes({ current: { name: "In Progress", type: "started" } }));
   assert.deepEqual(started.answer, { status: "done", note: "issue MK-42 moved to Done" });
-  assert.deepEqual(started.calls.map((call) => call.operation), ["issue", "issueUpdate", "commentCreate"]);
+  assert.deepEqual(started.calls.map((call) => call.operation), ["issue", "issueUpdate", "attachmentCreate", "commentCreate"]);
   assert.deepEqual(started.calls[1].variables, { id: "uuid-42", stateId: "s-done" });
 
   const stateless = await close(closeRoutes({ current: null }));
   assert.deepEqual(stateless.answer, { status: "done", note: "issue MK-42 moved to Done" });
-  assert.deepEqual(stateless.calls.map((call) => call.operation), ["issue", "issueUpdate", "commentCreate"]);
+  assert.deepEqual(stateless.calls.map((call) => call.operation), ["issue", "issueUpdate", "attachmentCreate", "commentCreate"]);
 });
 
-test("an already completed issue whose comment failed is not notified, and a second close again only comments", async () => {
+test("an already completed issue whose comment failed is not notified, and a second close again only attaches and comments", async () => {
   const routes = closeRoutes({ current: { name: "Done", type: "completed" }, comment: { errors: true } });
   const first = await close(routes);
-  assert.deepEqual(first.answer, { status: "warning", note: "issue MK-42 already Done; comment not posted (the service refused the query)" });
+  assert.deepEqual(first.answer, {
+    status: "warning",
+    note: "issue MK-42 already Done; comment not posted (the service refused the query)",
+    progress: { attached: true, commented: false },
+  });
   assert.equal("notified" in first.answer, false);
   const second = await close(routes);
-  assert.deepEqual(second.calls.map((call) => call.operation), ["issue", "commentCreate"]);
+  assert.deepEqual(second.calls.map((call) => call.operation), ["issue", "attachmentCreate", "commentCreate"]);
   assert.ok(!JSON.stringify([first.answer, second.answer]).includes(SECRET_MESSAGE));
 });
 
@@ -394,12 +484,12 @@ test("closing a job whose issue is already completed makes no state move, and --
   const id = seedDoneJob(home.env, { prompt: `the login breaks, see ${ISSUE_URL}` });
   const fetch = fakeFetch(closeRoutes({ current: { name: "Released", type: "completed" } }));
   const { outcome, row } = await closeLinearJob(home, id, fetch);
-  assert.deepEqual(outcome.postClose.steps[0], { name: "origin", status: "done", note: "issue MK-42 already Released; comment posted" });
-  assert.equal(JSON.parse(row.close).data.originNotified, true);
+  assert.deepEqual(outcome.postClose.steps[0], { name: "origin", status: "done", note: "linear MK-42: issue MK-42 already Released; comment posted" });
+  assert.deepEqual(JSON.parse(row.close).data.originsNotified, { "linear MK-42": true });
 
   const again = fakeFetch(closeRoutes({ current: { name: "Released", type: "completed" } }));
   const rerun = await runPostCloseSteps({ store: openStore(home.env), id, names: ["origin"], env: home.env, deps: { fetch: again.impl } });
-  assert.deepEqual(rerun.steps, [{ name: "origin", status: "done", note: "already notified" }]);
+  assert.deepEqual(rerun.steps, [{ name: "origin", status: "done", note: "linear MK-42: already notified" }]);
   const all = [...fetch.calls, ...again.calls].map((call) => call.operation);
   assert.equal(all.filter((operation) => operation === "issueUpdate").length, 0);
   assert.equal(all.filter((operation) => operation === "commentCreate").length, 1);

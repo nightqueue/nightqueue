@@ -48,7 +48,7 @@ function trackerHome(t, name, { connected = true } = {}) {
 
 test("the server instruction line is derived from the tracker providers of the build", () => {
   assert.deepEqual(trackerInstructionLines(), [
-    'Linear issues come from `tracker_issues`; queue from one with `origin: {kind: "linear", ref}` and the nightqueue `project`',
+    'Linear issues come from `tracker_issues`; queue from one with `origin: [{kind: "linear", ref}]` and the nightqueue `project`',
   ]);
 });
 

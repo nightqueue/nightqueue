@@ -7,9 +7,9 @@ import { test } from "node:test";
 import { defaultContext, run } from "../../src/cli/index.mjs";
 import { testConnection } from "../../src/config/connections.mjs";
 import { loadConfig, loadSecrets, saveConfig, saveSecrets } from "../../src/config/store.mjs";
-import { ORIGIN_MAX_BYTES, enrichJobOrigin } from "../../src/integrations/enrich.mjs";
+import { ORIGIN_MAX_BYTES, enrichJobOrigins } from "../../src/integrations/enrich.mjs";
 import { requestJson } from "../../src/integrations/http.mjs";
-import { detectOrigin, explicitOrigin } from "../../src/integrations/origin.mjs";
+import { detectOrigins, explicitOrigin } from "../../src/integrations/origin.mjs";
 import { sentry } from "../../src/integrations/sentry.mjs";
 import { acquireClose, getJob } from "../../src/memory/jobs.mjs";
 import { CLOSE_STEPS, runClosePipeline } from "../../src/queue/close.mjs";
@@ -158,12 +158,13 @@ test("a sentry link or a short id named after the word sentry is an origin; a ba
   assert.equal(parse("Sentry: api-12"), null);
   assert.equal(parse("wire the sentry error-handling into the sentry web-app"), null);
   assert.equal(parse("configure sentry API-KEY rotation"), null);
-  assert.equal(detectOrigin("add sentry error-handling to the worker"), null);
+  assert.deepEqual(detectOrigins("add sentry error-handling to the worker"), []);
   assert.equal(parse("fix J-86 for D-55, see NQ-7 and API-12"), null);
   assert.equal(parse("https://notsentry.io/issues/1"), null);
   assert.equal(parse("4507"), null);
-  assert.equal(detectOrigin("fix J-86 for D-55, see NQ-7"), null);
-  assert.deepEqual(detectOrigin(`the worker crashes, see ${ISSUE_URL}`), { kind: "sentry", ref: "4507" });
+  assert.deepEqual(detectOrigins("fix J-86 for D-55, see NQ-7"), []);
+  assert.deepEqual(detectOrigins(`the worker crashes, see ${ISSUE_URL}`), [{ kind: "sentry", ref: "4507" }]);
+  assert.deepEqual(sentry.origin.find(`sentry: api-1 no, Sentry API-12 then https://sentry.io/issues/9 and ${ISSUE_URL}`), ["API-12", "9", "4507"]);
   assert.deepEqual(explicitOrigin({ kind: "sentry", ref: "4507" }), { kind: "sentry", ref: "4507" });
   assert.deepEqual(explicitOrigin({ kind: "sentry", ref: "api-12" }), { kind: "sentry", ref: "API-12" });
   assert.throws(() => explicitOrigin({ kind: "sentry", ref: "not an issue" }), /is not a sentry reference/);
@@ -203,7 +204,7 @@ test("connection add --type sentry takes --set org and an optional url, refuses 
 
 test("enrichment reads the issue, its recent events and its latest event into markdown with no private data, resolving a short id first", async () => {
   const fetch = fakeFetch(issueRoutes());
-  const markdown = await sentry.origin.enrich("API-12", { connection: { ...RECORD, name: "sn" }, http: httpOf(fetch) });
+  const { markdown } = await sentry.origin.enrich("API-12", { connection: { ...RECORD, name: "sn" }, http: httpOf(fetch) });
   assert.deepEqual(fetch.calls.map((call) => [call.method, call.url]), [
     ["GET", `${API}/shortids/API-12/`],
     ["GET", `${API}/issues/4507/`],
@@ -230,7 +231,7 @@ test("enrichment reads the issue, its recent events and its latest event into ma
   assert.ok(!markdown.includes(PRIVATE_MARK));
   assert.ok(!markdown.includes(TOKEN));
 
-  const partial = await sentry.origin.enrich("4507", { connection: RECORD, http: httpOf(fakeFetch(issueRoutes({ event: 403, events: 500 }))) });
+  const { markdown: partial } = await sentry.origin.enrich("4507", { connection: RECORD, http: httpOf(fakeFetch(issueRoutes({ event: 403, events: 500 }))) });
   assert.match(partial, /Latest event not read \(HTTP 403\)\./);
   assert.match(partial, /Recent events not read \(HTTP 500\)\./);
   assert.match(partial, /^# Sentry issue API-12/);
@@ -244,8 +245,8 @@ test("the runner's enrichment writes the capped sentry file once and logs no sec
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const fetch = fakeFetch(issueRoutes({ title: "é".repeat(20000), extraTags: 500 }));
   const lines = [];
-  await enrichJobOrigin({
-    origin: { kind: "sentry", ref: "4507" },
+  await enrichJobOrigins({
+    origins: [{ kind: "sentry", ref: "4507" }],
     orgId: home.orgId,
     integrations: { sentry: { onClosed: "resolved" } },
     dir,
@@ -254,7 +255,7 @@ test("the runner's enrichment writes the capped sentry file once and logs no sec
     log: (line) => lines.push(line),
   });
   assert.deepEqual(lines, ["origin: sentry 4507 (connection: sn)"]);
-  const written = readFileSync(join(dir, "sentry.md"), "utf8");
+  const written = readFileSync(join(dir, "sentry-4507.md"), "utf8");
   assert.ok(Buffer.byteLength(written, "utf8") <= ORIGIN_MAX_BYTES);
   assert.ok(written.endsWith("[truncated]"));
   assert.ok(!written.includes(TOKEN) && !written.includes(PRIVATE_MARK));
@@ -303,17 +304,17 @@ test("closing a job queued from a sentry link resolves the issue, and a refused 
   const fetch = fakeFetch(issueRoutes());
   const { outcome, row } = await closeSentryJob(home, fetch);
   assert.equal(outcome.status, "closed");
-  assert.deepEqual(outcome.postClose.steps[0], { name: "origin", status: "done", note: "issue 4507 marked resolved" });
+  assert.deepEqual(outcome.postClose.steps[0], { name: "origin", status: "done", note: "sentry 4507: issue 4507 marked resolved" });
   assert.deepEqual(fetch.calls.map((call) => call.method), ["PUT", "POST"]);
   assert.equal(row.status, "closed");
-  assert.equal(JSON.parse(row.close).data.originNotified, true);
+  assert.deepEqual(JSON.parse(row.close).data.originsNotified, { "sentry 4507": true });
   assert.equal(row.notice_md, "Closed: PR #7 merged as abc1234 on 2026-10-01");
 
   const failing = fakeFetch(issueRoutes({ put: 500 }));
   const failed = await closeSentryJob(home, failing);
   assert.equal(failed.outcome.status, "closed");
   assert.equal(failed.row.status, "closed");
-  assert.match(failed.row.notice_md, /After close: origin warning - issue 4507 not marked resolved \(HTTP 500\)/);
+  assert.match(failed.row.notice_md, /After close: origin warning - sentry 4507: issue 4507 not marked resolved \(HTTP 500\)/);
   assert.ok(!JSON.stringify(failed.row).includes(TOKEN));
 });
 

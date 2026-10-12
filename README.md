@@ -86,7 +86,7 @@ written down in [docs/runtime-contract.md](docs/runtime-contract.md).
 
 | In | Out |
 |---|---|
-| A Linear issue, queued with `origin: {kind: "linear", ref}` over MCP (from `tracker_issues`) or `--origin linear:MK-42` on the CLI | The Studio in the browser: queue, jobs and settings (`nightqueue studio`) |
+| A Linear issue, queued with `origin: [{kind: "linear", ref}]` over MCP (from `tracker_issues`) or `--origin linear:MK-42` on the CLI | The Studio in the browser: queue, jobs and settings (`nightqueue studio`) |
 | One line in the terminal: `nightqueue queue add "<request>"` | The CLI: `nightqueue queue add`, `run`, `status` and `retry` |
 | A plan under discussion in Claude Code: `/nightqueue:queue` | The MCP server, from any Claude client: `queue_add`, `queue_status`, and memory tools such as `lesson_recall` and `decision_recall` |
 

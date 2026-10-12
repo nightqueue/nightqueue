@@ -1,10 +1,12 @@
 import { connectionRecord, orgUsesConnection, resolveForClose } from "./connections.mjs";
 import { connectionPlace, quietFiles } from "./coverage.mjs";
 import { requestJson } from "./http.mjs";
-import { actsOnOrigin, providerOf, providers } from "./registry.mjs";
+import { originLabel } from "./origin.mjs";
+import { actsOnOrigin, byRegistryOrder, providerOf, providers } from "./registry.mjs";
 import { getSetting } from "./settings.mjs";
 
 const HTTP_TIMEOUT_MS = 15000;
+const BUDGET_RESERVE_MS = 3000;
 const ANSWER_STATUSES = new Set(["done", "skipped", "warning"]);
 const SEVERITY = { skipped: 0, done: 1, warning: 2 };
 const CLOSE_EVENT = "closed";
@@ -28,7 +30,8 @@ function readFiles(ctx, deps) {
 // The HTTP a provider calls through: the close's fetch, bounded by the post-close budget and its abort signal.
 function boundHttp(ctx, deps) {
   const fetchImpl = typeof deps?.fetch === "function" ? deps.fetch : globalThis.fetch;
-  return (url, options = {}) => requestJson(fetchImpl, url, { timeoutMs: Math.max(1, Math.min(HTTP_TIMEOUT_MS, ctx.remainingMs())), ...options, signal: ctx.signal });
+  return (url, options = {}) =>
+    requestJson(fetchImpl, url, { timeoutMs: Math.max(1, Math.min(HTTP_TIMEOUT_MS, ctx.remainingMs() - BUDGET_RESERVE_MS)), ...options, signal: ctx.signal });
 }
 
 // What a provider is told about the closed job and the merge that closed it.
@@ -42,7 +45,18 @@ function closeFacts(ctx) {
 // A provider's answer as a step result; anything outside the contract is a warning naming the provider only.
 function providerAnswer(kind, raw) {
   if (!raw || typeof raw !== "object" || !ANSWER_STATUSES.has(raw.status)) return answer("warning", `${kind} answered an invalid result`);
-  return answer(raw.status, String(raw.note ?? raw.status), { notice: raw.notice === true, notified: raw.status === "done" || raw.notified === true });
+  const progress = isPlainObject(raw.progress) ? { progress: raw.progress } : {};
+  return answer(raw.status, String(raw.note ?? raw.status), { notice: raw.notice === true, notified: raw.status === "done" || raw.notified === true, ...progress });
+}
+
+// Whether a value is a plain object, not null nor an array.
+function isPlainObject(value) {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+// A copy of a stored per-origin map of the checklist, empty when it is missing or malformed.
+function storedMap(value) {
+  return isPlainObject(value) ? { ...value } : {};
 }
 
 // Runs a provider action, turning a throw into a warning that never carries the error's message.
@@ -54,23 +68,61 @@ async function callProvider(kind, action, run) {
   }
 }
 
-// Tells the service the job came from that its pull request merged, once: the origin step of a close.
-export async function originStep({ ctx, deps }) {
-  if (ctx.data.originNotified === true) return answer("done", "already notified");
-  const origin = ctx.origin;
-  if (!origin) return answer("skipped", "no origin");
+// Runs one origin's close action from the progress an earlier close left, answering a result without the `notified` mark.
+async function closeOneOrigin(origin, { ctx, deps, files, progress }) {
   const provider = providerOf(origin.kind);
   if (typeof provider?.onClosed !== "function") return answer("skipped", `${origin.kind} has no close action`);
   if (!actsOnOrigin(origin.kind, ctx.integrations)) return answer("skipped", `project has no ${origin.kind} integration`);
-  const { slot, connections } = resolveForClose({ kind: origin.kind, orgId: ctx.orgId, ...readFiles(ctx, deps) });
+  const { slot, connections } = resolveForClose({ kind: origin.kind, orgId: ctx.orgId, ...files });
   if (!slot && !connections.length) return answer("skipped", `no ${origin.kind} connection ${connectionPlace(origin.kind)}`, { notice: true });
   if (ctx.signal.aborted) return answer("warning", `interrupted before the ${origin.kind} close action`);
   const settings = ctx.integrations?.[origin.kind] ?? null;
-  const result = await callProvider(origin.kind, "close action", () =>
-    provider.onClosed({ ref: origin.ref, ...closeFacts(ctx), settings, slot, connections, http: boundHttp(ctx, deps) }),
+  return await callProvider(origin.kind, "close action", () =>
+    provider.onClosed({ ref: origin.ref, ...closeFacts(ctx), settings, slot, connections, http: boundHttp(ctx, deps), progress }),
   );
-  const { notified, ...rest } = result;
-  return notified ? { ...rest, data: { originNotified: true } } : rest;
+}
+
+// Records one origin's outcome: notified once told, else the progress its provider reported for the next close to resume from.
+function recordOriginOutcome(key, result, { notified, progress }) {
+  if (result.notified === true) {
+    notified[key] = true;
+    delete progress[key];
+  } else if (result.progress) {
+    progress[key] = result.progress;
+  }
+}
+
+// Tells one origin its pull request merged unless it already was, marking it notified; a throw becomes a warning.
+async function notifyOrigin(origin, { ctx, deps, files, notified, progress }) {
+  const key = originLabel(origin);
+  const named = (result, extra = {}) => ({ status: result.status, note: `${key}: ${result.note}`, notice: result.notice === true, ...extra });
+  if (notified[key] === true) return named(answer("done", "already notified"), { earlier: true });
+  if (ctx.remainingMs() <= BUDGET_RESERVE_MS) return named(answer("warning", "not attempted, the post-close budget ran out"));
+  try {
+    const result = await closeOneOrigin(origin, { ctx, deps, files, progress: storedMap(progress[key]) });
+    recordOriginOutcome(key, result, { notified, progress });
+    return named(result);
+  } catch {
+    return named(answer("warning", "the close action failed"));
+  }
+}
+
+// Folds the per-origin results into one: the worst status wins, every note is kept, one line per origin.
+function foldOriginResults(results, { notified, progress }) {
+  const status = results.reduce((worst, result) => (SEVERITY[result.status] > SEVERITY[worst] ? result.status : worst), "skipped");
+  const note = results.map((result) => result.note).join("; ");
+  return answer(status, note, { notice: results.some((result) => result.notice), data: { originsNotified: notified, originsProgress: progress }, lines: results });
+}
+
+// Tells every service the job came from that its pull request merged, once per origin and in registry order: the origin step of a close.
+export async function originStep({ ctx, deps }) {
+  const origins = byRegistryOrder(ctx.origins ?? []);
+  if (!origins.length) return answer("skipped", "no origin");
+  const marks = { notified: storedMap(ctx.data.originsNotified), progress: storedMap(ctx.data.originsProgress) };
+  const files = readFiles(ctx, deps);
+  const results = [];
+  for (const origin of origins) results.push(await notifyOrigin(origin, { ctx, deps, files, ...marks }));
+  return foldOriginResults(results, marks);
 }
 
 // The providers a project logs its closes to: a `log` action, a `log.connection` set, and `closed` among its `log.events`.
@@ -82,9 +134,10 @@ function logTargets(integrations) {
   });
 }
 
-// Clears the mark that the origin was notified, so the origin step posts again.
+// Clears the marks and the progress of the origins, so the origin step posts to every origin again.
 export function forgetOrigin(data) {
-  delete data.originNotified;
+  delete data.originsNotified;
+  delete data.originsProgress;
 }
 
 // Clears the logged mark of every provider the project logs to, so the log step posts again.

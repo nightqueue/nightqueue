@@ -2,7 +2,7 @@ import { Link } from "@tanstack/react-router";
 import { GitMerge, Play, RotateCcw, Terminal, X } from "lucide-react";
 import { canCancel, hasLog, hasSession, rawLogUrl, sessionCommand } from "../../lib/actions";
 import { copyText } from "../../lib/clipboard";
-import { activeMs, attemptCount, attemptsLabel, durationLabel, formatDurationMs, hhmmssUtc, hhmmUtc, timeoutLabel, wallMs } from "../../lib/format";
+import { activeMs, attemptCount, attemptsLabel, durationLabel, formatDurationMs, hhmmssUtc, hhmmUtc, jobOriginsLabel, timeoutLabel, wallMs } from "../../lib/format";
 import { jobRef, jobTitle } from "../../lib/queue";
 import { sessionBlockReason } from "../../lib/terminals";
 import type { CloseState as JobCloseState, JobDetail, JobStatus } from "../../lib/types";
@@ -81,9 +81,9 @@ function HeaderChip({ children, title }: { children: string; title?: string }) {
   );
 }
 
-// The second line: project and branch.
+// The second line: project, branch and the job's origins.
 function OriginLine({ job }: { job: JobDetail }) {
-  const parts = [job.project, job.branch ? `branch ${job.branch}` : null].filter((part): part is string => Boolean(part));
+  const parts = [job.project, job.branch ? `branch ${job.branch}` : null, jobOriginsLabel(job)].filter((part): part is string => Boolean(part));
   return <div className="font-mono text-sm break-words text-muted">{parts.join(" · ")}</div>;
 }
 

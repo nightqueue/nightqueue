@@ -13,16 +13,16 @@ export interface AddJobForm {
   text: string;
   tier: Tier;
   priority: number;
-  origin: JobOrigin | false | null;
+  origin: JobOrigin[] | null;
   originUrl: string | null;
 }
 
 export const EMPTY_ADD_FORM: AddJobForm = { project: "", text: "", tier: "auto", priority: DEFAULT_PRIORITY, origin: null, originUrl: null };
 
-// The `origin` argument of the form: the chip's origin, `false` once the chip was cleared, nothing when it never had one.
+// The `origin` argument of the form: the chips' origins, `[]` once every chip was cleared, nothing when it never had one.
 function originArg(origin: AddJobForm["origin"]): Record<string, unknown> {
-  if (origin === false) return { origin: false };
-  return origin ? { origin: { kind: origin.kind, ref: origin.ref } } : {};
+  if (!Array.isArray(origin)) return {};
+  return { origin: origin.map(({ kind, ref }) => ({ kind, ref })) };
 }
 
 // The exact arguments `queue_add` gets from the form: the text as the brief; `auto` sends no tier; the origin only when set or cleared.
@@ -58,5 +58,12 @@ function withoutLine(text: string, line: string): string {
 export function clearOrigin(form: AddJobForm): AddJobForm {
   const url = form.originUrl?.trim() ?? "";
   const text = url ? withoutLine(form.text, url) : form.text;
-  return { ...form, origin: false, originUrl: null, text };
+  return { ...form, origin: [], originUrl: null, text };
+}
+
+// The form without the origin at the given position; removing the last one clears the origin and its URL line.
+export function removeOrigin(form: AddJobForm, index: number): AddJobForm {
+  const origins = Array.isArray(form.origin) ? form.origin : [];
+  const kept = origins.filter((_, position) => position !== index);
+  return kept.length === 0 ? clearOrigin(form) : { ...form, origin: kept };
 }

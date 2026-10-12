@@ -1,4 +1,5 @@
 import { UserError } from "../config/errors.mjs";
+import { refsInTextOrder } from "./find-refs.mjs";
 import { requestJson } from "./http.mjs";
 
 const WEBHOOK_URL = /^https:\/\/(?:(?:ptb|canary)\.)?discord(?:app)?\.com\/api(?:\/v\d+)?\/webhooks\/(\d+)\/([\w-]+)$/;
@@ -28,6 +29,11 @@ function parseDiscord(text, { explicit = false } = {}) {
   if (!explicit) return null;
   const bare = BARE_REF.exec(text.trim());
   return bare ? `${bare[1]}/${bare[2]}/${bare[3]}` : null;
+}
+
+// Lists every Discord message reference a text carries, in text order.
+function findDiscord(text) {
+  return refsInTextOrder(text, [{ pattern: MESSAGE_LINK, ref: (match) => `${match[1]}/${match[2]}/${match[3]}` }]);
 }
 
 // The guild, channel and message ids of a reference.
@@ -280,7 +286,7 @@ export const discord = {
     fromTest: fromWebhookTest,
   },
   capabilities: { post: true, read: false, resolve: false },
-  origin: { parse: parseDiscord },
+  origin: { parse: parseDiscord, find: findDiscord },
   settings: {
     replyToOrigin: { type: "boolean", default: true },
     "log.connection": { type: "connection" },

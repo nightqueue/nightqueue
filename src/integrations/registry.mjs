@@ -115,6 +115,18 @@ export function originProviders() {
   return active.filter((provider) => typeof provider.origin?.parse === "function");
 }
 
+// Sorts origins by the registry order of their kind, keeping the given order within a kind and putting unknown kinds last.
+export function byRegistryOrder(origins) {
+  if (!Array.isArray(origins)) return [];
+  const rank = (origin) => {
+    const index = active.findIndex((provider) => provider.kind === origin?.kind);
+    return index === -1 ? active.length : index;
+  };
+  return origins.map((origin, position) => ({ origin, position, rank: rank(origin) }))
+    .sort((a, b) => a.rank - b.rank || a.position - b.position)
+    .map((entry) => entry.origin);
+}
+
 // Lists the providers able to list the issues of their service.
 export function trackerProviders() {
   return active.filter((provider) => typeof provider.tracker?.issues === "function");

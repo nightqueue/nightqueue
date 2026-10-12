@@ -242,9 +242,17 @@ test("`run pr` inside a job ends with `Opened by nightqueue · J-<n>`, and outsi
 
 test("`run pr` inside a job with an origin ends with the footer naming the job, then the origin's kind and ref", async (t) => {
   const { env, id } = makeRun(t, "run-pr-origin");
-  openDb(env).prepare("UPDATE jobs SET origin = ? WHERE id = ?").run(JSON.stringify({ kind: "linear", ref: "MK-42" }), id);
+  openDb(env).prepare("UPDATE jobs SET origin = ? WHERE id = ?").run(JSON.stringify([{ kind: "linear", ref: "MK-42" }]), id);
   const published = await publishedBody(t, { env, jobId: id, name: "run-pr-origin-body" });
   assert.equal(published, `${BODY.trimEnd()}\n\nOpened by nightqueue · J-${id} · linear MK-42\n`);
+});
+
+test("`run pr` inside a job with three origins ends with the footer naming every origin in stored order", async (t) => {
+  const { env, id } = makeRun(t, "run-pr-origins");
+  const origins = [{ kind: "linear", ref: "DLW-99" }, { kind: "sentry", ref: "4507" }, { kind: "discord", ref: "1/2/3" }];
+  openDb(env).prepare("UPDATE jobs SET origin = ? WHERE id = ?").run(JSON.stringify(origins), id);
+  const published = await publishedBody(t, { env, jobId: id, name: "run-pr-origins-body" });
+  assert.equal(published, `${BODY.trimEnd()}\n\nOpened by nightqueue · J-${id} · linear DLW-99 · sentry 4507 · discord 1/2/3\n`);
 });
 
 test("a body carrying the footer, a `Refs` line, a job id or the run slug is REJECTED naming the line, and nothing is pushed", async (t) => {

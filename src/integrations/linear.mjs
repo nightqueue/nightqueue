@@ -1,3 +1,4 @@
+import { refsInTextOrder } from "./find-refs.mjs";
 import { requestJson } from "./http.mjs";
 
 const API = "https://api.linear.app/graphql";
@@ -9,7 +10,8 @@ const ISSUE_QUERY =
 const CLOSE_QUERY =
   "query($id: String!) { issue(id: $id) { id identifier state { name type } team { states { nodes { id name type position } } } } }";
 const UPDATE_MUTATION = "mutation($id: String!, $stateId: String!) { issueUpdate(id: $id, input: { stateId: $stateId }) { success } }";
-const COMMENT_MUTATION = "mutation($issueId: String!, $body: String!) { commentCreate(input: { issueId: $issueId, body: $body }) { success } }";
+const ATTACH_MUTATION = "mutation($issueId: String!, $url: String!, $title: String!, $subtitle: String) { attachmentCreate(input: { issueId: $issueId, url: $url, title: $title, subtitle: $subtitle }) { success } }";
+const COMMENT_MUTATION ="mutation($issueId: String!, $body: String!) { commentCreate(input: { issueId: $issueId, body: $body }) { success } }";
 const ISSUES_QUERY =
   "query($filter: IssueFilter, $first: Int) { issues(filter: $filter, first: $first, orderBy: updatedAt) { " +
   "nodes { identifier title url priority priorityLabel updatedAt state { name type } team { key } labels { nodes { name } } } " +
@@ -64,6 +66,14 @@ function parseLinear(text, { explicit = false } = {}) {
   if (!explicit) return null;
   const bare = text.trim();
   return BARE.test(bare) ? bare.toUpperCase() : null;
+}
+
+// Lists every Linear reference a text carries, in text order.
+function findLinear(text) {
+  return refsInTextOrder(text, [
+    { pattern: ISSUE_LINK, ref: (match) => match[1].toUpperCase() },
+    { pattern: NAMED, ref: (match) => match[1] },
+  ]);
 }
 
 // A value of the service as one bounded line of text.
@@ -125,13 +135,27 @@ function detailLines(issue) {
   ];
 }
 
-// Fetches the whole issue as markdown, or answers the reason it could not.
-async function enrichLinear(ref, { connection, http }) {
+// The origins the issue's attachment urls name through the runtime's link reader, deduped in attachment order.
+function linkedOrigins(issue, linkOrigin) {
+  if (typeof linkOrigin !== "function") return [];
+  const seen = new Set();
+  const linked = [];
+  for (const attachment of nodesOf(issue.attachments)) {
+    const origin = linkOrigin(attachment?.url);
+    if (!origin || seen.has(`${origin.kind} ${origin.ref}`)) continue;
+    seen.add(`${origin.kind} ${origin.ref}`);
+    linked.push(origin);
+  }
+  return linked;
+}
+
+// Fetches the whole issue as markdown with the origins its attachments link, or answers the reason it could not.
+async function enrichLinear(ref, { connection, http, linkOrigin }) {
   const answer = await gql(http, connection, ISSUE_QUERY, { id: ref });
   if (!answer.ok) return { detail: `issue ${ref} not read (${answer.detail})` };
   const issue = answer.data?.issue;
   if (!issue || typeof issue !== "object") return { detail: `issue ${ref} not found` };
-  return `${[...factLines(ref, issue), ...detailLines(issue)].join("\n")}\n`;
+  return { markdown: `${[...factLines(ref, issue), ...detailLines(issue)].join("\n")}\n`, linked: linkedOrigins(issue, linkOrigin) };
 }
 
 // The first state of type completed of a team, by position, or null when the team has none.
@@ -153,19 +177,50 @@ function closeComment({ job, result }) {
   return `Merged ${result?.prUrl ?? "the merged pull request"} (${job?.ref ?? "unknown job"}, nightqueue)`;
 }
 
-// The close answer once the state move succeeded or was not possible, depending on whether the comment was posted.
-function closeAnswer({ ref, state, comment }) {
-  if (state && comment.ok) return { status: "done", note: `issue ${ref} moved to ${oneLine(state.name)}` };
-  if (state) return { status: "warning", note: `issue ${ref} moved to ${oneLine(state.name)}; comment not posted (${comment.detail})`, notified: true };
-  if (comment.ok) return { status: "warning", note: `issue ${ref} has no completed state; comment posted`, notified: true };
-  return { status: "warning", note: `issue ${ref} has no completed state; comment not posted (${comment.detail})` };
+// The notes of the PR attachment and the comment that did not succeed.
+function missedActions({ attach, comment }) {
+  const missed = [];
+  if (!attach.ok) missed.push(`PR not attached (${attach.detail})`);
+  if (!comment.ok) missed.push(`comment not posted (${comment.detail})`);
+  return missed;
 }
 
-// The close answer for an issue already completed or canceled, which keeps its state and only gets the comment.
-function alreadyClosedAnswer({ ref, current, comment }) {
+// Whether an action needs no retry: it succeeded, or it can never succeed for this close.
+function isSettled(action) {
+  return action.ok === true || action.settled === true;
+}
+
+// A warning answer: notified when no action is left to retry, else carrying the progress a retry resumes from.
+function warningAnswer(note, { attach, comment }) {
+  if (isSettled(attach) && comment.ok) return { status: "warning", note, notified: true };
+  return { status: "warning", note, progress: { attached: isSettled(attach), commented: comment.ok } };
+}
+
+// The close answer once the state move succeeded or was not possible, depending on whether the PR was attached and the comment posted.
+function closeAnswer({ ref, state, attach, comment }) {
+  const missed = missedActions({ attach, comment });
+  const head = state ? `issue ${ref} moved to ${oneLine(state.name)}` : `issue ${ref} has no completed state`;
+  if (state && !missed.length) return { status: "done", note: head };
+  const posted = !state && comment.ok ? ["comment posted"] : [];
+  return warningAnswer([head, ...posted, ...missed].join("; "), { attach, comment });
+}
+
+// The close answer for an issue already completed or canceled, which keeps its state and only gets the PR attached and the comment.
+function alreadyClosedAnswer({ ref, current, attach, comment }) {
   const name = typeof current.name === "string" && current.name.trim() ? oneLine(current.name) : current.type;
-  if (comment.ok) return { status: "done", note: `issue ${ref} already ${name}; comment posted` };
-  return { status: "warning", note: `issue ${ref} already ${name}; comment not posted (${comment.detail})` };
+  const missed = missedActions({ attach, comment });
+  const posted = comment.ok ? ["comment posted"] : [];
+  const note = [`issue ${ref} already ${name}`, ...posted, ...missed].join("; ");
+  if (!missed.length) return { status: "done", note };
+  return warningAnswer(note, { attach, comment });
+}
+
+// Attaches the merged pull request to the issue as a link, Linear updating an attachment of the same url instead of adding one.
+function attachPullRequest({ http, slot, issue, job, result }) {
+  if (typeof result?.prUrl !== "string" || !result.prUrl) return { ok: false, detail: "no pull request url", settled: true };
+  const title = Number.isInteger(result.prNumber) ? `Pull request #${result.prNumber}` : "Pull request";
+  const subtitle = `merged · ${job?.ref ?? "unknown job"} · nightqueue`;
+  return mutate(http, slot, { query: ATTACH_MUTATION, variables: { issueId: issue.id, url: result.prUrl, title, subtitle }, field: "attachmentCreate" });
 }
 
 // Posts the comment naming the merge on the issue.
@@ -173,23 +228,29 @@ function postCloseComment({ http, slot, issue, job, result }) {
   return mutate(http, slot, { query: COMMENT_MUTATION, variables: { issueId: issue.id, body: closeComment({ job, result }) }, field: "commentCreate" });
 }
 
-// Moves the issue the job came from to its team's first completed state, unless already closed, and comments naming the merge.
-async function closeLinearIssue({ ref, job, result, slot, http }) {
+// Attaches the pull request, then comments naming the merge, skipping what an earlier close already did and answering both outcomes.
+async function attachAndComment(call) {
+  const attach = call.progress?.attached === true ? { ok: true } : await attachPullRequest(call);
+  const comment = call.progress?.commented === true ? { ok: true } : await postCloseComment(call);
+  return { attach, comment };
+}
+
+// Moves the issue the job came from to its team's first completed state, unless already closed, attaches the pull request and comments naming the merge.
+async function closeLinearIssue({ ref, job, result, slot, http, progress }) {
   if (!slot) return { status: "skipped", note: "no linear connection in the home", notice: true };
   const read = await gql(http, slot, CLOSE_QUERY, { id: ref });
   const issue = read.ok ? read.data?.issue : null;
   if (!read.ok || !issue || typeof issue.id !== "string") return { status: "warning", note: `issue ${ref} not read (${read.ok ? "not found" : read.detail})` };
   const current = issue.state;
   if (DONE_TYPES.includes(current?.type)) {
-    return alreadyClosedAnswer({ ref, current, comment: await postCloseComment({ http, slot, issue, job, result }) });
+    return alreadyClosedAnswer({ ref, current, ...(await attachAndComment({ http, slot, issue, job, result, progress })) });
   }
   const state = completedState(nodesOf(issue.team?.states));
   if (state) {
     const moved = await mutate(http, slot, { query: UPDATE_MUTATION, variables: { id: issue.id, stateId: state.id }, field: "issueUpdate" });
     if (!moved.ok) return { status: "warning", note: `issue ${ref} not moved to ${oneLine(state.name)} (${moved.detail})` };
   }
-  const comment = await postCloseComment({ http, slot, issue, job, result });
-  return closeAnswer({ ref, state, comment });
+  return closeAnswer({ ref, state, ...(await attachAndComment({ http, slot, issue, job, result, progress })) });
 }
 
 // The issues filter built from the given fields only.
@@ -263,7 +324,7 @@ export const linear = {
     summary: summarizeLinear,
   },
   capabilities: { post: false, read: true, resolve: true },
-  origin: { parse: parseLinear, enrich: enrichLinear },
+  origin: { parse: parseLinear, find: findLinear, enrich: enrichLinear },
   onClosed: closeLinearIssue,
   tracker: { issues: listIssues, filters: listFilters },
 };

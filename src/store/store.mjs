@@ -15,7 +15,8 @@
 
 /**
  * @typedef {object} JobsDomain
- * @property {(spec: object) => Promise<object>} addJob the job's project by `projectId`; a `slug` binds the job to a run, refused in the same transaction while a job not yet closed is bound to it; an `origin` `{kind, ref}` is validated, `origin: false` stores no origin and skips detection, otherwise one is detected in the prompt, stored in `jobs.origin` (v21) and answered as `origin`
+ * @property {(spec: object) => Promise<object>} addJob the job's project by `projectId`; a `slug` binds the job to a run, refused in the same transaction while a job not yet closed is bound to it; an `origin` list of `{kind, ref}` is validated, `origin: []` stores no origin and skips detection, otherwise every recognised link of the prompt is detected, stored in `jobs.origin` (v21) as a JSON list and answered as the `origin` list
+ * @property {(id: number, spec: {worker: string, origins: Array<{kind: string, ref: string}>}) => Promise<boolean>} recordJobOrigins writes back the origin list of a job this worker still owns, guarded by status and worker
  * @property {(spec: object) => Promise<object|null>} claimNextJob
  * @property {(id: number, spec: object) => Promise<object|null>} claimJobById
  * @property {(id: number, spec: object) => Promise<boolean>} releaseJob
@@ -218,6 +219,7 @@
 export const STORE_CONTRACT = Object.freeze({
   jobs: [
     "addJob",
+    "recordJobOrigins",
     "claimNextJob",
     "claimJobById",
     "releaseJob",

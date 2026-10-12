@@ -58,8 +58,8 @@ import { phaseTelemetry, runDurationS } from "./telemetry.mjs";
 import { resolveWindow, windowPhase } from "./window.mjs";
 import { finishNotice, inspectRunWorktree, keptWorktreeLine, openJobWorktrees, removeRunWorktree } from "./worktree.mjs";
 import { jobRef } from "../memory/refs.mjs";
-import { enrichJobOrigin } from "../integrations/enrich.mjs";
-import { parseOriginColumn } from "../integrations/origin.mjs";
+import { enrichJobOrigins } from "../integrations/enrich.mjs";
+import { parseOriginsColumn } from "../integrations/origin.mjs";
 
 // Interval between two cycles of `queue run --watch` when the operator gives no number.
 export const WATCH_INTERVAL_DEFAULT_S = 30;
@@ -879,17 +879,27 @@ async function readOriginFacts(job, ctx) {
   }
 }
 
-// Logs the origin of a claimed job and lets its project's provider enrich the run with it; nothing here ever fails the job.
+// Writes back the origins an enrichment linked, answering false instead of throwing when the claim moved on or the store failed.
+async function recordLinkedOrigins(job, ctx, origins) {
+  try {
+    return await ctx.store.jobs.recordJobOrigins(job.id, { worker: job.worker, origins });
+  } catch {
+    return false;
+  }
+}
+
+// Logs the origins of a claimed job and lets its project's providers enrich the run with them; nothing here ever fails the job.
 async function enrichOrigin(job, ctx) {
-  const origin = parseOriginColumn(job.origin);
-  if (!origin) return null;
+  const origins = parseOriginsColumn(job.origin);
+  if (!origins.length) return null;
   const facts = await untilStoreAnswers(ctx, () => readOriginFacts(job, ctx));
   if (facts === OUTAGE_STOPPED) return OUTAGE_STOPPED;
   const dir = isRunPath(job.project_id, job.slug) ? join(runDir(job.project_id, job.slug, ctx.env), "origin") : null;
-  const enrich = ctx.deps.enrichImpl ?? enrichJobOrigin;
+  const enrich = ctx.deps.enrichImpl ?? enrichJobOrigins;
   const log = (line) => appendJobLog(job.id, line, ctx.env);
+  const onLinked = (list) => recordLinkedOrigins(job, ctx, list);
   try {
-    await enrich({ origin, ...facts, dir, env: ctx.env, fetchImpl: ctx.deps.fetch ?? globalThis.fetch, log });
+    await enrich({ origins, ...facts, dir, env: ctx.env, fetchImpl: ctx.deps.fetch ?? globalThis.fetch, log, onLinked });
   } catch {
     log("origin enrichment skipped: the enrichment failed");
   }

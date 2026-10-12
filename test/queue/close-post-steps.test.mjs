@@ -8,7 +8,7 @@ import { runPostCloseSteps } from "../../src/queue/close-start.mjs";
 import { closeChecklistLines, statusLabel } from "../../src/queue/close-view.mjs";
 import { openStore } from "../../src/store/open.mjs";
 import { makeHome, makeProject, projectIdOf, seedClosedJob, seedDoneJob } from "../../test-support/memory.mjs";
-import { bindTrackerConnection, orgOfProject, setIntegrations, trackerProvider, TRACKER_SECRET, TRACKER_URL } from "../../test-support/origin-provider.mjs";
+import { bindTrackerConnection, orgOfProject, setIntegrations, shadowProvider, trackerProvider, TRACKER_SECRET, TRACKER_URL } from "../../test-support/origin-provider.mjs";
 import { loadConfig, saveConfig, saveSecrets } from "../../src/config/store.mjs";
 import { linkProjects } from "../../src/integrations/destinations.mjs";
 
@@ -120,7 +120,7 @@ test("an org-scoped origin (sentry) in a project without integrations still clos
   const env = makeHome(t, "post-sentry-none");
   const checkout = makeProject(t, env, "alpha");
   const id = seedDoneJob(env, { prompt: "the worker crashes, see https://acme.sentry.io/issues/4507/" });
-  assert.deepEqual(jobView(getJob(id, env)).origin, { kind: "sentry", ref: "4507" });
+  assert.deepEqual(jobView(getJob(id, env)).origin, [{ kind: "sentry", ref: "4507" }]);
   const fetch = fakeFetch();
   const { outcome, reported, row } = await closeOnce({ env, checkout, id, store: openStore(env) }, { fetch });
 
@@ -138,7 +138,7 @@ test("with integrations the origin is resolved and the close logged once, the jo
 
     assert.equal(outcome.status, "closed");
     assert.deepEqual(outcome.postClose.steps, [
-      { name: "origin", status: "done", note: "resolved issue 4507" },
+      { name: "origin", status: "done", note: "tracker 4507: resolved issue 4507" },
       { name: "log", status: "done", note: "tracker: posted" },
     ]);
     assert.deepEqual(reported.map((step) => [step.name, step.status]).slice(4), [["origin", "done"], ["log", "done"]]);
@@ -148,7 +148,7 @@ test("with integrations the origin is resolved and the close logged once, the jo
     ]);
     assert.ok(fetch.calls[1].body.includes(MERGE_SHA));
     const checklist = checklistOf(row);
-    assert.equal(checklist.data.originNotified, true);
+    assert.deepEqual(checklist.data.originsNotified, { "tracker 4507": true });
     assert.deepEqual(checklist.data.logged, { tracker: true });
     assert.equal(checklist.steps.origin.status, "done");
     assert.equal(row.status, "closed");
@@ -175,12 +175,30 @@ test("a refused, failed or throwing service is a warning line in the notice, nev
       assert.equal(outcome.status, "closed", name);
       assert.equal(row.status, "closed", name);
       assert.equal(checklistOf(row).steps.origin.status, "warning", name);
-      assert.equal(checklistOf(row).data.originNotified, undefined, name);
-      assert.ok(row.notice_md.endsWith(`\n\nAfter close: origin warning - ${note}`), `${name}: ${row.notice_md}`);
+      assert.deepEqual(checklistOf(row).data.originsNotified, {}, name);
+      assert.ok(row.notice_md.endsWith(`\n\nAfter close: origin warning - tracker 4507: ${note}`), `${name}: ${row.notice_md}`);
       assert.ok(!row.notice_md.includes(TRACKER_SECRET), name);
       assert.ok(!row.close.includes(TRACKER_SECRET), name);
     });
   }
+});
+
+test("two origins each write their own notice line, in registry order, and the job stays closed", async (t) => {
+  const shadow = { ...shadowProvider(), onClosed: resolveIssue };
+  await withProviders([closingProvider(), shadow], async () => {
+    const home = postHome(t, "post-two-origins", { integrations: { ...LOGGING, shadow: { enabled: true } } });
+    assert.deepEqual(jobView(getJob(home.id, home.env)).origin, [{ kind: "tracker", ref: "4507" }, { kind: "shadow", ref: "4507" }]);
+    const fetch = fakeFetch({ "/resolve": 500 });
+    const { outcome, row } = await closeOnce(home, { fetch });
+
+    assert.equal(row.status, "closed");
+    assert.equal(outcome.postClose.steps[0].status, "warning");
+    assert.deepEqual(checklistOf(row).data.originsNotified, {});
+    assert.ok(
+      row.notice_md.endsWith("After close: origin warning - tracker 4507: resolve refused (HTTP 500)\n\nAfter close: origin skipped - shadow 4507: no shadow connection in the org"),
+      row.notice_md,
+    );
+  });
 });
 
 test("an origin with no connection in the org is a noticed skip, a project that never enabled the provider a silent one", async (t) => {
@@ -188,13 +206,13 @@ test("an origin with no connection in the org is a noticed skip, a project that 
     const unbound = postHome(t, "post-unbound", { bind: false, integrations: { tracker: { enabled: true } } });
     const { row } = await closeOnce(unbound, { fetch: fakeFetch() });
     assert.equal(checklistOf(row).steps.origin.status, "skipped");
-    assert.ok(row.notice_md.endsWith("After close: origin skipped - no tracker connection in the org"));
+    assert.ok(row.notice_md.endsWith("After close: origin skipped - tracker 4507: no tracker connection in the org"));
     assert.equal(checklistOf(row).steps.log.note, "no log destination");
 
     const other = postHome(t, "post-other", { integrations: { elsewhere: { enabled: true } } });
     const fetch = fakeFetch();
     const second = await closeOnce(other, { fetch });
-    assert.equal(checklistOf(second.row).steps.origin.note, "project has no tracker integration");
+    assert.equal(checklistOf(second.row).steps.origin.note, "tracker 4507: project has no tracker integration");
     assert.equal(second.row.notice_md, "Closed: PR #7 merged as abc1234 on 2026-10-01");
     assert.equal(fetch.calls.length, 0);
   });
@@ -288,16 +306,16 @@ test("--steps re-runs only the named steps; a step already done makes no request
 
     const retry = fakeFetch();
     const first = await runPostCloseSteps({ store: home.store, id: home.id, names: ["origin"], env: home.env, deps: { fetch: retry.impl } });
-    assert.deepEqual(first.steps, [{ name: "origin", status: "done", note: "resolved issue 4507" }]);
+    assert.deepEqual(first.steps, [{ name: "origin", status: "done", note: "tracker 4507: resolved issue 4507" }]);
     assert.deepEqual(retry.calls.map((call) => call.method), ["PUT"]);
     const row = getJob(home.id, home.env);
-    assert.ok(row.notice_md.endsWith("After close: origin warning - resolve refused (HTTP 503)\n\nAfter close: origin done - resolved issue 4507"));
+    assert.ok(row.notice_md.endsWith("After close: origin warning - tracker 4507: resolve refused (HTTP 503)\n\nAfter close: origin done - tracker 4507: resolved issue 4507"));
     assert.equal(row.close_worker, null);
 
     const again = fakeFetch();
     const second = await runPostCloseSteps({ store: home.store, id: home.id, names: ["log", "origin", "log"], env: home.env, deps: { fetch: again.impl } });
     assert.deepEqual(second.steps, [
-      { name: "origin", status: "done", note: "already notified" },
+      { name: "origin", status: "done", note: "tracker 4507: already notified" },
       { name: "log", status: "done", note: "tracker: already logged" },
     ]);
     assert.equal(again.calls.length, 0);
@@ -399,7 +417,7 @@ test("queue close --steps prints each step and a summary, exits 1 on a warning, 
 
     const warned = await runCli(env, ["queue", "close", "J-1", "--steps", "origin,log"], { fetch: fakeFetch({ "/log": 500 }).impl });
     assert.equal(warned.code, 1);
-    assert.deepEqual(warned.out, ["✓ origin     resolved issue 4507", "! log        tracker: HTTP 500", "J-1 post-close: origin done, log warning"]);
+    assert.deepEqual(warned.out, ["✓ origin     tracker 4507: resolved issue 4507", "! log        tracker: HTTP 500", "J-1 post-close: origin done, log warning"]);
 
     const json = await runCli(env, ["queue", "close", "J-1", "--steps", "log", "--json"], { fetch: fakeFetch().impl });
     assert.equal(json.code, 0);
