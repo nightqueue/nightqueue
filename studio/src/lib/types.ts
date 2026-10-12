@@ -415,6 +415,7 @@ export interface ConnectionRow {
   channelId?: string | null;
   serverId?: string | null;
   webhookName?: string | null;
+  forum?: boolean;
 }
 
 export interface ProjectDestination {

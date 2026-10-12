@@ -26,7 +26,8 @@ function fakeDiscord() {
     fake.calls.push({ method, url, body: options?.body ? JSON.parse(options.body) : null });
     const known = url === WEBHOOK || url === `${WEBHOOK}?wait=true`;
     const status = !known ? 404 : method === "GET" ? fake.getStatus : fake.postStatus;
-    const body = method === "GET" ? { id: "9001", channel_id: CHANNEL, guild_id: SERVER, name: "dlw-hook", token: TOKEN } : { id: "1" };
+    const readBody = fake.getBody ?? { id: "9001", channel_id: CHANNEL, guild_id: SERVER, name: "dlw-hook", token: TOKEN };
+    const body = method === "GET" ? readBody : fake.postBody ?? { id: "1" };
     return { status, headers: new Map(), json: async () => body };
   };
   return fake;
@@ -110,19 +111,46 @@ test("an invalid URL is a 422 before Discord is asked, and the secrets file stay
   assert.equal(home.discord.calls.length, 0);
 });
 
-test("a webhook Discord refuses, on the read or on the announce, is a 502 with its reason and stores nothing", async (t) => {
+test("a webhook Discord refuses on the read is a 502 with Discord's code and message and stores nothing", async (t) => {
   const home = await integrationsHome(t, "integrations-refused");
   home.discord.getStatus = 404;
   const read = await home.call("POST", "/api/integrations/discord", { name: "dlw-log", org: "dlw", url: WEBHOOK });
   assert.deepEqual([read.status, read.body.code, read.body.status, read.body.reason], [502, "refused", 404, "Discord answered 404: the webhook was deleted on the server."]);
   assert.deepEqual(home.discord.calls.map((call) => call.method), ["GET"]);
-  home.discord.getStatus = 200;
-  home.discord.postStatus = 403;
-  const announce = await home.call("POST", "/api/integrations/discord", { name: "dlw-log", org: "dlw", url: WEBHOOK });
-  assert.deepEqual([announce.status, announce.body.code, announce.body.status], [502, "refused", 403]);
-  assert.match(announce.body.error, /Nothing was saved\.$/);
+  home.discord.getStatus = 400;
+  home.discord.getBody = { code: 50035, message: "Invalid Form Body" };
+  const coded = await home.call("POST", "/api/integrations/discord", { name: "dlw-log", org: "dlw", url: WEBHOOK });
+  assert.deepEqual([coded.status, coded.body.reason], [502, "Discord answered 400 (code 50035: Invalid Form Body)."]);
+  assert.match(coded.body.error, /Nothing was saved\.$/);
+  assert.doesNotMatch(coded.body.error, new RegExp(TOKEN));
   assert.equal(existsSync(secretsPath(home.env)), false);
   assert.equal(loadConfig(home.env, QUIET).orgConnections[orgIdOf(home.env, "dlw")]?.discord ?? null, null);
+});
+
+test("a forum webhook, refused by the announce with code 220001, is saved marked as a forum with the fixed notice", async (t) => {
+  const home = await integrationsHome(t, "integrations-forum");
+  home.discord.postStatus = 400;
+  home.discord.postBody = { code: 220001, message: "Webhooks posted to forum channels must have a thread_name or thread_id" };
+  const added = await home.call("POST", "/api/integrations/discord", { name: "dlw-forum", org: "dlw", url: WEBHOOK });
+  assert.equal(added.status, 201, JSON.stringify(added.body));
+  assert.equal(added.body.connection.forum, true);
+  assert.equal(added.body.warning, undefined);
+  assert.equal(loadSecrets(home.env, QUIET).connections["dlw-forum"].forum, true);
+  const linked = await home.call("POST", "/api/integrations/dlw-forum/link", { projectIds: [home.ids.a1] });
+  assert.ok(linked.status >= 400 && linked.status < 500, JSON.stringify(linked.body));
+  assert.match(linked.body.error, /forum channel and the log has no thread to post in/);
+  assert.equal(integrationsOf(home, home.ids.a1)?.discord ?? null, null);
+});
+
+test("an announce refused for another reason saves the connection unmarked with a warning naming Discord's answer", async (t) => {
+  const home = await integrationsHome(t, "integrations-announce-warning");
+  home.discord.postStatus = 403;
+  home.discord.postBody = { code: 50013, message: "Missing Permissions" };
+  const added = await home.call("POST", "/api/integrations/discord", { name: "dlw-log", org: "dlw", url: WEBHOOK });
+  assert.equal(added.status, 201, JSON.stringify(added.body));
+  assert.equal(added.body.connection.forum, undefined);
+  assert.match(added.body.warning, /403/);
+  assert.equal(loadSecrets(home.env, QUIET).connections["dlw-log"].forum, undefined);
 });
 
 test("a duplicate name is a 409 naming the orgs that use it, before Discord is asked", async (t) => {

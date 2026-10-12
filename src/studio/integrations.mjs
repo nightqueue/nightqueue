@@ -89,7 +89,7 @@ function publicLastTest(lastTest) {
 // The destination fields of a record a row may show: webhook name, channel and server ids.
 function webhookFields(record) {
   const text = (value) => (typeof value === "string" && value ? value : null);
-  return { channelId: text(record?.channelId), serverId: text(record?.guildId), webhookName: text(record?.webhookName) };
+  return { channelId: text(record?.channelId), serverId: text(record?.guildId), webhookName: text(record?.webhookName), ...(record?.forum === true ? { forum: true } : {}) };
 }
 
 // The ids of the projects a connection serves: its destination projects for a destination kind, its orgs' projects otherwise.
@@ -336,15 +336,22 @@ async function derivedOf(add, { tested, fetchImpl }) {
   return await completeConnection({ type: add.target.kind, secret: add.secret, extra: add.extra, fetchImpl, timeoutMs: TEST_TIMEOUT_MS });
 }
 
+// The warning of an announce the service refused for a reason other than a forum channel, or null; the connection is saved anyway.
+function announceWarning(kind, announced) {
+  return announced.ok || announced.forum ? null : testReason(kind, announced);
+}
+
 // Announces the connection on its service once the name is reserved and the lock and the conflicts were checked, then stores it.
 async function announceAndStore({ env, add, tested, fetchImpl }) {
   const release = reserveName(env, add.name);
   try {
     await nothingSavedOnRefusal(() => lockedWrite(env, async (store) => await refuseConflicts({ store, files: loadFiles(env), add })));
     const announce = add.target.descriptor.announce;
-    if (typeof announce === "function") refuseUnless(add.target.kind, await announce(addRecordOf(add), { fetchImpl, timeoutMs: TEST_TIMEOUT_MS }));
+    const announced = typeof announce === "function" ? await announce(addRecordOf(add), { fetchImpl, timeoutMs: TEST_TIMEOUT_MS }) : { ok: true };
     const derived = await derivedOf(add, { tested, fetchImpl });
-    await nothingSavedOnRefusal(() => storeAdd({ env, add, derived: { ...derived, lastTest: { ok: true, at: new Date().toISOString(), status: tested.status } } }));
+    const forum = announced.forum === true ? { forum: true } : {};
+    await nothingSavedOnRefusal(() => storeAdd({ env, add, derived: { ...derived, ...forum, lastTest: { ok: true, at: new Date().toISOString(), status: tested.status } } }));
+    return announceWarning(add.target.kind, announced);
   } finally {
     release();
   }
@@ -377,9 +384,9 @@ export async function addOfKind({ kind, body, env, fetchImpl }) {
   await refuseConflicts({ store, files: loadFiles(env), add });
   refuseInvalidSecret(add);
   const tested = await testedAdd(add, fetchImpl);
-  await announceAndStore({ env, add, tested, fetchImpl });
+  const warning = await announceAndStore({ env, add, tested, fetchImpl });
   const view = await integrationsView(env);
-  return { connection: view.connections.find((row) => row.id === add.name) ?? null };
+  return { connection: view.connections.find((row) => row.id === add.name) ?? null, ...(warning ? { warning } : {}) };
 }
 
 // The status of a kind read from the machine, one probe per home and kind at a time; any other kind is a 404.

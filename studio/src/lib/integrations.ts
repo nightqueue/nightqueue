@@ -184,6 +184,8 @@ export function webhookLine(row: ConnectionRow): { text: string; title: string }
   return { text: parts.filter(Boolean).join(" · "), title: `channel ${row.channelId ?? "unknown"} · server ${row.serverId ?? "unknown"}` };
 }
 
+export const FORUM_NOTICE = "forum channel: notices go to each job's origin thread";
+
 // The label of a Discord connection in a select: its name and, when known, its webhook name.
 export function connectionLabel(row: ConnectionRow): string {
   return row.webhookName ? `${row.name} · ${row.webhookName}` : row.name;

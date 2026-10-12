@@ -16,6 +16,8 @@ export interface AddWebhookInput {
   url: string;
 }
 
+export type AddedWebhook = ConnectionRow & { warning: string | null };
+
 export interface LinkAnswer {
   linked: string[];
   unchanged: string[];
@@ -51,9 +53,9 @@ export function useRefreshIntegrations(): () => void {
 }
 
 // Adds a Discord webhook: tested and announced by the runtime first; the URL is sent once and never read back.
-export async function addWebhook(input: AddWebhookInput): Promise<ConnectionRow | null> {
-  const answer = await postJson<{ connection?: ConnectionRow | null }>("/api/integrations/discord", input);
-  return answer?.connection ?? null;
+export async function addWebhook(input: AddWebhookInput): Promise<AddedWebhook | null> {
+  const answer = await postJson<{ connection?: ConnectionRow | null; warning?: string }>("/api/integrations/discord", input);
+  return answer?.connection ? { ...answer.connection, warning: answer.warning ?? null } : null;
 }
 
 // Adds a connection of a module kind: tested by the runtime first; the secret is sent once and never read back.

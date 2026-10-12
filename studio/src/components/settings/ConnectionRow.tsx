@@ -1,7 +1,7 @@
 import { useMutation } from "@tanstack/react-query";
 import { KeyRound, Send } from "lucide-react";
 import { errorText } from "../../lib/actions";
-import { isDiscord, remainingOrgs, typeLabel, typeLine, usedByNames, webhookLine } from "../../lib/integrations";
+import { FORUM_NOTICE, isDiscord, remainingOrgs, typeLabel, typeLine, usedByNames, webhookLine } from "../../lib/integrations";
 import { showToast } from "../../lib/toast";
 import type { ConnectionRow as Row, IntegrationsView, LastTest } from "../../lib/types";
 import { testConnection, useRefreshIntegrations } from "../../lib/useIntegrations";
@@ -53,9 +53,12 @@ function TargetLine({ row }: { row: Row }) {
   if (!isDiscord(row)) return null;
   const line = webhookLine(row);
   return (
-    <div className="font-mono text-sm break-words text-muted" title={line.title}>
-      {line.text}
-    </div>
+    <>
+      <div className="font-mono text-sm break-words text-muted" title={line.title}>
+        {line.text}
+      </div>
+      {row.forum && <div className="text-sm text-dim">{FORUM_NOTICE}</div>}
+    </>
   );
 }
 
@@ -91,7 +94,7 @@ function ConnectionButtons({ row, handlers, phone = false }: { row: Row; handler
     <>
       <TestButton row={row} className={extra} />
       {isDiscord(row) && (
-        <Button size="sm" className={extra} disabled={!row.present} onClick={() => handlers.onLink(row)}>
+        <Button size="sm" className={extra} disabled={!row.present || row.forum} title={row.forum ? "a forum has no thread for the log to post in" : undefined} onClick={() => handlers.onLink(row)}>
           {phone ? "Link" : "Link projects"}
         </Button>
       )}

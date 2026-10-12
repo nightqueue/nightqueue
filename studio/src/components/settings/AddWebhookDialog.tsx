@@ -1,8 +1,8 @@
 import { useMutation } from "@tanstack/react-query";
 import { useState } from "react";
-import { addErrorView, shortId, type AddErrorView } from "../../lib/integrations";
-import type { ConnectionRow, OrgSummary } from "../../lib/types";
-import { addWebhook, useRefreshIntegrations } from "../../lib/useIntegrations";
+import { addErrorView, FORUM_NOTICE, shortId, type AddErrorView } from "../../lib/integrations";
+import type { OrgSummary } from "../../lib/types";
+import { addWebhook, useRefreshIntegrations, type AddedWebhook } from "../../lib/useIntegrations";
 import { Button } from "../ui";
 import { AddError, Field, INPUT_CLASS, Note, orgOption } from "./bits";
 import { SettingsDialog } from "./SettingsDialog";
@@ -18,7 +18,7 @@ const SAVED_PLACEHOLDER = "URL saved — not shown, not even masked";
 const PHONE_BUTTON = "max-sm:min-h-[46px] max-sm:w-full";
 
 // The green note of a saved connection: what the webhook told about its channel, and the next step.
-function AddSuccess({ connection, org }: { connection: ConnectionRow | null; org: string }) {
+function AddSuccess({ connection, org }: { connection: AddedWebhook | null; org: string }) {
   const webhook = connection?.webhookName ? (
     <>
       Webhook <span className="font-mono">{connection.webhookName}</span> in channel{" "}
@@ -38,10 +38,11 @@ function AddSuccess({ connection, org }: { connection: ConnectionRow | null; org
         <span className="font-mono" title={connection?.serverId ?? undefined}>
           {shortId(connection?.serverId)}
         </span>
-        . A “nightqueue connected” message was posted there.
+        . {connection?.forum ? FORUM_NOTICE : "A “nightqueue connected” message was posted there."}
       </div>
+      {connection?.warning && <div className="text-sm">{`Saved, but the connected message was not posted: ${connection.warning}`}</div>}
       <div className="text-sm text-[#8fbf9f]">Tip: name the webhook after its channel in Discord, so the list reads which channel each connection posts to.</div>
-      <div className="text-sm text-[#8fbf9f]">{`Next: choose which projects of org ${org} notify this channel when a job closes.`}</div>
+      {!connection?.forum && <div className="text-sm text-[#8fbf9f]">{`Next: choose which projects of org ${org} notify this channel when a job closes.`}</div>}
     </Note>
   );
 }
@@ -80,9 +81,11 @@ export function AddWebhookDialog({ orgs, onClose, onLink }: AddWebhookDialogProp
   const submitLabel = add.isPending ? "Testing…" : error ? "Test again and save" : "Test and save";
   const footer = saved ? (
     <>
-      <Button variant="primary" className={PHONE_BUTTON} onClick={() => onLink(name.trim())}>
-        Link projects
-      </Button>
+      {!add.data?.forum && (
+        <Button variant="primary" className={PHONE_BUTTON} onClick={() => onLink(name.trim())}>
+          Link projects
+        </Button>
+      )}
       <Button className={PHONE_BUTTON} onClick={close}>
         Done
       </Button>
