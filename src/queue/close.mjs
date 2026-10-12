@@ -340,15 +340,22 @@ async function failedVerdict(ctx, deps, { checks, head, reading }) {
   return reading;
 }
 
-// Tells whether the checks of the pull request stop the close, and what they said; with --force they never stop it and the note names them.
-async function checksVerdict(ctx, deps, head) {
-  const checks = await readHeadChecks(ctx, deps, head);
+// The verdict of one checks read of the head: a stop, a wait, a re-run, or green; with --force they never stop it and the note names them.
+async function headChecksVerdict(ctx, deps, { checks, head }) {
   const reading = checksReading(ctx, checks);
   if (reading.problem && ctx.force) return { note: ignoredChecksNote(checks) };
   if (reading.problem?.reason === "checks-red") return await failedVerdict(ctx, deps, { checks, head, reading });
   if (reading.problem?.reason === "checks-aborted") return await abortedVerdict(ctx, deps, checks, head);
   if (reading.problem) return reading;
   return { ...reading, data: ciGreenData(ctx, checks, head) };
+}
+
+// Tells whether the checks of the pull request stop the close, and what they said; a pending verdict carries how many checks the head has.
+async function checksVerdict(ctx, deps, head) {
+  const checks = await readHeadChecks(ctx, deps, head);
+  const verdict = await headChecksVerdict(ctx, deps, { checks, head });
+  if (verdict.problem?.reason !== "checks-pending") return verdict;
+  return { ...verdict, checksOnHead: checks?.checks?.length ?? 0 };
 }
 
 // The paths `git status --porcelain -z` lists, renamed ones under both names.
@@ -403,11 +410,28 @@ function withAttributionNote(note, attribution) {
   return attribution.note ? `${note}; ${attribution.note}` : note;
 }
 
-// The checks verdict of preflight; checks still running are waited on within the close's budget instead of stopping it.
-async function checksOrWait(ctx, deps, data) {
+// The open pull request read BEHIND its base at the head preflight judges, read once more when its merge state is UNKNOWN; null otherwise.
+async function behindBeforeWait(ctx, deps, pr, head) {
+  if (ctx.force || !pr || !head) return null;
+  const unknown = pr.mergeable === "UNKNOWN" || pr.mergeStateStatus === "UNKNOWN";
+  const live = unknown ? await readMergeabilityAgain(ctx, deps) : pr;
+  const behind = live?.ok && live.state === "OPEN" && live.headRefOid === head && live.mergeStateStatus === "BEHIND";
+  return behind ? live : null;
+}
+
+// The preflight verdict of checks still running on a head BEHIND its base: not waited, the conflict step updates the head and waits for the new one.
+function behindNotWaited(checks, head, live) {
+  const note = `checks still running on ${sha7(head)}, not waited: the pull request is BEHIND ${live.baseRefName}, the conflict step updates it and waits for the new head`;
+  return { note, data: checks.checksOnHead >= 1 ? { checksOnHead: checks.checksOnHead } : {} };
+}
+
+// The checks verdict of preflight; checks still running are waited on within the close's budget instead of stopping it, unless the head is BEHIND.
+async function checksOrWait(ctx, deps, data, pr) {
   const waitsFirst = ctx.data.pushedBy === "close" && Boolean(data.headSha) && !ctx.force;
   const checks = waitsFirst ? null : await checksVerdict(ctx, deps, data.headSha);
   if (checks && (checks.problem?.reason !== "checks-pending" || !data.headSha)) return checks;
+  const behind = checks ? await behindBeforeWait(ctx, deps, pr, data.headSha) : null;
+  if (behind) return behindNotWaited(checks, data.headSha, behind);
   const waited = await waitForChecks(ctx, deps, { status: "done", note: checks?.rerunNote ?? "checks waited", data }, `checks still running on ${sha7(data.headSha)}`);
   return waited.status === "done" ? { note: waited.note, data: waited.data } : { problem: { ...waited, reopen: [] } };
 }
@@ -494,7 +518,7 @@ async function preflightStep({ ctx, deps }) {
   if (attribution.problem) return { ...attribution.problem, data };
   if (pr.state === "CLOSED") return failed("pr-closed", `PR #${pr.number} was closed without being merged`, { data });
   if (pr.state === "MERGED") return { status: "done", note: withAttributionNote(`PR #${pr.number} already merged as ${sha7(pr.mergeSha)}`, attribution), data: { ...data, ...mergedData(pr, mergedByOf(ctx)) } };
-  const checks = verdict?.note ? verdict : await checksOrWait(ctx, deps, data);
+  const checks = verdict?.note ? verdict : await checksOrWait(ctx, deps, data, pr);
   if (checks.problem) return { ...checks.problem, data };
   Object.assign(data, checks.data ?? {});
   const checkout = await checkoutVerdict(ctx, deps, pr.baseRefName);
@@ -664,7 +688,7 @@ function removeDirQuietly(deps, dir) {
 }
 
 // Fetches both branches and rebases the head onto the base in a throwaway worktree, removed whatever happens.
-async function rebaseInThrowaway(ctx, deps, { head, base }) {
+async function rebaseInThrowaway(ctx, deps, { head, base }, { requireSuite = false } = {}) {
   if (!head || !base) return failed("fetch-failed", "gh did not report the head and base branches of the pull request");
   const fetched = await git(ctx, deps, ["fetch", "origin", head, base]);
   if (!fetched.ok) return failed("fetch-failed", `git fetch origin ${head} ${base} failed (${firstLine(fetched.stderr)})`);
@@ -674,7 +698,7 @@ async function rebaseInThrowaway(ctx, deps, { head, base }) {
   const throwaway = await addThrowaway(ctx, deps, head);
   if (throwaway.problem) return { ...throwaway.problem, data: { headShaBefore: branches.headShaBefore } };
   try {
-    return await rebaseTestAndPush(ctx, deps, { ...branches, dir: throwaway.dir });
+    return await rebaseTestAndPush(ctx, deps, { ...branches, dir: throwaway.dir, requireSuite });
   } finally {
     await removeThrowaway(ctx, deps, throwaway.dir);
   }
@@ -698,7 +722,7 @@ async function rebaseTestAndPush(ctx, deps, work) {
   }
   const markers = await leftoverMarkers(ctx, deps, work);
   if (markers.length) return failed("real-conflict", `conflict markers left in: ${namesNote(markers)}`, { data });
-  const ciGates = ciGatesRebase(ctx, resolution);
+  const ciGates = ciGatesRebase(ctx, resolution, work);
   const suite = ctx.force || ciGates ? {} : await runSuite(ctx, deps, work.dir);
   if (suite.problem) return { ...suite.problem, data };
   if (ctx.signal?.aborted) return { ...abortedBefore("push"), data };
@@ -711,13 +735,13 @@ async function rebaseTestAndPush(ctx, deps, work) {
   }
   data.headSha = after.stdout.trim();
   const note = rebasePushNote(ctx, { work, resolution, headSha: data.headSha, ciGates });
-  const verified = ctx.force || !data.headSha ? {} : { verifiedSha: data.headSha };
+  const verified = ctx.force || ciGates || !data.headSha ? {} : { verifiedSha: data.headSha };
   return { status: "done", note, data: { ...data, pushedBy: "close", ...verified }, reopen: ["preflight"] };
 }
 
-// Tells whether CI gates a clean rebase: no merger resolution and at least one check read on the previous head.
-function ciGatesRebase(ctx, resolution) {
-  return resolution === null && Number(ctx.data.checksOnHead) >= 1;
+// Tells whether CI gates a clean rebase: the suite not required, no merger resolution and at least one check read on the previous head.
+function ciGatesRebase(ctx, resolution, work) {
+  return !work.requireSuite && resolution === null && Number(ctx.data.checksOnHead) >= 1;
 }
 
 // The note of a pushed rebase: the merger's resolution when it ran, else the plain rebase with or without the suite.
@@ -844,7 +868,7 @@ function unverifiableHeadNote(ctx) {
 // Runs the suite on a head no CI verifies, rebased in the throwaway worktree, and takes the head it verified and pushed.
 async function suiteVerdict(ctx, deps, { pr, lead, data }) {
   const prefix = `${lead ? `${lead}; ` : ""}no CI on ${sha7(pr.headRefOid)}: `;
-  const suite = await rebaseInThrowaway(ctx, deps, { head: pr.headRefName, base: pr.baseRefName });
+  const suite = await rebaseInThrowaway(ctx, deps, { head: pr.headRefName, base: pr.baseRefName }, { requireSuite: true });
   if (suite.reason === "no-test-script") return { problem: { ...suite, note: `${prefix}${unverifiableHeadNote(ctx)}` } };
   if (suite.status !== "done") return { problem: { ...suite, note: `${prefix}${suite.note}` } };
   if (!suite.data?.verifiedSha) return { problem: failed("head-unreadable", `${prefix}the suite ran but the head it verified is unknown; run again`, { data: suite.data }) };

@@ -1011,9 +1011,14 @@ agent, never a second job, never queue work:
    head and is then waited on (`checks-aborted` when it is aborted again), and a pending one is waited
    on in the same run with the same poll, backoff and `waiting for checks on <sha>: 2/3 done`
    line as the `BEHIND` wait below, out of the one `queue.closeTimeoutS` budget the whole
-   close shares (a later `BEHIND` wait spends only what is left of it); when the budget is
+   close shares; when the budget is
    nearly out it stops with `checks-pending` - `checks still running on <sha> - run queue
-   close N again` - and the next run continues. A pull request with no checks reported goes on
+   close N again` - and the next run continues. When the checks are still running and GitHub
+   shows the pull request `BEHIND` its base at that head (read once more after ~3 s when its
+   merge state is `UNKNOWN`), preflight does not wait: it notes `checks still running on <sha>,
+   not waited: the pull request is BEHIND <base>, the conflict step updates it and waits for
+   the new head`, and the conflict step updates the branch and waits once, for the new head. A
+   red check still stops it, and `--force` is unchanged. A pull request with no checks reported goes on
    to the merge step, which verifies its head (see *The close merges only a head it or CI
    verified* below).
    Uncommitted files in the checkout only stop it when the pull that follows the merge
@@ -1060,7 +1065,8 @@ agent, never a second job, never queue work:
    renewed at each poll. All green goes on to merge; a red check stops with `checks-red`
    naming it; when `queue.closeTimeoutS` is nearly out it stops with `checks-pending` -
    `branch updated to <sha>, checks still running - run queue close J-N again` - and the next
-   run starts at preflight on that head. `UNSTABLE` is not updated; `BLOCKED` is never read
+   run starts at preflight on that head. This is the close's only CI wait for a pull request
+   preflight found `BEHIND` with its checks still running. `UNSTABLE` is not updated; `BLOCKED` is never read
    as mergeable: a pull request GitHub reports mergeable but `BLOCKED` waits the same way for
    the checks of the verified head (`merge state BLOCKED on <sha>; N checks green on <sha>`),
    then goes on to merge. With `--force` both waits are skipped.
@@ -1108,7 +1114,8 @@ last step took, never a condition. An open pull request GitHub answers without a
 stops every step with `pr-unreadable`, `--force` included, and no merge is ever issued without
 `--match-head-commit`. Two durable records say what was verified: `data.verifiedSha`, the head
 the close's own green suite ran on in the throwaway worktree (written only when the step
-returns, never under `--force`), and `data.ciGreenSha`, a head CI reported all green on (a
+returns, never under `--force`; a clean rebase CI gates, the suite skipped, never records it, so
+its head is merged only once CI reports green on it or the close's own suite runs on it), and `data.ciGreenSha`, a head CI reported all green on (a
 non-empty rollup, read together with that same head). Neither is ever cleared, and
 `data.pushedBy` decides nothing: it only makes the reads after the close's own push wait for
 GitHub to show it. Preflight and conflict note a head that differs from the recorded one (an

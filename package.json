@@ -45,6 +45,7 @@
   },
   "scripts": {
     "test": "node --test --test-timeout=240000 --disable-warning=ExperimentalWarning \"test/**/*.test.mjs\"",
+    "test:shard": "node --test --test-timeout=240000 --disable-warning=ExperimentalWarning --test-shard=$TEST_SHARD \"test/**/*.test.mjs\"",
     "release:check": "npm test && node scripts/release-check.mjs",
     "studio:dev": "node scripts/studio-dev.mjs",
     "studio:typecheck": "tsc -p studio/tsconfig.json --noEmit",
