@@ -1,16 +1,8 @@
 import { basename, isAbsolute, join, relative, sep } from "node:path";
 import { isId } from "../config/ids.mjs";
-import { SHIM_NAME, SHORTCUT_SHIM_NAMES, qaDir, runsDir, worktreesDir } from "../config/paths.mjs";
+import { SHIM_NAME, SHORTCUT_SHIM_NAMES, qaDir, secretsPath } from "../config/paths.mjs";
 import { registeredCheckouts } from "../memory/registry-access.mjs";
-import {
-  FORBIDDEN_SHELL_CHARS,
-  canonicalPath,
-  insideRoots,
-  isDeniedFlag,
-  pluginRoots,
-  sessionSpillRoot,
-  tokenize,
-} from "./orchestrator-scope.mjs";
+import { FORBIDDEN_SHELL_CHARS, canonicalPath, insideRoots, isDeniedFlag, tokenize } from "./orchestrator-scope.mjs";
 
 export const OPERATOR_DECISION = "D-58";
 
@@ -105,11 +97,23 @@ export function checkoutRoots(env = process.env) {
   }
 }
 
-// Directories the operator and its subagents may read: the registered checkouts, the qa worktrees, the runs, the jobs' worktrees, the plugin and its own spilled tool results.
-export function operatorReadRoots(env = process.env, session = {}) {
-  const { roots: checkouts, error } = checkoutRoots(env);
-  const candidates = [...checkouts, qaDir(env), runsDir(env), worktreesDir(env), ...pluginRoots(env), sessionSpillRoot(session)];
-  return { roots: [...new Set(candidates.filter(Boolean).map(canonicalPath))], registryError: error };
+// The file names the operator never reads wherever they lie: `.env` and its variants (`.env.local`, `.env.production`).
+const DOTENV_NAME = /^\.env(\..+)?$/;
+
+// Why the operator and its subagents may not read a path, or null when they may: everything on disk is readable but the home's
+// secrets file and every `.env*` file. A path that cannot be resolved is refused too.
+export function readRefusal(target, env = process.env) {
+  if (typeof target !== "string" || target === "") return "unresolved";
+  const canonical = canonicalPath(target);
+  if (canonical === canonicalPath(secretsPath(env))) return "secrets";
+  return DOTENV_NAME.test(basename(canonical)) ? "dotenv" : null;
+}
+
+// Tells whether a directory a Grep sweeps holds the secrets file below it, so the sweep would read it: the home or any of its parents.
+export function sweepsSecrets(target, env = process.env) {
+  if (typeof target !== "string" || target === "") return false;
+  const secrets = canonicalPath(secretsPath(env));
+  return canonicalPath(target) !== secrets && insideRoots(secrets, [canonicalPath(target)]);
 }
 
 // Tells whether a token asks a nightqueue command to hold the shell (a follow or a foreground run).
@@ -301,14 +305,16 @@ export function describeMainWriteDenial(toolName) {
   );
 }
 
-// Reason of a main-thread read outside the operator's roots.
-export function describeReadDenial({ target, roots, registryError }) {
-  const shown = target ?? "a path that cannot be resolved";
-  return (
-    `${OPERATOR_DECISION}: the operator and its subagents read only the registered checkouts, the qa worktrees, the runs, the jobs' worktrees ` +
-    `and the plugin (${roots.join(", ")}), and ${shown} is outside them; pass an absolute \`path\` inside one of them, ` +
-    `or hand the search to nightqueue:triage${registryNote(registryError)}`
-  );
+// Reason of a read the operator may not make: the secrets file, a `.env*` file, a Grep that would sweep the secrets file, or an unresolvable path.
+export function describeReadDenial({ target, refusal, env = process.env }) {
+  const shown = typeof target === "string" && target ? target : "a path that cannot be resolved";
+  const because = {
+    secrets: `${shown} is the home's secrets file (${secretsPath(env)}), which no operator session reads`,
+    dotenv: `${shown} is a \`.env\` file, and no operator session reads one`,
+    sweep: `a Grep over ${shown} would read the home's secrets file (${secretsPath(env)}) below it; narrow \`path\` to the directory you need`,
+    unresolved: `${shown} cannot be resolved; pass an absolute \`path\``,
+  }[refusal] ?? `${shown} is refused`;
+  return `${OPERATOR_DECISION}: the operator and its subagents read anything on disk but the secrets file and \`.env*\` files, and ${because}`;
 }
 
 // The refused subcommands and flags of the main thread, as a reason shows them (`queue session`, `doctor --fix`, …).

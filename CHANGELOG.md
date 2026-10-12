@@ -196,6 +196,13 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **The operator reads anything on disk but the secrets.** Read, Grep and Glob in an operator
+  session (main thread and the three subagents) no longer stop at the registered checkouts,
+  `<home>/qa|runs|worktrees` and the plugin: `<home>/logs`, `config.json`, the database, another
+  repository or an installed library are readable for a diagnosis. Still refused: the home's
+  `secrets.json`, any `.env*` file, a Grep whose `path` is the home or a parent of it (the sweep
+  would read the secrets file), and a path that cannot be resolved. Edit and Write stay refused
+  on the operator's thread (D-58).
 - **The pull request footer names the job.** A job's body ends with `Opened by nightqueue · J-<n>`,
   then ` · <kind> <ref>` when the job has an origin (`Opened by nightqueue · J-12 · linear MK-42`);
   a run outside a job keeps `Opened by nightqueue`.

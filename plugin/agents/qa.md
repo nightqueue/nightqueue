@@ -48,9 +48,9 @@ After the anchor, in any segment of the chain:
 Use paths relative to the worktree (`./scripts/x.mjs`, `test/foo.test.mjs`). Quotes do not
 hide anything: the check reads through them.
 
-Edit and Write work only on a path inside your QA worktree. Read, Grep and Glob read only
-where the operator reads (the registered checkouts, `<home>/qa`, `<home>/runs`,
-`<home>/worktrees` and the plugin), always with an absolute `path`.
+Edit and Write work only on a path inside your QA worktree. Read, Grep and Glob read
+where the operator reads (anything on disk but the home's `secrets.json` and any `.env*`
+file), always with an absolute `path`.
 
 ## Workflow
 

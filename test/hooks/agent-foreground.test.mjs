@@ -349,15 +349,22 @@ function operatorFixture(t) {
   return { ...fixture, env: { ...rest, NIGHTQUEUE_MODE: "operator" } };
 }
 
-test("the operator reads the runs and the plugin, and a path outside its roots, the home root included, is refused under D-58", (t) => {
+test("the operator reads anything on disk, and the secrets file, a `.env*` file or a Grep over the home is refused under D-58", (t) => {
   const { env, runDir, plugin, worktree } = operatorFixture(t);
-  assert.equal(runAgentForeground({ input: mainCall("Read", { file_path: join(runDir, "03-plan.md") }, worktree), env }), "");
-  assert.equal(runAgentForeground({ input: mainCall("Read", { file_path: join(plugin, "agents", "triager.md") }, worktree), env }), "");
   for (const [tool, toolInput] of [
+    ["Read", { file_path: join(runDir, "03-plan.md") }],
+    ["Read", { file_path: join(plugin, "agents", "triager.md") }],
     ["Read", { file_path: join(worktree, "src", "app.mjs") }],
-    ["Read", { file_path: join(env.NIGHTQUEUE_HOME, "secrets.json") }],
+    ["Read", { file_path: join(env.NIGHTQUEUE_HOME, "config.json") }],
     ["Grep", { pattern: "export" }],
     ["Glob", { pattern: "**/*.mjs" }],
+  ]) {
+    assert.equal(runAgentForeground({ input: mainCall(tool, toolInput, worktree), env }), "", `${tool} ${JSON.stringify(toolInput)}`);
+  }
+  for (const [tool, toolInput] of [
+    ["Read", { file_path: join(env.NIGHTQUEUE_HOME, "secrets.json") }],
+    ["Read", { file_path: join(worktree, ".env") }],
+    ["Grep", { pattern: "token", path: env.NIGHTQUEUE_HOME }],
   ]) {
     const reason = denyReasonOf(runAgentForeground({ input: mainCall(tool, toolInput, worktree), env }));
     assert.ok(reason.startsWith(OPERATOR_REASON_PREFIX), reason);

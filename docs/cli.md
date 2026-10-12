@@ -1089,10 +1089,10 @@ executes. The PreToolUse hook of an operator session (matcher
 one line starting `D-58:`:
 
 - main thread: `Edit`, `Write`, `MultiEdit` and `NotebookEdit` are refused; `Read`, `Grep` and
-  `Glob` only under a registered checkout, `<home>/qa`, `<home>/runs`, `<home>/worktrees`, the
-  plugin and the session's spill directory (never the home root, which holds `config.json`,
-  `secrets.json` and the database; a `Glob` without a `path` targets the home and is refused, and
-  an absolute Glob `pattern` or Grep `glob` is judged by its static prefix);
+  `Glob` read anything on disk except `secrets.json` and any `.env*` file (`.env`, `.env.local`,
+  …), a `Grep` whose `path` is the home or a parent of it is refused because the sweep would
+  read `secrets.json`, a path that cannot be resolved is refused, and an absolute Glob `pattern`
+  or Grep `glob` is judged by its static prefix;
   Bash only as one bare command (no `;`, `&&`, `|`, redirection, substitution or backslash) that
   is either `nightqueue|nq <command> …` with `<command>` one of `queue`, `decision`,
   `project`, `org`, `connection`, `doctor`, `memory`, `libs`, `version` - never `queue session`,
@@ -1110,10 +1110,10 @@ one line starting `D-58:`:
   (`queue status|log`, `project list`, `decision list|show`, `org list`,
   `connection list`, `memory stats`, `doctor` without `--fix`, `version`), the main thread's
   `git -C` reads, `gh pr view|diff|checks|list|status` or `gh issue view|list`;
-- every subagent reads only under the main thread's read roots, so delegating never widens them.
+- every subagent reads exactly where the main thread reads, so delegating never reaches the
+  secrets or a `.env*` file.
 
-A registry that cannot be read refuses the checkout reads and `git -C` (the reason names
-`nightqueue doctor`), an error inside the guard refuses every tool but the reads, and an edit,
+A registry that cannot be read refuses `git -C` (the reason names `nightqueue doctor`), an error inside the guard refuses every tool but the reads, and an edit,
 `Bash`, `Agent` or `Task` call whose `tool_input` is not an object is refused: the operator
 guard fails closed, unlike a job's.
 
