@@ -97,6 +97,12 @@ out when the list is empty) and the `--json`/`queue_status` detail carries `orig
 open of the database, into a one-element list; a value that is not a well-formed origin
 becomes no origin.
 
+Example: a job queued from Linear issue MK-47 that has a Discord thread attached carries both
+origins, `linear MK-47` and the `discord` message of the thread (the runner links the second
+at claim). Its close notifies each one on its own: Linear MK-47 is completed and commented with
+the pull request, and a reply is posted in the Discord thread (once the project has a `discord`
+setting).
+
 **The runner enriches the origins at claim.** A claimed job writes one
 `origin: <kind> <ref> (connection: <name|none>)` line per origin in its job log (the narrated
 log shows it). For each origin, when the project enabled that provider
