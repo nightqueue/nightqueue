@@ -249,7 +249,7 @@ function publishBranch({ run, cwd, branch, title, bodyFile, env }) {
   if (created.missing) throw new UserError(`\`${branch}\` is pushed, but the GitHub CLI is not installed: open the pull request by hand`);
   if (!created.ok) throw new UserError(`\`${branch}\` is pushed, but gh could not open the pull request: ${failureLine(created)}`);
   const recorded = recordOutcome({ projectId: run.projectId, slug: run.slug, status: "done", env });
-  const prRecorded = recordPrUrl({ projectId: run.projectId, slug: run.slug, prUrl: created.url, env });
+  const prRecorded = recordPrUrl({ projectId: run.projectId, slug: run.slug, prUrl: created.url, prTitle: title, env });
   const branchRecorded = recordRunFields({ projectId: run.projectId, slug: run.slug, fields: { branch }, env });
   return { url: created.url, recorded, prRecorded, branchRecorded };
 }

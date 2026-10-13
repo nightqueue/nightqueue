@@ -142,14 +142,14 @@ export function recordOutcome({ projectId, slug, status, notice, env = process.e
   });
 }
 
-// Records the pull request of the run, which the runtime reads from the host and the agent never sends as a parameter.
-export function recordPrUrl({ projectId, slug, prUrl, env = process.env } = {}) {
+// Records the pull request of the run and, when known, its title; both are the runtime's and the agent never sends them as a parameter.
+export function recordPrUrl({ projectId, slug, prUrl, prTitle, env = process.env } = {}) {
   if (!isPrUrl(prUrl)) return kept(`\`${String(prUrl)}\` is not a pull request URL`);
   return record({
     projectId,
     slug,
     env,
-    change: (state, at) => ({ outcome: { ...(isStateObject(state.outcome) ? state.outcome : {}), prUrl, at } }),
+    change: (state, at) => ({ outcome: withText({ ...(isStateObject(state.outcome) ? state.outcome : {}), prUrl, at }, { prTitle }) }),
   });
 }
 

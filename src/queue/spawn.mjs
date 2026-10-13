@@ -13,14 +13,13 @@ import { jobSettings } from "../host/settings.mjs";
 import { RECOVERED_PROMPT, recoveredPromptRefusal, truncateByCodePoint } from "../memory/jobs.mjs";
 import { escapePromptMarkers } from "../memory/prompt-safety.mjs";
 import { JOB_CLAUDE_DIR_ENV, JOB_HOME_ENV } from "./home-guard.mjs";
-import { slugSource } from "./job-title.mjs";
+import { slugText } from "./job-title.mjs";
 import { holdJobAwake } from "./keep-awake.mjs";
 import { PLUGIN_DIR_ENV } from "./orchestrator-scope.mjs";
 import { isRunPath, isSafeSegment, rerunLines } from "./resume.mjs";
 import { isSessionIdSafe } from "./stream.mjs";
 import { jobRef } from "../memory/refs.mjs";
 
-export { slugSource } from "./job-title.mjs";
 
 // Silence of the stream that means a dead process: no event at all for this long ends the attempt.
 export const IDLE_TIMEOUT_S = 1200;
@@ -182,7 +181,7 @@ export function slugCandidates(base, id) {
 
 // A run slug derived from the brief of a job, so the run directory exists from the first attempt even if the pipeline never names itself.
 export function provisionalSlug(job) {
-  const words = slugSource(job?.prompt)
+  const words = slugText(job)
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, " ")
     .trim()

@@ -380,6 +380,32 @@ test("jobTitle derives the first meaningful prompt line, clipped at 120 with the
   assert.equal(jobTitle({ prompt: "## Brief\n\n" }), null);
 });
 
+test("jobTitle resolves the pull request title, the operator title, the brief objective and the first brief line, in that order", () => {
+  const operator = "## Brief\n**Affected area:** job title derivation\n**Objective:** Every job shows a human title. More words follow.\n**Type:** feature";
+  assert.equal(jobTitle({ prompt: operator, title: "Job titles show the brief label", pr_title: "fix(discord): accept guild/thread links as a Discord origin" }), "accept guild/thread links as a Discord origin");
+  assert.equal(jobTitle({ prompt: operator, title: "Job titles show the brief label" }), "Job titles show the brief label");
+  assert.equal(jobTitle({ prompt: operator }), "Every job shows a human title.");
+  assert.equal(jobTitle({ prompt: operator.replace(/\*\*Objective:.*\n/, "") }), "job title derivation");
+  assert.equal(jobTitle({ prompt: "teste de thread" }), "teste de thread");
+  assert.equal(jobTitle({ prompt: "x", title: "  one\n  line   ", pr_title: "   " }), "one line");
+  assert.equal(jobTitle({ prompt: "x", pr_title: "Note: not a commit type" }), "Note: not a commit type");
+  assert.equal(jobTitle({ prompt: "## Brief\n**Objective:** Use `jobTitle` in **every** reader\nand the studio.\n\n**Type:** x" }), "Use jobTitle in every reader and the studio.");
+});
+
+test("the title and the pull request title of a row reach the listing and the detail resolved, and an empty title is absent", async (t) => {
+  const env = makeHome(t, "view-title-resolved");
+  makeProject(t, env, "alpha");
+  const projectId = ensureProject(env, "alpha");
+  const titled = addJob({ projectId, prompt: "## Brief\n**Affected area:** x", title: "  Job titles\nshow the label " }, env).id;
+  const blank = addJob({ projectId, prompt: "## Brief\n**Objective:** Every job shows a human title.", title: "   " }, env).id;
+  openDb(env).prepare("UPDATE jobs SET pr_title = 'feat(queue): show the PR title' WHERE id = ?").run(blank);
+  await withReadOnlyStore(env, async (store) => {
+    const view = await queueView(store, { env });
+    assert.deepEqual(Object.fromEntries(view.jobs.map((job) => [job.id, job.title])), { [titled]: "Job titles show the label", [blank]: "show the PR title" });
+    assert.equal((await jobDetailView(store, blank, { env })).pr_title, "feat(queue): show the PR title");
+  });
+});
+
 test("queue_status jobs carry the title of their prompt, in the listing and in the detail", async (t) => {
   const env = makeHome(t, "view-title-join");
   makeProject(t, env, "alpha");

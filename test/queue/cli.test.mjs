@@ -378,6 +378,17 @@ test("`queue add --tier` records the tier, `queue status` shows it, and an unkno
   assert.equal(getJob(3, env), null, "a `--tier` with no value still queued a job");
 });
 
+test("`queue add --title` lists the pending job by that title in the table and in the json, and a blank title is none", (t) => {
+  const env = makeCliHome(t, "cli-add-title");
+  const repo = projectPath(env);
+  const added = runCli(env, ["queue", "add", "--title", "Job titles show the brief label", "## Brief\n**Affected area:** x"], { cwd: repo });
+  assert.equal(added.status, 0, added.stderr);
+  assert.equal(JSON.parse(runCli(env, ["queue", "status", "1", "--json"]).stdout).job.title, "Job titles show the brief label");
+  assert.match(runCli(env, ["queue", "status"]).stdout, /Job titles show the brief label/);
+  runCli(env, ["queue", "add", "--title", "   ", "fix the parser"], { cwd: repo });
+  assert.equal(getJob(2, env).title, null);
+});
+
 // The last line the CLI printed, the place the backlog nudge belongs to.
 function lastLine(stdout) {
   const lines = stdout.trimEnd().split("\n");
