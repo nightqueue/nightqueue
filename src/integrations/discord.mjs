@@ -246,16 +246,9 @@ function replyDescription(job) {
   return cut(capitalise(done), EMBED_DESCRIPTION_MAX);
 }
 
-// The Commit field: the merge sha linked to the commit page of the repository the pull request URL names, or none.
-function commitField(result) {
-  const repo = /^(.*)\/pull\/\d+/.exec(String(result?.prUrl ?? ""))?.[1];
-  if (!repo || typeof result?.mergeSha !== "string" || !result.mergeSha) return [];
-  return [{ name: "Commit", value: cut(`[${shortSha(result.mergeSha)}](${repo}/commit/${result.mergeSha})`, EMBED_FIELD_MAX), inline: true }];
-}
-
-// The Commit and PR fields both messages carry.
+// The PR field both messages carry.
 function mergeFields(result) {
-  return [...commitField(result), { name: "PR", value: cut(pullRequestLink(result), EMBED_FIELD_MAX), inline: true }];
+  return [{ name: "PR", value: cut(pullRequestLink(result), EMBED_FIELD_MAX), inline: true }];
 }
 
 // One field per origin of the given kinds, in Linear, Sentry, Thread order; a missing link leaves the plain ref.
