@@ -128,6 +128,14 @@ test("an empty list resolves to no origin whatever the prompt names; null or omi
   assert.throws(() => resolveOrigins({ origin: [{ kind: "linear", ref: "MK-9" }, { kind: "nope", ref: "1" }], prompt }), /unknown origin kind `nope`/);
 });
 
+test("queue_add detects a Discord thread link (guild/thread) pasted in the prompt as a discord origin", async (t) => {
+  const { env } = makeOriginHome(t, "origin-queue-add-thread");
+  const client = await connectInProcess(t, env);
+  const prompt = "the bot crashes, see https://discord.com/channels/111/222";
+  const added = payloadOf(await client.callTool({ name: "queue_add", arguments: { project: "alpha", prompt } }));
+  assert.deepEqual(jobView(getJob(added.id, env)).origin, [{ kind: "discord", ref: "111/222" }]);
+});
+
 test("queue_add with origin [] stores no origin; omitted or null detects it; an object, false or true is an older client", async (t) => {
   const { env } = makeOriginHome(t, "origin-queue-add-false");
   const client = await connectInProcess(t, env);

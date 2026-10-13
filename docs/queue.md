@@ -175,7 +175,9 @@ tool list the workspace's issues by Linear team and project; queueing from one s
 **Discord.** A prompt with a Discord message link
 (`https://discord.com/channels/<guild>/<channel>/<message>`, also `ptb.`/`canary.` and
 `discordapp.com`) gets the origin `discord <guild>/<channel>/<message>`; `--origin
-discord:<guild>/<channel>/<message>` gives it explicitly. Discord works through channel
+discord:<guild>/<channel>/<message>` gives it explicitly. A thread link
+(`.../channels/<guild>/<thread>`, no message id) gets `discord <guild>/<thread>` and the
+close replies inside that thread. Discord works through channel
 webhooks only (`connection add --type discord`, many per org) and reads nothing at claim. The
 org webhook posting in the message's channel covers it; a message in a thread or another
 channel shows `none` with the thread probe the close will try. Once the project has any

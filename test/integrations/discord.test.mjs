@@ -136,10 +136,16 @@ test("a discord message link is an origin `<guild>/<channel>/<message>`; a bare 
   assert.equal(parse(`see ${MESSAGE_LINK}`), "111/222/555");
   assert.equal(parse("https://ptb.discord.com/channels/1/2/3"), "1/2/3");
   assert.equal(parse("https://canary.discordapp.com/channels/4/5/6"), "4/5/6");
-  assert.equal(parse("https://discord.com/channels/1/2"), null);
+  assert.equal(parse("https://discord.com/channels/1/2"), "1/2");
+  assert.equal(parse("https://discord.com/channels/1"), null);
   assert.equal(parse("https://notdiscord.com/channels/1/2/3"), null);
   assert.equal(parse("ratio 1/2/3 in prose"), null);
   assert.equal(parse("1/2/3", { explicit: true }), "1/2/3");
+  assert.equal(parse("1/2", { explicit: true }), "1/2");
+  assert.equal(parse("1/2"), null);
+  assert.deepEqual(detectOrigins("see https://discord.com/channels/1/2 now"), [{ kind: "discord", ref: "1/2" }]);
+  assert.deepEqual(discord.origin.find("https://discord.com/channels/1/2 and https://discord.com/channels/4/5/6"), ["1/2", "4/5/6"]);
+  assert.deepEqual(explicitOrigin({ kind: "discord", ref: "1/2" }), { kind: "discord", ref: "1/2" });
   assert.deepEqual(detectOrigins(`the bot crashes, see ${MESSAGE_LINK}`), [{ kind: "discord", ref: "111/222/555" }]);
   assert.deepEqual(discord.origin.find(`${MESSAGE_LINK} and https://ptb.discord.com/channels/4/5/6`), ["111/222/555", "4/5/6"]);
   assert.deepEqual(explicitOrigin({ kind: "discord", ref: "111/222/555" }), { kind: "discord", ref: "111/222/555" });
@@ -239,6 +245,10 @@ test("the reply posts in the matching channel, else probes the guild's webhooks 
   const probed = await replyWith({ [`POST ${CHAT_URL}?wait=true&thread_id=${THREAD}`]: { status: 400 }, [`POST ${OPS_URL}?wait=true&thread_id=${THREAD}`]: {} }, { ref: threadRef });
   assert.deepEqual(probed.answer, { status: "done", note: `replied in thread ${THREAD} through ops` });
   assert.deepEqual(probed.calls.map((call) => call.url), [`${CHAT_URL}?wait=true&thread_id=${THREAD}`, `${OPS_URL}?wait=true&thread_id=${THREAD}`]);
+
+  const bareThread = await replyWith({ [`POST ${CHAT_URL}?wait=true&thread_id=${THREAD}`]: {} }, { ref: `${GUILD}/${THREAD}` });
+  assert.deepEqual(bareThread.answer, { status: "done", note: `replied in thread ${THREAD} through chat` });
+  assert.deepEqual(bareThread.calls[0].body.embeds[0].fields, [{ name: "Reported", value: `[thread](https://discord.com/channels/${GUILD}/${THREAD})` }]);
 
   const firstWins = await replyWith({ [`POST ${CHAT_URL}?wait=true&thread_id=${THREAD}`]: {} }, { ref: threadRef });
   assert.equal(firstWins.calls.length, 1);
@@ -431,6 +441,31 @@ test("discord.replyToOrigin=false sends no reply, and an unset replyToOrigin rep
   const on = await closeDiscordJob(home, replying);
   assert.equal(on.outcome.postClose.steps[0].status, "done");
   assert.deepEqual(replying.calls.map((call) => call.url), [`${CHAT_URL}?wait=true`]);
+});
+
+test("closing a job queued from a guild/thread link replies inside the thread with thread_id on the request", async (t) => {
+  const home = await discordHome(t, "discord-thread-close");
+  setIntegrations(home.env, home.projectId, { discord: { replyToOrigin: true } });
+  const id = seedDoneJob(home.env, { prompt: `see https://discord.com/channels/${GUILD}/${THREAD}` });
+  acquireClose(id, { worker: WORKER, leaseS: 660 }, home.env);
+  const fetch = fakeFetch({ [`POST ${CHAT_URL}?wait=true&thread_id=${THREAD}`]: {} });
+  const outcome = await runClosePipeline({
+    store: home.store,
+    job: getJob(id, home.env),
+    worker: WORKER,
+    env: home.env,
+    deps: { fetch: fetch.impl },
+    timeoutS: 60,
+    signal: null,
+    onStep: () => {},
+    checkout: home.checkout,
+    steps: [...fakePreSteps(), ...POST_STEPS],
+  });
+  assert.equal(outcome.status, "closed");
+  assert.deepEqual(fetch.calls.map((call) => call.url), [`${CHAT_URL}?wait=true&thread_id=${THREAD}`]);
+  assert.equal(outcome.postClose.steps[0].note, `discord ${GUILD}/${THREAD}: replied in thread ${THREAD} through chat`);
+  assert.equal(fetch.calls[0].body.embeds[0].fields[0].value, `[thread](https://discord.com/channels/${GUILD}/${THREAD})`);
+  assertNoSecret([outcome, getJob(id, home.env)]);
 });
 
 test("a thread nobody of the org can post in leaves the job closed with a notice line and no URL", async (t) => {
