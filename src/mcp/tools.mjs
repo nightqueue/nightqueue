@@ -73,7 +73,18 @@ import {
 import { ensureStoreExists, openStore, withReadOnlyStore } from "../store/open.mjs";
 import { coverageField, coverageLabel, jobOriginCoverage } from "../integrations/coverage.mjs";
 import { changeProjectIntegrations, INTEGRATION_ACTIONS, integrationsView } from "../integrations/settings.mjs";
-import { TRACKER_LIMIT, TRACKER_STATES, trackerInstructionLines, trackerIssues } from "../integrations/tracker.mjs";
+import { redactSecrets, redactValue } from "../integrations/redact.mjs";
+import {
+  TRACKER_BOUNDS,
+  TRACKER_LIMIT,
+  TRACKER_STATES,
+  trackerComment,
+  trackerCreate,
+  trackerInstructionLines,
+  trackerIssues,
+  trackerRead,
+  trackerUpdate,
+} from "../integrations/tracker.mjs";
 import { callerContext, PHASE_TARGETS, phaseContextBlock, recallFreshLessons, runInjectedLessonIds } from "./phase-context.mjs";
 import { phasePrompt, PROMPT_TARGETS } from "./phase-prompt.mjs";
 import { readVersion } from "../cli/version.mjs";
@@ -667,7 +678,7 @@ function guard(name, handler, session) {
       return asText(withContract(await handler(upgraded.args), upgraded.deprecated));
     } catch (err) {
       if (err instanceof StoreUnavailableError) return storeUnavailableAnswer(err);
-      const message = err instanceof StaleContractError ? err.message : `${name}: ${err?.message ?? String(err)}`;
+      const message = redactSecrets(err instanceof StaleContractError ? err.message : `${name}: ${err?.message ?? String(err)}`, session.env);
       return { content: [{ type: "text", text: message }], isError: true };
     }
   };
@@ -795,7 +806,79 @@ async function queueCancelAnswer(args, env) {
   return { ok: true, ...(await stopAndCancelJob({ ...cancel, releaseWorktree: args.release_worktree === true })) };
 }
 
-// The thirty-one tools of the plugin contract, with the parameter names the plugin actually sends.
+// Runs one tracker call with the home's stored secrets redacted from its input before any cut and from its whole answer.
+async function trackerAnswer(call, args, env) {
+  const answer = await call(redactValue(args, env), { env });
+  return redactValue(answer, env);
+}
+
+// One tool that writes to the issue tracker, its description ending with the explicit-ok rule and the in-job refusal.
+function trackerWriteTool({ name, lead, inputSchema, run }, env) {
+  return {
+    name,
+    config: {
+      description:
+        `${lead} ` +
+        "Writes to the home's issue tracker: call it only after showing the person exactly what will change and getting an explicit ok, never on your own initiative. Refused inside a queue job, and nothing is sent. Never deletes or archives. " +
+        "Answers `{ok: false, error: \"no-connection\" | \"invalid-input\" | \"not-found\" | \"provider-unavailable\", hint, provider}` as a normal answer; a `provider-unavailable` hint saying the write may still have been applied means read the issue before trying again.",
+      inputSchema,
+    },
+    handler: (args) => trackerAnswer(run, args, env),
+  };
+}
+
+// The tracker tools that write: create, comment and update, never delete or archive.
+function trackerWriteTools(env) {
+  const issueRef = z.string().describe("The issue reference, e.g. `MK-49` or its link.");
+  const title = z.string().max(TRACKER_BOUNDS.title);
+  const description = z.string().max(TRACKER_BOUNDS.body);
+  const priority = z.number().int().min(0).max(4).nullable().optional().describe("0 none, 1 urgent, 2 high, 3 medium, 4 low.");
+  const names = z.array(z.string().max(TRACKER_BOUNDS.label)).nullable().optional();
+  return [
+    {
+      name: "tracker_create",
+      lead: "Creates one issue in a team of the tracker, with only the fields given. Answers `{ok: true, provider, issue: {ref, title, url}}`. A state, label or assignee name that is unknown or names several is refused with the valid names, and nothing is created.",
+      inputSchema: {
+        team: z.string().describe("The tracker team key, e.g. `MK`."),
+        title: title.describe("The issue title, at most 255 characters."),
+        description: description.nullable().optional().describe("The issue description (markdown), at most 50,000 characters."),
+        priority,
+        state: optionalText.describe("The team state name, e.g. `Todo`."),
+        labels: names.describe("Label names, each matched exactly, case-insensitively."),
+        assignee: optionalText.describe("A person's name, display name or email, or `me`."),
+      },
+      run: trackerCreate,
+    },
+    {
+      name: "tracker_comment",
+      lead: "Posts one comment on an issue. Answers `{ok: true, provider, ref, comment: {url}}`.",
+      inputSchema: {
+        ref: issueRef,
+        body: description.describe("The whole comment text (markdown), at most 50,000 characters."),
+      },
+      run: trackerComment,
+    },
+    {
+      name: "tracker_update",
+      lead:
+        "Changes the given fields of one issue and leaves the rest: `title`, `description` (replaces the whole text), `priority`, `state`, `assignee` (`none` unassigns), `labels_add`, `labels_remove`. " +
+        "Answers `{ok: true, provider, issue, changed}` with the issue as the tracker holds it after the edit. A name that is unknown or names several is refused with the valid names, and nothing is changed.",
+      inputSchema: {
+        ref: issueRef,
+        title: title.nullable().optional(),
+        description: description.nullable().optional(),
+        priority,
+        state: optionalText.describe("The team state name, e.g. `In Progress`."),
+        assignee: optionalText.describe("A person's name, display name or email, `me`, or `none`."),
+        labels_add: names.describe("Label names to add."),
+        labels_remove: names.describe("Label names to remove."),
+      },
+      run: trackerUpdate,
+    },
+  ].map((tool) => trackerWriteTool(tool, env));
+}
+
+// The thirty-five tools of the plugin contract, with the parameter names the plugin actually sends.
 function toolDefinitions(env, state) {
   return [
     {
@@ -1176,6 +1259,7 @@ function toolDefinitions(env, state) {
         description:
           "Read-only: lists the issues of the home's issue-tracker connection, newest update first, filtered by the service's own `team` key and `project` name - no nightqueue project argument. " +
           "`state` is `open` (default), `closed` or `all`; `limit` 1..50 (default 25), `truncated: true` when more matched; `include_filters: true` adds `filters` (`teams`, `projects`), cached for five minutes. " +
+          "`text` searches the title or the description, case-insensitively; `label` keeps the issues carrying that one label, matched exactly, case-insensitively; both combine with every other filter. " +
           "Answers `{ok: true, provider, items: [{ref, title, team, state, priority, priorityLabel, labels, url, updatedAt}], truncated}`, or `{ok: false, error: \"no-connection\" | \"provider-unavailable\", hint, provider}` as a normal answer. " +
           "Queueing from an item is `queue_add` with `origin: [{kind: provider, ref}]` and the nightqueue `project`, after the person said yes.",
         inputSchema: {
@@ -1184,10 +1268,27 @@ function toolDefinitions(env, state) {
           state: z.enum(TRACKER_STATES).nullable().optional(),
           limit: z.number().int().min(TRACKER_LIMIT.min).max(TRACKER_LIMIT.max).nullable().optional(),
           include_filters: z.boolean().nullable().optional(),
+          text: z.string().max(TRACKER_BOUNDS.text).nullable().optional().describe("Text the title or the description contains."),
+          label: z.string().max(TRACKER_BOUNDS.label).nullable().optional().describe("One label name."),
         },
       },
-      handler: async (args) => await trackerIssues(args, { env }),
+      handler: (args) => trackerAnswer(trackerIssues, args, env),
     },
+    {
+      name: "tracker_read",
+      config: {
+        description:
+          "Read-only: reads one issue of the home's issue-tracker connection whole - no nightqueue project argument, allowed inside a queue job. " +
+          "Answers `{ok: true, provider, issue: {ref, title, url, team: {key, name}, project, state: {name, type}, priority, priorityLabel, assignee, labels, parent, description, description_truncated, attachments: [{title, url}], comments: [{author, createdAt, body}], comments_truncated, createdAt, updatedAt}}`; " +
+          "an empty field is `null` or `[]`, up to 50 comments are returned oldest first, each cut at 10,000 characters, `comments_truncated` true when there are more, and the description is cut at 50,000. " +
+          "Answers `{ok: false, error: \"no-connection\" | \"invalid-input\" | \"not-found\" | \"provider-unavailable\", hint, provider}` as a normal answer.",
+        inputSchema: {
+          ref: z.string().describe("The issue reference, e.g. `MK-49` or its link."),
+        },
+      },
+      handler: (args) => trackerAnswer(trackerRead, args, env),
+    },
+    ...trackerWriteTools(env),
     {
       name: "queue_status",
       config: {
@@ -1540,7 +1641,7 @@ function toolHandler(tool, env) {
   };
 }
 
-// Builds the MCP server with the thirty-one tools of the plugin contract.
+// Builds the MCP server with the thirty-five tools of the plugin contract.
 export function createServer(env = process.env) {
   const server = new McpServer(
     {

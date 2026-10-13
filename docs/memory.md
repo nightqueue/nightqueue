@@ -271,7 +271,7 @@ worker are no longer read or written and can be deleted.
 **Commands.**
 
 ```sh
-nightqueue mcp                     # start the stdio MCP server with the thirty-one tools
+nightqueue mcp                     # start the stdio MCP server with the thirty-five tools
 nightqueue mcp --http --port 4747 --token <t>   # serve the same tools over Streamable HTTP on 127.0.0.1
 nightqueue hook session-start      # run a hook, reading the event JSON from stdin
 nightqueue embed download          # download the embedding weights (the only network path)

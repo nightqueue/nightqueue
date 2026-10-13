@@ -32,6 +32,15 @@ export function refuseMemoryDeleteInsideJob(env, action) {
   );
 }
 
+// Refuses a write to the issue tracker from inside a queue run, whatever the home: writing to it is the operator's call.
+export function refuseTrackerWriteInsideJob(env, action) {
+  const own = callerJobId(env);
+  if (own === null) return;
+  throw new UserError(
+    `refused: ${action} inside ${jobRef(own)}: writing to the issue tracker is the operator's call, made only outside a queue run after the person's explicit ok; a run reads it (\`tracker_read\`, \`tracker_issues\`) and never writes. Nothing was sent`,
+  );
+}
+
 // Refuses a command that would change the home - or, with `host`, the Claude settings - the unattended runner itself uses; a temporary home is always allowed.
 export function refuseHomeWriteInsideJob(env, { host = false } = {}) {
   const own = callerJobId(env);

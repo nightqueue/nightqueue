@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { homeDir, jobLogPath, logsDir, PACKAGE_NAME, queuePausedPath, runnersDir, runtimeCurrentLink, runtimeDir, runtimeVersionsDir } from "../../src/config/paths.mjs";
-import { loadConfig, saveConfig } from "../../src/config/store.mjs";
+import { loadConfig, loadSecrets, saveConfig, saveSecrets } from "../../src/config/store.mjs";
 import { packageRoot } from "../../src/host/paths.mjs";
 import { closeDb, openDb, openDbReadOnly } from "../../src/memory/db.mjs";
 import { saveDecision } from "../../src/memory/decisions.mjs";
@@ -56,7 +56,11 @@ const CONTRACT_TOOLS = [
   "run_set",
   "run_skip",
   "run_terminate",
+  "tracker_comment",
+  "tracker_create",
   "tracker_issues",
+  "tracker_read",
+  "tracker_update",
 ];
 
 const LESSON = {
@@ -93,12 +97,12 @@ function textOf(result) {
   return result.content.map((block) => block.text).join("\n");
 }
 
-test("the server exposes exactly the thirty-one tools of the contract", async (t) => {
+test("the server exposes exactly the thirty-five tools of the contract", async (t) => {
   const env = makeHome(t, "mcp-tools");
   const client = await connect(t, env);
   const names = (await client.listTools()).tools.map((tool) => tool.name).sort();
   assert.deepEqual(names, CONTRACT_TOOLS);
-  assert.equal(names.length, 31,"the contract list and the server disagree on how many tools there are");
+  assert.equal(names.length, 35,"the contract list and the server disagree on how many tools there are");
 });
 
 test("tracker_issues with no tracker connection is a normal answer carrying the refusal and the contract", async (t) => {
@@ -112,6 +116,85 @@ test("tracker_issues with no tracker connection is a normal answer carrying the 
     hint: 'connect it: echo "$LINEAR_API_KEY" | nightqueue connection add linear --type linear',
     contract: 7,
   });
+});
+
+const LINEAR_KEY = "lin_api_secret_0123456789";
+const TRACKER_CALLS = {
+  tracker_read: { ref: "MK-49" },
+  tracker_create: { team: "MK", title: "Fix the login" },
+  tracker_comment: { ref: "MK-49", body: "Looked into it." },
+  tracker_update: { ref: "MK-49", priority: 2 },
+};
+
+// Stores the home-wide linear connection with the fake key.
+function storeLinearKey(env) {
+  const secrets = loadSecrets(env, { warn: () => {} });
+  secrets.connections.linear = { type: "linear", apiKey: LINEAR_KEY };
+  saveSecrets(secrets, env);
+}
+
+test("every new tracker tool with no tracker connection answers the no-connection refusal with the contract", async (t) => {
+  const env = makeHome(t, "mcp-tracker-tools-none");
+  const client = await connect(t, env);
+  for (const [name, args] of Object.entries(TRACKER_CALLS)) {
+    assert.deepEqual(payloadOf(await client.callTool({ name, arguments: args })), {
+      ok: false,
+      error: "no-connection",
+      provider: "linear",
+      hint: 'connect it: echo "$LINEAR_API_KEY" | nightqueue connection add linear --type linear',
+      contract: 7,
+    }, name);
+  }
+});
+
+test("inside a queue job every tracker write is refused before anything is sent, and the reads still answer", async (t) => {
+  const env = makeHome(t, "mcp-tracker-in-job");
+  const inJob = await connect(t, { ...env, NIGHTQUEUE_JOB_ID: "7" });
+  for (const name of ["tracker_create", "tracker_comment", "tracker_update"]) {
+    const refused = await inJob.callTool({ name, arguments: TRACKER_CALLS[name] });
+    assert.equal(refused.isError, true, name);
+    assert.equal(
+      textOf(refused),
+      `${name}: refused: \`${name}\` inside J-7: writing to the issue tracker is the operator's call, made only outside a queue run after the person's explicit ok; a run reads it (\`tracker_read\`, \`tracker_issues\`) and never writes. Nothing was sent`,
+    );
+  }
+  assert.equal(payloadOf(await inJob.callTool({ name: "tracker_read", arguments: TRACKER_CALLS.tracker_read })).error, "no-connection");
+  assert.equal(payloadOf(await inJob.callTool({ name: "tracker_issues", arguments: {} })).error, "no-connection");
+});
+
+test("the write tools state the explicit-ok rule and no tool deletes or archives an issue", async (t) => {
+  const env = makeHome(t, "mcp-tracker-descriptions");
+  const client = await connect(t, env);
+  const tools = (await client.listTools()).tools;
+  for (const name of ["tracker_create", "tracker_comment", "tracker_update"]) {
+    const description = tools.find((tool) => tool.name === name).description;
+    assert.ok(description.includes("getting an explicit ok"), name);
+    assert.ok(description.includes("Refused inside a queue job, and nothing is sent"), name);
+  }
+  assert.ok(!tools.some((tool) => /delete|archive/.test(tool.name) && tool.name.startsWith("tracker_")));
+  const issues = tools.find((tool) => tool.name === "tracker_issues");
+  assert.deepEqual(Object.keys(issues.inputSchema.properties).sort(), ["include_filters", "label", "limit", "project", "state", "team", "text"]);
+});
+
+test("the generic error answer never carries a stored secret: the key is redacted, other text is kept", async (t) => {
+  const env = makeHome(t, "mcp-guard-redacts");
+  makeProject(t, env, "alpha");
+  storeLinearKey(env);
+  const client = await connect(t, env);
+  const result = await client.callTool({ name: "queue_add", arguments: { project: LINEAR_KEY, prompt: "fix the worker" } });
+  assert.equal(result.isError, true);
+  assert.ok(!textOf(result).includes(LINEAR_KEY), textOf(result));
+  assert.match(textOf(result), /unknown project `\[redacted\]`/);
+});
+
+test("a tracker refusal hint that echoes the input never carries a stored secret", async (t) => {
+  const env = makeHome(t, "mcp-tracker-hint-redacts");
+  storeLinearKey(env);
+  const client = await connect(t, env);
+  const result = await client.callTool({ name: "tracker_read", arguments: { ref: LINEAR_KEY } });
+  assert.ok(!textOf(result).includes(LINEAR_KEY), textOf(result));
+  assert.equal(payloadOf(result).error, "invalid-input");
+  assert.match(payloadOf(result).hint, /\[redacted\]/);
 });
 
 test("the server never migrates a v8 home: a tool answers store-unavailable with the update message and the file stays v8", async (t) => {

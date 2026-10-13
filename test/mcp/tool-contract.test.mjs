@@ -64,6 +64,10 @@ test("the handshake and every answer publish the tool contract, and a current cl
   const status = await answer(client, "queue_status", {});
   assert.equal(status.contract, TOOL_CONTRACT);
   assert.equal(status.advisories.includes(STALE_CONTRACT_ADVISORY), false);
+  const read = await answer(client, "tracker_read", { ref: "MK-49" });
+  assert.equal(read.error, "no-connection");
+  assert.equal(read.contract, TOOL_CONTRACT);
+  assert.equal("deprecated_input" in read, false);
 });
 
 test("an integer id with no owner to prove it is answered with the stale-contract line alone, for every tool whose input changed", async (t) => {
