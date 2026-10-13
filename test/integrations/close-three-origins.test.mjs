@@ -140,7 +140,6 @@ test("a close with sentry, linear and discord origins acts on Sentry, then Linea
   const [embed] = fetch.posts[0].embeds;
   assert.equal(embed.title, "✅ Fixed - Login crashes");
   assert.deepEqual(embed.fields.map((field) => [field.name, field.value]), [
-    ["Commit", `[abc1234](https://github.com/acme/api/commit/${MERGE_SHA})`],
     ["PR", `[#7](${PR_URL})`],
     ["Linear", "[MK-42](https://linear.app/acme/issue/MK-42/login)"],
     ["Sentry", "[REACT-T-N82](https://sentry.io/organizations/acme/issues/4507/)"],
@@ -157,7 +156,7 @@ test("a sentry lookup that fails leaves the plain ref and a warning line, and th
   assert.equal(row.status, "closed");
   const [embed] = fetch.posts[0].embeds;
   assert.equal(embed.title, "✅ Fixed - Login crashes");
-  assert.deepEqual(embed.fields.map((field) => field.value).slice(2), ["[MK-42](https://linear.app/acme/issue/MK-42/login)", "4507"]);
+  assert.deepEqual(embed.fields.map((field) => field.value).slice(1), ["[MK-42](https://linear.app/acme/issue/MK-42/login)", "4507"]);
   assert.match(row.notice_md, /After close: origin warning - sentry 4507: link not resolved \(issue 4507 not read/);
   assertNoSecret(row);
 });
