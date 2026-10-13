@@ -42,7 +42,9 @@ async function fetchMarkdown({ provider, origin, connection, fetchImpl }) {
   });
   try {
     const answer = await Promise.race([provider.origin.enrich(origin.ref, { connection, http, linkOrigin }), expired]);
-    if (typeof answer?.markdown === "string" && answer.markdown.trim()) return { markdown: answer.markdown, linked: validOrigins(answer.linked) };
+    if (typeof answer?.markdown === "string" && answer.markdown.trim()) {
+      return { markdown: answer.markdown, linked: validOrigins(answer.linked), ignored: Array.isArray(answer.ignored) ? answer.ignored : [] };
+    }
     return { detail: typeof answer?.detail === "string" && answer.detail ? answer.detail : "the service answered nothing" };
   } catch {
     return { detail: "the enrichment failed" };
@@ -86,6 +88,22 @@ function writeOriginFile({ origin, markdown, run }) {
   }
 }
 
+// A link safe to log: no credentials, query, fragment or webhook token, or a fixed word when it is no url.
+function loggableLink(link) {
+  try {
+    const url = new URL(String(link));
+    const path = url.pathname.replace(/\/webhooks\/.*$/i, "/webhooks/<redacted>");
+    return `${url.protocol}//${url.host}${path}`;
+  } catch {
+    return "<not a url>";
+  }
+}
+
+// Logs one line per attachment link no origin recognised.
+function logIgnoredLinks({ ignored, run }) {
+  for (const link of ignored) run.log(`origin: ignored linked link ${loggableLink(link)} (not a known origin)`);
+}
+
 // Records the origins an enrichment linked that the job does not carry yet, answering the new ones or null when the write-back was refused.
 async function recordLinked({ origin, linked, run }) {
   const known = new Set(run.origins.map(originLabel));
@@ -113,6 +131,7 @@ async function enrichOne({ origin, links, run }) {
   if (!run.dir || !wantsEnrichment({ provider, integrations: run.integrations, file: originFileOf(run.dir, origin) })) return [];
   const fetched = await fetchOrigin({ origin, coverage, run });
   if (!fetched) return [];
+  if (links) logIgnoredLinks({ ignored: fetched.ignored, run });
   const added = links ? await recordLinked({ origin, linked: fetched.linked, run }) : [];
   if (added === null) return [];
   writeOriginFile({ origin, markdown: fetched.markdown, run });

@@ -135,18 +135,20 @@ function detailLines(issue) {
   ];
 }
 
-// The origins the issue's attachment urls name through the runtime's link reader, deduped in attachment order.
+// The origins the issue's attachment urls name through the runtime's link reader, deduped in attachment order, and the urls no origin recognised.
 function linkedOrigins(issue, linkOrigin) {
-  if (typeof linkOrigin !== "function") return [];
   const seen = new Set();
   const linked = [];
+  const ignored = [];
+  if (typeof linkOrigin !== "function") return { linked, ignored };
   for (const attachment of nodesOf(issue.attachments)) {
     const origin = linkOrigin(attachment?.url);
+    if (!origin) ignored.push(attachment?.url);
     if (!origin || seen.has(`${origin.kind} ${origin.ref}`)) continue;
     seen.add(`${origin.kind} ${origin.ref}`);
     linked.push(origin);
   }
-  return linked;
+  return { linked, ignored };
 }
 
 // Fetches the whole issue as markdown with the origins its attachments link, or answers the reason it could not.
@@ -155,7 +157,7 @@ async function enrichLinear(ref, { connection, http, linkOrigin }) {
   if (!answer.ok) return { detail: `issue ${ref} not read (${answer.detail})` };
   const issue = answer.data?.issue;
   if (!issue || typeof issue !== "object") return { detail: `issue ${ref} not found` };
-  return { markdown: `${[...factLines(ref, issue), ...detailLines(issue)].join("\n")}\n`, linked: linkedOrigins(issue, linkOrigin) };
+  return { markdown: `${[...factLines(ref, issue), ...detailLines(issue)].join("\n")}\n`, ...linkedOrigins(issue, linkOrigin) };
 }
 
 // The first state of type completed of a team, by position, or null when the team has none.

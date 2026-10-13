@@ -116,6 +116,29 @@ test("a claimed Linear job links the Sentry and Discord origins of its attachmen
   assert.equal(fetch.calls.filter((url) => url === LINEAR_API).length, 1);
 });
 
+test("a claimed Linear job links a Discord thread attachment (guild/thread, no message id)", async (t) => {
+  const home = linkedHome(t, "linked-thread");
+  const fetch = fakeFetch(issueWith({ attachments: ["https://discord.com/channels/1526962439235698809/1559284125926555688"] }));
+  const id = await runLinearJob(t, home, fetch);
+  const origins = parseOriginsColumn(getJob(id, home.env).origin);
+  assert.deepEqual(origins, [{ kind: "linear", ref: "DLW-99" }, { kind: "discord", ref: "1526962439235698809/1559284125926555688" }]);
+  const log = readFileSync(jobLogPath(id, home.env), "utf8");
+  assert.ok(log.includes("origin linked by linear DLW-99: discord 1526962439235698809/1559284125926555688"), log);
+});
+
+test("an attachment no origin recognises is logged as ignored, never with a webhook token or query", async (t) => {
+  const home = linkedHome(t, "linked-ignored");
+  const webhook = "https://discord.com/api/webhooks/123/SECRET_TOKEN_abc";
+  const fetch = fakeFetch(issueWith({ attachments: [GITHUB_PR_URL, `${GITHUB_PR_URL}?token=QUERY_SECRET`, webhook, "not a url"] }));
+  const id = await runLinearJob(t, home, fetch);
+  const log = readFileSync(jobLogPath(id, home.env), "utf8");
+  assert.ok(log.includes(`origin: ignored linked link ${GITHUB_PR_URL} (not a known origin)`), log);
+  assert.ok(log.includes("origin: ignored linked link https://discord.com/api/webhooks/<redacted> (not a known origin)"), log);
+  assert.ok(log.includes("origin: ignored linked link <not a url> (not a known origin)"), log);
+  assert.equal(/SECRET_TOKEN_abc|QUERY_SECRET/.test(log), false);
+  assert.deepEqual(parseOriginsColumn(getJob(id, home.env).origin), [{ kind: "linear", ref: "DLW-99" }]);
+});
+
 test("links in the description and comments of a Linear issue with no attachments never become origins", async (t) => {
   const home = linkedHome(t, "linked-prose");
   const prose = `see ${GITHUB_PR_URL}, ${OTHER_LINEAR_URL} and ${DISCORD_URL} and ${SENTRY_URL}`;

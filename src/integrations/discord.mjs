@@ -3,8 +3,8 @@ import { refsInTextOrder } from "./find-refs.mjs";
 import { requestJson } from "./http.mjs";
 
 const WEBHOOK_URL = /^https:\/\/(?:(?:ptb|canary)\.)?discord(?:app)?\.com\/api(?:\/v\d+)?\/webhooks\/(\d+)\/([\w-]+)$/;
-const MESSAGE_LINK = /https:\/\/(?:(?:ptb|canary)\.)?discord(?:app)?\.com\/channels\/(\d+)\/(\d+)\/(\d+)/i;
-const BARE_REF = /^(\d+)\/(\d+)\/(\d+)$/;
+const MESSAGE_LINK = /https:\/\/(?:(?:ptb|canary)\.)?discord(?:app)?\.com\/channels\/(\d+)\/(\d+)(?:\/(\d+))?/i;
+const BARE_REF = /^(\d+)\/(\d+)(?:\/(\d+))?$/;
 const SNOWFLAKE = /^\d+$/;
 const LOG_EVENTS = Object.freeze(["closed"]);
 const EMBED_TITLE_MAX = 256;
@@ -22,18 +22,23 @@ const MAX_URL_CHARS = 512;
 const INVALID_URL_TEXT = "Invalid URL: expected https://discord.com/api/webhooks/<id>/<token>.";
 const TOO_LONG_TEXT = `Invalid URL: a Discord webhook URL of at most ${MAX_URL_CHARS} characters is expected.`;
 
-// Reads a Discord reference `<guild>/<channel>/<message>`: a message link, or (explicitly given) the bare triple.
-function parseDiscord(text, { explicit = false } = {}) {
-  const linked = MESSAGE_LINK.exec(text);
-  if (linked) return `${linked[1]}/${linked[2]}/${linked[3]}`;
-  if (!explicit) return null;
-  const bare = BARE_REF.exec(text.trim());
-  return bare ? `${bare[1]}/${bare[2]}/${bare[3]}` : null;
+// The reference `<guild>/<channel>[/<message>]` a regex match carries.
+function refOfMatch(match) {
+  return match.slice(1).filter(Boolean).join("/");
 }
 
-// Lists every Discord message reference a text carries, in text order.
+// Reads a Discord reference `<guild>/<channel>[/<message>]`: a message or thread link, or (explicitly given) the bare form.
+function parseDiscord(text, { explicit = false } = {}) {
+  const linked = MESSAGE_LINK.exec(text);
+  if (linked) return refOfMatch(linked);
+  if (!explicit) return null;
+  const bare = BARE_REF.exec(text.trim());
+  return bare ? refOfMatch(bare) : null;
+}
+
+// Lists every Discord message or thread reference a text carries, in text order.
 function findDiscord(text) {
-  return refsInTextOrder(text, [{ pattern: MESSAGE_LINK, ref: (match) => `${match[1]}/${match[2]}/${match[3]}` }]);
+  return refsInTextOrder(text, [{ pattern: MESSAGE_LINK, ref: refOfMatch }]);
 }
 
 // The guild, channel and message ids of a reference.
@@ -210,7 +215,8 @@ function isProbeRefusal(answer) {
 // The reply posted under the message the job came from.
 function replyContent(ref, result, job) {
   const { guild, channel, message } = refParts(ref);
-  const jump = `[message](https://discord.com/channels/${guild}/${channel}/${message})`;
+  const target = message ? `${channel}/${message}` : channel;
+  const jump = `[${message ? "message" : "thread"}](https://discord.com/channels/${guild}/${target})`;
   return {
     ...mergeEmbed(result),
     title: cut(`Fixed · ${job?.ref ?? "job"}`, EMBED_TITLE_MAX),
