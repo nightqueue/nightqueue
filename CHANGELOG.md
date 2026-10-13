@@ -58,6 +58,12 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Delete a lesson or a memory.** `nightqueue lesson delete <id>` and `nightqueue memory delete
+  <id>` (`L344`/`M446` or the plain number, `--project` to check the owner), and the MCP tools
+  `lesson_delete` and `memory_delete` (`id` and `project` required) remove one row and its search
+  entry, so it never comes back in recall or `context_for_phase`. An unknown id and an id of
+  another project are refused and nothing is deleted; a queue job may not delete. Tool contract
+  7: the MCP server has thirty-one tools now; MCP clients must restart.
 - **Studio Settings › Projects & orgs.** The settings page lists every org (key, default pill,
   project count) and every project (path and whether it exists, origin, integrations, old keys),
   registers a repository from a home-bounded folder browser, edits a project in a drawer (name,

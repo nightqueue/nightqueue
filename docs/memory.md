@@ -241,6 +241,12 @@ with `lesson_recall`/`memory_recall`.
 the owner already has answers `deduped: true` with the stored value. Like `lesson_save`, it is
 allowed inside a queue job.
 
+`lesson_delete` and `memory_delete` remove one row by `id` (`L344`, `M446` or the plain number) of
+`project`, both required, with its search entry, so it never comes back in recall or
+`context_for_phase`. An unknown id and an id of another project are refused and nothing is
+deleted; unlike the saves, both are refused inside a queue job. The answer names the id and the
+title (or key) that went.
+
 **Recurrence.** A lesson that recalls an existing one is re-saved with that lesson's exact
 `title`: the server finds it and bumps its `attempts` instead of adding a row. Inside a queued
 job, when the lesson is one the run was given (injected into its session), the same re-save
@@ -265,12 +271,14 @@ worker are no longer read or written and can be deleted.
 **Commands.**
 
 ```sh
-nightqueue mcp                     # start the stdio MCP server with the twenty-nine tools
+nightqueue mcp                     # start the stdio MCP server with the thirty-one tools
 nightqueue mcp --http --port 4747 --token <t>   # serve the same tools over Streamable HTTP on 127.0.0.1
 nightqueue hook session-start      # run a hook, reading the event JSON from stdin
 nightqueue embed download          # download the embedding weights (the only network path)
 nightqueue embed backfill          # embed the lessons and the decisions that still have no vector
 nightqueue memory stats [--json]   # counts per project
+nightqueue lesson delete <id> [--project <name>]   # delete one lesson (L344 or 344) and its search entry
+nightqueue memory delete <id> [--project <name>]   # delete one memory (M446 or 446) and its search entry
 nightqueue decision list [--project <name> | --org <name>] [--status <status>]   # the decisions log
 nightqueue decision show <number> [--project <name> | --org <name>]              # one decision, in full
 nightqueue decision export <number> [--dir <path>] [--force]                     # one decision as a markdown file

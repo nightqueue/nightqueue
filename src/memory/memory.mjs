@@ -81,6 +81,20 @@ export function saveMemoryDeduped({ projectId, key, value, model }, env = proces
   return { ...saved, deduped: false, value: String(value).trim() };
 }
 
+// Deletes one memory, and its search entry with it; with `projectId` set, a memory of another project is refused and nothing is deleted.
+export function deleteMemory({ id, projectId }, env = process.env) {
+  const db = openDb(env);
+  const found = db.prepare("SELECT * FROM memory WHERE id = ?").get(id);
+  if (!found) throw new UserError(`unknown memory \`M${id}\`; nothing deleted`);
+  const row = attachNames(db, [found])[0];
+  if (projectId !== undefined && row.project_id !== null && row.project_id !== projectId) {
+    throw new UserError(`memory \`M${id}\` belongs to project \`${row.project}\`, not to the project named; nothing deleted`);
+  }
+  const statement = db.prepare("DELETE FROM memory WHERE id = ?");
+  withWriteRetry(() => statement.run(row.id));
+  return { id: row.id, key: row.key, project: row.project ?? null };
+}
+
 // Public shape of a memory row.
 export function memoryView(row) {
   return {

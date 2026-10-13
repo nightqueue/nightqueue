@@ -8,8 +8,9 @@ import { after, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { defaultContext, run } from "../src/cli/index.mjs";
 import { readSecret } from "../src/cli/prompt.mjs";
-import { closeDb } from "../src/memory/db.mjs";
+import { closeDb, openDb } from "../src/memory/db.mjs";
 import { saveLesson } from "../src/memory/lessons.mjs";
+import { saveMemory } from "../src/memory/memory.mjs";
 import { assertIsolatedEnv, isolatedHostVars } from "../test-support/host.mjs";
 import { projectIdOf } from "../test-support/memory.mjs";
 
@@ -34,10 +35,12 @@ function makeRepo(t, name) {
   return dir;
 }
 
+const OUTSIDE_JOB = { NIGHTQUEUE_JOB_ID: "" };
+
 // Runs the CLI in its own process, with an isolated configuration home.
-function runCli(home, args, { input = "", cwd } = {}) {
+function runCli(home, args, { input = "", cwd, env = {} } = {}) {
   return spawnSync(process.execPath, [CLI, ...args], {
-    env: assertIsolatedEnv({ ...process.env, ...HOST_VARS, NIGHTQUEUE_HOME: home }),
+    env: assertIsolatedEnv({ ...process.env, ...HOST_VARS, NIGHTQUEUE_HOME: home, ...env }),
     input,
     cwd,
     encoding: "utf8",
@@ -384,6 +387,35 @@ test("memory stats answers on a home that has no database yet", (t) => {
   assert.match(result.stdout, /^project\s+lessons\s+memory\s+index\s+libs\s+runs$/m);
   assert.match(result.stdout, /^\(global\)/m);
   assert.deepEqual(JSON.parse(runCli(home, ["memory", "stats", "--json"]).stdout), { projects: [] });
+});
+
+test("lesson delete and memory delete remove one row by id, refuse a foreign or unknown id and a queue job", (t) => {
+  const home = makeDir(t, "delete-home");
+  assert.equal(runCli(home, ["init", makeRepo(t, "delete-api"), "--name", "api", "--no-gh"]).status, 0);
+  assert.equal(runCli(home, ["init", makeRepo(t, "delete-web"), "--name", "web", "--no-gh"]).status, 0);
+  const env = { NIGHTQUEUE_HOME: home };
+  t.after(() => closeDb(env));
+  const lesson = saveLesson({ projectId: projectIdOf(env, "api"), title: "use the queue like this", root_cause: "r", solution: "s", prevention: "p" }, env);
+  const memory = saveMemory({ projectId: projectIdOf(env, "api"), key: "queue usage", value: "v" }, env);
+  closeDb(env);
+  const count = (table) => openDb(env).prepare(`SELECT COUNT(*) AS n FROM ${table}`).get().n;
+
+  const inJob = runCli(home, ["lesson", "delete", String(lesson.id)], { env: { NIGHTQUEUE_JOB_ID: "7" } });
+  assert.equal(inJob.status, 1);
+  assert.match(inJob.stderr, /refused: `nightqueue lesson delete` inside J-7/);
+  const foreign = runCli(home, ["memory", "delete", String(memory.id), "--project", "web"], { env: OUTSIDE_JOB });
+  assert.equal(foreign.status, 1);
+  assert.match(foreign.stderr, /belongs to project `api`.*nothing deleted/);
+  assert.match(runCli(home, ["lesson", "delete", "L999"], { env: OUTSIDE_JOB }).stderr, /unknown lesson `L999`; nothing deleted/);
+  assert.deepEqual([count("lessons"), count("memory")], [1, 1]);
+  closeDb(env);
+
+  const lessonOut = runCli(home, ["lesson", "delete", `L${lesson.id}`, "--project", "api"], { env: OUTSIDE_JOB });
+  assert.equal(lessonOut.status, 0, lessonOut.stderr);
+  assert.match(lessonOut.stdout, new RegExp(`deleted lesson L${lesson.id}: use the queue like this`));
+  const memoryOut = runCli(home, ["memory", "delete", String(memory.id)], { env: OUTSIDE_JOB });
+  assert.match(memoryOut.stdout, new RegExp(`deleted memory M${memory.id}: queue usage`));
+  assert.deepEqual([count("lessons"), count("memory")], [0, 0]);
 });
 
 test("the session start hook prints the lessons already stored for the repository", (t) => {

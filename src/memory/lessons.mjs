@@ -77,6 +77,18 @@ export function getLesson(id, env = process.env) {
   return row ? attachNames(db, [row])[0] : null;
 }
 
+// Deletes one lesson, and its search entry with it; with `projectId` set, a lesson of another project is refused and nothing is deleted.
+export function deleteLesson({ id, projectId }, env = process.env) {
+  const row = getLesson(id, env);
+  if (!row) throw new UserError(`unknown lesson \`L${id}\`; nothing deleted`);
+  if (projectId !== undefined && row.project_id !== null && row.project_id !== projectId) {
+    throw new UserError(`lesson \`L${id}\` belongs to project \`${row.project}\`, not to the project named; nothing deleted`);
+  }
+  const statement = openDb(env).prepare("DELETE FROM lessons WHERE id = ?");
+  withWriteRetry(() => statement.run(row.id));
+  return { id: row.id, title: row.title, project: row.project ?? null };
+}
+
 // Fills only the currently empty text columns of a lesson from a follow-up payload, never overwriting one that already has text.
 export function backfillEmptyLessonFields(id, { root_cause, solution, prevention }, env = process.env) {
   const row = getLesson(id, env);

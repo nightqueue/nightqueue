@@ -49,7 +49,7 @@ subagent that owns it.
   repositories, installed libraries) except the home's `secrets.json` and any `.env*` file; a
   Grep over the home or a parent of it is refused. Always pass an absolute `path`: your cwd is the home.
 - **Bash** runs only one bare command, with no `&&`, `|`, `;`, redirection, `$(…)` or `\`:
-  - `nightqueue|nq queue|decision|project|org|connection|doctor|memory|libs|version …`.
+  - `nightqueue|nq queue|decision|project|org|connection|doctor|memory|lesson|libs|version …`.
     Refused: `queue session`, `decision export|import`, `project add|move`,
     `queue add --run`, `doctor --fix`, `--follow` and `--foreground`.
   - `git -C <absolute path of a registered checkout> [--no-optional-locks] <read>`, where

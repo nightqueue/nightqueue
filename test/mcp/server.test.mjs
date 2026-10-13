@@ -33,8 +33,10 @@ const CONTRACT_TOOLS = [
   "decision_update",
   "index_recall",
   "index_save",
+  "lesson_delete",
   "lesson_recall",
   "lesson_save",
+  "memory_delete",
   "memory_recall",
   "memory_save",
   "phase_prompt",
@@ -91,12 +93,12 @@ function textOf(result) {
   return result.content.map((block) => block.text).join("\n");
 }
 
-test("the server exposes exactly the twenty-nine tools of the contract", async (t) => {
+test("the server exposes exactly the thirty-one tools of the contract", async (t) => {
   const env = makeHome(t, "mcp-tools");
   const client = await connect(t, env);
   const names = (await client.listTools()).tools.map((tool) => tool.name).sort();
   assert.deepEqual(names, CONTRACT_TOOLS);
-  assert.equal(names.length, 29,"the contract list and the server disagree on how many tools there are");
+  assert.equal(names.length, 31,"the contract list and the server disagree on how many tools there are");
 });
 
 test("tracker_issues with no tracker connection is a normal answer carrying the refusal and the contract", async (t) => {
@@ -108,7 +110,7 @@ test("tracker_issues with no tracker connection is a normal answer carrying the 
     error: "no-connection",
     provider: "linear",
     hint: 'connect it: echo "$LINEAR_API_KEY" | nightqueue connection add linear --type linear',
-    contract: 6,
+    contract: 7,
   });
 });
 
@@ -255,6 +257,74 @@ test("the lesson, memory, index, phase and pipeline tools refuse an unknown proj
   assert.equal(outside.project, null);
 });
 
+test("a deleted lesson is gone from lesson_recall and context_for_phase, and the answer names its id and title", async (t) => {
+  const env = makeHome(t, "mcp-lesson-delete");
+  makeProject(t, env, "alpha");
+  const client = await connect(t, env);
+  const saved = payloadOf(await client.callTool({ name: "lesson_save", arguments: { ...LESSON, project: "alpha" } }));
+  const ask = { query: "the worker leaks a file descriptor", project: "alpha" };
+  assert.ok(payloadOf(await client.callTool({ name: "lesson_recall", arguments: ask })).some((row) => row.id === saved.id));
+  assert.match(payloadOf(await client.callTool({ name: "context_for_phase", arguments: { ...ask, target: "coder" } })).block, new RegExp(`\\[L${saved.id}\\]`));
+
+  const deleted = payloadOf(await client.callTool({ name: "lesson_delete", arguments: { id: `L${saved.id}`, project: "alpha" } }));
+  assert.deepEqual([deleted.id, deleted.title], [saved.id, LESSON.title]);
+  assert.equal(payloadOf(await client.callTool({ name: "lesson_recall", arguments: ask })).some((row) => row.id === saved.id), false);
+  assert.doesNotMatch(payloadOf(await client.callTool({ name: "context_for_phase", arguments: { ...ask, target: "coder" } })).block, /file descriptor/);
+  assert.equal(openDb(env).prepare("SELECT COUNT(*) AS n FROM lessons_fts WHERE lessons_fts MATCH 'descriptor'").get().n, 0);
+});
+
+test("a deleted memory is gone from memory_recall, and the plain number and the M prefix both name it", async (t) => {
+  const env = makeHome(t, "mcp-memory-delete");
+  makeProject(t, env, "alpha");
+  const client = await connect(t, env);
+  const first = payloadOf(await client.callTool({ name: "memory_save", arguments: { project: "alpha", key: "queue usage", value: "zebra quagga" } }));
+  const second = payloadOf(await client.callTool({ name: "memory_save", arguments: { project: "alpha", key: "other fact", value: "okapi wombat" } }));
+  const deleted = payloadOf(await client.callTool({ name: "memory_delete", arguments: { id: first.ref, project: "alpha" } }));
+  assert.deepEqual([deleted.id, deleted.key], [first.id, "queue usage"]);
+  assert.equal(payloadOf(await client.callTool({ name: "memory_recall", arguments: { query: "zebra", project: "alpha" } })).some((row) => row.id === first.id), false);
+  payloadOf(await client.callTool({ name: "memory_delete", arguments: { id: second.id, project: "alpha" } }));
+  assert.equal(openDb(env).prepare("SELECT COUNT(*) AS n FROM memory").get().n, 0);
+});
+
+test("a delete from inside a queue job is refused and deletes nothing", async (t) => {
+  const env = makeHome(t, "mcp-delete-in-job");
+  makeProject(t, env, "alpha");
+  const outside = await connect(t, env);
+  const lesson = payloadOf(await outside.callTool({ name: "lesson_save", arguments: { ...LESSON, project: "alpha" } }));
+  const memory = payloadOf(await outside.callTool({ name: "memory_save", arguments: { project: "alpha", key: "k", value: "v" } }));
+  const inJob = await connect(t, { ...env, NIGHTQUEUE_JOB_ID: "7" });
+  for (const [name, id] of [["lesson_delete", lesson.id], ["memory_delete", memory.id]]) {
+    const refused = await inJob.callTool({ name, arguments: { id, project: "alpha" } });
+    assert.equal(refused.isError, true, name);
+    assert.match(textOf(refused), new RegExp(`refused: \`${name}\` inside J-7`), name);
+  }
+  assert.equal(openDb(env).prepare("SELECT COUNT(*) AS n FROM lessons").get().n, 1);
+  assert.equal(openDb(env).prepare("SELECT COUNT(*) AS n FROM memory").get().n, 1);
+});
+
+test("a delete with the id of another project, or an unknown id, is refused and deletes nothing", async (t) => {
+  const env = makeHome(t, "mcp-delete-refused");
+  makeProject(t, env, "alpha");
+  makeProject(t, env, "beta");
+  const client = await connect(t, env);
+  const lesson = payloadOf(await client.callTool({ name: "lesson_save", arguments: { ...LESSON, project: "alpha" } }));
+  const memory = payloadOf(await client.callTool({ name: "memory_save", arguments: { project: "alpha", key: "k", value: "v" } }));
+  const cases = [
+    ["lesson_delete", { id: lesson.id, project: "beta" }, /belongs to project `alpha`.*nothing deleted/],
+    ["memory_delete", { id: memory.id, project: "beta" }, /belongs to project `alpha`.*nothing deleted/],
+    ["lesson_delete", { id: 999, project: "alpha" }, /unknown lesson `L999`; nothing deleted/],
+    ["memory_delete", { id: "M999", project: "alpha" }, /unknown memory `M999`; nothing deleted/],
+    ["lesson_delete", { id: "x1", project: "alpha" }, /expected a lesson id/],
+  ];
+  for (const [name, args, message] of cases) {
+    const refused = await client.callTool({ name, arguments: args });
+    assert.equal(refused.isError, true, name);
+    assert.match(textOf(refused), message, name);
+  }
+  assert.equal(openDb(env).prepare("SELECT COUNT(*) AS n FROM lessons").get().n, 1);
+  assert.equal(openDb(env).prepare("SELECT COUNT(*) AS n FROM memory").get().n, 1);
+});
+
 test("lesson_save with attempts: 1 is accepted and stored as null, never rejected", async (t) => {
   const env = makeHome(t, "mcp-lesson-attempts-one");
   makeProject(t, env, "alpha");
@@ -330,7 +400,7 @@ test("the index round trip reports the freshness of the checkout", async (t) => 
       },
     }),
   );
-  assert.deepEqual(saved, { ok: true, files: 1, libs: 0, contract: 6 });
+  assert.deepEqual(saved, { ok: true, files: 1, libs: 0, contract: 7 });
 
   const fresh = payloadOf(
     await client.callTool({ name: "index_recall", arguments: { project: "alpha", repo_root: repo } }),
@@ -491,7 +561,7 @@ test("queue_add enqueues by project NAME and refuses a path or a project nobody 
     timeoutS: 600,
     origin: [],
     hint: "queued J-1 for `alpha` (1 pending). 0 runners online - pending jobs will wait until `nightqueue queue run` starts one.",
-    contract: 6,
+    contract: 7,
   });
   assert.equal(getJob(1, env).prompt, "fix the worker");
 
@@ -1284,7 +1354,7 @@ test("queue_stop answers the CLI line per runner, and refuses an unknown pid", a
   const client = await connect(t, env);
 
   const empty = payloadOf(await client.callTool({ name: "queue_stop", arguments: {} }));
-  assert.deepEqual(empty, { ok: true, runners: [{ outcome: "absent", pid: null, message: "runner is not running" }], contract: 6 });
+  assert.deepEqual(empty, { ok: true, runners: [{ outcome: "absent", pid: null, message: "runner is not running" }], contract: 7 });
 
   const unknown = await client.callTool({ name: "queue_stop", arguments: { pid: 999999 } });
   assert.equal(unknown.isError, true, textOf(unknown));

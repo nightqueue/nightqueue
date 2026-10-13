@@ -89,6 +89,7 @@
  * @typedef {object} LessonsDomain
  * @property {(lesson: object) => Promise<object>} saveLesson
  * @property {(id: number) => Promise<object|null>} getLesson
+ * @property {(spec: object) => Promise<object>} deleteLesson
  * @property {(id: number) => Promise<object>} bumpAttempts
  * @property {(id: number) => Promise<object>} bumpViolation
  * @property {(ids: number[]) => Promise<number>} markInjected
@@ -104,6 +105,7 @@
  * @typedef {object} MemoryDomain
  * @property {(entry: object) => Promise<object>} saveMemory
  * @property {(entry: object) => Promise<object>} saveMemoryDeduped
+ * @property {(spec: object) => Promise<object>} deleteMemory
  * @property {(spec?: object) => Promise<object[]>} recentMemories
  * @property {(spec?: object) => Promise<object[]>} searchMemories
  * @property {(spec?: object) => Promise<object|null>} memoryByKey
@@ -282,6 +284,7 @@ export const STORE_CONTRACT = Object.freeze({
   lessons: [
     "saveLesson",
     "getLesson",
+    "deleteLesson",
     "bumpAttempts",
     "bumpViolation",
     "markInjected",
@@ -292,7 +295,7 @@ export const STORE_CONTRACT = Object.freeze({
     "recallLessons",
     "saveLessonDeduped",
   ],
-  memory: ["saveMemory", "saveMemoryDeduped", "recentMemories", "searchMemories", "memoryByKey", "recallMemories"],
+  memory: ["saveMemory", "saveMemoryDeduped", "deleteMemory","recentMemories", "searchMemories", "memoryByKey", "recallMemories"],
   index: ["saveProjectIndex", "fillProjectIndex", "recallProjectIndex"],
   decisions: [
     "getDecision",
