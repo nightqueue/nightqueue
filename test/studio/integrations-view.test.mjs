@@ -140,9 +140,10 @@ test("a generic add failure maps each refusal code to its title and field, witho
 
 test("the webhook line shows the webhook name and short ids, with the full ids as its title", () => {
   const line = webhookLine(sampleView().connections[0]);
-  assert.equal(line.text, "webhook dlw-log-hook · channel …890123 · server …210987");
+  assert.deepEqual([line.webhook, line.channel, line.server], ["webhook dlw-log-hook", "channel …890123", "server …210987"]);
   assert.equal(line.title, "channel 1234567890123 · server 9876543210987");
-  assert.equal(webhookLine(discordRow("x", [], { webhookName: null, channelId: null })).text, "channel ? · server …210987");
+  const bare = webhookLine(discordRow("x", [], { webhookName: null, channelId: null }));
+  assert.deepEqual([bare.webhook, bare.channel, bare.server], [null, "channel ?", "server …210987"]);
 });
 
 test("destination options mark the not-allowed connections, keep a missing stored one, and end with no destination", () => {

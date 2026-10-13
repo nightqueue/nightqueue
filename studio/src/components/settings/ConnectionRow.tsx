@@ -1,5 +1,5 @@
 import { useMutation } from "@tanstack/react-query";
-import { KeyRound, Send } from "lucide-react";
+import { Hash, KeyRound, MessagesSquare, Send } from "lucide-react";
 import { errorText } from "../../lib/actions";
 import { FORUM_NOTICE, isDiscord, remainingOrgs, typeLabel, typeLine, usedByNames, webhookLine } from "../../lib/integrations";
 import { showToast } from "../../lib/toast";
@@ -47,6 +47,13 @@ function TypeLine({ type }: { type: string }) {
   );
 }
 
+// The Discord-style icon of a channel: speech bubbles for a forum, a hash for a text channel.
+function ChannelIcon({ forum }: { forum?: boolean }) {
+  const label = forum ? "Forum channel" : "Text channel";
+  const Icon = forum ? MessagesSquare : Hash;
+  return <Icon size={15} role="img" aria-label={label} className="mr-1 inline align-[-2px]" />;
+}
+
 // What a row knows of its target: webhook and short ids for Discord, a missing secret in red.
 function TargetLine({ row }: { row: Row }) {
   if (!row.present) return <Pill tone="err">secret missing</Pill>;
@@ -54,8 +61,10 @@ function TargetLine({ row }: { row: Row }) {
   const line = webhookLine(row);
   return (
     <>
-      <div className="font-mono text-sm break-words text-muted" title={line.title}>
-        {line.text}
+      <div className="font-mono text-[15px] leading-relaxed break-words text-muted" title={line.title}>
+        {line.webhook && `${line.webhook} · `}
+        <ChannelIcon forum={row.forum} />
+        {line.channel} · {line.server}
       </div>
       {row.forum && <div className="text-sm text-dim">{FORUM_NOTICE}</div>}
     </>
@@ -110,30 +119,34 @@ function RowOrgs({ row, view, handlers }: ConnectionRowProps) {
   return <OrgChips row={row} remaining={remainingOrgs(view, row)} onAllow={(org) => handlers.onAllowOrg(row, org)} onRemove={(org) => handlers.onRemoveOrg(row, org)} />;
 }
 
-// One connection on a desktop: the five columns of the design's grid.
+// One connection on a desktop: identity and actions on the first band, metadata on the second.
 function DesktopRow({ row, view, handlers }: ConnectionRowProps) {
   return (
-    <div className="grid grid-cols-[minmax(0,1.25fr)_minmax(0,.9fr)_minmax(0,1.1fr)_minmax(0,1.25fr)_auto] items-start gap-4 border-t border-line px-4 py-3.5 first:border-t-0 max-lg:hidden">
-      <div className="flex min-w-0 flex-col gap-1.5">
-        <div className="font-mono text-[14px] font-medium break-words">{row.name}</div>
-        <TypeLine type={row.type} />
-        <TargetLine row={row} />
+    <div className="flex flex-col gap-3.5 border-t border-line px-4 py-3.5 first:border-t-0 max-lg:hidden">
+      <div className="flex items-start justify-between gap-4">
+        <div className="flex min-w-0 flex-col gap-1.5">
+          <div className="font-mono text-[14px] font-medium break-words">{row.name}</div>
+          <TypeLine type={row.type} />
+          <TargetLine row={row} />
+        </div>
+        <div className="flex shrink-0 gap-1.5">
+          <ConnectionButtons row={row} handlers={handlers} />
+        </div>
       </div>
-      <div className="flex flex-col gap-1.5">
-        <ColumnLabel>Allowed orgs</ColumnLabel>
-        <RowOrgs row={row} view={view} handlers={handlers} />
-      </div>
-      <div className="flex flex-col gap-1.5">
-        <ColumnLabel>Last test</ColumnLabel>
-        <LastTestPill lastTest={row.lastTest} />
-        {isDiscord(row) && row.lastTest?.ok !== false && <div className="text-sm text-dim">event: job closed</div>}
-      </div>
-      <div className="flex min-w-0 flex-col gap-1.5">
-        <ColumnLabel>{`Used by ${row.usedBy.length} ${row.usedBy.length === 1 ? "project" : "projects"}`}</ColumnLabel>
-        <UsedBy row={row} view={view} />
-      </div>
-      <div className="flex shrink-0 gap-1.5">
-        <ConnectionButtons row={row} handlers={handlers} />
+      <div className="grid grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,1.2fr)] items-start gap-4">
+        <div className="flex flex-col gap-1.5">
+          <ColumnLabel>Allowed orgs</ColumnLabel>
+          <RowOrgs row={row} view={view} handlers={handlers} />
+        </div>
+        <div className="flex flex-col gap-1.5">
+          <ColumnLabel>Last test</ColumnLabel>
+          <LastTestPill lastTest={row.lastTest} />
+          {isDiscord(row) && row.lastTest?.ok !== false && <div className="text-sm text-dim">event: job closed</div>}
+        </div>
+        <div className="flex min-w-0 flex-col gap-1.5">
+          <ColumnLabel>{`Used by ${row.usedBy.length} ${row.usedBy.length === 1 ? "project" : "projects"}`}</ColumnLabel>
+          <UsedBy row={row} view={view} />
+        </div>
       </div>
     </div>
   );

@@ -179,9 +179,8 @@ export function shortId(id: string | null | undefined): string {
 }
 
 // What a Discord row knows of its channel: webhook name and short ids, with the full ids as the title.
-export function webhookLine(row: ConnectionRow): { text: string; title: string } {
-  const parts = [row.webhookName ? `webhook ${row.webhookName}` : null, `channel ${shortId(row.channelId)}`, `server ${shortId(row.serverId)}`];
-  return { text: parts.filter(Boolean).join(" · "), title: `channel ${row.channelId ?? "unknown"} · server ${row.serverId ?? "unknown"}` };
+export function webhookLine(row: ConnectionRow): { webhook: string | null; channel: string; server: string; title: string } {
+  return { webhook: row.webhookName ? `webhook ${row.webhookName}` : null, channel: `channel ${shortId(row.channelId)}`, server: `server ${shortId(row.serverId)}`, title: `channel ${row.channelId ?? "unknown"} · server ${row.serverId ?? "unknown"}` };
 }
 
 export const FORUM_NOTICE = "forum channel: notices go to each job's origin thread";
