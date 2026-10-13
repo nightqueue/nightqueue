@@ -929,11 +929,13 @@ test("settleClose closes a merged job, clears the close columns and appends the 
   const id = closableJob(env);
   openDb(env).prepare("UPDATE jobs SET notice_md = 'A\n' WHERE id = ?").run(id);
   const row = acquireClose(id, { worker: CLOSE_WORKER, leaseS: 660 }, env);
-  const merged = { ...JSON.parse(row.close), data: { merged: true, mergeSha: "abc1234def" } };
+  const merged = { ...JSON.parse(row.close), data: { merged: true, mergeSha: "abc1234def", title: "fix(queue): show the PR title" } };
   const line = "Closed: PR #7 merged as abc1234 on 2026-09-21";
   assert.equal(settleClose(id, { worker: OTHER_CLOSE_WORKER, close: merged, noticeLine: line }, env), null);
   const settled = settleClose(id, { worker: CLOSE_WORKER, close: merged, noticeLine: line }, env);
   assert.equal(settled.status, "closed");
+  assert.equal(settled.pr_title, "fix(queue): show the PR title", "the close refreshes the pull request title from the checklist");
+  assert.equal(settled.title, "show the PR title");
   assert.equal(settled.close_status, null);
   assert.equal(settled.close_worker, null);
   assert.equal(settled.close_lease_until, null);

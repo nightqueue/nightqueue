@@ -2,6 +2,7 @@ import { UserError } from "../config/errors.mjs";
 import { parseRunId } from "../host/gh.mjs";
 import { sameBranch } from "./branch-name.mjs";
 import { defaultCloseDeps } from "./close-deps.mjs";
+import { jobTitle } from "./job-title.mjs";
 import { closedLine, parseCloseChecklist, postCloseLine } from "./close-view.mjs";
 import { resolveConflictedRebase } from "./merger.mjs";
 import { releaseJobWorktree } from "./worktree.mjs";
@@ -1382,7 +1383,7 @@ function postCloseContext(run, stepName) {
     origins: originsOf(job),
     integrations: facts.integrations,
     orgId: facts.orgId,
-    title: checklist.data.title ?? null,
+    title: jobTitle({ ...job, pr_title: checklist.data.title ?? job.pr_title }),
     noticeMd: job.notice_md ?? null,
     mergeSha: checklist.data.mergeSha ?? null,
     mergedAt: checklist.data.mergedAt ?? null,

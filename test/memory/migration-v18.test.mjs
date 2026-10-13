@@ -368,7 +368,7 @@ function rowsOf(db, table) {
   return db
     .prepare(`SELECT * FROM ${table} ORDER BY id`)
     .all()
-    .map(({ origin: _origin, attempt_started_at: _attemptStartedAt, next_attempt_fresh: _nextAttemptFresh, reason: _reason, ...row }) => ({ ...row }));
+    .map(({ origin: _origin, attempt_started_at: _attemptStartedAt, next_attempt_fresh: _nextAttemptFresh, title: _title, pr_title: _prTitle, reason: _reason, ...row }) => ({ ...row }));
 }
 
 // The rows of a v18 table with their owner id swapped for the name it resolves to, the shape a v17 table had.

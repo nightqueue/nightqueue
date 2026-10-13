@@ -60,7 +60,7 @@ import { coverageLabel, jobOriginCoverage } from "../integrations/coverage.mjs";
 import { originsLabel } from "../integrations/origin.mjs";
 
 export const USAGE = {
-  add: "nightqueue queue add [project] <prompt...> [--project <name>] [--run] [--foreground] [--priority <n>] [--max-attempts <n>] [--timeout <s>] [--yes] [--key <KEY>] [--tier <trivial|simple|complex>] [--origin <kind>:<ref>]...",
+  add: "nightqueue queue add [project] <prompt...> [--project <name>] [--run] [--foreground] [--priority <n>] [--max-attempts <n>] [--timeout <s>] [--yes] [--key <KEY>] [--tier <trivial|simple|complex>] [--title <text>] [--origin <kind>:<ref>]...",
   status: "nightqueue queue status [J-<id>|<id>|<PR URL>] [--limit <n>] [--json] [--follow [seconds]] [--until-idle] [--blocked]",
   run: "nightqueue queue run [--job <id> | --watch [seconds] [--from HH:MM] --until HH:MM] [--max <jobs>] [--stop] [--foreground] [--dry] [--json]",
   cancel: "nightqueue queue cancel <id> [--reason <text>] [--json]",
@@ -310,6 +310,7 @@ function addLimits(values) {
     maxAttempts: requireInt("--max-attempts", values["max-attempts"]),
     timeoutS: requireInt("--timeout", values.timeout),
     tier: values.tier,
+    title: values.title,
     origin: originOption(values.origin),
   };
 }
@@ -357,6 +358,7 @@ const ADD_OPTIONS = {
   "run-dir": { type: "string" },
   project: { type: "string" },
   tier: { type: "string" },
+  title: { type: "string" },
   key: { type: "string" },
   origin: { type: "string", multiple: true },
 };

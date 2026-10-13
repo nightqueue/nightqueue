@@ -22,6 +22,7 @@ import { isPendingV19, migrateToV19 } from "./migration/v19.mjs";
 import { isPendingV20, migrateToV20, refuseOrphans } from "./migration/v20.mjs";
 import { migrateOriginLists } from "./migration/origin-list.mjs";
 import { migrateV21Columns } from "./migration/v21.mjs";
+import { migrateJobTitles } from "./migration/job-titles.mjs";
 import { migrateV23 } from "./migration/v23.mjs";
 import { isPendingV22, migrateToV22 } from "./migration/v22.mjs";
 import { isPendingV24, migrateToV24 } from "./migration/v24.mjs";
@@ -147,6 +148,7 @@ function migrate(db) {
   migrateV21Columns(db);
   migrateOriginLists(db);
   migrateV23(db);
+  migrateJobTitles(db);
   addColumnIfMissing(db, "pipeline_phases", "reason", "TEXT");
   ensureDefaultOrg(db);
   if (version < DB_USER_VERSION) db.exec(`PRAGMA user_version = ${DB_USER_VERSION}`);

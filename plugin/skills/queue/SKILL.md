@@ -50,13 +50,13 @@ runs unattended, with no access to this conversation:
 - `project` is the registered NAME of the project, never a path. It is replaced
   by `cwd` (absolute) when no project is registered for the current directory.
 - `prompt` is the text of step 3.
+- `title` is always sent: a short outcome sentence in product language (one line, 120 characters at most).
 - `tier` is your reading of the risk: `trivial` (the prompt fully describes the
   result — docs, copy, config, a rename), `simple` (a local change whose
   behaviour the prompt defines, one subsystem), `complex` (a design decision,
   concurrency/security/money, more than one subsystem, or stages). In doubt
   propose the lower one: the pipeline may raise it with evidence, never lower it.
-- Ask ONCE before the call, naming the project, the job title (the first line of
-  the prompt, shortened to fit) and the tier:
+- Ask ONCE before the call, naming the project, the job `title` and the tier:
   `Queue "<title>" for <project> as <tier>? [Y/n]` — or, when step 2 matched no
   project, `Queue "<title>" for <cwd> (register as <name>) as <tier>? [Y/n]`,
   which is the registration question too and, on yes, sends `register: true`.

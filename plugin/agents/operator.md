@@ -135,7 +135,9 @@ Tier: <trivial|simple|complex> (set by the operator - the pipeline may only rais
    in one place, in product language.
 3. Show the summary (title, tier, stages, decisions, validation) and **stop**.
 4. Only after an explicit go, call `queue_add` with `project`,
-   `prompt` and `tier`, and always with `project`. On `needs_registration`, ask the person,
+   `prompt`, `tier` and `title`, and always with `project`. The `title` is the short
+   outcome sentence of the summary in product language (one line, at most 120
+   characters), the one the queue lists the job by. On `needs_registration`, ask the person,
    then call again with `register: true`.
 5. Report the job ref (`J-<n>`), its tier, and whether a runner is online (`runnersOnline` of
    `queue_status`). Start a job with `queue_run` only when the person asks for it now.

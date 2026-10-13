@@ -14,7 +14,6 @@ import { liveState } from "./narrate.mjs";
 import { readAttemptTail } from "./follow.mjs";
 import { extractNoticeFromStream, partialTokens } from "./stream.mjs";
 import { KEPT_PREFIX } from "./worktree.mjs";
-import { jobTitle } from "./job-title.mjs";
 
 export { jobTitle } from "./job-title.mjs";
 
@@ -156,14 +155,9 @@ function withLive(jobs, env, now) {
   return { jobs: withBlocks, section };
 }
 
-// A public job view carrying its derived title, from the raw row that still holds the prompt.
-function jobViewWithTitle(row) {
-  return { ...jobView(row), title: jobTitle(row) };
-}
-
 // The data of the queue view in timed sections, read from SELECTs and pure file reads alone; a failed section never fails the view.
 export async function queueView(readStore, { env = process.env, limit, blockedOnly = false, prStates = null, killImpl, now = () => performance.now() } = {}) {
-  const jobsPart = await timedSection("jobs", async () => (await readStore.jobs.listJobs({ limit, blockedOnly })).map(jobViewWithTitle), now);
+  const jobsPart = await timedSection("jobs", async () => (await readStore.jobs.listJobs({ limit, blockedOnly })).map((row) => jobView(row)), now);
   const countsPart = await timedSection("counts", () => readCounts(readStore), now);
   const runnersPart = await timedSection("runners", () => readRunners(env, killImpl), now);
   const runners = runnersPart.value ?? [];
@@ -231,7 +225,7 @@ function withoutRuntimeAppendedLines(notice) {
 // aside - both are carried: `notice` is the row's, `run_notice` the run's whole own.
 export async function jobDetailView(readStore, id, { prStates = null, env = process.env } = {}) {
   const row = await readStore.jobs.getJob(id);
-  const job = row ? { ...jobView(row, { full: true }), title: jobTitle(row) } : null;
+  const job = row ? jobView(row, { full: true }) : null;
   if (!job) return null;
   const live = job.status === "running" ? readLiveOf(job, env).live : null;
   const withState = { ...withPrState(job, prStates), live };

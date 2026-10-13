@@ -716,6 +716,7 @@ function finishSpec(job, run, { state, noticeMd, env }) {
       files: implementedFiles(job, run, state, env),
     },
     prUrl: run.outcome.prUrl,
+    prTitle: state?.outcome?.prTitle,
     noticeMd,
     usage: run.usage,
     hostCommands: run.hostCommands,

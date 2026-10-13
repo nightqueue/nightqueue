@@ -17,6 +17,7 @@ import { jobRef } from "./refs.mjs";
 import * as registry from "./registry.mjs";
 import { ACTIVE_JOB_PREDICATE, LEASE_GRACE_S, RESULT_OBJECT_BASE } from "./schema.mjs";
 import { isSafeSegment } from "../queue/resume.mjs";
+import { jobTitle, storableTitle } from "../queue/job-title.mjs";
 import { PIPELINE_TIERS } from "./runs.mjs";
 
 export const JOB_STATUSES = ["pending", "running", "done", "gate", "failed", "cancelled", "closed"];
@@ -49,6 +50,7 @@ const JOB_VIEW_COLUMNS = [
   "slug",
   "branch",
   "pr_url",
+  "pr_title",
   "worker",
   "operator_note",
   "blocked_code",
@@ -174,11 +176,12 @@ function inTransaction(db, steps) {
   });
 }
 
-// The public view of a job: never the prompt, ISO timestamps, and free text cut for listings unless `full`, a cut field flagged `notice_truncated`/`result_truncated`.
+// The public view of a job: never the prompt but its resolved `title`, ISO timestamps, and free text cut for listings unless `full`, a cut field flagged `notice_truncated`/`result_truncated`.
 export function jobView(row, { full = false } = {}) {
   if (!row) return null;
   const view = { id: row.id ?? null, ref: row.id ? jobRef(row.id) : null };
   for (const column of JOB_VIEW_COLUMNS) view[column] = row[column] ?? null;
+  view.title = jobTitle(row);
   for (const column of JOB_VIEW_ZERO_OMITTED) if (view[column] === 0) view[column] = null;
   for (const column of JOB_VIEW_TIMESTAMPS) view[column] = sqliteToIso(row[column]);
   for (const column of JOB_VIEW_TRUNCATED) {
@@ -215,7 +218,7 @@ function optionalRunSlug(value) {
 }
 
 const INSERT_JOB =
-  "INSERT INTO jobs (project_id, prompt, priority, max_attempts, timeout_s, tier, slug, operator_note, origin) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)";
+  "INSERT INTO jobs (project_id, prompt, priority, max_attempts, timeout_s, tier, slug, operator_note, origin, title) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
 
 // Requires the id of the project a job is queued for; a name never reaches the jobs table.
 function requireProjectId(projectId) {
@@ -258,7 +261,7 @@ function insertRunJob(db, { values, project }, env) {
 }
 
 // Enqueues a job for a project id, validating every range before the write; a run slug is refused while an open job is bound to it.
-export function addJob({ projectId, prompt, priority, maxAttempts, timeoutS, tier, slug, operatorNote, origin } = {}, env = process.env) {
+export function addJob({ projectId, prompt, priority, maxAttempts, timeoutS, tier, slug, operatorNote, origin, title } = {}, env = process.env) {
   const origins = resolveOrigins({ origin, prompt });
   const values = [
     requireProjectId(projectId),
@@ -270,6 +273,7 @@ export function addJob({ projectId, prompt, priority, maxAttempts, timeoutS, tie
     optionalRunSlug(slug),
     optionalNote(operatorNote),
     origins.length ? JSON.stringify(origins) : null,
+    storableTitle(title),
   ];
   const db = openDb(env);
   const project = requireJobProject(db, values[0]);
@@ -727,7 +731,7 @@ function finishedAttemptEnd(status, result) {
 }
 
 // Closes a job with its outcome, closes its attempt row and adds the attempt's measures to the totals, and links the pipeline run, in one transaction; false means the job was lost.
-export function finishJob(id, { worker, status, result, prUrl, noticeMd, usage, hostCommands, baselineCtx, orchestrator } = {}, env = process.env) {
+export function finishJob(id, { worker, status, result, prUrl, prTitle, noticeMd, usage, hostCommands, baselineCtx, orchestrator } = {}, env = process.env) {
   const db = openDb(env);
   const statement = db.prepare(
     `UPDATE jobs
@@ -739,6 +743,7 @@ export function finishJob(id, { worker, status, result, prUrl, noticeMd, usage, 
             not_before = NULL,
             result = COALESCE(?, result),
             pr_url = COALESCE(?, pr_url),
+            pr_title = COALESCE(?, pr_title),
             notice_md = COALESCE(?, notice_md),
             baseline_ctx = COALESCE(?, baseline_ctx)
       WHERE id = ? AND status = 'running' AND worker = ?
@@ -748,6 +753,7 @@ export function finishJob(id, { worker, status, result, prUrl, noticeMd, usage, 
     requireWritableStatus(status),
     toJsonText(result),
     optionalText(prUrl),
+    storableTitle(prTitle),
     optionalText(noticeMd),
     optionalNumber(baselineCtx),
     requireId(id),
@@ -759,8 +765,8 @@ export function finishJob(id, { worker, status, result, prUrl, noticeMd, usage, 
       const row = statement.get(...values);
       if (!row) return null;
       linkRun(db, id, row.project_id, row.slug);
-      const attempt = closeOpenAttempt(db, values[5], attemptEnd);
-      settleMeasures(db, values[5], attempt, { usage, hostCommands, orchestrator });
+      const attempt = closeOpenAttempt(db, values[6], attemptEnd);
+      settleMeasures(db, values[6], attempt, { usage, hostCommands, orchestrator });
       return row;
     }),
   );
@@ -1084,6 +1090,7 @@ export function settleClose(id, { worker, close, noticeLine } = {}, env = proces
         SET status = 'closed',
             close_status = NULL,
             close = ?,
+            pr_title = COALESCE(?, pr_title),
             close_worker = NULL,
             close_lease_until = NULL,
             notice_md = CASE
@@ -1096,7 +1103,7 @@ export function settleClose(id, { worker, close, noticeLine } = {}, env = proces
   const base = requireText("noticeLine", noticeLine);
   const jobId = requireId(id);
   const closeText = requireCloseText(close);
-  const values = [closeText, base, base, jobId, owner];
+  const values = [closeText, storableTitle(parseCloseColumn(closeText)?.data?.title), base, base, jobId, owner];
   const row = writeCloseDurably({ id, statement, values, witness: closeWitness(TERMINAL_CLOSE_WITNESS_COLUMNS, owner), env });
   return row ? jobView(withProjectFacts(db, row), { full: true }) : null;
 }

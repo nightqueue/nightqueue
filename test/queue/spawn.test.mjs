@@ -300,6 +300,14 @@ test("the provisional slug is the prompt in kebab, at most six words, and never 
   }
 });
 
+test("the provisional slug comes from the title, else the objective, else the brief with its labels removed, never from a field label", () => {
+  const operator = "## Brief\n**Affected area:** job title derivation\n**Objective:** Every job shows a human title.\n**Type:** feature";
+  assert.equal(provisionalSlug({ id: 7, prompt: operator, title: "Job titles show the brief label" }), "job-titles-show-the-brief-label");
+  assert.equal(provisionalSlug({ id: 7, prompt: operator }), "every-job-shows-a-human-title");
+  assert.equal(provisionalSlug({ id: 7, prompt: operator.replace(/\*\*Objective:.*\n/, "") }), "job-title-derivation-feature");
+  assert.equal(provisionalSlug({ id: 7, prompt: operator, title: "x", pr_title: "feat: from the PR" }), "x", "the pull request never names the slug");
+});
+
 test("the provisional slug comes from the brief, never from the runtime header the operator writes above it", () => {
   const header = "Tier: complex (set by the operator - the pipeline may only raise it, with evidence, never lower it)";
   const operator = `${header}\n\n## Brief\nSlug derivation ignores the tier header entirely\n\n## Success criteria\n- two jobs, two runs`;
