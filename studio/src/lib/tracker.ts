@@ -10,7 +10,7 @@ export interface TrackerPrefs {
 
 export interface IssueDraft {
   text: string;
-  origin: JobOrigin;
+  origin: JobOrigin[];
   originUrl: string | null;
 }
 
@@ -76,7 +76,7 @@ export function isOption(options: FilterOption[], value: string): boolean {
 export function issueDraft(item: TrackerItem, kind: string): IssueDraft {
   const url = item.url?.trim() || null;
   const text = url ? `${item.title}\n\n${url}\n\n` : `${item.title}\n\n`;
-  return { text, origin: { kind, ref: item.ref }, originUrl: url };
+  return { text, origin: [{ kind, ref: item.ref }], originUrl: url };
 }
 
 // The service name of a tracker kind, as a sentence shows it.

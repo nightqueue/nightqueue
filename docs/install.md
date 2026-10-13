@@ -313,8 +313,9 @@ contract number (`nightqueue doctor` shows it as `tool contract`, and every MCP 
 it as `contract`). It goes up when a tool's input changes incompatibly - contract 2 is the one
 where issues and decisions are named by ref (`NQ-12`, `D-7`) instead of an internal id, and
 contract 3 the one where the tracker tools are named `issue_*` and `queue_add` takes `issue_id`,
-contract 4 the one where the tracker is removed, and contract 5 the one that adds
-`tracker_issues` (Linear issues through the home's Linear connection).
+contract 4 the one where the tracker is removed, contract 5 the one that adds
+`tracker_issues` (Linear issues through the home's Linear connection), and contract 6 the one
+where `queue_add`'s `origin` is a list of `{kind, ref}` (`[]` for none).
 A client keeps the tool definitions it read when it connected, so after such an update reopen
 the ones still running: Claude Code sessions (start a new one), Claude Desktop and Cowork
 conversations (open a new conversation, or restart the app), and a running `nq open`. Until

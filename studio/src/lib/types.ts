@@ -46,6 +46,7 @@ export interface Job {
   blocked_code: string | null;
   notice_md: string | null;
   title: string | null;
+  origin?: JobOrigin[] | null;
   created_at: string | null;
   started_at: string | null;
   attempt_started_at?: string | null;

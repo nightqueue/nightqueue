@@ -1,5 +1,12 @@
 import type { AttemptOutcome, AttemptRow, Job, JobDetail } from "./types";
 
+// The job's origins as `origins: <kind> <ref>, ...`, or null when it has none.
+export function jobOriginsLabel(job: Pick<Job, "origin">): string | null {
+  const origins = Array.isArray(job.origin) ? job.origin : [];
+  const labels = origins.filter((origin) => origin?.kind && origin?.ref).map((origin) => `${origin.kind} ${origin.ref}`);
+  return labels.length > 0 ? `origins: ${labels.join(", ")}` : null;
+}
+
 // Milliseconds of an ISO instant, null when it is missing or not a date.
 export function isoMs(value: string | null | undefined): number | null {
   if (!value) return null;

@@ -7,7 +7,7 @@ import { resolveConflictedRebase } from "./merger.mjs";
 import { releaseJobWorktree } from "./worktree.mjs";
 import { checkoutOfJob } from "../memory/registry-access.mjs";
 import { jobRef } from "../memory/refs.mjs";
-import { parseOriginColumn } from "../integrations/origin.mjs";
+import { parseOriginsColumn, validOrigins } from "../integrations/origin.mjs";
 import { forgetLogged, forgetOrigin, logStep, originStep } from "../integrations/post-close.mjs";
 import { isHomeScoped } from "../integrations/registry.mjs";
 
@@ -1359,19 +1359,19 @@ async function postCloseFacts(store, job) {
     const [project, integrations] = await Promise.all([store.projects.byId(job.project_id), store.projects.integrations(job.project_id)]);
     const orgId = project?.org_id ?? null;
     if (integrations && Object.keys(integrations).length) return { orgId, integrations };
-    return isHomeScoped(originOf(job)?.kind) ? { orgId, integrations: null } : null;
+    return originsOf(job).some((origin) => isHomeScoped(origin.kind)) ? { orgId, integrations: null } : null;
   } catch {
     return null;
   }
 }
 
-// The origin of a job, from a parsed view or the raw column.
-function originOf(job) {
+// The origins of a job, from a parsed view or the raw column.
+function originsOf(job) {
   const origin = job?.origin;
-  return origin && typeof origin === "object" ? origin : parseOriginColumn(origin);
+  return Array.isArray(origin) ? validOrigins(origin) : parseOriginsColumn(origin);
 }
 
-// The context a post-close step reads: the close's own, plus the job's origin, the project's integrations and the merge.
+// The context a post-close step reads: the close's own, plus the job's origins, the project's integrations and the merge.
 function postCloseContext(run, stepName) {
   const { job, checklist, facts } = run;
   return {
@@ -1379,7 +1379,7 @@ function postCloseContext(run, stepName) {
     progress: (note) => run.onStep?.({ name: stepName, status: "running", note, earlier: false }),
     env: run.env,
     jobRef: jobRef(job.id),
-    origin: originOf(job),
+    origins: originsOf(job),
     integrations: facts.integrations,
     orgId: facts.orgId,
     title: checklist.data.title ?? null,
@@ -1393,17 +1393,26 @@ const POST_RESULT_STATUSES = new Set(["done", "skipped", "warning", "failed"]);
 
 // A post-close step result as recorded: `done`, `skipped` or `warning`; a failure, a throw or the budget becomes a warning.
 function postCloseResult(name, result) {
-  if (result.status !== "failed") return { status: result.status, note: String(result.note ?? ""), data: result.data, notice: result.notice === true };
+  if (result.status !== "failed") {
+    const lines = Array.isArray(result.lines) ? { lines: result.lines } : {};
+    return { status: result.status, note: String(result.note ?? ""), data: result.data, notice: result.notice === true, ...lines };
+  }
   if (result.reason === "timeout") return { status: "warning", note: `passed the post-close budget of ${POST_CLOSE_TIMEOUT_S}s` };
   if (result.reason === "interrupted") return { status: "warning", note: "interrupted" };
   if (result.reason === "step-crashed") return { status: "warning", note: `the ${name} step failed` };
   return { status: "warning", note: String(result.note ?? result.reason ?? "failed"), data: result.data };
 }
 
-// The notice line a post-close result appends: a warning, a skip worth telling, or a success after one of those.
+// Whether a result is worth a notice line: a warning, a skip worth telling, or a success after one of those.
+function isNoticed(result, previous) {
+  return result.status === "warning" || (result.status === "skipped" && result.notice === true) || (result.status === "done" && previous?.noticed === true);
+}
+
+// The notice text a post-close result appends: one line per noticed sub-result acted on in this run when it has lines, else its own line.
 function postNoticeLine(name, result, previous) {
-  const noticed = result.status === "warning" || (result.status === "skipped" && result.notice) || (result.status === "done" && previous?.noticed === true);
-  return noticed ? postCloseLine(name, result) : null;
+  if (!Array.isArray(result.lines) || !result.lines.length) return isNoticed(result, previous) ? postCloseLine(name, result) : null;
+  const lines = result.lines.filter((line) => line.earlier !== true && isNoticed(line, previous)).map((line) => postCloseLine(name, line));
+  return lines.length ? lines.join("\n\n") : null;
 }
 
 // Runs one post-close step and records it with its notice line; answers false when the post-close lease was lost.

@@ -1,3 +1,4 @@
+import { refsInTextOrder } from "./find-refs.mjs";
 import { requestJson } from "./http.mjs";
 
 const DEFAULT_URL = "https://sentry.io";
@@ -23,6 +24,14 @@ function parseSentry(text, { explicit = false } = {}) {
   const bare = text.trim();
   if (/^\d+$/.test(bare)) return bare;
   return SHORT_ID.test(bare) ? bare.toUpperCase() : null;
+}
+
+// Lists every Sentry reference a text carries, in text order.
+function findSentry(text) {
+  return refsInTextOrder(text, [
+    { pattern: ISSUE_LINK, ref: (match) => match[1] },
+    { pattern: NAMED_SHORT_ID, ref: (match) => match[1].toUpperCase() },
+  ]);
 }
 
 // The API root of a connection: its url without a trailing slash, sentry.io when none is stored.
@@ -142,7 +151,7 @@ async function enrichSentry(ref, { connection, http }) {
   const recent = await http(`${issueUrl}events/?per_page=${MAX_RECENT_EVENTS}`, { headers: authHeaders(connection) });
   const event = await http(`${issueUrl}events/latest/`, { headers: authHeaders(connection) });
   const tail = event.ok ? eventLines(event.body) : ["", `Latest event not read (${event.detail}).`];
-  return `${[...issueLines(ref, issue.body ?? {}), ...recentEventLines(recent), ...tail].join("\n")}\n`;
+  return { markdown: `${[...issueLines(ref, issue.body ?? {}), ...recentEventLines(recent), ...tail].join("\n")}\n` };
 }
 
 // The status a close sets on the issue: the project's `onClosed` setting, `resolved` when unset or unknown.
@@ -187,7 +196,7 @@ export const sentry = {
     summary: summarizeSentry,
   },
   capabilities: { post: false, read: true, resolve: true },
-  origin: { parse: parseSentry, enrich: enrichSentry },
+  origin: { parse: parseSentry, find: findSentry, enrich: enrichSentry },
   settings: { onClosed: { type: "enum", values: CLOSE_STATUSES, default: "resolved" } },
   onClosed: closeSentryIssue,
 };

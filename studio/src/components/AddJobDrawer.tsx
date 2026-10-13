@@ -3,12 +3,12 @@ import {
   type AddJobForm,
   addFormProblem,
   buildAddArgs,
-  clearOrigin,
   DEFAULT_PRIORITY,
   EMPTY_ADD_FORM,
   effectiveProject,
   PRIORITIES,
   queueJob,
+  removeOrigin,
   TIERS,
   type Tier,
 } from "../lib/addJob";
@@ -25,7 +25,7 @@ interface AddJobDrawerProps {
   onClose: () => void;
   initialProject?: string;
   initialText?: string;
-  initialOrigin?: JobOrigin;
+  initialOrigin?: JobOrigin[];
   initialOriginUrl?: string;
   onQueued?: () => void;
 }
@@ -68,6 +68,18 @@ function OriginChip({ origin, onClear }: { origin: JobOrigin; onClear: () => voi
           ×
         </button>
       </span>
+    </div>
+  );
+}
+
+// One removable chip per origin the job carries; nothing when it has none.
+function OriginChips({ origins, onRemove }: { origins: JobOrigin[] | null; onRemove: (index: number) => void }) {
+  if (!Array.isArray(origins) || origins.length === 0) return null;
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      {origins.map((origin, index) => (
+        <OriginChip key={`${origin.kind} ${origin.ref}`} origin={origin} onClear={() => onRemove(index)} />
+      ))}
     </div>
   );
 }
@@ -121,7 +133,7 @@ function CallPreview({ args, runnersOnline, problem }: { args: Record<string, un
 export function AddJobDrawer({ runnersOnline, onClose, onQueued, ...initial }: AddJobDrawerProps) {
   const projects = useProjects();
   const [draft, setDraft] = useState<AddJobForm>(() => initialDraft(initial));
-  const firstProject = initial.initialOrigin ? "" : (projects.data?.[0]?.name ?? "");
+  const firstProject = initial.initialOrigin?.length ? "" :(projects.data?.[0]?.name ?? "");
   const form: AddJobForm = { ...draft, project: effectiveProject(draft, firstProject) };
   const set: SetField = (key, value) => setDraft((current) => ({ ...current, project: form.project, [key]: value }));
   const changeProject = (project: string) => setDraft((current) => ({ ...current, project }));
@@ -143,7 +155,7 @@ export function AddJobDrawer({ runnersOnline, onClose, onQueued, ...initial }: A
           <Field id="add-project" label="Project">
             <ProjectField projects={projects} value={form.project} onChange={changeProject} />
           </Field>
-          {form.origin && <OriginChip origin={form.origin} onClear={() => setDraft(clearOrigin(form))} />}
+          <OriginChips origins={form.origin} onRemove={(index) => setDraft(removeOrigin(form, index))} />
           <BriefField form={form} set={set} />
           <RunFields form={form} set={set} />
           <CallPreview args={args} runnersOnline={runnersOnline} problem={problem} />

@@ -50,20 +50,37 @@ test("a run outside the queue ends with the bare signature too", (t) => {
 
 test("a job with an origin ends with the signature, its job ref, then the origin's kind and ref; a partial origin keeps only the job ref", (t) => {
   const { runDir, bodyFile } = makeFooterHome(t, "pr-footer-origin");
-  const linear = publishedBodyFile({ bodyFile, runDir, jobId: 4, origin: { kind: "linear", ref: "MK-42" } });
+  const linear = publishedBodyFile({ bodyFile, runDir, jobId: 4, origins: [{ kind: "linear", ref: "MK-42" }] });
   assert.equal(readFileSync(linear, "utf8"), "## Report\n\nthe thing is done.\n\nOpened by nightqueue · J-4 · linear MK-42\n");
-  const sentry = publishedBodyFile({ bodyFile, runDir, jobId: 4, origin: { kind: "sentry", ref: "4507" } });
+  const sentry = publishedBodyFile({ bodyFile, runDir, jobId: 4, origins: [{ kind: "sentry", ref: "4507" }] });
   assert.equal(readFileSync(sentry, "utf8"), "## Report\n\nthe thing is done.\n\nOpened by nightqueue · J-4 · sentry 4507\n");
-  assert.equal(footerLine({ jobId: 4, origin: { kind: "linear", ref: "" } }), "Opened by nightqueue · J-4");
-  assert.equal(footerLine({ jobId: 4, origin: { kind: "", ref: "MK-42" } }), "Opened by nightqueue · J-4");
+  assert.equal(footerLine({ jobId: 4, origins: [{ kind: "linear", ref: "" }] }), "Opened by nightqueue · J-4");
+  assert.equal(footerLine({ jobId: 4, origins: [{ kind: "", ref: "MK-42" }] }), "Opened by nightqueue · J-4");
 });
 
-test("the footer line names the job, then the origin, and stays bare without either", () => {
+test("a job with several origins lists every one in stored order after the job ref, skipping a partial one", (t) => {
+  const { runDir, bodyFile } = makeFooterHome(t, "pr-footer-origins");
+  const origins = [
+    { kind: "linear", ref: "DLW-99" },
+    { kind: "sentry", ref: "4507" },
+    { kind: "discord", ref: "" },
+    { kind: "discord", ref: "1/2/3" },
+  ];
+  const published = publishedBodyFile({ bodyFile, runDir, jobId: 7, origins });
+  assert.equal(
+    readFileSync(published, "utf8"),
+    "## Report\n\nthe thing is done.\n\nOpened by nightqueue · J-7 · linear DLW-99 · sentry 4507 · discord 1/2/3\n",
+  );
+  assert.equal(footerLine({ jobId: 7, origins: { kind: "linear", ref: "MK-42" } }), "Opened by nightqueue · J-7");
+});
+
+test("the footer line names the job, then the origins, and stays bare without either", () => {
   assert.equal(footerLine({ jobId: 156 }), "Opened by nightqueue · J-156");
-  assert.equal(footerLine({ jobId: 156, origin: { kind: "linear", ref: "MK-42" } }), "Opened by nightqueue · J-156 · linear MK-42");
+  assert.equal(footerLine({ jobId: 156, origins: [{ kind: "linear", ref: "MK-42" }] }), "Opened by nightqueue · J-156 · linear MK-42");
+  assert.equal(footerLine({ jobId: 156, origins: [] }), "Opened by nightqueue · J-156");
   assert.equal(footerLine({ jobId: null }), "Opened by nightqueue");
   assert.equal(footerLine(), "Opened by nightqueue");
-  assert.equal(footerLine({ origin: { kind: "linear", ref: "MK-42" } }), "Opened by nightqueue · linear MK-42");
+  assert.equal(footerLine({ origins: [{ kind: "linear", ref: "MK-42" }] }), "Opened by nightqueue · linear MK-42");
 });
 
 test("an invalid job id adds no job ref to the footer line", () => {

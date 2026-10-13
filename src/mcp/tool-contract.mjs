@@ -3,8 +3,8 @@ import { decisionRef } from "../memory/refs.mjs";
 import { openStore } from "../store/open.mjs";
 import { callerContext } from "./phase-context.mjs";
 
-// The version of the tool input shapes; bump it whenever a tool's input shape changes incompatibly (contract 1 is the pre-v19 integer ids, 2 the refs, 3 the tracker renamed, 4 the tracker removed, 5 the tracker_issues tool, home-scoped connections and `queue_add` `origin: false`).
-export const TOOL_CONTRACT = 5;
+// The version of the tool input shapes; bump it whenever a tool's input shape changes incompatibly (contract 1 is the pre-v19 integer ids, 2 the refs, 3 the tracker renamed, 4 the tracker removed, 5 the tracker_issues tool, home-scoped connections and `queue_add` `origin: false`, 6 `origin` is a list of {kind, ref}).
+export const TOOL_CONTRACT = 6;
 
 const INTEGER_ID_CONTRACT = 1;
 
@@ -49,6 +49,20 @@ export function refuseRenamedFields(name, args, state) {
   if (args === null || typeof args !== "object") return;
   const fields = RENAMED_FIELDS[name] ?? [];
   if (!fields.some((field) => Object.hasOwn(args, field))) return;
+  state.sawOldShape = true;
+  throw new StaleContractError();
+}
+
+// Inputs whose older contract took another shape, by tool: each answers whether a value is in the old shape.
+const OLD_SHAPES = {
+  queue_add: { origin: (value) => value !== null && value !== undefined && !Array.isArray(value) },
+};
+
+// Refuses a call carrying an input in the shape of an older contract, before validation would answer a generic error, and notes it in the server's state.
+export function refuseOldShapes(name, args, state) {
+  if (args === null || typeof args !== "object") return;
+  const shapes = Object.entries(OLD_SHAPES[name] ?? {});
+  if (!shapes.some(([field, isOld]) => Object.hasOwn(args, field) && isOld(args[field]))) return;
   state.sawOldShape = true;
   throw new StaleContractError();
 }

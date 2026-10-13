@@ -26,7 +26,7 @@ type Dialog = { pick: RowMenuPick; job: Job } | null;
 
 type Menu = { job: Job; anchor: HTMLElement } | null;
 
-type Drawer = { project?: string; text?: string; origin?: JobOrigin; originUrl?: string } | null;
+type Drawer = { project?: string; text?: string; origin?: JobOrigin[]; originUrl?: string } | null;
 
 const byJob = (job: Job) => String(job.id);
 

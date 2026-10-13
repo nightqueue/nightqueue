@@ -79,6 +79,7 @@ import { phasePrompt, PROMPT_TARGETS } from "./phase-prompt.mjs";
 import { readVersion } from "../cli/version.mjs";
 import {
   newContractState,
+  refuseOldShapes,
   refuseRenamedFields,
   refuseRetiredFields,
   STALE_CONTRACT_ADVISORY,
@@ -527,8 +528,8 @@ async function queuedAnswer({ job, registered = null }, env) {
   const pending = (await store.jobs.countsByStatus()).pending;
   const done = registered ? `registered project \`${registered.name}\` (${registered.path}). ` : "";
   const stale = staleRuntimeHint(env);
-  const coverage = await jobOriginCoverage({ origin: job.origin, projectId: job.projectId, store, env });
-  const origin = coverage ? ` Origin: ${coverageLabel(coverage)}.` : "";
+  const coverages = await jobOriginCoverage({ origins: job.origin, projectId: job.projectId, store, env });
+  const origin = coverages.length ? ` Origins: ${coverages.map(coverageLabel).join("; ")}.` : "";
   return {
     ok: true,
     id: job.id,
@@ -537,7 +538,7 @@ async function queuedAnswer({ job, registered = null }, env) {
     priority: job.priority,
     timeoutS: job.timeoutS,
     ...(job.tier ? { tier: job.tier } : {}),
-    ...(coverage ? { origin: coverageField(coverage) } : {}),
+    origin: coverages.map(coverageField),
     hint: `${done}queued ${jobRef(job.id)} for \`${job.project}\` (${pending} pending).${origin} ${queuedRunnerLine(env, job.id)}${stale ? ` ${stale}` : ""}`,
   };
 }
@@ -1069,11 +1070,11 @@ function toolDefinitions(env, state) {
             .optional()
             .describe("Risk tier of the job, set by the operator. The pipeline may only raise it, with evidence, never lower it."),
           origin: z
-            .union([z.object({ kind: z.string(), ref: z.string() }), z.literal(false)])
+            .array(z.object({ kind: z.string(), ref: z.string() }))
             .nullable()
             .optional()
             .describe(
-              "The service the job came from, as `{kind, ref}`; omitted, the runtime detects it in the prompt with the registered providers. The answer carries `origin` with the org connection that covers it, or `none`. `false` queues the job with no origin and skips detection; omitted or null, the runtime detects it in the prompt.",
+              "The services the job came from, as a list of `{kind, ref}`; omitted or null, the runtime detects every recognised link of the prompt (outside `<comment-thread>` blocks) with the registered providers; `[]` queues the job with no origin and skips detection. The answer carries `origin` as a list, one entry per origin with the connection that covers it, or `none`.",
             ),
         },
       },
@@ -1135,7 +1136,7 @@ function toolDefinitions(env, state) {
           "Read-only: lists the issues of the home's issue-tracker connection, newest update first, filtered by the service's own `team` key and `project` name - no nightqueue project argument. " +
           "`state` is `open` (default), `closed` or `all`; `limit` 1..50 (default 25), `truncated: true` when more matched; `include_filters: true` adds `filters` (`teams`, `projects`), cached for five minutes. " +
           "Answers `{ok: true, provider, items: [{ref, title, team, state, priority, priorityLabel, labels, url, updatedAt}], truncated}`, or `{ok: false, error: \"no-connection\" | \"provider-unavailable\", hint, provider}` as a normal answer. " +
-          "Queueing from an item is `queue_add` with `origin: {kind: provider, ref}` and the nightqueue `project`, after the person said yes.",
+          "Queueing from an item is `queue_add` with `origin: [{kind: provider, ref}]` and the nightqueue `project`, after the person said yes.",
         inputSchema: {
           team: optionalText.describe("The tracker team key, e.g. `MK`."),
           project: optionalText.describe("The tracker project name."),
@@ -1521,6 +1522,7 @@ export function createServer(env = process.env) {
   // The SDK validates the call before the handler and refuses with one problem; this refusal carries every problem, the whole contract and what was received, which is what lets an agent fix the next call instead of repeating the same payload.
   server.validateToolInput = async (tool, args, toolName) => {
     refuseRenamedFields(toolName, args, state);
+    refuseOldShapes(toolName, args, state);
     refuseRetiredFields(toolName, args);
     return validateArgs(toolName, schemas.get(toolName) ?? tool.inputSchema, args);
   };

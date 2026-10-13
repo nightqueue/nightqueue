@@ -15,10 +15,10 @@ function parseTracker(text) {
   return /^\d+$/.test(bare) ? bare : null;
 }
 
-// Fetches one issue through the http the runtime hands in, answering markdown or the reason it could not.
+// Fetches one issue through the http the runtime hands in, answering its markdown or the reason it could not.
 async function enrichTracker(ref, { connection, http }) {
   const answer = await http(`https://tracker.example/api/issues/${ref}`, { headers: { Authorization: `Bearer ${connection.token}` } });
-  return answer.ok ? `# Issue ${ref}\n\n${answer.body.title}\n` : { detail: answer.detail };
+  return answer.ok ? { markdown: `# Issue ${ref}\n\n${answer.body.title}\n` } : { detail: answer.detail };
 }
 
 // A read-capable test provider: one org connection, an issue link as origin, an enrichment over the injected fetch.

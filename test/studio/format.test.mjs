@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { durationLabel, formatDurationMs, spanMs, timeoutLabel } from "../../studio/src/lib/format.ts";
+import { durationLabel, formatDurationMs, jobOriginsLabel, spanMs, timeoutLabel } from "../../studio/src/lib/format.ts";
 
 test("a duration is minutes and seconds only, seconds always shown and never hours", () => {
   assert.equal(formatDurationMs(45000), "45s");
@@ -31,4 +31,13 @@ test("every duration helper shares the one format", () => {
   assert.equal(timeoutLabel(14400), "4h");
   assert.equal(durationLabel("2026-10-10T10:00:00.000Z", "2026-10-10T11:05:00.000Z", 0), "65m0s");
   assert.equal(durationLabel(null, null, 0), "-");
+});
+
+test("jobOriginsLabel lists every origin in stored order, and is null with none or a malformed list", () => {
+  const origin = [{ kind: "linear", ref: "DLW-99" }, { kind: "sentry", ref: "4507" }, { kind: "discord", ref: "" }, { kind: "discord", ref: "1/2/3" }];
+  assert.equal(jobOriginsLabel({ origin }), "origins: linear DLW-99, sentry 4507, discord 1/2/3");
+  assert.equal(jobOriginsLabel({ origin: [] }), null);
+  assert.equal(jobOriginsLabel({ origin: null }), null);
+  assert.equal(jobOriginsLabel({}), null);
+  assert.equal(jobOriginsLabel({ origin: { kind: "linear", ref: "DLW-99" } }), null);
 });

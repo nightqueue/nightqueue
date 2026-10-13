@@ -28,7 +28,7 @@ function serviceLabel(kind) {
 export function trackerInstructionLines() {
   return trackerProviders().map(
     ({ kind }) =>
-      `${serviceLabel(kind)} issues come from \`tracker_issues\`; queue from one with \`origin: {kind: "${kind}", ref}\` and the nightqueue \`project\``,
+      `${serviceLabel(kind)} issues come from \`tracker_issues\`; queue from one with \`origin: [{kind: "${kind}", ref}]\` and the nightqueue \`project\``,
   );
 }
 

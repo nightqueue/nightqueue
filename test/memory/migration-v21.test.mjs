@@ -52,7 +52,7 @@ test("a diagnosis read of a v20 home reads no origin and no integrations instead
   const db = openDbReadOnly(env, { anySchema: true });
   t.after(() => db.close());
   assert.equal(projectIntegrations(db, projectId), null);
-  assert.equal(jobView(db.prepare("SELECT * FROM jobs WHERE id = 1").get()).origin, null);
+  assert.deepEqual(jobView(db.prepare("SELECT * FROM jobs WHERE id = 1").get()).origin, []);
 });
 
 test("a stored integrations value reads as an object, an empty or broken one as none", async (t) => {
@@ -83,5 +83,5 @@ test("a v17 home reaches the current schema in one open with both columns", (t) 
   t.after(() => copy.close());
   assert.deepEqual(copy.prepare("SELECT title FROM issues").all().map((row) => row.title), ["old item"]);
   assert.equal(db.prepare("SELECT 1 FROM sqlite_master WHERE name = 'issues'").get(), undefined, "v24 kept the tracker");
-  assert.equal(jobView(getJob(addJob({ projectId: projectIdOf(env, "alpha"), prompt: "x" }, env).id, env)).origin, null);
+  assert.deepEqual(jobView(getJob(addJob({ projectId: projectIdOf(env, "alpha"), prompt: "x" }, env).id, env)).origin, []);
 });

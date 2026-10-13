@@ -5,7 +5,7 @@ import { defaultContext, run } from "../../src/cli/index.mjs";
 import { testConnection } from "../../src/config/connections.mjs";
 import { loadConfig, loadSecrets, saveSecrets } from "../../src/config/store.mjs";
 import { requestJson } from "../../src/integrations/http.mjs";
-import { detectOrigin, explicitOrigin } from "../../src/integrations/origin.mjs";
+import { detectOrigins, explicitOrigin } from "../../src/integrations/origin.mjs";
 import { announceWebhook, discord, discordReason, noticeSummary } from "../../src/integrations/discord.mjs";
 import { acquireClose, getJob } from "../../src/memory/jobs.mjs";
 import { CLOSE_STEPS, runClosePipeline } from "../../src/queue/close.mjs";
@@ -140,7 +140,8 @@ test("a discord message link is an origin `<guild>/<channel>/<message>`; a bare 
   assert.equal(parse("https://notdiscord.com/channels/1/2/3"), null);
   assert.equal(parse("ratio 1/2/3 in prose"), null);
   assert.equal(parse("1/2/3", { explicit: true }), "1/2/3");
-  assert.deepEqual(detectOrigin(`the bot crashes, see ${MESSAGE_LINK}`), { kind: "discord", ref: "111/222/555" });
+  assert.deepEqual(detectOrigins(`the bot crashes, see ${MESSAGE_LINK}`), [{ kind: "discord", ref: "111/222/555" }]);
+  assert.deepEqual(discord.origin.find(`${MESSAGE_LINK} and https://ptb.discord.com/channels/4/5/6`), ["111/222/555", "4/5/6"]);
   assert.deepEqual(explicitOrigin({ kind: "discord", ref: "111/222/555" }), { kind: "discord", ref: "111/222/555" });
   assert.deepEqual(explicitOrigin({ kind: "discord", ref: MESSAGE_LINK }), { kind: "discord", ref: "111/222/555" });
   assert.throws(() => explicitOrigin({ kind: "discord", ref: "general" }), /is not a discord reference/);
@@ -387,7 +388,7 @@ test("closing a job queued from a discord link replies and logs once; a --steps 
   const { id, outcome, row } = await closeDiscordJob(home, fetch);
   assert.equal(outcome.status, "closed");
   assert.deepEqual(outcome.postClose.steps, [
-    { name: "origin", status: "done", note: `replied in channel ${CHAT_CHANNEL} through chat` },
+    { name: "origin", status: "done", note: `discord ${GUILD}/${CHAT_CHANNEL}/${MESSAGE}: replied in channel ${CHAT_CHANNEL} through chat` },
     { name: "log", status: "done", note: "discord: logged through ops" },
   ]);
   assert.deepEqual(fetch.calls.map((call) => [call.method, call.url]), [["POST", `${CHAT_URL}?wait=true`], ["POST", `${OPS_URL}?wait=true`]]);
@@ -397,14 +398,14 @@ test("closing a job queued from a discord link replies and logs once; a --steps 
   assert.doesNotMatch(fetch.calls[1].body.content, /http/);
   assert.equal(fetch.calls[1].body.embeds[0].url, RESULT.prUrl);
   const checklist = JSON.parse(row.close);
-  assert.equal(checklist.data.originNotified, true);
+  assert.deepEqual(checklist.data.originsNotified, { [`discord ${GUILD}/${CHAT_CHANNEL}/${MESSAGE}`]: true });
   assert.deepEqual(checklist.data.logged, { discord: true });
   assert.equal(row.status, "closed");
 
   const again = fakeFetch();
   const rerun = await runPostCloseSteps({ store: home.store, id, names: ["log", "origin"], env: home.env, deps: { fetch: again.impl } });
   assert.deepEqual(rerun.steps, [
-    { name: "origin", status: "done", note: "already notified" },
+    { name: "origin", status: "done", note: `discord ${GUILD}/${CHAT_CHANNEL}/${MESSAGE}: already notified` },
     { name: "log", status: "done", note: "discord: already logged" },
   ]);
   assert.equal(again.calls.length, 0);
@@ -417,7 +418,7 @@ test("discord.replyToOrigin=false sends no reply, and an unset replyToOrigin rep
   const silent = fakeFetch();
   const off = await closeDiscordJob(home, silent);
   assert.deepEqual(off.outcome.postClose.steps, [
-    { name: "origin", status: "skipped", note: "replyToOrigin is false" },
+    { name: "origin", status: "skipped", note: `discord ${GUILD}/${CHAT_CHANNEL}/${MESSAGE}: replyToOrigin is false` },
     { name: "log", status: "skipped", note: "no log destination" },
   ]);
   assert.equal(silent.calls.length, 0);
@@ -453,7 +454,7 @@ test("a thread nobody of the org can post in leaves the job closed with a notice
   const row = getJob(id, home.env);
   assert.equal(outcome.status, "closed");
   assert.equal(row.status, "closed");
-  assert.match(row.notice_md, new RegExp(`After close: origin skipped - no webhook of the org can post in channel ${THREAD}`));
+  assert.match(row.notice_md, new RegExp(`After close: origin skipped - discord ${GUILD}/${THREAD}/${MESSAGE}: no webhook of the org can post in channel ${THREAD}`));
   assertNoSecret([outcome, row]);
 });
 

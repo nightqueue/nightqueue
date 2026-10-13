@@ -140,8 +140,9 @@ for every subsection. Both: no bare `#<number>` outside a `Fixes`/`Closes` line,
 `{{placeholder}}` or `<...>` example left over from the template, and none of the
 traceability the runtime appends itself - an `Opened by nightqueue` line, a whole
 `Refs` line, a job ref or the run slug. It then publishes a copy of the body with
-the footer `Opened by nightqueue · J-<n>` inside a job, plus ` · <kind> <ref>` when the
-job has an origin (e.g. `Opened by nightqueue · J-12 · linear MK-42`), and `Opened by
+the footer `Opened by nightqueue · J-<n>` inside a job, plus ` · <kind> <ref>` for every
+origin of the job in stored order (e.g. `Opened by nightqueue · J-12 · linear MK-42 · sentry
+4507`), and `Opened by
 nightqueue` outside a job (see
 [Runtime contract](runtime-contract.md)). A body that
 fails prints one `REJECTED: <reason>` or `MISSING: <what>` line per violation
@@ -488,8 +489,10 @@ the bounded merger agent before the suite runs. A second close of a closed
 job answers ``job `<id>` is already closed``. `queue.closeTimeoutS` (default `1800`, range
 `60..3600`) bounds the whole close, the merger included. For a project with integrations, the
 post-close steps origin and log run after settle on the closed job and never stop it: a failure
-is an `After close: <step> warning - <note>` line in the notice; `queue close <id> --steps
-origin,log` re-runs only those steps (each skips what it already did) and exits `1` on a
+is an `After close: <step> warning - <note>` line in the notice (the origin step writes one per
+origin of the job, each origin acted on in registry order and on its own); `queue close <id>
+--steps origin,log` re-runs only those steps (each skips what it already did, origin by origin)
+and exits `1` on a
 warning; `--again` (only with `--steps`, never with `--merged` or `--force`) clears those steps'
 done marks first so they post again, and the summary says `(again)` after each. The MCP tool `queue_close` (`job_id`, `force?`) starts the
 same detached close. See [Queue](queue.md#closing-a-job) for the steps, the lease and what a

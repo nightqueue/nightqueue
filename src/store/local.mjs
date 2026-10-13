@@ -23,6 +23,7 @@ const READ_ONLY_ALLOWED = new Set(READ_ONLY_METHODS);
 function jobsDomain(env, db) {
   return {
     addJob: async (spec) => jobs.addJob(spec, env),
+    recordJobOrigins: async (id, spec) => jobs.recordJobOrigins(id, spec, env),
     claimNextJob: async (spec) => jobs.claimNextJob(spec, env),
     claimJobById: async (id, spec) => jobs.claimJobById(id, spec, env),
     releaseJob: async (id, spec) => jobs.releaseJob(id, spec, env),

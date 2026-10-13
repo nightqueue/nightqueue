@@ -52,11 +52,12 @@ export function quietFiles(env) {
   }
 }
 
-// The coverage of a job's origin read through a store for its project, or null when the job has no origin.
-export async function jobOriginCoverage({ origin, projectId, store, env }) {
-  if (!origin) return null;
+// The coverage of each origin of a job, read through a store for its project once; empty when the job has no origin.
+export async function jobOriginCoverage({ origins, projectId, store, env }) {
+  if (!Array.isArray(origins) || origins.length === 0) return [];
   const [project, integrations] = await Promise.all([store.projects.byId(projectId), store.projects.integrations(projectId)]);
-  return originCoverage({ origin, orgId: project?.org_id ?? null, integrations, ...quietFiles(env) });
+  const known = { orgId: project?.org_id ?? null, integrations, ...quietFiles(env) };
+  return origins.map((origin) => originCoverage({ origin, ...known }));
 }
 
 // The coverage as the `origin` field of an answer: `detail` only when there is one.

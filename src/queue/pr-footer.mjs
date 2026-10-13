@@ -8,23 +8,29 @@ export const PUBLISHED_BODY_FILE = "pr-body.published.md";
 // The traceability footer `run pr` appends to every pull request body.
 export const PR_FOOTER = "Opened by nightqueue";
 
-// The footer line of a run: the plain footer, then the job's ref inside a job, then the kind and ref of the job's origin when it has one.
-export function footerLine({ jobId = null, origin = null } = {}) {
-  const parts = [PR_FOOTER];
-  if (Number.isSafeInteger(jobId) && jobId > 0) parts.push(jobRef(jobId));
+// The `<kind> <ref>` part of one origin, or an empty text when either is missing.
+function originPart(origin) {
   const kind = typeof origin?.kind === "string" ? origin.kind.trim() : "";
   const ref = typeof origin?.ref === "string" ? origin.ref.trim() : "";
-  if (kind && ref) parts.push(`${kind} ${ref}`);
+  return kind && ref ? `${kind} ${ref}` : "";
+}
+
+// The footer line of a run: the plain footer, then the job's ref inside a job, then the kind and ref of every origin of the job in stored order.
+export function footerLine({ jobId = null, origins = [] } = {}) {
+  const parts = [PR_FOOTER];
+  if (Number.isSafeInteger(jobId) && jobId > 0) parts.push(jobRef(jobId));
+  const list = Array.isArray(origins) ? origins : [];
+  for (const part of list.map(originPart)) if (part) parts.push(part);
   return parts.join(" · ");
 }
 
 // The body file `run pr` publishes: a copy of the agent's body in the run directory ending with the footer.
-export function publishedBodyFile({ bodyFile, runDir, jobId, origin = null }) {
+export function publishedBodyFile({ bodyFile, runDir, jobId, origins = [] }) {
   try {
     const body = readFileSync(bodyFile, "utf8");
     mkdirSync(runDir, { recursive: true });
     const published = join(runDir, PUBLISHED_BODY_FILE);
-    writeFileSync(published, `${body.replace(/\s+$/, "")}\n\n${footerLine({ jobId, origin })}\n`);
+    writeFileSync(published, `${body.replace(/\s+$/, "")}\n\n${footerLine({ jobId, origins })}\n`);
     return published;
   } catch (error) {
     const source = jobId === null || jobId === undefined ? "outside a job" : `from ${jobRef(jobId)}`;

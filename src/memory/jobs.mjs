@@ -1,7 +1,7 @@
 import { appendFileSync, mkdirSync } from "node:fs";
 import { UserError } from "../config/errors.mjs";
 import { jobLogPath, logsDir, runDir } from "../config/paths.mjs";
-import { parseOriginColumn, resolveOrigin } from "../integrations/origin.mjs";
+import { parseOriginsColumn, resolveOrigins, validOrigins } from "../integrations/origin.mjs";
 import {
   finishVerificationReport,
   isoToSqlite,
@@ -187,7 +187,7 @@ export function jobView(row, { full = false } = {}) {
     if (view[column] !== whole) view[TRUNCATION_FLAGS[column]] = true;
   }
   view.close = parseCloseColumn(row.close);
-  view.origin = parseOriginColumn(row.origin);
+  view.origin = parseOriginsColumn(row.origin);
   return Object.assign(view, attemptViewKeys(row));
 }
 
@@ -259,7 +259,7 @@ function insertRunJob(db, { values, project }, env) {
 
 // Enqueues a job for a project id, validating every range before the write; a run slug is refused while an open job is bound to it.
 export function addJob({ projectId, prompt, priority, maxAttempts, timeoutS, tier, slug, operatorNote, origin } = {}, env = process.env) {
-  const resolvedOrigin = resolveOrigin({ origin, prompt });
+  const origins = resolveOrigins({ origin, prompt });
   const values = [
     requireProjectId(projectId),
     requireText("prompt", prompt),
@@ -269,7 +269,7 @@ export function addJob({ projectId, prompt, priority, maxAttempts, timeoutS, tie
     optionalTier(tier),
     optionalRunSlug(slug),
     optionalNote(operatorNote),
-    resolvedOrigin ? JSON.stringify(resolvedOrigin) : null,
+    origins.length ? JSON.stringify(origins) : null,
   ];
   const db = openDb(env);
   const project = requireJobProject(db, values[0]);
@@ -282,8 +282,25 @@ export function addJob({ projectId, prompt, priority, maxAttempts, timeoutS, tie
     maxAttempts: values[3],
     timeoutS: values[4],
     tier: values[5],
-    origin: resolvedOrigin,
+    origin: origins,
   };
+}
+
+// Requires an origin list to write back: an array of { kind, ref } with non-empty texts, deduped.
+function requireOriginList(origins) {
+  const valid = validOrigins(origins);
+  if (!Array.isArray(origins) || valid.length !== origins.length) {
+    throw new UserError("job field `origins` must be a list of {kind, ref} with non-empty texts and no repeats");
+  }
+  return valid;
+}
+
+// Records the origins of a job this worker still owns; false means the row moved on and nothing was written.
+export function recordJobOrigins(id, { worker, origins } = {}, env = process.env) {
+  const list = requireOriginList(origins);
+  const statement = openDb(env).prepare("UPDATE jobs SET origin = ? WHERE id = ? AND status = 'running' AND worker = ?");
+  const values = [list.length ? JSON.stringify(list) : null, requireId(id), requireText("worker", worker)];
+  return withWriteRetry(() => statement.run(...values)).changes === 1;
 }
 
 // The job not yet closed that is bound to the run of a project id and slug, or null when none is.

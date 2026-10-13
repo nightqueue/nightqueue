@@ -61,9 +61,9 @@ test("teamOptions and projectOptions list every choice with the all option first
 test("issueDraft prefills the title and URL and carries the explicit origin", () => {
   const draft = issueDraft(item("MK-42", { title: "Fix the signup" }), "linear");
   assert.equal(draft.text, "Fix the signup\n\nhttps://linear.app/acme/issue/MK-42\n\n");
-  assert.deepEqual(draft.origin, { kind: "linear", ref: "MK-42" });
+  assert.deepEqual(draft.origin, [{ kind: "linear", ref: "MK-42" }]);
   assert.equal(draft.originUrl, "https://linear.app/acme/issue/MK-42");
-  assert.deepEqual(issueDraft(item("MK-43", { url: null }), "linear"), { text: "title MK-43\n\n", origin: { kind: "linear", ref: "MK-43" }, originUrl: null });
+  assert.deepEqual(issueDraft(item("MK-43", { url: null }), "linear"), { text: "title MK-43\n\n", origin: [{ kind: "linear", ref: "MK-43" }], originUrl: null });
 });
 
 test("tracker prefs round-trip and fall back to the defaults on unreadable text", () => {
