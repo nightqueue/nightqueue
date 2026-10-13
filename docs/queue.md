@@ -101,7 +101,7 @@ Example: a job queued from Linear issue MK-47 that has a Discord thread attached
 origins, `linear MK-47` and the `discord` message of the thread (the runner links the second
 at claim). Its close notifies each one on its own: Linear MK-47 is completed and commented with
 the pull request, and a reply is posted in the Discord thread (once the project has a `discord`
-setting).
+setting). Either a Discord thread link or a Discord message link is accepted as that origin.
 
 **The runner enriches the origins at claim.** A claimed job writes one
 `origin: <kind> <ref> (connection: <name|none>)` line per origin in its job log (the narrated
