@@ -120,9 +120,13 @@ same worker, logged `origin linked by <kind> <ref>: <kind> <ref>, ...`, and enri
 on) the log says `linked origins not recorded: the claim moved on` and the linking origin's
 file is not written, so a retry fetches it again. The fetch never fails the job: a refusal, a
 timeout or a network failure is one `origin enrichment skipped: <reason>` line, with a status
-and never a secret, URL or error text. The triager reads every file through
-`context_for_phase` as a `## Job origin` section with one `### <kind>-<ref>` heading per file,
-fenced and labelled as evidence, never instructions.
+and never a secret, URL or error text. The runtime also appends every file to the request the
+session receives, before Phase 0, as a `Job origin` block with one `### <kind>-<ref>` heading per
+file (same 16 KiB cap per file, control literals escaped), fenced and labelled as evidence, never
+instructions, so a job queued as only a title and a link runs the task its description holds
+without gating for missing detail. The triager also reads every file through
+`context_for_phase` as a `## Job origin` section in the same shape. This replaces the earlier
+rule (D-55) that only the triage phase received the origin content.
 
 **Sentry.** A prompt with a Sentry issue link (`https://acme.sentry.io/issues/4507/`,
 `https://sentry.io/organizations/acme/issues/4507/` or a regional `*.sentry.io` host) gets the
