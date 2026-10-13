@@ -154,6 +154,18 @@ async function enrichSentry(ref, { connection, http }) {
   return { markdown: `${[...issueLines(ref, issue.body ?? {}), ...recentEventLines(recent), ...tail].join("\n")}\n` };
 }
 
+// The short id, permalink and title of an issue, or the reason they could not be read.
+async function describeSentry(ref, { slot, http }) {
+  if (!slot) return { detail: "no sentry connection in the org" };
+  const resolved = await issueIdOf(ref, { record: slot, http });
+  if (!resolved.id) return { detail: resolved.detail };
+  const issue = await http(`${apiRoot(slot)}/issues/${resolved.id}/`, { headers: authHeaders(slot) });
+  if (!issue.ok) return { detail: `issue ${resolved.id} not read (${issue.detail})` };
+  const { shortId, permalink, title } = issue.body ?? {};
+  if (typeof shortId !== "string" || typeof permalink !== "string") return { detail: `issue ${resolved.id} answered no link` };
+  return { label: shortId, url: permalink, title: oneLine(title) };
+}
+
 // The status a close sets on the issue: the project's `onClosed` setting, `resolved` when unset or unknown.
 function closeStatusOf(settings) {
   return CLOSE_STATUSES.includes(settings?.onClosed) ? settings.onClosed : "resolved";
@@ -196,7 +208,7 @@ export const sentry = {
     summary: summarizeSentry,
   },
   capabilities: { post: false, read: true, resolve: true },
-  origin: { parse: parseSentry, find: findSentry, enrich: enrichSentry },
+  origin: { parse: parseSentry, find: findSentry, enrich: enrichSentry, describe: describeSentry },
   settings: { onClosed: { type: "enum", values: CLOSE_STATUSES, default: "resolved" } },
   onClosed: closeSentryIssue,
 };

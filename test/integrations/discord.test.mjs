@@ -228,10 +228,13 @@ test("the reply posts in the matching channel, else probes the guild's webhooks 
   assert.deepEqual(byChannel.calls[0].body, {
     content: "",
     embeds: [{
-      title: "Fixed · J-1",
-      description: "fix the crash",
+      title: "✅ Fixed - fix the crash",
+      description: "Fix the crash",
       url: RESULT.prUrl,
-      fields: [{ name: "Reported", value: `[message](${MESSAGE_LINK})` }],
+      fields: [
+        { name: "Commit", value: `[abc1234](https://github.com/acme/api/commit/${MERGE_SHA})`, inline: true },
+        { name: "PR", value: `[#7](${RESULT.prUrl})`, inline: true },
+      ],
       footer: { text: "merged as abc1234" },
       timestamp: RESULT.mergedAt,
       color: 0x2ECC71,
@@ -248,7 +251,7 @@ test("the reply posts in the matching channel, else probes the guild's webhooks 
 
   const bareThread = await replyWith({ [`POST ${CHAT_URL}?wait=true&thread_id=${THREAD}`]: {} }, { ref: `${GUILD}/${THREAD}` });
   assert.deepEqual(bareThread.answer, { status: "done", note: `replied in thread ${THREAD} through chat` });
-  assert.deepEqual(bareThread.calls[0].body.embeds[0].fields, [{ name: "Reported", value: `[thread](https://discord.com/channels/${GUILD}/${THREAD})` }]);
+  assert.deepEqual(bareThread.calls[0].body.embeds[0].fields.map((field) => field.name), ["Commit", "PR"]);
 
   const firstWins = await replyWith({ [`POST ${CHAT_URL}?wait=true&thread_id=${THREAD}`]: {} }, { ref: threadRef });
   assert.equal(firstWins.calls.length, 1);
@@ -280,6 +283,7 @@ test("the log posts the closed job once to its webhook as one embed, cut to Disc
       description: "fix(crash): the crash",
       url: RESULT.prUrl,
       fields: [
+        { name: "Commit", value: `[abc1234](https://github.com/acme/api/commit/${MERGE_SHA})`, inline: true },
         { name: "PR", value: `[#7](${RESULT.prUrl})`, inline: true },
         { name: "Project", value: "alpha", inline: true },
       ],
@@ -300,6 +304,7 @@ test("the log posts the closed job once to its webhook as one embed, cut to Disc
   const [degraded] = fetch.calls[2].body.embeds;
   assert.equal(degraded.url, undefined);
   assert.equal(degraded.timestamp, undefined);
+  assert.deepEqual(degraded.fields.map((field) => field.name), ["PR", "Project"]);
   assert.equal(degraded.fields[0].value, "the merged pull request");
   assert.equal(degraded.footer.text, "merged as unknown");
   const other = await discord.log({ event: "failed", job: JOB, result: RESULT, settings: {}, connection: OPS, http: httpOf(fetch) });
@@ -307,6 +312,61 @@ test("the log posts the closed job once to its webhook as one embed, cut to Disc
   assert.equal(fetch.calls.length, 3);
   const refused = await discord.log({ event: "closed", job: JOB, result: RESULT, settings: {}, connection: OPS, http: httpOf(fakeFetch()) });
   assert.deepEqual(refused, { status: "warning", note: "log not posted through ops (HTTP 404)" });
+});
+
+const ORIGINS = [
+  { kind: "linear", ref: "MK-47", label: "MK-47", url: "https://linear.app/acme/issue/MK-47/x", title: "Login crashes" },
+  { kind: "sentry", ref: "4507", label: "REACT-T-N82", url: "https://sentry.io/organizations/acme/issues/4507/", title: "TypeError" },
+  { kind: "discord", ref: `${GUILD}/${THREAD}`, label: "thread", url: `https://discord.com/channels/${GUILD}/${THREAD}`, title: null },
+];
+
+test("the reply answers the reported problem: Linear title, the whole What was done text, and every link but the thread", async () => {
+  const notice = "✅ Fixed — the crash is gone\n\nWhat was done: a guard was added. Nothing else changed.\n\nHow it was validated: tests.";
+  const fetch = fakeFetch({ [`POST ${CHAT_URL}?wait=true`]: {} });
+  const job = { ...JOB, notice_md: notice };
+  await discord.onClosed({ ref: `${GUILD}/${CHAT_CHANNEL}/${MESSAGE}`, job, result: RESULT, origins: ORIGINS, settings: {}, slot: null, connections: [CHAT], http: httpOf(fetch) });
+  const [embed] = fetch.calls[0].body.embeds;
+  assert.equal(embed.title, "✅ Fixed - Login crashes");
+  assert.equal(embed.description, "A guard was added. Nothing else changed.");
+  assert.deepEqual(embed.fields.map((field) => [field.name, field.value]), [
+    ["Commit", `[abc1234](https://github.com/acme/api/commit/${MERGE_SHA})`],
+    ["PR", `[#7](${RESULT.prUrl})`],
+    ["Linear", `[MK-47](${ORIGINS[0].url})`],
+    ["Sentry", `[REACT-T-N82](${ORIGINS[1].url})`],
+  ]);
+  const sentryOnly = { ...job, title: "fix the crash" };
+  await discord.onClosed({ ref: `${GUILD}/${CHAT_CHANNEL}`, job: sentryOnly, result: RESULT, origins: [ORIGINS[1], { kind: "linear", ref: "MK-48", label: "MK-48", url: null, title: null }], settings: {}, slot: null, connections: [CHAT], http: httpOf(fetch) });
+  const [second] = fetch.calls[1].body.embeds;
+  assert.equal(second.title, "✅ Fixed - TypeError");
+  assert.deepEqual(second.fields.slice(2).map((field) => [field.name, field.value]), [["Linear", "MK-48"], ["Sentry", `[REACT-T-N82](${ORIGINS[1].url})`]]);
+  await discord.onClosed({ ref: `${GUILD}/${CHAT_CHANNEL}`, job: { ...JOB, notice_md: `What was done: ${"x".repeat(5000)}` }, result: RESULT, origins: "oops", settings: {}, slot: null, connections: [CHAT], http: httpOf(fetch) });
+  const [long] = fetch.calls[2].body.embeds;
+  assert.equal(long.title, "✅ Fixed - fix the crash");
+  assert.equal(long.description.length, 4096);
+  assert.ok(long.description.endsWith("…"));
+});
+
+test("the log carries Commit, PR, Project, then Linear, Sentry and Thread, with title and description as before", async () => {
+  const fetch = fakeFetch({ [`POST ${OPS_URL}?wait=true`]: {} });
+  await discord.log({ event: "closed", job: { ...JOB, slug: "the-crash" }, result: RESULT, origins: ORIGINS, settings: {}, connection: OPS, http: httpOf(fetch) });
+  const [embed] = fetch.calls[0].body.embeds;
+  assert.equal(embed.title, "J-1 closed · the-crash");
+  assert.equal(embed.description, "fix the crash");
+  assert.deepEqual(embed.fields.map((field) => [field.name, field.value]), [
+    ["Commit", `[abc1234](https://github.com/acme/api/commit/${MERGE_SHA})`],
+    ["PR", `[#7](${RESULT.prUrl})`],
+    ["Project", "alpha"],
+    ["Linear", `[MK-47](${ORIGINS[0].url})`],
+    ["Sentry", `[REACT-T-N82](${ORIGINS[1].url})`],
+    ["Thread", `[thread](https://discord.com/channels/${GUILD}/${THREAD})`],
+  ]);
+  await discord.log({ event: "closed", job: JOB, result: RESULT, origins: [], settings: {}, connection: OPS, http: httpOf(fetch) });
+  assert.deepEqual(fetch.calls[1].body.embeds[0].fields.map((field) => field.name), ["Commit", "PR", "Project"]);
+});
+
+test("a discord origin is described offline as a thread jump link", () => {
+  assert.deepEqual(discord.origin.describe(`${GUILD}/${THREAD}/${MESSAGE}`), { label: "thread", url: `https://discord.com/channels/${GUILD}/${THREAD}/${MESSAGE}`, title: null });
+  assert.deepEqual(discord.origin.describe(`${GUILD}/${THREAD}`).url, `https://discord.com/channels/${GUILD}/${THREAD}`);
 });
 
 // A notice in the real shape: headline, other paragraphs, "What was done:", and the closing lines.
@@ -367,7 +427,7 @@ test("the closed card of J-117 is titled by ref and slug, described by the full 
   assert.equal(embed.title, "J-117 closed · task-queue-status-carries-a-derived");
   assert.equal(embed.url, result.prUrl);
   assert.equal(embed.description, "refactor(queue): queue_status carries a derived live block per running job\nOne shared calculation, read on demand from the job's log, now feeds both the terminal and the tool.");
-  assert.deepEqual(embed.fields.map((field) => [field.name, field.value, field.inline]), [["PR", `[#42](${result.prUrl})`, true], ["Project", "nightqueue", true]]);
+  assert.deepEqual(embed.fields.map((field) => [field.name, field.value, field.inline]), [["Commit", `[2e2e7aa](https://github.com/acme/nightqueue/commit/2e2e7aa1234)`, true], ["PR", `[#42](${result.prUrl})`, true], ["Project", "nightqueue", true]]);
   assert.equal(embed.footer.text, "merged as 2e2e7aa");
   assert.equal(embed.timestamp, result.mergedAt);
 });
@@ -404,7 +464,7 @@ test("closing a job queued from a discord link replies and logs once; a --steps 
   assert.deepEqual(fetch.calls.map((call) => [call.method, call.url]), [["POST", `${CHAT_URL}?wait=true`], ["POST", `${OPS_URL}?wait=true`]]);
   assert.match(fetch.calls[1].body.embeds[0].title, /^J-\d+ closed · bot-crash$/);
   assert.equal(fetch.calls[1].body.embeds[0].description, "fix the crash\nAn empty message is now ignored.");
-  assert.equal(fetch.calls[0].body.embeds[0].description, "fix the crash\nAn empty message is now ignored.");
+  assert.equal(fetch.calls[0].body.embeds[0].description, "An empty message is now ignored. Nothing else changed.");
   assert.doesNotMatch(fetch.calls[1].body.content, /http/);
   assert.equal(fetch.calls[1].body.embeds[0].url, RESULT.prUrl);
   const checklist = JSON.parse(row.close);
@@ -464,7 +524,7 @@ test("closing a job queued from a guild/thread link replies inside the thread wi
   assert.equal(outcome.status, "closed");
   assert.deepEqual(fetch.calls.map((call) => call.url), [`${CHAT_URL}?wait=true&thread_id=${THREAD}`]);
   assert.equal(outcome.postClose.steps[0].note, `discord ${GUILD}/${THREAD}: replied in thread ${THREAD} through chat`);
-  assert.equal(fetch.calls[0].body.embeds[0].fields[0].value, `[thread](https://discord.com/channels/${GUILD}/${THREAD})`);
+  assert.ok(!fetch.calls[0].body.embeds[0].fields.some((field) => field.name === "Reported"));
   assertNoSecret([outcome, getJob(id, home.env)]);
 });
 

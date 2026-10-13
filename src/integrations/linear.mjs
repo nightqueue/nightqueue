@@ -9,6 +9,7 @@ const ISSUE_QUERY =
   "comments(first: 20) { nodes { body createdAt user { name } } } team { key states { nodes { id name type position } } } } }";
 const CLOSE_QUERY =
   "query($id: String!) { issue(id: $id) { id identifier state { name type } team { states { nodes { id name type position } } } } }";
+const DESCRIBE_QUERY = "query($id: String!) { issue(id: $id) { identifier title url } }";
 const UPDATE_MUTATION = "mutation($id: String!, $stateId: String!) { issueUpdate(id: $id, input: { stateId: $stateId }) { success } }";
 const ATTACH_MUTATION = "mutation($issueId: String!, $url: String!, $title: String!, $subtitle: String) { attachmentCreate(input: { issueId: $issueId, url: $url, title: $title, subtitle: $subtitle }) { success } }";
 const COMMENT_MUTATION ="mutation($issueId: String!, $body: String!) { commentCreate(input: { issueId: $issueId, body: $body }) { success } }";
@@ -158,6 +159,16 @@ async function enrichLinear(ref, { connection, http, linkOrigin }) {
   const issue = answer.data?.issue;
   if (!issue || typeof issue !== "object") return { detail: `issue ${ref} not found` };
   return { markdown: `${[...factLines(ref, issue), ...detailLines(issue)].join("\n")}\n`, ...linkedOrigins(issue, linkOrigin) };
+}
+
+// The identifier, url and title of an issue, or the reason they could not be read.
+async function describeLinear(ref, { slot, http }) {
+  if (!slot) return { detail: "no linear connection in the home" };
+  const answer = await gql(http, slot, DESCRIBE_QUERY, { id: ref });
+  if (!answer.ok) return { detail: `issue ${ref} not read (${answer.detail})` };
+  const issue = answer.data?.issue;
+  if (typeof issue?.identifier !== "string" || typeof issue?.url !== "string") return { detail: `issue ${ref} not found` };
+  return { label: issue.identifier, url: issue.url, title: oneLine(issue.title) };
 }
 
 // The first state of type completed of a team, by position, or null when the team has none.
@@ -326,7 +337,7 @@ export const linear = {
     summary: summarizeLinear,
   },
   capabilities: { post: false, read: true, resolve: true },
-  origin: { parse: parseLinear, find: findLinear, enrich: enrichLinear },
+  origin: { parse: parseLinear, find: findLinear, enrich: enrichLinear, describe: describeLinear },
   onClosed: closeLinearIssue,
   tracker: { issues: listIssues, filters: listFilters },
 };

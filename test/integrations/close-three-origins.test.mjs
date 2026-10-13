@@ -24,8 +24,9 @@ const STORED = [
   { kind: "linear", ref: "MK-42" },
   { kind: "sentry", ref: "4507" },
 ];
+const SENTRY_ISSUE = { shortId: "REACT-T-N82", permalink: "https://sentry.io/organizations/acme/issues/4507/", title: "TypeError in login" };
 const LINEAR_ANSWERS = {
-  issue: { issue: { id: "uuid-42", identifier: "MK-42", state: { name: "In Progress", type: "started" }, team: { states: { nodes: [{ id: "s-done", name: "Done", type: "completed", position: 1 }] } } } },
+  issue: { issue: { id: "uuid-42", identifier: "MK-42", title: "Login crashes", url: "https://linear.app/acme/issue/MK-42/login", state: { name: "In Progress", type: "started" }, team: { states: { nodes: [{ id: "s-done", name: "Done", type: "completed", position: 1 }] } } } },
   issueUpdate: { issueUpdate: { success: true } },
   attachmentCreate: { attachmentCreate: { success: true } },
   commentCreate: { commentCreate: { success: true } },
@@ -37,8 +38,9 @@ function linearOperation(query) {
 }
 
 // A fake fetch for the three services, recording each call as `<service> <action>`; the discord post answers `discord`.
-function serviceFetch({ discord = 200 } = {}) {
+function serviceFetch({ discord = 200, sentryRead = 200 } = {}) {
   const calls = [];
+  const posts = [];
   const impl = async (url, options = {}) => {
     const method = options.method ?? "GET";
     const reply = (status, body = {}) => ({ status, headers: new Map(), json: async () => body });
@@ -49,13 +51,14 @@ function serviceFetch({ discord = 200 } = {}) {
     }
     if (url.startsWith(SENTRY_API)) {
       calls.push(`sentry ${method} ${url.slice(SENTRY_API.length)}`);
-      return reply(200);
+      return method === "GET" ? reply(sentryRead, SENTRY_ISSUE) : reply(200);
     }
     calls.push(`discord ${method}`);
+    posts.push(JSON.parse(options.body));
     if (discord === "throw") throw new Error(`socket hang up ${WEBHOOK_TOKEN}`);
     return reply(discord, { id: "999" });
   };
-  return { impl, calls };
+  return { impl, calls, posts };
 }
 
 // A home whose project enables sentry and discord, with the org's sentry slot, its discord webhook and the home's linear key.
@@ -119,6 +122,7 @@ function assertNoSecret(value) {
   for (const secret of SECRETS) assert.ok(!text.includes(secret), `a secret leaked: ${text}`);
 }
 
+const LOOKUP_CALLS = ["sentry GET /issues/4507/", "linear issue"];
 const SENTRY_CALLS = ["sentry PUT /issues/4507/", "sentry POST /issues/4507/comments/"];
 const LINEAR_CALLS = ["linear issue", "linear issueUpdate", "linear attachmentCreate", "linear commentCreate"];
 
@@ -128,15 +132,37 @@ test("a close with sentry, linear and discord origins acts on Sentry, then Linea
   const fetch = serviceFetch();
   const { outcome, row } = await closeJob(home, id, fetch);
   assert.equal(outcome.status, "closed");
-  assert.deepEqual(fetch.calls, [...SENTRY_CALLS, ...LINEAR_CALLS, "discord POST"]);
+  assert.deepEqual(fetch.calls, [...LOOKUP_CALLS, ...SENTRY_CALLS, ...LINEAR_CALLS, "discord POST"]);
   assert.equal(outcome.postClose.steps[0].name, "origin");
   assert.equal(outcome.postClose.steps[0].status, "done", outcome.postClose.steps[0].note);
   assert.deepEqual(JSON.parse(row.close).data.originsNotified, { "sentry 4507": true, "linear MK-42": true, "discord 111/222/555": true });
   assert.equal(row.notice_md, "Closed: PR #7 merged as abc1234 on 2026-10-01");
+  const [embed] = fetch.posts[0].embeds;
+  assert.equal(embed.title, "✅ Fixed - Login crashes");
+  assert.deepEqual(embed.fields.map((field) => [field.name, field.value]), [
+    ["Commit", `[abc1234](https://github.com/acme/api/commit/${MERGE_SHA})`],
+    ["PR", `[#7](${PR_URL})`],
+    ["Linear", "[MK-42](https://linear.app/acme/issue/MK-42/login)"],
+    ["Sentry", "[REACT-T-N82](https://sentry.io/organizations/acme/issues/4507/)"],
+  ]);
   assertNoSecret(row);
 });
 
-test("a refused or throwing discord post is a warning line of its own; the job stays closed and a re-close calls only discord", async (t) => {
+test("a sentry lookup that fails leaves the plain ref and a warning line, and the job still closes", async (t) => {
+  const home = threeOriginHome(t, "three-origins-unreachable");
+  const id = seedThreeOriginJob(home);
+  const fetch = serviceFetch({ sentryRead: 502 });
+  const { outcome, row } = await closeJob(home, id, fetch);
+  assert.equal(outcome.status, "closed");
+  assert.equal(row.status, "closed");
+  const [embed] = fetch.posts[0].embeds;
+  assert.equal(embed.title, "✅ Fixed - Login crashes");
+  assert.deepEqual(embed.fields.map((field) => field.value).slice(2), ["[MK-42](https://linear.app/acme/issue/MK-42/login)", "4507"]);
+  assert.match(row.notice_md, /After close: origin warning - sentry 4507: link not resolved \(issue 4507 not read/);
+  assertNoSecret(row);
+});
+
+test("a refused or throwing discord post is a warning line of its own; the job stays closed and a re-close looks the links up again and posts only to discord", async (t) => {
   for (const discord of [400, "throw"]) {
     const home = threeOriginHome(t, `three-origins-${discord}`);
     const id = seedThreeOriginJob(home);
@@ -144,7 +170,7 @@ test("a refused or throwing discord post is a warning line of its own; the job s
     const { outcome, row } = await closeJob(home, id, fetch);
     assert.equal(outcome.status, "closed", String(discord));
     assert.equal(row.status, "closed", String(discord));
-    assert.deepEqual(fetch.calls, [...SENTRY_CALLS, ...LINEAR_CALLS, "discord POST"], String(discord));
+    assert.deepEqual(fetch.calls, [...LOOKUP_CALLS, ...SENTRY_CALLS, ...LINEAR_CALLS, "discord POST"], String(discord));
     assert.equal(outcome.postClose.steps[0].status, "warning", String(discord));
     assert.deepEqual(JSON.parse(row.close).data.originsNotified, { "sentry 4507": true, "linear MK-42": true }, String(discord));
     assert.match(row.notice_md, /After close: origin warning - discord 111\/222\/555: /, String(discord));
@@ -152,7 +178,7 @@ test("a refused or throwing discord post is a warning line of its own; the job s
 
     const retry = serviceFetch();
     const rerun = await runPostCloseSteps({ store: openStore(home.env), id, names: ["origin"], env: home.env, deps: { fetch: retry.impl } });
-    assert.deepEqual(retry.calls, ["discord POST"], String(discord));
+    assert.deepEqual(retry.calls, [...LOOKUP_CALLS, "discord POST"], String(discord));
     assert.equal(rerun.steps[0].status, "done", String(discord));
 
     const idle = serviceFetch();

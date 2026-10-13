@@ -92,7 +92,7 @@ function fullIssue({ description = "The login breaks.\n\nSteps: open it.", state
 function closeRoutes({ states = STATES, current, update = { success: true }, attach = { success: true }, comment = { success: true }, updateStatus = 200 } = {}) {
   const state = current === undefined ? {} : { state: current };
   return {
-    issue: { body: { data: { issue: { id: "uuid-42", identifier: "MK-42", ...state, team: { states: { nodes: states } } } } } },
+    issue: { body: { data: { issue: { id: "uuid-42", identifier: "MK-42", title: "Fix the login", url: ISSUE_URL, ...state, team: { states: { nodes: states } } } } } },
     issueUpdate: { status: updateStatus, body: { data: { issueUpdate: update } } },
     attachmentCreate: attach.status ? { status: attach.status } : { body: { data: { attachmentCreate: attach } } },
     commentCreate: comment.errors ? { body: { errors: [{ message: SECRET_MESSAGE }] } } : { body: { data: { commentCreate: comment } } },
@@ -362,7 +362,7 @@ test("a failed PR attach is retried by a plain --steps origin re-run that attach
   const retry = fakeFetch(closeRoutes({ current: { name: "Done", type: "completed" } }));
   const answer = await runPostCloseSteps({ store: openStore(home.env), id, names: ["origin"], env: home.env, deps: { fetch: retry.impl } });
   assert.deepEqual(answer.steps, [{ name: "origin", status: "done", note: "linear MK-42: issue MK-42 already Done; comment posted" }]);
-  assert.deepEqual(retry.calls.map((call) => call.operation), ["issue", "attachmentCreate"]);
+  assert.deepEqual(retry.calls.map((call) => call.operation), ["issue", "issue", "attachmentCreate"]);
   const after = JSON.parse(getJob(id, home.env).close).data;
   assert.deepEqual(after.originsNotified, { "linear MK-42": true });
   assert.deepEqual(after.originsProgress, {});
@@ -392,7 +392,7 @@ test("closing a job queued from a linear link in a project with no integrations 
   const { outcome, row } = await closeLinearJob(home, id, fetch);
   assert.equal(outcome.status, "closed");
   assert.deepEqual(outcome.postClose.steps[0], { name: "origin", status: "done", note: "linear MK-42: issue MK-42 moved to Done" });
-  assert.deepEqual(fetch.calls.map((call) => call.operation), ["issue", "issueUpdate", "attachmentCreate", "commentCreate"]);
+  assert.deepEqual(fetch.calls.map((call) => call.operation), ["issue", "issue", "issueUpdate", "attachmentCreate", "commentCreate"]);
   assert.deepEqual(JSON.parse(row.close).data.originsNotified, { "linear MK-42": true });
   assert.ok(!JSON.stringify(row).includes(API_KEY));
 });
@@ -411,7 +411,7 @@ test("smoke: connection add, queue add --origin and close move the issue and com
   const fetch = fakeFetch(closeRoutes());
   const { outcome } = await closeLinearJob(home, id, fetch);
   assert.deepEqual(outcome.postClose.steps[0], { name: "origin", status: "done", note: "linear MK-42: issue MK-42 moved to Done" });
-  assert.deepEqual(fetch.calls.map((call) => call.operation), ["issue", "issueUpdate", "attachmentCreate", "commentCreate"]);
+  assert.deepEqual(fetch.calls.map((call) => call.operation), ["issue", "issue", "issueUpdate", "attachmentCreate", "commentCreate"]);
 
   const again = fakeFetch(closeRoutes());
   const rerun = await runPostCloseSteps({ store: openStore(home.env), id, names: ["origin"], env: home.env, deps: { fetch: again.impl } });
@@ -426,12 +426,12 @@ test("a close whose move failed is retried whole by --steps origin, and the comm
   const failed = fakeFetch(closeRoutes({ updateStatus: 503 }));
   const { row } = await closeLinearJob(home, id, failed);
   assert.equal(JSON.parse(row.close).steps.origin.status, "warning");
-  assert.deepEqual(failed.calls.map((call) => call.operation), ["issue", "issueUpdate"]);
+  assert.deepEqual(failed.calls.map((call) => call.operation), ["issue", "issue", "issueUpdate"]);
 
   const retry = fakeFetch(closeRoutes());
   const answer = await runPostCloseSteps({ store: openStore(home.env), id, names: ["origin"], env: home.env, deps: { fetch: retry.impl } });
   assert.deepEqual(answer.steps, [{ name: "origin", status: "done", note: "linear MK-42: issue MK-42 moved to Done" }]);
-  assert.deepEqual(retry.calls.map((call) => call.operation), ["issue", "issueUpdate", "attachmentCreate", "commentCreate"]);
+  assert.deepEqual(retry.calls.map((call) => call.operation), ["issue", "issue", "issueUpdate", "attachmentCreate", "commentCreate"]);
 });
 
 test("the close reads the issue's current state in the same issue query, and every request is one of the seven operations", async () => {
