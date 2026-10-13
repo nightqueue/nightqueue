@@ -33,10 +33,10 @@ import {
 } from "../memory/jobs.mjs";
 import { LESSON_TARGETS, lessonView } from "../memory/lessons.mjs";
 import { memoryView } from "../memory/memory.mjs";
-import { jobRef, parseJobRef, requireKey } from "../memory/refs.mjs";
+import { jobRef, parseJobRef, parseRecordId, requireKey } from "../memory/refs.mjs";
 import { startAdvisoryLines } from "../queue/advisory.mjs";
 import { claimingRunners, noRunnerWait, onceOnlyLine, parkedBacklogLine, pausedRunnerLine, pendingJobs, runnersOnline, runnersOnlineSplit, staleRuntimeHint, windowWaitingLine } from "../queue/hints.mjs";
-import { refuseDecisionWriteInsideJob, refuseHomeWriteInsideJob } from "../queue/home-guard.mjs";
+import { refuseDecisionWriteInsideJob, refuseHomeWriteInsideJob, refuseMemoryDeleteInsideJob } from "../queue/home-guard.mjs";
 import { blockerLines } from "../queue/claim.mjs";
 import { lastMaintenance } from "../queue/maintenance.mjs";
 import { jobIdOfPrUrl } from "../queue/pr-lookup.mjs";
@@ -137,6 +137,13 @@ const phaseSchema = z.object({
 // a path inside none, and an unknown name refused, so nothing is ever written under a project that does not exist.
 async function memoryProject(ref, env) {
   return await resolveProjectRef(openStore(env), ref);
+}
+
+// The registered project a delete is scoped to: required, so an id is never deleted without saying whose it is.
+async function deleteProject(ref, tool, env) {
+  const project = await memoryProject(ref, env);
+  if (project === null) throw new UserError(`\`${tool}\` requires \`project\`: the registered name or key of the project that owns the id`);
+  return project;
 }
 
 // Refuses to register a project from inside an unattended run: there is no user there to confirm it.
@@ -788,7 +795,7 @@ async function queueCancelAnswer(args, env) {
   return { ok: true, ...(await stopAndCancelJob({ ...cancel, releaseWorktree: args.release_worktree === true })) };
 }
 
-// The twenty-nine tools of the plugin contract, with the parameter names the plugin actually sends.
+// The thirty-one tools of the plugin contract, with the parameter names the plugin actually sends.
 function toolDefinitions(env, state) {
   return [
     {
@@ -914,6 +921,21 @@ function toolDefinitions(env, state) {
       },
     },
     {
+      name: "lesson_delete",
+      config: {
+        description:
+          "Deletes one lesson by `id` (`L344` or the plain number) of `project` (the registered name or key, required), with its search entry, so it never comes back in `lesson_recall` or `context_for_phase`. " +
+          "An unknown id and an id of another project are refused and nothing is deleted. Refused inside a queue job: deleting is the operator's call. The answer names the id and the title that went.",
+        inputSchema: { id: z.union([z.number().int(), z.string()]), project: z.string() },
+      },
+      handler: async (args) => {
+        refuseMemoryDeleteInsideJob(env, "`lesson_delete`");
+        const project = await deleteProject(args.project, "lesson_delete", env);
+        const deleted = await openStore(env).lessons.deleteLesson({ id: parseRecordId(args.id, "L"), projectId: project.id });
+        return { ok: true, deleted: true, id: deleted.id, ref: `L${deleted.id}`, title: deleted.title, project: deleted.project };
+      },
+    },
+    {
       name: "memory_recall",
       config: {
         description: "Recalls project facts and decisions from the shared memory.",
@@ -943,6 +965,21 @@ function toolDefinitions(env, state) {
           value: args.value,
         });
         return { ok: true, id: saved.id, ref: `M${saved.id}`, project: project?.name ?? null, deduped: saved.deduped, value: saved.value };
+      },
+    },
+    {
+      name: "memory_delete",
+      config: {
+        description:
+          "Deletes one memory by `id` (`M446` or the plain number) of `project` (the registered name or key, required), with its search entry, so it never comes back in `memory_recall` or `context_for_phase`. " +
+          "An unknown id and an id of another project are refused and nothing is deleted. Refused inside a queue job: deleting is the operator's call. The answer names the id and the key that went.",
+        inputSchema: { id: z.union([z.number().int(), z.string()]), project: z.string() },
+      },
+      handler: async (args) => {
+        refuseMemoryDeleteInsideJob(env, "`memory_delete`");
+        const project = await deleteProject(args.project, "memory_delete", env);
+        const deleted = await openStore(env).memory.deleteMemory({ id: parseRecordId(args.id, "M"), projectId: project.id });
+        return { ok: true, deleted: true, id: deleted.id, ref: `M${deleted.id}`, key: deleted.key, project: deleted.project };
       },
     },
     {
@@ -1499,7 +1536,7 @@ function toolHandler(tool, env) {
   };
 }
 
-// Builds the MCP server with the twenty-nine tools of the plugin contract.
+// Builds the MCP server with the thirty-one tools of the plugin contract.
 export function createServer(env = process.env) {
   const server = new McpServer(
     {

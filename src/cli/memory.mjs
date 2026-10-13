@@ -1,6 +1,9 @@
 import { UserError } from "../config/errors.mjs";
+import { parseRecordId } from "../memory/refs.mjs";
+import { refuseMemoryDeleteInsideJob } from "../queue/home-guard.mjs";
 import { openStore } from "../store/open.mjs";
 import { checkArgs, parseCommand } from "./args.mjs";
+import { projectIdOfFlag } from "./lesson.mjs";
 
 const COLUMNS = ["lessons", "memory", "index", "libs", "runs"];
 const MIN_NAME_WIDTH = 24;
@@ -38,7 +41,22 @@ async function runStats(argv, ctx) {
   for (const row of rows) ctx.out(formatRow(row, width));
 }
 
-const SUBCOMMANDS = new Map([["stats", runStats]]);
+// Runs `nightqueue memory delete <id>`: removes one memory and its search entry.
+async function runDelete(argv, ctx) {
+  refuseMemoryDeleteInsideJob(ctx.env, "`nightqueue memory delete`");
+  const { values, positionals } = parseCommand(argv, { project: { type: "string" } });
+  checkArgs(positionals, { min: 1, max: 1, usage: "nightqueue memory delete <id> [--project <name>]" });
+  const id = parseRecordId(positionals[0], "M");
+  const store = openStore(ctx.env);
+  const projectId = await projectIdOfFlag(store, values.project);
+  const deleted = await store.memory.deleteMemory({ id, projectId });
+  ctx.out(`deleted memory M${deleted.id}: ${deleted.key}`);
+}
+
+const SUBCOMMANDS = new Map([
+  ["stats", runStats],
+  ["delete", runDelete],
+]);
 
 // Dispatches the subcommands of `nightqueue memory`.
 export async function run(argv, ctx) {

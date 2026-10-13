@@ -3,8 +3,8 @@ import { decisionRef } from "../memory/refs.mjs";
 import { openStore } from "../store/open.mjs";
 import { callerContext } from "./phase-context.mjs";
 
-// The version of the tool input shapes; bump it whenever a tool's input shape changes incompatibly (contract 1 is the pre-v19 integer ids, 2 the refs, 3 the tracker renamed, 4 the tracker removed, 5 the tracker_issues tool, home-scoped connections and `queue_add` `origin: false`, 6 `origin` is a list of {kind, ref}).
-export const TOOL_CONTRACT = 6;
+// The version of the tool input shapes; bump it whenever a tool's input shape changes incompatibly (contract 1 is the pre-v19 integer ids, 2 the refs, 3 the tracker renamed, 4 the tracker removed, 5 the tracker_issues tool, home-scoped connections and `queue_add` `origin: false`, 6 `origin` is a list of {kind, ref}, 7 the `lesson_delete` and `memory_delete` tools).
+export const TOOL_CONTRACT = 7;
 
 const INTEGER_ID_CONTRACT = 1;
 

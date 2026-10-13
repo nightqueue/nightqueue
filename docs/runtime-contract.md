@@ -365,7 +365,7 @@ a call to the foreground. The main thread (no `agent_id` in the payload) may not
 secrets file) nor a path that cannot be resolved (an absolute Glob `pattern` or Grep `glob` is
 judged by its static prefix too); Bash only as one bare command with no shell
 operator or backslash:
-`nightqueue|nq <queue|decision|project|org|connection|doctor|memory|libs|version> …`
+`nightqueue|nq <queue|decision|project|org|connection|doctor|memory|lesson|libs|version> …`
 (not `queue session`, `decision export|import`, `project add|move`, `queue add --run`,
 `doctor --fix`, `--follow` or `--foreground`) or a read-only `git -C <checkout> …`; and
 `Agent`/`Task` only for the `triage`, `qa` and `reviewer` subagents (`<role>`,
@@ -403,7 +403,7 @@ a worktree another live session holds is never dropped. It always answers nothin
 fails the session. What it misses, `nightqueue open` and `nightqueue doctor --fix` drop once the
 worktree is stale (see [the CLI](cli.md#sandbox)).
 
-The twenty-nine MCP tools, with the parameters `nightqueue mcp` actually accepts:
+The thirty-one MCP tools, with the parameters `nightqueue mcp` actually accepts:
 
 | tool | parameters |
 |---|---|
@@ -412,6 +412,8 @@ The twenty-nine MCP tools, with the parameters `nightqueue mcp` actually accepts
 | `phase_prompt` | `target` (`triager`, `explore`, `architect`, `coder`, `coder-fix`, `verifier`, `runtime`, `qa-lite`, `qa-analyst`, `qa-prover`, `reflector` - no artifact, `check` null), `query?`, `stage?`, `delivery_constraints?`, `raw_evidence?`, `group?` (required for `qa-prover`), `note?`, `artifact?` (`runtime` only), `project?`, `slug?` |
 | `lesson_save` | `title`, `root_cause`, `solution`, `prevention`, `attempts?`, `project?`, `target?` (a title the owner already has bumps its `attempts`; answers `deduped` and `violated` - `true` only inside a queue job, on a dedup onto a lesson this run was given, which also bumps the lesson's `violated`) |
 | `memory_recall` | `query?`, `project?` |
+| `lesson_delete` | `id` (`L344` or the plain number), `project` (name or key): deletes one lesson and its search entry; an unknown id or another project's is refused; refused inside a queue job; answers `{id, ref, title, project}` |
+| `memory_delete` | `id` (`M446` or the plain number), `project` (name or key): deletes one memory and its search entry; an unknown id or another project's is refused; refused inside a queue job; answers `{id, ref, key, project}` |
 | `memory_save` | `key`, `value`, `project?` (a key the owner already has is kept, never overwritten: answers `deduped: true` with the stored value; answers `{id, ref: "M<id>", project, deduped, value}`; allowed inside a queue job) |
 | `index_save` | `project`, `repo_root`, `files[{path, responsibility}]`, `libs?[{lib, version}]` |
 | `index_recall` | `project`, `repo_root?`, `query?` |

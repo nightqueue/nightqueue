@@ -23,6 +23,15 @@ export function refuseDecisionWriteInsideJob(env, action) {
   );
 }
 
+// Refuses deleting a lesson or a memory from inside a queue run: what the corpus keeps is the operator's call.
+export function refuseMemoryDeleteInsideJob(env, action) {
+  const own = callerJobId(env);
+  if (own === null) return;
+  throw new UserError(
+    `refused: ${action} inside ${jobRef(own)}: deleting lessons and memories is the operator's call, made only outside a queue run; a run records them (\`lesson_save\`, \`memory_save\`) and never deletes one`,
+  );
+}
+
 // Refuses a command that would change the home - or, with `host`, the Claude settings - the unattended runner itself uses; a temporary home is always allowed.
 export function refuseHomeWriteInsideJob(env, { host = false } = {}) {
   const own = callerJobId(env);

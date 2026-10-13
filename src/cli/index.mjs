@@ -10,6 +10,7 @@ import * as doctor from "./doctor.mjs";
 import * as embed from "./embed.mjs";
 import * as hook from "./hook.mjs";
 import * as init from "./init.mjs";
+import * as lesson from "./lesson.mjs";
 import * as libs from "./libs.mjs";
 import * as mcp from "./mcp.mjs";
 import * as memory from "./memory.mjs";
@@ -40,6 +41,7 @@ const COMMANDS = new Map([
   ["hook", hook.run],
   ["embed", embed.run],
   ["memory", memory.run],
+  ["lesson", lesson.run],
   ["decision", decision.run],
   ["queue", queue.run],
   ["verify", verify.run],
@@ -59,7 +61,7 @@ const READ_ONLY_COMMANDS = new Set(["doctor", "version", "decision", "verify", "
 
 const READ_ONLY_SUBCOMMANDS = new Set(["list", "test"]);
 
-const SELF_LOCKING_COMMANDS = new Set(["mcp", "studio", "hook", "embed", "memory", "queue", "run"]);
+const SELF_LOCKING_COMMANDS = new Set(["mcp", "studio", "hook", "embed", "memory", "lesson", "queue", "run"]);
 
 const HOME_WRITE_COMMANDS = new Set(["init", "setup", "update"]);
 
@@ -99,7 +101,7 @@ commands:
   connection test <name>                    check a stored connection against its service
   connection list [--json]                  list connections, their type and the orgs using them
   connection remove <name>                  unbind a connection from every org and delete its secret
-  mcp                                       start the stdio MCP server that exposes the twenty-nine memory and queue tools
+  mcp                                       start the stdio MCP server that exposes the thirty-one memory and queue tools
   mcp --http [--port <n>] [--token <t>]     serve the same tools over Streamable HTTP on 127.0.0.1
   studio [--port <n>] [--api-only] [--no-open]  serve nightqueue studio, the local web cockpit, on 127.0.0.1
   hook <name>                               run a hook (session-start, prompt-context, agent-foreground, merger-guard, subagent-stop), reading the event JSON from stdin
@@ -107,6 +109,8 @@ commands:
   embed download                            download the embedding weights into the home (the only network path)
   embed backfill                            compute the embeddings of the lessons and decisions that still have none
   memory stats [--json]                     count lessons, memories, index entries and runs per project
+  memory delete <id> [--project <name>]     delete one memory (M446 or 446) and its search entry; refused inside a queue job
+  lesson delete <id> [--project <name>]     delete one lesson (L344 or 344) and its search entry; refused inside a queue job
   decision list [--project|--org] [--status]  list the architecture decisions of a project and of its org
   decision show <number|ref> [--project|--org]  print one decision in full (D-7, DLW/D-3)
   decision export <number|ref> [--dir] [--force]  write one decision as a markdown file (default: docs, folder decisions, of the current directory); never writes the database

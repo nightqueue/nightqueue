@@ -100,6 +100,7 @@ function lessonsDomain(env, db) {
   return {
     saveLesson: async (lesson) => lessons.saveLesson(lesson, env),
     getLesson: async (id) => lessons.getLesson(id, env),
+    deleteLesson: async (spec) => lessons.deleteLesson(spec, env),
     bumpAttempts: async (id) => lessons.bumpAttempts(id, env),
     bumpViolation: async (id) => lessons.bumpViolation(id, env),
     markInjected: async (ids) => lessons.markInjected(ids, env),
@@ -117,6 +118,7 @@ function memoryDomain(env) {
   return {
     saveMemory: async (entry) => memory.saveMemory(entry, env),
     saveMemoryDeduped: async (entry) => memory.saveMemoryDeduped(entry, env),
+    deleteMemory: async (spec) => memory.deleteMemory(spec, env),
     recentMemories: async (spec) => memory.recentMemories(spec, env),
     searchMemories: async (spec) => memory.searchMemories(spec, env),
     memoryByKey: async (spec) => memory.memoryByKey(spec, env),

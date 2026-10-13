@@ -515,6 +515,19 @@ own MCP servers, plugins, skills, agents and user hooks; only a literal `true` o
 job back into inheriting them. See [Queue](queue.md) for what an isolated job's
 environment is and is not, and for the `job environment` row of `nightqueue doctor`.
 
+## Lessons and memories
+
+```sh
+nightqueue lesson delete L344 --project api   # delete one lesson (L344 or 344) and its search entry
+nightqueue memory delete M446                 # delete one memory (M446 or 446) and its search entry
+```
+
+Each command deletes one row by id and answers its id and title (a memory's key). An unknown id is
+an error. With `--project <name>`, an id that belongs to another project is refused; both commands
+delete nothing in those cases and are refused inside a queue job. A deleted row never comes back in
+`lesson_recall`, `memory_recall` or `context_for_phase`. The MCP tools `lesson_delete` and
+`memory_delete` do the same and require `project`.
+
 ## Decisions
 
 ```sh

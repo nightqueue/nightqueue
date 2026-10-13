@@ -88,6 +88,17 @@ export function parseJobRef(value) {
   return ref.id;
 }
 
+// Resolves a lesson or memory id given as the plain number or with its display prefix (`L344`, `M446`), refusing anything else.
+export function parseRecordId(value, prefix) {
+  const text = refText(value);
+  const match = text === null ? null : new RegExp(`^${prefix}?(\\d+)$`).exec(text);
+  const id = match ? positiveNumber(match[1]) : null;
+  if (id === null || (typeof value === "number" && !Number.isInteger(value))) {
+    throw new UserError(`expected a ${prefix === "L" ? "lesson" : "memory"} id (\`${prefix}<id>\` or the plain number), got \`${value}\``);
+  }
+  return id;
+}
+
 // Splits a name into upper-case alphanumeric hyphen parts, starting at the first letter.
 function nameParts(name) {
   const parts = String(name ?? "").toUpperCase().split("-").map((part) => part.replace(/[^A-Z0-9]/g, ""));
