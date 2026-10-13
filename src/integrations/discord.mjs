@@ -13,6 +13,9 @@ const EMBED_FIELD_MAX = 1024;
 const EMBED_FOOTER_MAX = 2048;
 const MERGED_COLOR = 0x2ECC71;
 const DONE_LABEL = "What was done:";
+const MAX_FIELDS = 25;
+const ORIGIN_ORDER = Object.freeze(["linear", "sentry", "discord"]);
+const FIELD_NAMES = Object.freeze({ linear: "Linear", sentry: "Sentry", discord: "Thread" });
 const WEBHOOK_NAME_MAX = 80;
 const NO_CHANNEL_DETAIL = "the webhook answered no channel";
 const CONNECTED_DESCRIPTION = "This channel gets the “job closed” notice of the projects linked to this connection.";
@@ -146,6 +149,14 @@ function coversDiscord(ref, { connections }) {
   return { connection: null, detail: `thread or other channel: probes the org's webhooks of guild ${guild} at close (${candidates})` };
 }
 
+// The label and jump link of a Discord origin, built from its ids without any request.
+function describeDiscord(ref) {
+  const { guild, channel, message } = refParts(ref);
+  if (!guild || !channel) return { detail: "not a guild/channel reference" };
+  const target = message ? `${channel}/${message}` : channel;
+  return { label: "thread", url: `https://discord.com/channels/${guild}/${target}`, title: null };
+}
+
 // The first seven characters of a merge sha.
 function shortSha(sha) {
   return typeof sha === "string" && sha ? sha.slice(0, 7) : "unknown";
@@ -173,14 +184,20 @@ function capitalise(text) {
   return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
+// The whole "What was done:" paragraph of a notice, or an empty text when it has none.
+function doneParagraph(noticeMd) {
+  const text = String(noticeMd ?? "");
+  const labelAt = text.indexOf(DONE_LABEL);
+  return labelAt === -1 ? "" : text.slice(labelAt + DONE_LABEL.length).split(/\n\s*\n/)[0].trim();
+}
+
 // The headline and first "What was done:" sentence of a job notice, or null for a blank notice; a sentence ends at `.`, `!` or `?` followed by whitespace or the end, so an abbreviation like `e.g.` cuts it there.
 export function noticeSummary(noticeMd) {
   const text = String(noticeMd ?? "");
   const first = text.split("\n").map((line) => line.trim()).find((line) => line !== "");
   if (!first) return null;
   const headline = first.replace(/^[\p{Extended_Pictographic}️\s]+/u, "").replace(/^(?:Delivered|(?:Partially )?fixed)\s+—\s*/i, "").trim();
-  const labelAt = text.indexOf(DONE_LABEL);
-  const paragraph = labelAt === -1 ? "" : text.slice(labelAt + DONE_LABEL.length).split(/\n\s*\n/)[0].trim();
+  const paragraph = doneParagraph(text);
   const sentence = /^[\s\S]*?(?:[.!?](?=\s|$)|$)/.exec(paragraph)[0].trim();
   return { headline, firstDone: sentence || null };
 }
@@ -212,16 +229,55 @@ function isProbeRefusal(answer) {
   return typeof answer.status === "number" && answer.status >= 400 && answer.status < 500 && answer.status !== 429;
 }
 
-// The reply posted under the message the job came from.
-function replyContent(ref, result, job) {
-  const { guild, channel, message } = refParts(ref);
-  const target = message ? `${channel}/${message}` : channel;
-  const jump = `[${message ? "message" : "thread"}](https://discord.com/channels/${guild}/${target})`;
+// The origins a provider received, none when the payload is not a list.
+function originsOf(origins) {
+  return Array.isArray(origins) ? origins.filter((origin) => origin && FIELD_NAMES[origin.kind]) : [];
+}
+
+// The title of the problem the job fixed: the first origin issue title (Linear, then Sentry), else the pull request title, else the job ref.
+function problemTitle(job, origins) {
+  const titled = ORIGIN_ORDER.map((kind) => origins.find((origin) => origin.kind === kind && origin.title)).find(Boolean);
+  return String(titled?.title ?? job?.title ?? "").trim() || String(job?.ref ?? "job");
+}
+
+// The whole "What was done:" text of the notice, the pull request title standing in when it has none.
+function replyDescription(job) {
+  const done = doneParagraph(job?.notice_md) || String(job?.title ?? "").trim();
+  return cut(capitalise(done), EMBED_DESCRIPTION_MAX);
+}
+
+// The Commit field: the merge sha linked to the commit page of the repository the pull request URL names, or none.
+function commitField(result) {
+  const repo = /^(.*)\/pull\/\d+/.exec(String(result?.prUrl ?? ""))?.[1];
+  if (!repo || typeof result?.mergeSha !== "string" || !result.mergeSha) return [];
+  return [{ name: "Commit", value: cut(`[${shortSha(result.mergeSha)}](${repo}/commit/${result.mergeSha})`, EMBED_FIELD_MAX), inline: true }];
+}
+
+// The Commit and PR fields both messages carry.
+function mergeFields(result) {
+  return [...commitField(result), { name: "PR", value: cut(pullRequestLink(result), EMBED_FIELD_MAX), inline: true }];
+}
+
+// One field per origin of the given kinds, in Linear, Sentry, Thread order; a missing link leaves the plain ref.
+function originFields(origins, kinds) {
+  return ORIGIN_ORDER.filter((kind) => kinds.includes(kind)).flatMap((kind) =>
+    origins
+      .filter((origin) => origin.kind === kind)
+      .map((origin) => {
+        const label = String(origin.label ?? origin.ref);
+        return { name: FIELD_NAMES[kind], value: cut(origin.url ? `[${label}](${origin.url})` : label, EMBED_FIELD_MAX), inline: true };
+      }),
+  );
+}
+
+// The reply posted under the message the job came from: an answer to the reported problem with every link of the job.
+function replyContent(result, job, origins) {
+  const known = originsOf(origins);
   return {
     ...mergeEmbed(result),
-    title: cut(`Fixed · ${job?.ref ?? "job"}`, EMBED_TITLE_MAX),
-    description: closedDescription(job),
-    fields: [{ name: "Reported", value: cut(jump, EMBED_FIELD_MAX) }],
+    title: cut(`✅ Fixed - ${problemTitle(job, known)}`, EMBED_TITLE_MAX),
+    description: replyDescription(job),
+    fields: [...mergeFields(result), ...originFields(known, ["linear", "sentry"])].slice(0, MAX_FIELDS),
   };
 }
 
@@ -237,9 +293,9 @@ async function probeThread({ ref, embeds, connections, post }) {
 }
 
 // Replies to the message the job came from: in its channel when an org webhook posts there, otherwise as a thread probe.
-async function replyToOrigin({ ref, job, result, settings, connections, http }) {
+async function replyToOrigin({ ref, job, result, origins, settings, connections, http }) {
   if (settings?.replyToOrigin === false) return { status: "skipped", note: "replyToOrigin is false" };
-  const embeds = [replyContent(ref, result, job)];
+  const embeds = [replyContent(result, job, origins)];
   const post = (connection, message) => postMessage(http, connection, message);
   const { channel } = refParts(ref);
   const match = connections.find((connection) => connection.channelId === channel);
@@ -250,23 +306,24 @@ async function replyToOrigin({ ref, job, result, settings, connections, http }) 
 }
 
 // The log embed of a closed job: titled by its ref and slug, described by its notice.
-function closedLogContent(job, result) {
+function closedLogContent(job, result, origins) {
   const ref = job?.ref ?? "job";
   return {
     ...mergeEmbed(result),
     title: cut(job?.slug ? `${ref} closed · ${job.slug}` : `${ref} closed`, EMBED_TITLE_MAX),
     description: closedDescription(job),
     fields: [
-      { name: "PR", value: cut(pullRequestLink(result), EMBED_FIELD_MAX), inline: true },
+      ...mergeFields(result),
       { name: "Project", value: cut(job?.project ?? "unknown", EMBED_FIELD_MAX), inline: true },
-    ],
+      ...originFields(originsOf(origins), ORIGIN_ORDER),
+    ].slice(0, MAX_FIELDS),
   };
 }
 
 // Posts a job event to the project's log webhook.
-async function logToDiscord({ event, job, result, connection, http }) {
+async function logToDiscord({ event, job, result, origins, connection, http }) {
   if (event !== "closed") return { status: "skipped", note: `no log for the event ${event}` };
-  const answer = await postMessage(http, connection, { embeds: [closedLogContent(job, result)] });
+  const answer = await postMessage(http, connection, { embeds: [closedLogContent(job, result, origins)] });
   if (answer.ok) return { status: "done", note: `logged through ${connection.name}` };
   if (discordError(answer).code === FORUM_CODE) return { status: "warning", note: `log not posted through ${connection.name}: its channel is a forum and the log has no thread to post in` };
   return { status: "warning", note: `log not posted through ${connection.name} (${answer.detail})` };
@@ -292,7 +349,7 @@ export const discord = {
     fromTest: fromWebhookTest,
   },
   capabilities: { post: true, read: false, resolve: false },
-  origin: { parse: parseDiscord, find: findDiscord },
+  origin: { parse: parseDiscord, find: findDiscord, describe: describeDiscord },
   settings: {
     replyToOrigin: { type: "boolean", default: true },
     "log.connection": { type: "connection" },

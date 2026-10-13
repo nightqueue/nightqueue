@@ -305,7 +305,7 @@ test("closing a job queued from a sentry link resolves the issue, and a refused 
   const { outcome, row } = await closeSentryJob(home, fetch);
   assert.equal(outcome.status, "closed");
   assert.deepEqual(outcome.postClose.steps[0], { name: "origin", status: "done", note: "sentry 4507: issue 4507 marked resolved" });
-  assert.deepEqual(fetch.calls.map((call) => call.method), ["PUT", "POST"]);
+  assert.deepEqual(fetch.calls.map((call) => call.method), ["GET", "PUT", "POST"]);
   assert.equal(row.status, "closed");
   assert.deepEqual(JSON.parse(row.close).data.originsNotified, { "sentry 4507": true });
   assert.equal(row.notice_md, "Closed: PR #7 merged as abc1234 on 2026-10-01");

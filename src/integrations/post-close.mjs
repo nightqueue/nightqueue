@@ -34,12 +34,37 @@ function boundHttp(ctx, deps) {
     requestJson(fetchImpl, url, { timeoutMs: Math.max(1, Math.min(HTTP_TIMEOUT_MS, ctx.remainingMs() - BUDGET_RESERVE_MS)), ...options, signal: ctx.signal });
 }
 
-// What a provider is told about the closed job and the merge that closed it.
-function closeFacts(ctx) {
+// What a provider is told about the closed job, the merge that closed it and the origins it came from.
+function closeFacts(ctx, origins) {
   return {
     job: { id: ctx.jobId, ref: ctx.jobRef, slug: ctx.slug, title: ctx.title, project: ctx.project, notice_md: ctx.noticeMd },
     result: { prUrl: ctx.prUrl, prNumber: ctx.prNumber, mergeSha: ctx.mergeSha, mergedAt: ctx.mergedAt },
+    origins,
   };
+}
+
+// Looks one origin up through its own provider: its label, url and title, or the stored ref as plain text with the reason.
+async function describeOrigin(origin, { ctx, deps, files }) {
+  const plain = { kind: origin.kind, ref: origin.ref, label: origin.ref, url: null, title: null };
+  const describe = providerOf(origin.kind)?.origin?.describe;
+  if (typeof describe !== "function") return { described: plain };
+  const lost = (reason) => ({ described: plain, warning: `${originLabel(origin)}: link not resolved (${reason})` });
+  if (ctx.signal.aborted || ctx.remainingMs() <= BUDGET_RESERVE_MS) return lost("not attempted, the post-close budget ran out");
+  try {
+    const { slot, connections } = resolveForClose({ kind: origin.kind, orgId: ctx.orgId, ...files });
+    const found = await describe(origin.ref, { slot, connections, http: boundHttp(ctx, deps) });
+    if (typeof found?.label !== "string" || !found.label) return lost(found?.detail ?? "no answer");
+    return { described: { ...plain, label: found.label, url: found.url ?? null, title: found.title ?? null } };
+  } catch {
+    return lost("the lookup failed");
+  }
+}
+
+// Describes every origin of the job in registry order, answering { described, warnings }.
+async function describeOrigins({ ctx, deps, files }) {
+  const results = [];
+  for (const origin of byRegistryOrder(ctx.origins ?? [])) results.push(await describeOrigin(origin, { ctx, deps, files }));
+  return { described: results.map((result) => result.described), warnings: results.flatMap((result) => result.warning ?? []) };
 }
 
 // A provider's answer as a step result; anything outside the contract is a warning naming the provider only.
@@ -69,7 +94,7 @@ async function callProvider(kind, action, run) {
 }
 
 // Runs one origin's close action from the progress an earlier close left, answering a result without the `notified` mark.
-async function closeOneOrigin(origin, { ctx, deps, files, progress }) {
+async function closeOneOrigin(origin, { ctx, deps, files, progress, described }) {
   const provider = providerOf(origin.kind);
   if (typeof provider?.onClosed !== "function") return answer("skipped", `${origin.kind} has no close action`);
   if (!actsOnOrigin(origin.kind, ctx.integrations)) return answer("skipped", `project has no ${origin.kind} integration`);
@@ -78,7 +103,7 @@ async function closeOneOrigin(origin, { ctx, deps, files, progress }) {
   if (ctx.signal.aborted) return answer("warning", `interrupted before the ${origin.kind} close action`);
   const settings = ctx.integrations?.[origin.kind] ?? null;
   return await callProvider(origin.kind, "close action", () =>
-    provider.onClosed({ ref: origin.ref, ...closeFacts(ctx), settings, slot, connections, http: boundHttp(ctx, deps), progress }),
+    provider.onClosed({ ref: origin.ref, ...closeFacts(ctx, described), settings, slot, connections, http: boundHttp(ctx, deps), progress }),
   );
 }
 
@@ -93,18 +118,23 @@ function recordOriginOutcome(key, result, { notified, progress }) {
 }
 
 // Tells one origin its pull request merged unless it already was, marking it notified; a throw becomes a warning.
-async function notifyOrigin(origin, { ctx, deps, files, notified, progress }) {
+async function notifyOrigin(origin, { ctx, deps, files, notified, progress, described }) {
   const key = originLabel(origin);
   const named = (result, extra = {}) => ({ status: result.status, note: `${key}: ${result.note}`, notice: result.notice === true, ...extra });
   if (notified[key] === true) return named(answer("done", "already notified"), { earlier: true });
   if (ctx.remainingMs() <= BUDGET_RESERVE_MS) return named(answer("warning", "not attempted, the post-close budget ran out"));
   try {
-    const result = await closeOneOrigin(origin, { ctx, deps, files, progress: storedMap(progress[key]) });
+    const result = await closeOneOrigin(origin, { ctx, deps, files, progress: storedMap(progress[key]), described });
     recordOriginOutcome(key, result, { notified, progress });
     return named(result);
   } catch {
     return named(answer("warning", "the close action failed"));
   }
+}
+
+// The notice line of an origin whose link could not be looked up.
+function linkWarning(note) {
+  return answer("warning", note, { notice: true });
 }
 
 // Folds the per-origin results into one: the worst status wins, every note is kept, one line per origin.
@@ -120,9 +150,11 @@ export async function originStep({ ctx, deps }) {
   if (!origins.length) return answer("skipped", "no origin");
   const marks = { notified: storedMap(ctx.data.originsNotified), progress: storedMap(ctx.data.originsProgress) };
   const files = readFiles(ctx, deps);
+  const pending = origins.some((origin) => marks.notified[originLabel(origin)] !== true);
+  const { described, warnings } = pending ? await describeOrigins({ ctx, deps, files }) : { described: [], warnings: [] };
   const results = [];
-  for (const origin of origins) results.push(await notifyOrigin(origin, { ctx, deps, files, ...marks }));
-  return foldOriginResults(results, marks);
+  for (const origin of origins) results.push(await notifyOrigin(origin, { ctx, deps, files, described, ...marks }));
+  return foldOriginResults([...results, ...warnings.map(linkWarning)], marks);
 }
 
 // The providers a project logs its closes to: a `log` action, a `log.connection` set, and `closed` among its `log.events`.
@@ -147,7 +179,7 @@ export function forgetLogged(data, integrations) {
 }
 
 // Logs the close to one provider unless it already did, answering a result whose note names the provider.
-async function logTo(provider, { ctx, deps, files, logged }) {
+async function logTo(provider, { ctx, deps, files, logged, described }) {
   const kind = provider.kind;
   if (logged[kind] === true) return answer("done", `${kind}: already logged`);
   const name = getSetting(ctx.integrations, kind, "log.connection");
@@ -158,7 +190,7 @@ async function logTo(provider, { ctx, deps, files, logged }) {
   }
   if (ctx.signal.aborted) return answer("warning", `${kind}: interrupted before the log`);
   const settings = ctx.integrations[kind];
-  const result = await callProvider(kind, "log", () => provider.log({ event: CLOSE_EVENT, ...closeFacts(ctx), settings, connection, http: boundHttp(ctx, deps) }));
+  const result = await callProvider(kind, "log", () => provider.log({ event: CLOSE_EVENT, ...closeFacts(ctx, described), settings, connection, http: boundHttp(ctx, deps) }));
   if (result.status === "done") logged[kind] = true;
   return { ...result, note: result.note.startsWith(`${kind}:`) ? result.note : `${kind}: ${result.note}` };
 }
@@ -177,7 +209,9 @@ export async function logStep({ ctx, deps }) {
   const stored = ctx.data.logged;
   const logged = stored && typeof stored === "object" && !Array.isArray(stored) ? { ...stored } : {};
   const files = readFiles(ctx, deps);
+  const pending = targets.some((provider) => logged[provider.kind] !== true);
+  const { described } = pending ? await describeOrigins({ ctx, deps, files }) : { described: [] };
   const results = [];
-  for (const provider of targets) results.push(await logTo(provider, { ctx, deps, files, logged }));
+  for (const provider of targets) results.push(await logTo(provider, { ctx, deps, files, logged, described }));
   return foldLogResults(results, logged);
 }
