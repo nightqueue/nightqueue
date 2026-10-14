@@ -498,7 +498,7 @@ The runtime waits for every subagent and background task of an unattended run; l
    The pipeline only **stops to ask the user for input** at these points (each rule lives in
    full in its own phase — this is only the index):
    - **Phase 0 (gate 2.5):** verdict `PROPOSE-ALTERNATIVE` or `ASK`.
-   - **Phase 1 (gate):** verdict `NO-CHANGE-NEEDED`, `NOT-REPRODUCIBLE` or `NEEDS-CLARIFICATION`.
+   - **Phase 1 (gate):** verdict `NOT-REPRODUCIBLE` or `NEEDS-CLARIFICATION`.
    - **Phase 3:** an insufficient brief, `## Requires user confirmation`, or the Type divergence
      valve with no confirmed `feature/refactor`.
    - **Phase 6.5 (native/device-gated capability):** the emulator/CI cannot reproduce it — not a

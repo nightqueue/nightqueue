@@ -219,7 +219,7 @@ function noChangeText(result) {
 function closedDescription(job, result) {
   const summary = noticeSummary(job?.notice_md);
   const title = String(job?.title ?? "").trim() || capitalise(summary?.headline ?? "");
-  if (isNoChange(result)) return cut(`${title}\n${noChangeText(result)}`, EMBED_DESCRIPTION_MAX);
+  if (isNoChange(result)) return cut(`${title}\n${NO_CHANGE_SENTENCE}`, EMBED_DESCRIPTION_MAX);
   if (!summary?.firstDone) return cut(title, EMBED_DESCRIPTION_MAX);
   return cut(`${title}\n${capitalise(summary.firstDone)}`, EMBED_DESCRIPTION_MAX);
 }
@@ -265,6 +265,12 @@ function problemTitle(job, origins) {
   const titled = ORIGIN_ORDER.map((kind) => origins.find((origin) => origin.kind === kind && origin.title)).find(Boolean);
   const candidates = [titled?.title, job?.operatorTitle, job?.title, job?.slug];
   return candidates.map((candidate) => String(candidate ?? "").trim()).find(Boolean) ?? "";
+}
+
+// The short error type of the Sentry origin (the title up to its first colon); empty when the job has no titled Sentry origin.
+function sentryErrorName(origins) {
+  const sentry = origins.find((origin) => origin.kind === "sentry" && origin.title);
+  return String(sentry?.title ?? "").split(":")[0].trim();
 }
 
 // The whole notice as the reply text, cut at the embed limit; the pull request title or link stands in for an empty notice, and a job resolved without change gets the no-change sentence and the run's conclusion.
@@ -330,7 +336,7 @@ async function replyToOrigin({ ref, job, result, origins, settings, connections,
 // The log embed of a closed job: titled by its ref and the problem it fixed, described by its notice.
 function closedLogContent(job, result, origins) {
   const ref = job?.ref ?? "job";
-  const problem = problemTitle(job, originsOf(origins));
+  const problem = sentryErrorName(originsOf(origins)) || problemTitle(job, originsOf(origins));
   return {
     ...closingEmbed(result),
     title: cut(problem ? `${ref} closed · ${problem}` : `${ref} closed`, EMBED_TITLE_MAX),

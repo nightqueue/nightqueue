@@ -38,7 +38,7 @@ function runningJob(env) {
 function writeOutcome(env, outcome) {
   const dir = runDir(ensureProject(env, "alpha"), SLUG, env);
   mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, "state.json"), JSON.stringify({ schemaVersion: 1, slug: SLUG, phases: [], outcome }));
+  writeFileSync(join(dir, "state.json"), JSON.stringify({ schemaVersion: 1, slug: SLUG, phases: [], termination: { phase: "triage", reason: "NO-CHANGE-NEEDED", at: "2026-01-01T00:00:00.000Z" }, outcome }));
 }
 
 // A git double for the preflight: a clean checkout of the default branch.

@@ -345,7 +345,7 @@ test("the reply is the whole notice with no title on top, and every link but the
   assert.equal(fetch.calls[3].body.embeds[0].description, `[#7](${RESULT.prUrl})`);
 });
 
-test("a job resolved without change replies and logs with its conclusion, no PR field, no link, no merge footer", async () => {
+test("a job resolved without change replies and logs (the log without it), no PR field, no link, no merge footer", async () => {
   const conclusion = "✅ Resolved — no code change needed\n\nThe crash comes from a browser extension.";
   const result = { prUrl: null, prNumber: null, mergeSha: null, mergedAt: null, resolution: "no-change", conclusion, resolvedAt: "2026-10-14T10:00:00.000Z" };
   const job = { ...JOB, notice_md: conclusion };
@@ -358,7 +358,7 @@ test("a job resolved without change replies and logs with its conclusion, no PR 
   assert.equal(reply.description, `Resolved without a code change.\n\n${conclusion}`);
   assert.deepEqual(reply.fields.map((field) => field.name), ["Linear", "Sentry"]);
   const [log] = fetch.calls[1].body.embeds;
-  assert.equal(log.description, `fix the crash\nResolved without a code change.\n\n${conclusion}`);
+  assert.equal(log.description, "fix the crash\nResolved without a code change.");
   assert.deepEqual(log.fields.map((field) => field.name), ["Project", "Linear", "Sentry", "Thread"]);
   for (const embed of [reply, log]) {
     assert.equal(embed.url, undefined);
@@ -370,11 +370,11 @@ test("a job resolved without change replies and logs with its conclusion, no PR 
   }
 });
 
-test("the log carries PR, Project, then Linear, Sentry and Thread, titled by the Linear issue", async () => {
+test("the log carries PR, Project, then Linear, Sentry and Thread, titled by the Sentry error type", async () => {
   const fetch = fakeFetch({ [`POST ${OPS_URL}?wait=true`]: {} });
   await discord.log({ event: "closed", job: { ...JOB, slug: "the-crash", operatorTitle: "the crash is fixed" }, result: RESULT, origins: ORIGINS, settings: {}, connection: OPS, http: httpOf(fetch) });
   const [embed] = fetch.calls[0].body.embeds;
-  assert.equal(embed.title, "J-1 closed · Login crashes");
+  assert.equal(embed.title, "J-1 closed · TypeError");
   assert.equal(embed.description, "fix the crash");
   assert.deepEqual(embed.fields.map((field) => [field.name, field.value]), [
     ["PR", `[#7](${RESULT.prUrl})`],
@@ -392,6 +392,33 @@ test("the log carries PR, Project, then Linear, Sentry and Thread, titled by the
   assert.equal(fetch.calls[3].body.embeds[0].title, "J-1 closed · the crash is fixed");
   await discord.log({ event: "closed", job: { ...JOB, title: "", slug: "the-crash" }, result: RESULT, origins: [], settings: {}, connection: OPS, http: httpOf(fetch) });
   assert.equal(fetch.calls[4].body.embeds[0].title, "J-1 closed · the-crash");
+});
+
+test("a job with no Sentry origin keeps today's title and description, with a pull request and without one", async () => {
+  const noChange = { prUrl: null, prNumber: null, mergeSha: null, resolution: "no-change", conclusion: "Not a defect." };
+  const notice = "✅ Fixed — the crash is gone\n\nWhat was done: a guard was added. Nothing else changed.";
+  const fetch = fakeFetch({ [`POST ${OPS_URL}?wait=true`]: {} });
+  const job = { ...JOB, operatorTitle: "the crash is fixed", notice_md: notice };
+  const linearOnly = [ORIGINS[0], ORIGINS[2]];
+  await discord.log({ event: "closed", job, result: RESULT, origins: linearOnly, settings: {}, connection: OPS, http: httpOf(fetch) });
+  await discord.log({ event: "closed", job, result: noChange, origins: linearOnly, settings: {}, connection: OPS, http: httpOf(fetch) });
+  const [withPr, without] = fetch.calls.map((call) => call.body.embeds[0]);
+  assert.equal(withPr.title, "J-1 closed · Login crashes");
+  assert.equal(withPr.description, "fix the crash\nA guard was added.");
+  assert.equal(without.title, "J-1 closed · Login crashes");
+  assert.equal(without.description, "fix the crash\nResolved without a code change.");
+});
+
+test("the J-193 no-change log is titled by the Sentry error type and described in two lines only", async () => {
+  const sentry = { kind: "sentry", ref: "9001", label: "JAVA-1", url: "https://sentry.io/organizations/acme/issues/9001/", title: "OutOfMemoryError: Java heap space" };
+  const result = { prUrl: null, prNumber: null, mergeSha: null, resolution: "no-change", conclusion: "Single development event." };
+  const job = { id: 193, ref: "J-193", title: "Heap space error", project: "alpha", notice_md: result.conclusion };
+  const fetch = fakeFetch({ [`POST ${OPS_URL}?wait=true`]: {} });
+  await discord.log({ event: "closed", job, result, origins: [sentry], settings: {}, connection: OPS, http: httpOf(fetch) });
+  const [embed] = fetch.calls[0].body.embeds;
+  assert.equal(embed.title, "J-193 closed · OutOfMemoryError");
+  assert.equal(embed.description, "Heap space error\nResolved without a code change.");
+  assert.equal(embed.description.split("\n").length, 2);
 });
 
 test("a discord origin is described offline as a thread jump link", () => {

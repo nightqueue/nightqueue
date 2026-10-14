@@ -184,9 +184,9 @@ function resolvePrUrl(log, { state, record }) {
 }
 
 // Classifies the run's own ending, exactly as if a runtime kill never happened: the gate, the pull request and the notice rules.
-function classifyEnding({ record, resultText, log, ending, prUrl, planPath, runOutcome }) {
+function classifyEnding({ record, state, resultText, log, ending, prUrl, planPath, runOutcome }) {
   const gate = record?.status ? record.status === "gate" : hasGateMarker(resultText) || hasGateMarkerInStream(log);
-  const noChange = record?.status === NO_CHANGE_OUTCOME;
+  const noChange = record?.status === NO_CHANGE_OUTCOME && state?.termination?.phase === "triage";
   const reason = gateReason(log, resultText, record?.notice ?? null);
   const status = decideStatus({ ...ending, prUrl, gate, noChange, reason, runOutcome });
   if (status === "gate" && isBrokenGateNotice(reason, planPath)) {
@@ -208,7 +208,7 @@ export function classifyJobResult({ log, exitCode, timedOut = false, idleTimedOu
     return { status: "failed", prUrl, noticeMd: withStrayPr(runtimeKillNotice(kill), stray, prUrl), resultText };
   }
   const ending = { exitCode, timedOut, idleTimedOut, stopped };
-  const base = classifyEnding({ record, resultText, log, ending, prUrl, planPath, runOutcome });
+  const base = classifyEnding({ record, state, resultText, log, ending, prUrl, planPath, runOutcome });
   const noticeMd = kill ? withAbandonedCommand(base.noticeMd, kill.description) : base.noticeMd;
   return { ...base, prUrl, noticeMd: withStrayPr(noticeMd, stray, prUrl), resultText };
 }

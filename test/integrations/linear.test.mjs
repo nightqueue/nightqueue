@@ -13,6 +13,7 @@ import { detectOrigins, explicitOrigin } from "../../src/integrations/origin.mjs
 import { openDb } from "../../src/memory/db.mjs";
 import { acquireClose, claimJobById, finishJob, getJob } from "../../src/memory/jobs.mjs";
 import { CLOSE_STEPS, runClosePipeline } from "../../src/queue/close.mjs";
+import { noChangeConclusion } from "../../src/queue/run-notice.mjs";
 import { runPostCloseSteps } from "../../src/queue/close-start.mjs";
 import { openStore } from "../../src/store/open.mjs";
 import { makeHome, makeProject, projectIdOf, seedDoneJob } from "../../test-support/memory.mjs";
@@ -396,6 +397,16 @@ test("a close resolved without change moves the issue to its first completed sta
   ]);
   const body = calls.at(-1).variables.body;
   for (const word of ["Merged", "merged as", "pull request", "/pull/"]) assert.equal(body.includes(word), false, `the no-change comment says ${word}`);
+});
+
+test("the comment of a no-change close carries the headline once and no instruction to confirm before closing", async () => {
+  const notice = "✅ Resolved — no code change needed\n\nThe loop comes from the CDN cache rule. Confirm it is still a single development event before closing.";
+  const { calls } = await closeWithResult({ prUrl: null, prNumber: null, mergeSha: null, resolution: "no-change", conclusion: noChangeConclusion(notice) });
+  const body = calls.at(-1).variables.body;
+  assert.equal(body.match(/Resolved without a code change/gi).length, 1);
+  assert.equal(/no code change/i.test(body), false, `the comment repeats the headline: ${body}`);
+  assert.equal(/confirm[\s\S]*before closing/i.test(body), false, `the comment tells the operator to confirm: ${body}`);
+  assert.ok(body.includes("The loop comes from the CDN cache rule."));
 });
 
 test("closing a job queued from a linear link in a project with no integrations moves the issue and comments once", async (t) => {

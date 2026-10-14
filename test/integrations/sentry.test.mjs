@@ -13,6 +13,7 @@ import { detectOrigins, explicitOrigin } from "../../src/integrations/origin.mjs
 import { sentry } from "../../src/integrations/sentry.mjs";
 import { acquireClose, getJob } from "../../src/memory/jobs.mjs";
 import { CLOSE_STEPS, runClosePipeline } from "../../src/queue/close.mjs";
+import { noChangeConclusion } from "../../src/queue/run-notice.mjs";
 import { openStore } from "../../src/store/open.mjs";
 import { makeHome, makeProject, projectIdOf, seedDoneJob } from "../../test-support/memory.mjs";
 import { orgOfProject, setIntegrations } from "../../test-support/origin-provider.mjs";
@@ -318,6 +319,25 @@ test("onClosed on a job resolved without change sets the onClosed status and not
     const note = fetch.calls[1].body;
     for (const word of ["Fixed by", "merged as", "pull request", "/pull/"]) assert.equal(note.includes(word), false, `the no-change note says ${word}`);
   }
+});
+
+test("the note of a no-change close carries the headline once and no instruction to confirm before closing", async () => {
+  const notice = "✅ Resolved — no code change needed\n\nThe crash comes from an extension. Confirm it is still a single development event before closing.";
+  const fetch = fakeFetch(issueRoutes());
+  await sentry.onClosed({
+    ref: "4507",
+    job: { id: 1, ref: "J-1", title: "fix the crash", project: "alpha" },
+    result: { prUrl: null, prNumber: null, mergeSha: null, resolution: "no-change", conclusion: noChangeConclusion(notice) },
+    settings: {},
+    slot: { ...RECORD, name: "sn" },
+    connections: [],
+    http: httpOf(fetch),
+  });
+  const { text } = JSON.parse(fetch.calls[1].body);
+  assert.equal(text.match(/Resolved without a code change/gi).length, 1);
+  assert.equal(/no code change/i.test(text), false, `the note repeats the headline: ${text}`);
+  assert.equal(/confirm[\s\S]*before closing/i.test(text), false, `the note tells the operator to confirm: ${text}`);
+  assert.ok(text.includes("The crash comes from an extension."));
 });
 
 test("closing a job queued from a sentry link resolves the issue, and a refused update leaves the job closed with a notice line", async (t) => {
