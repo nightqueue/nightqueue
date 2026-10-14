@@ -10,7 +10,7 @@ const CONCLUDED = toNdjson([systemInitEvent(), resultEvent({ text: noticeText(CO
 
 // The state.json of a run that recorded the given outcome.
 function stateWith(outcome) {
-  return { schemaVersion: 1, slug: "fix-the-loop", phases: [], outcome };
+  return { schemaVersion: 1, slug: "fix-the-loop", phases: [], termination: { phase: "triage", reason: "NO-CHANGE-NEEDED", at: "2026-01-01T00:00:00.000Z" }, outcome };
 }
 
 const NO_CHANGE = stateWith({ status: "no_change", notice: CONCLUSION });
@@ -75,6 +75,16 @@ test("no_change without a notice is a silent stop, and no_change on an attempt t
   assert.deepEqual([silent.status, silent.noticeMd], ["failed", SILENT_STOP_NOTICE]);
   for (const runOutcome of ["local_commit", "pr_opened"]) {
     assert.equal(classifyJobResult({ log: CONCLUDED, exitCode: 0, state: NO_CHANGE, runOutcome }).status, "failed", runOutcome);
+  }
+});
+
+test("no_change recorded outside the triage phase, or with no termination, ends as it would without it", () => {
+  const elsewhere = { ...NO_CHANGE, termination: { phase: "implement", reason: "x", at: "2026-01-01T00:00:00.000Z" } };
+  const unrecorded = { ...NO_CHANGE, termination: undefined };
+  for (const state of [elsewhere, unrecorded]) {
+    const outcome = classifyJobResult({ log: CONCLUDED, exitCode: 0, state, runOutcome: "no_commit" });
+    assert.equal(outcome.status, "cancelled");
+    assert.equal(outcome.resolution, undefined);
   }
 });
 

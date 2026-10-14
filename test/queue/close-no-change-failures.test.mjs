@@ -23,7 +23,7 @@ const LOG = `POST ${OPS_URL}?wait=true`;
 const SENTRY_PUT = `PUT ${SENTRY_API}/issues/4507/`;
 const SENTRY_NOTE = `POST ${SENTRY_API}/issues/4507/comments/`;
 const LINEAR_WRITES = ["issueUpdate", "attachmentCreate", "commentCreate"];
-const CONCLUSION = "✅ Resolved — no code change needed\n\nThe loop comes from the CDN cache rule, not from this repository.";
+const CONCLUSION = "✅ Resolved — no code change needed\n\nThe loop comes from the CDN cache rule, not from this repository. Confirm it is still a single event before closing.";
 const STATES = [{ id: "s-done", name: "Done", type: "completed", position: 3 }];
 
 // The GraphQL operation of a Linear request body, named by its root field.
@@ -174,7 +174,7 @@ for (const failure of FAILURES) {
     assert.equal(rerun.code, 0, [...rerun.out, ...rerun.err].join("\n"));
     assert.deepEqual(writesOf(redo), failure.redoWrites, "the re-run wrote again to a service already told");
     const sentryNote = redo.calls.find((call) => call.key === SENTRY_NOTE);
-    if (sentryNote) assert.match(JSON.parse(sentryNote.body).text, /^Resolved without a code change \(J-\d+, nightqueue\): ✅ Resolved/);
+    if (sentryNote) assert.match(JSON.parse(sentryNote.body).text, /^Resolved without a code change \(J-\d+, nightqueue\): The loop comes from the CDN cache rule, not from this repository\.$/);
     const row = getJob(home.id, home.env);
     assert.equal(row.status, "closed");
     assert.equal(JSON.parse(row.close).data.resolvedWithoutChange, true);

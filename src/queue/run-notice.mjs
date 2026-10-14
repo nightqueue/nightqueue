@@ -29,3 +29,20 @@ export function withoutRuntimeAppendedLines(notice) {
 export function runOwnNotice(notice) {
   return trailingStripped(notice, ORIGIN_EXCLUDED_LINE_PREFIXES).trim() || null;
 }
+
+const NO_CHANGE_HEADLINE = /^[^\p{L}]*resolved\b.*\bno code change\b/iu;
+const OPERATOR_CONFIRMATION = /\bconfirm\b.*\bbefore closing\b/i;
+
+// One line of a conclusion without its operator-only confirmation sentences; blank when nothing is left.
+function withoutConfirmation(line) {
+  return line.split(/(?<=[.!?])\s+/).filter((sentence) => !OPERATOR_CONFIRMATION.test(sentence)).join(" ").trim();
+}
+
+// The run's own notice for the origins of a no-change close: no headline repeating the resolution and no instruction to the operator, or null when nothing is left.
+export function noChangeConclusion(notice) {
+  const own = runOwnNotice(notice);
+  if (own === null) return null;
+  const lines = own.split("\n").filter((line) => !NO_CHANGE_HEADLINE.test(line.trim())).map(withoutConfirmation);
+  const kept = lines.filter((line, index) => line !== "" || (index > 0 && lines[index - 1] !== ""));
+  return kept.join("\n").trim() || null;
+}

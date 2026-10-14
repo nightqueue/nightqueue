@@ -14,7 +14,8 @@ import { makeHome, makeProject, projectIdOf, seedDoneJob } from "../../test-supp
 import { bindTrackerConnection, setIntegrations, trackerProvider, TRACKER_URL } from "../../test-support/origin-provider.mjs";
 
 const WORKER = "close:test:1:nochange";
-const CONCLUSION = "✅ Resolved — no code change needed\n\nThe loop comes from the CDN cache rule, not from this repository.";
+const CONCLUSION = "✅ Resolved — no code change needed\n\nThe loop comes from the CDN cache rule, not from this repository. Confirm it is still a single event before closing.";
+const ORIGIN_CONCLUSION = "The loop comes from the CDN cache rule, not from this repository.";
 const NOTICE = `${CONCLUSION}\n\n${KEPT_PREFIX}/tmp/wt-9 - it has uncommitted changes.`;
 const NO_PR_NOTE = "no pull request: resolved without a code change";
 const LOGGING = { tracker: { log: { connection: "trk" } } };
@@ -86,6 +87,7 @@ test("a done job with no pull request closes with no gh or git call: the pre ste
       assert.deepEqual([checklist.steps[name].status, checklist.steps[name].note], ["skipped", NO_PR_NOTE], name);
     }
     assert.equal(checklist.steps.settle.status, "done");
+    for (const name of ["origin", "log"]) assert.ok(checklist.finishedAt >= checklist.steps[name].at, `finishedAt precedes the ${name} step`);
     assert.equal(checklist.data.resolvedWithoutChange, true);
     assert.match(checklist.data.noticeLine, /^Closed: resolved without change on \d{4}-\d{2}-\d{2}$/);
     assert.equal(outcome.postClose.steps.map((step) => `${step.name} ${step.status}`).join(", "), "origin done, log done");
@@ -97,7 +99,7 @@ test("a done job with no pull request closes with no gh or git call: the pre ste
   });
   for (const result of [...seen.origin, ...seen.log]) {
     assert.equal(result.resolution, "no-change");
-    assert.equal(result.conclusion, CONCLUSION, "the conclusion carried a line the runtime appended");
+    assert.equal(result.conclusion, ORIGIN_CONCLUSION, "the conclusion carried a line the runtime appended");
     assert.equal(result.prUrl, null);
     assert.equal(result.mergeSha, null);
   }
@@ -132,7 +134,7 @@ test("--steps origin on a closed job resolved without change re-tells only that 
   assert.equal(second.origin.length, 1);
   assert.equal(second.log.length, 0, "the log already posted was posted again");
   assert.equal(second.origin[0].resolution, "no-change");
-  assert.equal(second.origin[0].conclusion, CONCLUSION);
+  assert.equal(second.origin[0].conclusion, ORIGIN_CONCLUSION);
 });
 
 test("--force is refused on a job with no pull request, and the close without it is accepted", async (t) => {
@@ -189,7 +191,7 @@ test("the conclusion told to the origins never names a stray pull request the ru
     await closeOnce({ env, checkout, id, store: openStore(env) }, forbiddenDeps([]));
   });
   for (const result of [...seen.origin, ...seen.log]) {
-    assert.equal(result.conclusion, CONCLUSION);
+    assert.equal(result.conclusion, ORIGIN_CONCLUSION);
     assert.equal(result.conclusion.includes("/pull/"), false);
   }
 });

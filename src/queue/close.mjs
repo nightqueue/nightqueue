@@ -4,7 +4,7 @@ import { sameBranch } from "./branch-name.mjs";
 import { defaultCloseDeps } from "./close-deps.mjs";
 import { jobTitle } from "./job-title.mjs";
 import { closedLine, parseCloseChecklist, postCloseLine, resolvedLine } from "./close-view.mjs";
-import { runOwnNotice } from "./run-notice.mjs";
+import { noChangeConclusion, runOwnNotice } from "./run-notice.mjs";
 import { isNoChangeJob } from "../memory/jobs.mjs";
 import { resolveConflictedRebase } from "./merger.mjs";
 import { releaseJobWorktree } from "./worktree.mjs";
@@ -1421,7 +1421,7 @@ function postCloseContext(run, stepName) {
     mergeSha: checklist.data.mergeSha ?? null,
     mergedAt: checklist.data.mergedAt ?? null,
     resolution: isNoChangeJob(job) ? "no-change" : "merged",
-    conclusion: runOwnNotice(job.notice_md),
+    conclusion: isNoChangeJob(job) ? noChangeConclusion(job.notice_md) : runOwnNotice(job.notice_md),
     resolvedAt: checklist.data.resolvedAt ?? null,
   };
 }
@@ -1478,6 +1478,12 @@ async function recordPostStep(run, name, noticeLine) {
   return false;
 }
 
+// Records the close's finish time once its post-close steps ended, so it never precedes the origin and log steps.
+async function stampFinish(run) {
+  run.checklist.finishedAt = new Date(run.now()).toISOString();
+  await recordPostStep(run, "post-close", null);
+}
+
 // Releases the post-close lease quietly: a lease left behind expires on its own.
 async function releasePostLease(run) {
   try {
@@ -1511,7 +1517,9 @@ async function runPostClosePhase(base, steps, signal) {
   const deadline = armDeadline({ timeoutS: POST_CLOSE_TIMEOUT_S, signal, now: base.now });
   const run = { ...base, job, facts, deadline, checklist: startingChecklist(job), results: [] };
   try {
-    for (const step of steps) if (!(await runPostStep(run, step))) break;
+    let leaseHeld = true;
+    for (const step of steps) if (!(leaseHeld = await runPostStep(run, step))) break;
+    if (leaseHeld) await stampFinish(run);
     return { status: "ran", note: null, steps: run.results };
   } finally {
     deadline.disarm();
