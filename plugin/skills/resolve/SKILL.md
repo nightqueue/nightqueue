@@ -1078,14 +1078,10 @@ confirmation` block verbatim, followed by the answer line, with NO length cap.
   internal identifier name. Describe the effect for whoever uses it, not the code mechanism.
 - The job does **not know** a ticket ID nor a form of delivery, and the v1 runtime has
   neither an issue tracker nor a delivery channel. **The notice must never contain a
-  placeholder in double curly braces; when a value is unknown, omit the line.** Name the
-  PR by its real URL — Phase 7 already opened it and knows the link. The line has
-  exactly three forms, one per value of `outcome` in the telemetry below: the real
-  URL, closing the line with nothing after it (`pr_opened`); `local commit, no PR`
-  when there is a commit but nothing was pushed (`local_commit`);
-  `no delivery — stopped at the <gate> gate`, naming the gate recorded in
-  `gate_stop`, when the run ended before any commit (`no_commit`). The last two never
-  carry a URL. Never invent a PR number, a hash, a ticket ID nor a channel.
+  placeholder in double curly braces; when a value is unknown, omit the line.** The notice
+  carries no delivery line: the PR link, the merge and the status are shown by the runtime
+  from the job's own fields, so never write a `Record:` line nor repeat the PR URL. Never
+  invent a PR number, a hash, a ticket ID nor a channel.
 - **The cap is a writing constraint, not a target.** Target: **≤1000 characters**; hard
   cap: **1900 characters** — the runtime refuses the whole notice above it. The number is
   inherited from the runtime and is not re-derived here. Write it already fitting: trim to
@@ -1178,8 +1174,6 @@ For support to guide whoever uses it: <how whoever uses it gets the fix; only wh
 
 Still open — a DIFFERENT problem, does not affect this fix: <only when there is one; max 3 bullets>
 • <open item 1 (TICKET when there is one), saying in one sentence that it will be handled separately>
-
-Record: • PR <the real URL of the PR opened in Phase 7; or "local commit, no PR"; or "no delivery — stopped at the <gate> gate" when the run ended before any commit>
 ```
 
 In a task that is not a bug fix (feature, refactor), swap only the header

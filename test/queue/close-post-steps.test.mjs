@@ -110,7 +110,7 @@ test("a project without integrations closes exactly as before: no post-close ent
     assert.deepEqual(reported.map((step) => step.name), ["preflight", "conflict", "merge", "settle"]);
     assert.equal(row.status, "closed");
     assert.equal(row.close_worker, null);
-    assert.equal(row.notice_md, "Closed: PR #7 merged as abc1234 on 2026-10-01");
+    assert.ok(!row.notice_md, "settle appends no Closed line to the notice");
     assert.deepEqual(Object.keys(checklistOf(row).steps), ["preflight", "conflict", "merge", "settle"]);
     assert.equal(fetch.calls.length, 0);
   });
@@ -126,7 +126,7 @@ test("an org-scoped origin (sentry) in a project without integrations still clos
 
   assert.equal(outcome.postClose, undefined);
   assert.deepEqual(reported.map((step) => step.name), ["preflight", "conflict", "merge", "settle"]);
-  assert.equal(row.notice_md, "Closed: PR #7 merged as abc1234 on 2026-10-01");
+  assert.ok(!row.notice_md, "settle appends no Closed line to the notice");
   assert.equal(fetch.calls.length, 0);
 });
 
@@ -154,7 +154,7 @@ test("with integrations the origin is resolved and the close logged once, the jo
     assert.equal(row.status, "closed");
     assert.equal(row.close_status, null);
     assert.equal(row.close_worker, null, "the post-close lease is released");
-    assert.equal(row.notice_md, "Closed: PR #7 merged as abc1234 on 2026-10-01");
+    assert.ok(!row.notice_md, "settle appends no Closed line to the notice");
     assert.ok(!row.close.includes(TRACKER_SECRET));
     const lines = closeChecklistLines(jobView(row));
     assert.ok(lines.some((line) => line.includes("origin") && line.includes("resolved issue 4507")));
@@ -176,7 +176,7 @@ test("a refused, failed or throwing service is a warning line in the notice, nev
       assert.equal(row.status, "closed", name);
       assert.equal(checklistOf(row).steps.origin.status, "warning", name);
       assert.deepEqual(checklistOf(row).data.originsNotified, {}, name);
-      assert.ok(row.notice_md.endsWith(`\n\nAfter close: origin warning - tracker 4507: ${note}`), `${name}: ${row.notice_md}`);
+      assert.equal(row.notice_md, `After close: origin warning - tracker 4507: ${note}`, name);
       assert.ok(!row.notice_md.includes(TRACKER_SECRET), name);
       assert.ok(!row.close.includes(TRACKER_SECRET), name);
     });
@@ -213,7 +213,7 @@ test("an origin with no connection in the org is a noticed skip, a project that 
     const fetch = fakeFetch();
     const second = await closeOnce(other, { fetch });
     assert.equal(checklistOf(second.row).steps.origin.note, "tracker 4507: project has no tracker integration");
-    assert.equal(second.row.notice_md, "Closed: PR #7 merged as abc1234 on 2026-10-01");
+    assert.ok(!second.row.notice_md, "settle appends no Closed line to the notice");
     assert.equal(fetch.calls.length, 0);
   });
 });

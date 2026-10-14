@@ -136,9 +136,10 @@ test("a close with sentry, linear and discord origins acts on Sentry, then Linea
   assert.equal(outcome.postClose.steps[0].name, "origin");
   assert.equal(outcome.postClose.steps[0].status, "done", outcome.postClose.steps[0].note);
   assert.deepEqual(JSON.parse(row.close).data.originsNotified, { "sentry 4507": true, "linear MK-42": true, "discord 111/222/555": true });
-  assert.equal(row.notice_md, "Closed: PR #7 merged as abc1234 on 2026-10-01");
+  assert.ok(!row.notice_md, "settle appends no Closed line to the notice");
   const [embed] = fetch.posts[0].embeds;
-  assert.equal(embed.title, "✅ Fixed - Login crashes");
+  assert.equal(embed.title, undefined);
+  assert.equal(embed.description, "fix the login crash");
   assert.deepEqual(embed.fields.map((field) => [field.name, field.value]), [
     ["PR", `[#7](${PR_URL})`],
     ["Linear", "[MK-42](https://linear.app/acme/issue/MK-42/login)"],
@@ -155,7 +156,7 @@ test("a sentry lookup that fails leaves the plain ref and a warning line, and th
   assert.equal(outcome.status, "closed");
   assert.equal(row.status, "closed");
   const [embed] = fetch.posts[0].embeds;
-  assert.equal(embed.title, "✅ Fixed - Login crashes");
+  assert.equal(embed.title, undefined);
   assert.deepEqual(embed.fields.map((field) => field.value).slice(1), ["[MK-42](https://linear.app/acme/issue/MK-42/login)", "4507"]);
   assert.match(row.notice_md, /After close: origin warning - sentry 4507: link not resolved \(issue 4507 not read/);
   assertNoSecret(row);

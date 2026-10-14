@@ -1125,10 +1125,17 @@ agent, never a second job, never queue work:
    and is `skipped` with the note `merged outside a close as <sha7>; ...`. Afterwards the
    checkout is fast-forwarded with `git pull --ff-only` only when it sits on the base branch;
    the result is noted, never a failure.
-4. **settle** - closes the job and appends `Closed: PR #<n> merged as <sha7> on
-   <YYYY-MM-DD>` to its notice (after a blank line, never replacing it), in one write that the
+4. **settle** - closes the job, leaving its notice untouched, in one write that the
    schema refuses unless the checklist records the merge; the job's worktree is then released
-   by the rule of *Worktrees*.
+   by the rule of *Worktrees*. The notice carries only the job's own account (no `Record:`
+   and no `Closed:` line): the PR, the merge (`PR #<n> merged as <sha7> on <YYYY-MM-DD>`, kept
+   in `close.data.noticeLine`) and the status are shown from the job's fields. A post-close
+   `After close: ...` line for a warning or skip is still appended. The Discord thread reply
+   is the whole notice as embed text (cut at the embed limit with `…`; the PR title and link
+   when the notice is empty), with the PR link, the Linear/Sentry links and the `merged as
+   <sha7>` footer from the job's fields. The log message is titled `<ref> closed · <title>`,
+   the title being the Linear issue, the Sentry issue, the job's `title`, the PR title, then
+   the slug. Rows closed before this rule keep their `Closed:` line.
 
 The job's status is untouched until settle: a close that stops leaves it `done`, except for a
 pull request closed without merge, which cancels it.

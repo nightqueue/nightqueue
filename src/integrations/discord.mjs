@@ -234,16 +234,18 @@ function originsOf(origins) {
   return Array.isArray(origins) ? origins.filter((origin) => origin && FIELD_NAMES[origin.kind]) : [];
 }
 
-// The title of the problem the job fixed: the first origin issue title (Linear, then Sentry), else the pull request title, else the job ref.
+// The title of the problem the job fixed: the first origin issue title (Linear, then Sentry), the job's own title, the pull request title, then the slug; empty when none exists.
 function problemTitle(job, origins) {
   const titled = ORIGIN_ORDER.map((kind) => origins.find((origin) => origin.kind === kind && origin.title)).find(Boolean);
-  return String(titled?.title ?? job?.title ?? "").trim() || String(job?.ref ?? "job");
+  const candidates = [titled?.title, job?.operatorTitle, job?.title, job?.slug];
+  return candidates.map((candidate) => String(candidate ?? "").trim()).find(Boolean) ?? "";
 }
 
-// The whole "What was done:" text of the notice, the pull request title standing in when it has none.
-function replyDescription(job) {
-  const done = doneParagraph(job?.notice_md) || String(job?.title ?? "").trim();
-  return cut(capitalise(done), EMBED_DESCRIPTION_MAX);
+// The whole notice as the reply text, cut at the embed limit; the pull request title or link stands in for an empty notice.
+function replyDescription(job, result) {
+  const notice = String(job?.notice_md ?? "").trim();
+  const text = notice || String(job?.title ?? "").trim() || pullRequestLink(result);
+  return cut(text, EMBED_DESCRIPTION_MAX);
 }
 
 // The PR field both messages carry.
@@ -263,13 +265,12 @@ function originFields(origins, kinds) {
   );
 }
 
-// The reply posted under the message the job came from: an answer to the reported problem with every link of the job.
+// The reply posted under the message the job came from: the job's notice as it is stored, with every link of the job from its fields.
 function replyContent(result, job, origins) {
   const known = originsOf(origins);
   return {
     ...mergeEmbed(result),
-    title: cut(`✅ Fixed - ${problemTitle(job, known)}`, EMBED_TITLE_MAX),
-    description: replyDescription(job),
+    description: replyDescription(job, result),
     fields: [...mergeFields(result), ...originFields(known, ["linear", "sentry"])].slice(0, MAX_FIELDS),
   };
 }
@@ -298,12 +299,13 @@ async function replyToOrigin({ ref, job, result, origins, settings, connections,
   return { status: "warning", note: `reply in channel ${channel} not posted through ${match.name} (${answer.detail})` };
 }
 
-// The log embed of a closed job: titled by its ref and slug, described by its notice.
+// The log embed of a closed job: titled by its ref and the problem it fixed, described by its notice.
 function closedLogContent(job, result, origins) {
   const ref = job?.ref ?? "job";
+  const problem = problemTitle(job, originsOf(origins));
   return {
     ...mergeEmbed(result),
-    title: cut(job?.slug ? `${ref} closed · ${job.slug}` : `${ref} closed`, EMBED_TITLE_MAX),
+    title: cut(problem ? `${ref} closed · ${problem}` : `${ref} closed`, EMBED_TITLE_MAX),
     description: closedDescription(job),
     fields: [
       ...mergeFields(result),

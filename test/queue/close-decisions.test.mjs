@@ -82,8 +82,7 @@ test("close leaves every proposal of the closed job proposed, prints no accepted
   assert.equal(statusOf(env, second.id), "proposed");
   assert.ok(result.out.includes(`J-${job} closed: PR #7 merged as abc1234`), result.out.join("\n"));
   assert.deepEqual(acceptedLines(result.out), []);
-  assert.match(getJob(job, env).notice_md, /^Closed: PR #7 merged as abc1234 on \d{4}-\d{2}-\d{2}$/m);
-  assert.doesNotMatch(getJob(job, env).notice_md, /accepted/);
+  assert.doesNotMatch(getJob(job, env).notice_md ?? "", /Closed:|accepted/);
 });
 
 test("a detached close hands nothing down and its child leaves the proposals proposed", async (t) => {
@@ -174,7 +173,7 @@ test("a close never writes a decision: with every decision update aborted by a t
 
   assert.equal(result.code, 0, result.err.join("\n"));
   assert.equal(getJob(job, env).status, "closed");
-  assert.match(getJob(job, env).notice_md, /Closed: PR #7 merged as abc1234 on \d{4}-\d{2}-\d{2}$/);
+  assert.doesNotMatch(getJob(job, env).notice_md ?? "", /Closed:/);
   assert.equal(statusOf(env, first.id), "proposed");
   assert.deepEqual(acceptedLines(result.out), []);
 });

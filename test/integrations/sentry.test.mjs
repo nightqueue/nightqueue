@@ -308,7 +308,7 @@ test("closing a job queued from a sentry link resolves the issue, and a refused 
   assert.deepEqual(fetch.calls.map((call) => call.method), ["GET", "PUT", "POST"]);
   assert.equal(row.status, "closed");
   assert.deepEqual(JSON.parse(row.close).data.originsNotified, { "sentry 4507": true });
-  assert.equal(row.notice_md, "Closed: PR #7 merged as abc1234 on 2026-10-01");
+  assert.ok(!row.notice_md, "settle appends no Closed line to the notice");
 
   const failing = fakeFetch(issueRoutes({ put: 500 }));
   const failed = await closeSentryJob(home, failing);

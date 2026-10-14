@@ -924,7 +924,7 @@ test("adoptClose and recordCloseStep hold only for the worker that owns the leas
   assert.equal(failClose(id, { worker: OTHER_CLOSE_WORKER, close: checklist }, env), false);
 });
 
-test("settleClose closes a merged job, clears the close columns and appends the settled line to the notice", (t) => {
+test("settleClose closes a merged job, clears the close columns and leaves the notice untouched", (t) => {
   const env = makeQueue(t, "jobs-close-settle");
   const id = closableJob(env);
   openDb(env).prepare("UPDATE jobs SET notice_md = 'A\n' WHERE id = ?").run(id);
@@ -940,7 +940,7 @@ test("settleClose closes a merged job, clears the close columns and appends the 
   assert.equal(settled.close_worker, null);
   assert.equal(settled.close_lease_until, null);
   assert.equal(settled.close.data.merged, true);
-  assert.equal(getJob(id, env).notice_md, `A\n\n${line}`);
+  assert.equal(getJob(id, env).notice_md, "A\n", "the notice is left untouched");
   assert.equal(noteCloseWorktree(id, { worktree: { removed: "/tmp/wt" } }, env), false, "a checklist without a settle step is left alone");
 });
 

@@ -260,7 +260,7 @@ test("queue close re-runs a failed close keeping its checklist, reclaims a dead 
   const row = getJob(id, env);
   assert.equal(row.status, "closed");
   assert.equal(row.close_status, null);
-  assert.equal(row.notice_md, "A\n\nClosed: PR #7 merged as abc1234 on 2026-09-21");
+  assert.equal(row.notice_md, "A");
   const checklist = JSON.parse(row.close);
   assert.equal(checklist.attempts, 3);
   assert.equal(checklist.steps.preflight.status, "done");

@@ -82,8 +82,9 @@ test("a green close writes the checklist after every step, leaves the job status
   assert.equal(row.status, "closed");
   assert.equal(row.close_status, null);
   assert.equal(row.close_worker, null);
-  assert.equal(row.notice_md, "A\n\nClosed: PR #7 merged as abc1234 on 2026-09-21");
+  assert.equal(row.notice_md, "A");
   const checklist = checklistOf(home);
+  assert.equal(checklist.data.noticeLine, "Closed: PR #7 merged as abc1234 on 2026-09-21");
   assert.deepEqual(Object.values(checklist.steps).map((step) => step.status), ["done", "skipped", "done", "done"]);
   assert.equal(checklist.data.mergeSha, MERGE_SHA);
   assert.equal(typeof checklist.finishedAt, "string");
@@ -217,7 +218,7 @@ test("the injected close answers the worktree, which the outcome carries and the
   const home = closeHome(t, "close-engine-close-worktree");
   const worktree = { status: "removed", path: "/tmp/wt-7" };
   const deps = {
-    settleClosed: async ({ store, id, worker, close, noticeLine }) => ({ job: await store.jobs.settleClose(id, { worker, close, noticeLine }), worktree }),
+    settleClosed: async ({ store, id, worker, close }) => ({ job: await store.jobs.settleClose(id, { worker, close }), worktree }),
   };
   const { outcome } = await attempt(home, { steps: fakeSteps(GREEN).steps, deps });
   assert.deepEqual(outcome.worktree, worktree);
