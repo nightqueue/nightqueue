@@ -34,11 +34,9 @@ test("the rubric recalls before proposing and re-saves a recurrence with the exa
   assert.ok(RUBRIC.includes("No candidate at all is a valid result."));
 });
 
-test("the rubric names decision_save only inside the NEVER sentence", () => {
-  const sentences = sentencesWith(RUBRIC, "decision_save");
-  assert.equal(sentences.length, 1, sentences.join(" | "));
-  assert.match(sentences[0], /NEVER saved with `decision_save` or `decision_update`/);
-  for (const sentence of sentencesWith(RUBRIC, "decision_update")) assert.ok(sentence.includes("NEVER"), sentence);
+test("the rubric names no decision tool: lessons and memories are its only outputs", () => {
+  assert.equal(RUBRIC.includes("decision_save"), false);
+  assert.equal(RUBRIC.includes("decision_update"), false);
 });
 
 test("the reflect skill is `reflect` and reads the rubric from its base directory", () => {
@@ -62,7 +60,7 @@ test("the reflect skill asks once, saves only confirmed candidates and reports t
   assert.ok(SKILL.includes("`Saved: L<id>, M<id>, …`"));
 });
 
-test("the reflect skill documents that an interactive recurrence bumps attempts only, and never writes a decision", () => {
+test("the reflect skill documents that an interactive recurrence bumps attempts only, and names no decision tool", () => {
   assert.ok(SKILL.includes("In an interactive session a recurrence bumps the lesson's `attempts` only; the `violated` counter is bumped only inside a queued job"));
   assert.equal(SKILL.includes("decision_save"), false);
   assert.equal(SKILL.includes("decision_update"), false);

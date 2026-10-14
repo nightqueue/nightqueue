@@ -87,7 +87,7 @@ test("a finish written by a runtime replaced under it survives a second process 
     env,
     { onFirstLine: () => rmSync(oldRuntime, { recursive: true, force: true }) },
   );
-  const writer = runChild(WRITER, ["decision", "durability", String(WRITE_MS)], env);
+  const writer = runChild(WRITER, ["lesson", "durability", String(WRITE_MS)], env);
   const [finished, written] = await Promise.all([finisher, writer]);
 
   assert.equal(finished.code, 0, `the finisher exited ${finished.code}: ${finished.stderr}`);
@@ -115,9 +115,9 @@ test("a finish written by a runtime replaced under it survives a second process 
     pid: ready.pid,
   });
 
-  const decisions = openDb(env).prepare("SELECT COUNT(*) AS total FROM decisions WHERE title LIKE 'concurrent %'").get().total;
-  assert.equal(decisions, linesOf(written).pop().written, "the writes of the other process were lost");
-  assert.ok(decisions > 0, "the other process wrote nothing, so nothing crossed the finish");
+  const lessons = openDb(env).prepare("SELECT COUNT(*) AS total FROM lessons WHERE title LIKE 'concurrent %'").get().total;
+  assert.equal(lessons, linesOf(written).pop().written, "the writes of the other process were lost");
+  assert.ok(lessons > 0, "the other process wrote nothing, so nothing crossed the finish");
 
   revertFinish(env, id);
   assert.deepEqual(await reconcileFromWitness(env), { repaired: [id], error: null });

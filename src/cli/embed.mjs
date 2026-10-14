@@ -1,6 +1,5 @@
 import { UserError } from "../config/errors.mjs";
 import { modelsDir } from "../config/paths.mjs";
-import { decisionProbe } from "../memory/decisions.mjs";
 import { EMBEDDING_MODEL_TAG, embedTexts, isModelCached, warmupModel } from "../memory/embedding.mjs";
 import { openStore } from "../store/open.mjs";
 import { checkArgs, parseCommand } from "./args.mjs";
@@ -27,12 +26,6 @@ const CORPORA = [
     pending: (store, spec) => store.lessons.lessonsMissingEmbedding(spec),
     fill: (store, spec) => store.lessons.setLessonEmbedding(spec),
     probe: lessonProbe,
-  },
-  {
-    label: "decision",
-    pending: (store, spec) => store.decisions.decisionsMissingEmbedding(spec),
-    fill: (store, spec) => store.decisions.setDecisionEmbedding(spec),
-    probe: decisionProbe,
   },
 ];
 

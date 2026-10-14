@@ -14,7 +14,7 @@ import { makeDir, makeHome, makeProject, projectIdOf } from "../../test-support/
 
 const CLI = fileURLToPath(new URL("../../bin/nightqueue.mjs", import.meta.url));
 const REFUSAL = /refused: the database at .* is the runner's home at schema v20, and this build \(v\d+\) would migrate it from inside J-7; nothing was changed - run this build against a temporary home \(`nightqueue sandbox <command>` or NIGHTQUEUE_HOME=\$\(mktemp -d\)\)/;
-const OUTDATED = /database at v20, this nightqueue expects v25: run `nightqueue update`/;
+const OUTDATED = /database at v20, this nightqueue expects v26: run `nightqueue update`/;
 
 // A temporary home stamped v20 with the project `alpha`, one job and the tracker under its pre-v22 names.
 function makeV20Home(t, name) {
@@ -87,7 +87,7 @@ test("a read command inside a job refuses with the update message and writes not
 test("the worktree CLI inside a job refuses a read of an older home and writes nothing", (t) => {
   const env = makeV20Home(t, "runner-home-cli");
   const before = diskBytes(env);
-  const result = runCli(jobEnv(env, env.NIGHTQUEUE_HOME), ["decision", "show", "D-1", "--project", "alpha"]);
+  const result = runCli(jobEnv(env, env.NIGHTQUEUE_HOME), ["project", "list"]);
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, OUTDATED);
   assertUntouched(env, before);
@@ -97,7 +97,7 @@ test("inside a job a read of a temporary home that is not the runner's never mig
   const env = makeV20Home(t, "runner-home-temp");
   const before = diskBytes(env);
   const runnerHome = join(makeDir(t, "runner-home-other"), "home");
-  const result = runCli(jobEnv(env, runnerHome), ["decision", "show", "D-1", "--project", "alpha"]);
+  const result = runCli(jobEnv(env, runnerHome), ["project", "list"]);
   assert.match(result.stderr, OUTDATED);
   assertUntouched(env, before);
 });
@@ -117,7 +117,7 @@ test("outside a job, with no NIGHTQUEUE_JOB_ID (the incident), the same read ref
   delete operator.NIGHTQUEUE_JOB_ID;
   delete operator.NIGHTQUEUE_JOB_HOME;
   const before = diskBytes(env);
-  const result = runCli(operator, ["decision", "show", "D-1", "--project", "alpha"]);
+  const result = runCli(operator, ["project", "list"]);
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, OUTDATED);
   assertUntouched(env, before);

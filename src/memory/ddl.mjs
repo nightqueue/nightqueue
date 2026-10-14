@@ -1,39 +1,10 @@
 import { CLOSED_INVARIANT, sqlList } from "./schema.mjs";
 
-// The current (v22) schema of the memory database: one source for a fresh creation and for the v22 migration; the frozen
-// v18, v19 and v20 shapes the earlier migrations build live under `migration/`.
+// The current schema of the memory database: one source for a fresh creation and for the per-open steps; the frozen
+// shapes the earlier migrations build live under `migration/`.
 
 const PROJECT_ID = "project_id TEXT REFERENCES projects(id) ON DELETE RESTRICT";
 const REQUIRED_PROJECT_ID = "project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE RESTRICT";
-const ORG_ID = "org_id TEXT REFERENCES orgs(id) ON DELETE RESTRICT";
-const SCOPE_COLUMN = "scope TEXT NOT NULL DEFAULT 'project' CHECK(scope IN ('project','org'))";
-
-// The one owner a decision has: a project row (or a global one) carries no org, an org row no project.
-export const OWNER_CHECK =
-  "(scope = 'project' AND org_id IS NULL) OR (scope = 'org' AND org_id IS NOT NULL AND project_id IS NULL)";
-
-// The `decisions` table under a given name: owned by a project id (NULL for a global decision) or by an org id.
-export function decisionsDdl(name) {
-  return `CREATE TABLE IF NOT EXISTS ${name} (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  ${SCOPE_COLUMN},
-  ${PROJECT_ID},
-  ${ORG_ID},
-  number INTEGER,
-  title TEXT NOT NULL,
-  context TEXT NOT NULL,
-  decision TEXT NOT NULL,
-  consequences TEXT,
-  status TEXT NOT NULL DEFAULT 'accepted' CHECK(status IN ('proposed','accepted','superseded','rejected')),
-  superseded_by INTEGER REFERENCES decisions(id) ON DELETE RESTRICT,
-  job_id INTEGER REFERENCES jobs(id) ON DELETE SET NULL,
-  created_at TEXT NOT NULL DEFAULT (datetime('now')),
-  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
-  embedding BLOB,
-  embedding_model TEXT,
-  CHECK(${OWNER_CHECK})
-);`;
-}
 
 // The format rule of an owner key column: 2 to 5 uppercase letters or digits, starting with a letter.
 export function OWNER_KEY_FORMAT(column) {
@@ -123,7 +94,6 @@ export const DATA_TABLES = Object.freeze([
   "project_libs",
   "pipeline_runs",
   "jobs",
-  "decisions",
 ]);
 
 // The `lessons` table under a given name: owned by a project id, NULL for a global lesson.
@@ -307,7 +277,6 @@ CREATE TABLE IF NOT EXISTS pipeline_phases (
   note TEXT,
   FOREIGN KEY (run_id) REFERENCES pipeline_runs(id) ON DELETE CASCADE
 );
-${decisionsDdl("decisions")}
 `;
 
 // The indexes of the `jobs` table, which a rebuild of that table alone recreates.
@@ -324,11 +293,7 @@ CREATE INDEX IF NOT EXISTS project_index_project_idx ON project_index(project_id
 CREATE INDEX IF NOT EXISTS pipeline_runs_project_idx ON pipeline_runs(project_id, created_at);
 CREATE INDEX IF NOT EXISTS pipeline_phases_run_idx ON pipeline_phases(run_id, seq);
 ${JOBS_INDEXES}
-CREATE UNIQUE INDEX IF NOT EXISTS decisions_number_idx ON decisions(project_id, number);
-CREATE UNIQUE INDEX IF NOT EXISTS decisions_org_number_idx ON decisions(org_id, number) WHERE scope = 'org';
-CREATE INDEX IF NOT EXISTS decisions_job_idx ON decisions(job_id) WHERE job_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS pipeline_runs_job_idx ON pipeline_runs(job_id);
-CREATE INDEX IF NOT EXISTS decisions_superseded_idx ON decisions(superseded_by);
 `;
 
 // The lexical index of the job history (slug, brief, notice), kept out of FTS because the older one-shot steps exec FTS while `jobs` is being rebuilt.
@@ -399,23 +364,5 @@ END;
 CREATE TRIGGER IF NOT EXISTS memory_fts_au AFTER UPDATE OF key, value ON memory BEGIN
   INSERT INTO memory_fts(memory_fts, rowid, key, value) VALUES ('delete', old.id, old.key, old.value);
   INSERT INTO memory_fts(rowid, key, value) VALUES (new.id, new.key, new.value);
-END;
-CREATE VIRTUAL TABLE IF NOT EXISTS decisions_fts USING fts5(
-  title, context, decision, consequences,
-  content='decisions', content_rowid='id'
-);
-CREATE TRIGGER IF NOT EXISTS decisions_fts_ai AFTER INSERT ON decisions BEGIN
-  INSERT INTO decisions_fts(rowid, title, context, decision, consequences)
-  VALUES (new.id, new.title, new.context, new.decision, new.consequences);
-END;
-CREATE TRIGGER IF NOT EXISTS decisions_fts_ad AFTER DELETE ON decisions BEGIN
-  INSERT INTO decisions_fts(decisions_fts, rowid, title, context, decision, consequences)
-  VALUES ('delete', old.id, old.title, old.context, old.decision, old.consequences);
-END;
-CREATE TRIGGER IF NOT EXISTS decisions_fts_au AFTER UPDATE OF title, context, decision, consequences ON decisions BEGIN
-  INSERT INTO decisions_fts(decisions_fts, rowid, title, context, decision, consequences)
-  VALUES ('delete', old.id, old.title, old.context, old.decision, old.consequences);
-  INSERT INTO decisions_fts(rowid, title, context, decision, consequences)
-  VALUES (new.id, new.title, new.context, new.decision, new.consequences);
 END;
 `;

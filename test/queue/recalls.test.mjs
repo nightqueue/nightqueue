@@ -4,7 +4,7 @@ import { jobRecalls, LESSONS_HEADING, MEMORY_HEADING } from "../../src/queue/rec
 import { agentToolUseEvent, attemptMarker, taskStartedEvent, toolResultEvent, toolUseEvent } from "../../test-support/streams.mjs";
 
 const LESSON = "mcp__nightqueue__lesson_recall";
-const DECISION = "mcp__nightqueue__decision_recall";
+const OLD_DECISION_RECALL = "mcp__nightqueue__decision_recall";
 const INDEX = "mcp__nightqueue__index_recall";
 const MEMORY = "mcp__nightqueue__memory_recall";
 
@@ -24,8 +24,8 @@ test("recalls come as one flat list in run order across attempts, each with its 
     toolUseEvent({ name: LESSON, id: "r1", input: { project: "alpha" } }),
     jsonResult("r1", [{ id: 7, title: "Guard the path", via: "fallback" }]),
     agentToolUseEvent({ id: "lane1", subagentType: "nightqueue:architect" }),
-    toolUseEvent({ name: DECISION, id: "r2", input: { project: "alpha", query: "studio api" }, parentToolUseId: "lane1" }),
-    jsonResult("r2", [{ id: 3, ref: "D-12", title: "API is host-local", cosine: 0.8123 }], { parentToolUseId: "lane1" }),
+    toolUseEvent({ name: LESSON, id: "r2", input: { project: "alpha", query: "studio api" }, parentToolUseId: "lane1" }),
+    jsonResult("r2", [{ id: 3, title: "API is host-local", cosine: 0.8123 }], { parentToolUseId: "lane1" }),
     attemptMarker(2),
     taskStartedEvent({ toolUseId: "lane2", subagentType: "nightqueue:coder" }),
     toolUseEvent({ name: INDEX, id: "r3", input: { project: "alpha", query: "timeline" }, parentToolUseId: "lane2" }),
@@ -38,7 +38,7 @@ test("recalls come as one flat list in run order across attempts, each with its 
     recalls.map((recall) => [recall.tool, recall.kind, recall.phase, recall.agent, recall.attempt]),
     [
       ["lesson_recall", "lesson", null, "orchestrator", 1],
-      ["decision_recall", "decision", 3, "architect", 1],
+      ["lesson_recall", "lesson", 3, "architect", 1],
       ["index_recall", "index", 4, "coder", 2],
       ["memory_recall", "memory", 4, "coder", 2],
     ],
@@ -46,10 +46,20 @@ test("recalls come as one flat list in run order across attempts, each with its 
   const [orchestrator, architect, coder, memory] = recalls;
   assert.deepEqual(orchestrator.hits, [{ ref: "L7", title: "Guard the path", score: null, via: "fallback" }]);
   assert.equal(architect.query, "studio api");
-  assert.deepEqual(architect.hits, [{ ref: "D-12", title: "API is host-local", score: 0.8123 }]);
+  assert.deepEqual(architect.hits, [{ ref: "L3", title: "API is host-local", score: 0.8123 }]);
   assert.deepEqual(coder.hits, [{ ref: "src/queue/timeline.mjs", title: "phase timeline", score: 0.9 }]);
   assert.deepEqual([memory.pending, memory.error, memory.hits], [false, null, []]);
   assert.equal("results" in memory, false);
+});
+
+test("an old log's call to the removed decision_recall is no recall, and its answer does not throw", async () => {
+  const log = logOf([
+    attemptMarker(1),
+    toolUseEvent({ name: OLD_DECISION_RECALL, id: "d1", input: { project: "alpha", query: "studio api" } }),
+    jsonResult("d1", { decisions: [{ id: 3, ref: "D-12", title: "API is host-local" }] }),
+    toolUseEvent({ name: LESSON, id: "r1", input: { query: "a" } }),
+  ]);
+  assert.deepEqual((await jobRecalls(log)).map((recall) => recall.id), ["r1"]);
 });
 
 test("a recall inside the runtime lane reads phase 7, the same number the track gives it, and one inside a plain verifier reads 6", async () => {
@@ -261,10 +271,10 @@ test("context calls of another agent or another phase stay apart, and memory rec
     agentToolUseEvent({ id: "lane1", subagentType: "nightqueue:qa-guardian" }),
     ...phasePrompt("p2", { target: "qa-analyst", check: "05a", parentToolUseId: "lane1" }),
     ...phasePrompt("p3", { target: "qa-guardian", check: "06" }),
-    toolUseEvent({ name: DECISION, id: "d1", input: { query: "a" } }),
-    jsonResult("d1", [{ ref: "D-7", title: "t" }]),
-    toolUseEvent({ name: DECISION, id: "d2", input: { query: "a" } }),
-    jsonResult("d2", [{ ref: "D-7", title: "t" }]),
+    toolUseEvent({ name: MEMORY, id: "d1", input: { query: "a" } }),
+    jsonResult("d1", [{ id: 7, key: "t", value: "v" }]),
+    toolUseEvent({ name: MEMORY, id: "d2", input: { query: "a" } }),
+    jsonResult("d2", [{ id: 7, key: "t", value: "v" }]),
   ]);
   const recalls = await jobRecalls(log);
   assert.deepEqual(

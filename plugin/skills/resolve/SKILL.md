@@ -103,11 +103,6 @@ The runtime waits for every subagent and background task of an unattended run; l
      create the worktree, do not record anything, do not launch any subagent.
    - **The tool answers** — including an EMPTY return or a read error → continue. An empty
      memory is the normal state of a fresh install.
-   - **Decisions are the operator's record, never a constraint of this run.** The session
-     block may carry `## Standing decisions`, and `decision_recall`/`decision_list` may be read
-     as optional context. A run never saves or updates a decision (the runtime refuses
-     `decision_save`/`decision_update` inside a job), and a conflict with one is never, by
-     itself, a gate.
    - **The orchestrator never calls `lesson_save` or `memory_save`** - not after a loop, not at
      a gate, not because the session block's footer suggests it; Phase 9's reflector is the
      run's only writer of lessons and memories.
@@ -982,8 +977,7 @@ The command below owns the mechanics — staging, the commit, the branch name, t
      method with no evidence file has no row. Repository template: its own test section, in its own
      format.
    - **No bare `#<number>` in the title or body** — GitHub cross-references an unrelated
-     issue/PR and notifies it. A decision is named by its ref (`D-1`), never `#1`; the only
-     `#<number>` allowed is a real issue of this repository in the `Fixes`/`Closes` line.
+     issue/PR and notifies it. The only `#<number>` allowed is a real issue of this repository in the `Fixes`/`Closes` line.
    - **No job ref (`J-24`), run slug, `Refs` line or `Opened by nightqueue` line in the body**
      — `nightqueue run publish` appends the traceability footer from the job row and refuses a
      body that carries one.

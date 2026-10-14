@@ -44,6 +44,6 @@ test("the model of the pull request template ends at `Not tested:`, and the bare
   const last = fence.split("\n").filter((line) => line.trim() !== "").at(-1);
   assert.match(last, /^Not tested: /);
   assert.match(text, /\*\*A bare `#<number>` anywhere\.\*\*/);
-  assert.match(text, /A decision is named by its ref \(`D-1`\), never `#1`/);
+  assert.match(text, /Any other number goes inside a code span/);
   assert.match(text, /`nightqueue run pr` appends the traceability footer from the job row/);
 });

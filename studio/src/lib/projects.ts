@@ -27,7 +27,7 @@ const REGISTER_ERRORS: Record<string, string> = {
   refused: "The runtime refused the registration.",
 };
 
-const MEMORY_TABLES_EXCLUDED = new Set(["jobs", "decisions", "lessons"]);
+const MEMORY_TABLES_EXCLUDED = new Set(["jobs", "lessons"]);
 
 export interface Draft {
   name: string;
@@ -90,7 +90,6 @@ export interface ProviderControls {
 
 export interface FootprintCounters {
   jobs: number;
-  decisions: number;
   lessons: number;
   memoryRows: number;
   total: number;
@@ -457,7 +456,7 @@ export function footprintCounters(footprint: FootprintEntry[]): FootprintCounter
   const of = (table: string) => footprint.filter((entry) => entry.table === table).reduce((sum, entry) => sum + entry.total, 0);
   const memoryRows = footprint.filter((entry) => !MEMORY_TABLES_EXCLUDED.has(entry.table)).reduce((sum, entry) => sum + entry.total, 0);
   const total = footprint.reduce((sum, entry) => sum + entry.total, 0);
-  return { jobs: of("jobs"), decisions: of("decisions"), lessons: of("lessons"), memoryRows, total };
+  return { jobs: of("jobs"), lessons: of("lessons"), memoryRows, total };
 }
 
 // How a project is removed: refused while a job runs on it, with the typed name when it owns rows, plainly otherwise.

@@ -10,6 +10,7 @@ import { MigrationRefused } from "../../src/memory/migration/one-shot.mjs";
 import { CLOSED_REQUIRES_MERGE_V24, isPendingV25 } from "../../src/memory/migration/v25.mjs";
 import { jobRef } from "../../src/memory/refs.mjs";
 import { CLOSED_INVARIANT } from "../../src/memory/schema.mjs";
+import { plantDecisionsV25 } from "../../test-support/legacy-home.mjs";
 import { ensureProject, makeHome, seedClosedJob, seedDoneJob } from "../../test-support/memory.mjs";
 import { migrateTestHome } from "../../test-support/migrate.mjs";
 
@@ -51,6 +52,7 @@ function downgradeToV24(env) {
     raw.exec("ALTER TABLE jobs_v24 RENAME TO jobs");
     raw.exec(JOBS_INDEXES);
     raw.exec(JOBS_FTS);
+    plantDecisionsV25(raw);
     raw.exec("PRAGMA user_version = 24");
     raw.exec("COMMIT");
   });
@@ -120,8 +122,7 @@ test("a v24 home migrates to v25: every row and column kept, the job index in st
   const before = jobRows(env);
 
   const db = migrateTestHome(env);
-  assert.equal(DB_USER_VERSION, 25);
-  assert.equal(db.prepare("PRAGMA user_version").get().user_version, 25);
+  assert.equal(db.prepare("PRAGMA user_version").get().user_version, DB_USER_VERSION);
   assert.deepEqual(jobRows(env), before, "the rebuild changed a row or a column");
   assert.ok(existsSync(preVersionBackupPath(env, 25)), "no pre-v25 copy");
   assert.equal(fileVersion(preVersionBackupPath(env, 25)), 24, "the pre-v25 copy is not the v24 database");
@@ -166,9 +167,9 @@ test("re-opening a migrated v25 home is a no-op: nothing pending, nothing writte
   assert.equal(again.prepare("SELECT total_changes() AS n").get().n, 0, "a second open wrote to the database");
 });
 
-test("a fresh home is created at v25 with the new invariant", (t) => {
+test("a fresh home is created at the current version with the v25 invariant", (t) => {
   const env = makeHome(t, "v25-fresh");
   const db = openDb(env);
-  assert.equal(db.prepare("PRAGMA user_version").get().user_version, 25);
+  assert.equal(db.prepare("PRAGMA user_version").get().user_version, DB_USER_VERSION);
   assert.match(db.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'jobs'").get().sql, /resolvedWithoutChange/);
 });

@@ -1,11 +1,9 @@
-import { saveDecision } from "../src/memory/decisions.mjs";
 import { saveLesson } from "../src/memory/lessons.mjs";
 import { logPipelineRun } from "../src/memory/runs.mjs";
-import { projectIdOf } from "./memory.mjs";
 
 const [, , mode, label, durationRaw] = process.argv;
 const DEFAULT_DURATION_MS = 2000;
-const MODES = ["lesson", "run", "decision"];
+const MODES = ["lesson", "run"];
 
 // Writes one lesson, numbered so the rows of the two writers never collide.
 function writeLesson(seq) {
@@ -41,28 +39,13 @@ function writeRun() {
   );
 }
 
-// Writes one decision, numbered so the rows of the two writers never collide.
-function writeDecision(seq) {
-  saveDecision(
-    {
-      projectId: projectIdOf(process.env, "alpha"),
-      title: `concurrent ${label} #${seq}`,
-      context: "concurrency context",
-      decision: "concurrency decision",
-      consequences: "concurrency consequences",
-    },
-    process.env,
-  );
-}
-
 // The single write of the chosen mode.
 function writeOne(seq) {
   if (mode === "lesson") return writeLesson(seq);
-  if (mode === "decision") return writeDecision(seq);
   return writeRun();
 }
 
-// Loops the write of argv (`<lesson|run|decision> <label> <durationMs>`) until the deadline and prints how many rows it wrote.
+// Loops the write of argv (`<lesson|run> <label> <durationMs>`) until the deadline and prints how many rows it wrote.
 function main() {
   if (!MODES.includes(mode)) throw new Error(`unknown mode: ${String(mode)}`);
   const deadline = Date.now() + (Number(durationRaw) || DEFAULT_DURATION_MS);

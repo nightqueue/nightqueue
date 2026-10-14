@@ -1,6 +1,7 @@
 import { UserError } from "../../config/errors.mjs";
 import { dbPath, preV20BackupPath } from "../../config/paths.mjs";
-import { FTS, decisionsDdl, pipelineRunsDdl } from "../ddl.mjs";
+import { FTS, pipelineRunsDdl } from "../ddl.mjs";
+import { DECISIONS_FTS_V25, decisionsDdlV25 } from "./decisions-shape.mjs";
 import { hasColumn } from "../columns.mjs";
 import { MigrationRefused, foreignKeyViolations, hasTable, rebuildTable, runOneShot, userVersion } from "./one-shot.mjs";
 import {
@@ -22,7 +23,7 @@ export const V20 = 20;
 const MAX_LISTED_ORPHANS = 20;
 
 const REBUILT = Object.freeze([
-  { table: "decisions", ddl: decisionsDdl },
+  { table: "decisions", ddl: decisionsDdlV25 },
   { table: "roadmap_items", ddl: roadmapItemsDdlV20 },
   { table: "roadmap_item_projects", ddl: roadmapItemProjectsDdlV20 },
   { table: "roadmap_comments", ddl: roadmapCommentsDdlV20 },
@@ -52,10 +53,11 @@ function danglingRows(db, { table, column, parent }) {
     .all();
 }
 
-// Every row whose reference names a row that does not exist, as `{ table, column, parent, row, missing }` in audit order.
-export function orphansOf(db) {
+// Every row whose reference names a row that does not exist, as `{ table, column, parent, row, missing }` in audit order, outside the skipped tables.
+export function orphansOf(db, skippedTables = []) {
   const orphans = [];
   for (const reference of REFERENCED_COLUMNS_V20) {
+    if (skippedTables.includes(reference.table)) continue;
     for (const { row, missing } of danglingRows(db, reference)) orphans.push({ ...reference, row, missing: printable(missing) });
   }
   return orphans;
@@ -70,9 +72,9 @@ function orphanList(orphans) {
   return rest > 0 ? `${named.join("; ")}; and ${rest} more` : named.join("; ");
 }
 
-// Refuses the migration to a version while any row points at a row that does not exist, naming them; the refusal writes nothing.
-export function refuseOrphans(db, env, version = V20) {
-  const orphans = orphansOf(db);
+// Refuses the migration to a version while any row outside the skipped tables points at a row that does not exist, naming them; the refusal writes nothing.
+export function refuseOrphans(db, env, version = V20, skippedTables = []) {
+  const orphans = orphansOf(db, skippedTables);
   if (!orphans.length) return;
   throw new MigrationRefused(
     `the database must migrate to v${version}, but ${orphans.length} row(s) point at a row that does not exist: ${orphanList(orphans)}; fix or clear them with sqlite3 on ${dbPath(env)} and run the command again; nothing was written`,
@@ -119,6 +121,7 @@ function finishSchema(db, violationsBefore) {
   db.exec(INDEXES_V20);
   db.exec(ROADMAP_COMMENT_GUARDS_V20);
   db.exec(FTS);
+  db.exec(DECISIONS_FTS_V25);
   db.exec(ROADMAP_FTS_V20);
   db.exec(ROADMAP_NUMBER_INDEXES_V20);
   for (const mirror of MIRRORS) db.exec(`INSERT INTO ${mirror}(${mirror}) VALUES('rebuild')`);

@@ -50,7 +50,7 @@ test("a v22 home gains the attempt table and columns, one backfilled row per job
   const { env, ids } = makeV22Home(t, "migration-v23");
   assert.throws(() => openDbReadOnly(env), (err) => err.code === "SCHEMA_OUTDATED");
   const db = migrateTestHome(env);
-  assert.equal(db.prepare("PRAGMA user_version").get().user_version, 25);
+  assert.equal(db.prepare("PRAGMA user_version").get().user_version, 26);
   const rows = attemptRows(db);
   assert.deepEqual(
     rows.map(({ job_id, attempt, outcome, measured, backfilled, spawns, tokens_out, finished_at }) => ({ job_id, attempt, outcome, measured, backfilled, spawns, tokens_out, open: finished_at === null })),

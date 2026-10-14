@@ -71,9 +71,9 @@ in the queue. `--foreground` on a command that was not given `--run` is a usage
 error, never a silent no-op. An explicit job id ignores the pause sentinel, so
 `--run` runs even on a paused queue.
 
-Operator runs no longer exist (D-58):
-`--run-dir` (`queue_add`'s `run_dir`) is refused with a reason naming D-58, and what an
-investigation found goes in the prompt.
+Operator runs no longer exist:
+`--run-dir` (`queue_add`'s `run_dir`) is refused with a reason saying it was removed with the
+operator runs, and what an investigation found goes in the prompt.
 
 **A job records where it came from.** Every queued job carries `origin`, a list of
 `{kind, ref}` (empty = none). An explicit list wins: each repeated `--origin <kind>:<ref>`
@@ -126,14 +126,14 @@ file (same 16 KiB cap per file, control literals escaped), fenced and labelled a
 instructions, so a job queued as only a title and a link runs the task its description holds
 without gating for missing detail. The triager also reads every file through
 `context_for_phase` as a `## Job origin` section in the same shape. This replaces the earlier
-rule (D-55) that only the triage phase received the origin content.
+rule that only the triage phase received the origin content.
 
 **Sentry.** A prompt with a Sentry issue link (`https://acme.sentry.io/issues/4507/`,
 `https://sentry.io/organizations/acme/issues/4507/` or a regional `*.sentry.io` host) gets the
 origin `sentry 4507`; a short id counts only written in upper case, with a digit after the
 dash, right after the word sentry (`sentry API-12`, `Sentry: API-12`) or given as
 `--origin sentry:API-12` (any case, any suffix), never a bare `ABC-12` in prose (nightqueue's
-own `J-86`, `D-55` refs have that shape) nor a word such as `sentry error-handling`. The org's `sentry`
+own `J-86` refs have that shape) nor a word such as `sentry error-handling`. The org's `sentry`
 connection (`connection add --type sentry --set org=<slug>`) covers it. With
 `project integrations <project> set sentry.onClosed=resolved` (or `resolvedInNextRelease`;
 `resolved` is the default) the runner writes `origin/sentry-<ref>.md` at claim - the issue's title,
@@ -154,7 +154,7 @@ home; there is no mapping between nightqueue orgs/projects and Linear teams/proj
 with a Linear issue link (`https://linear.app/<workspace>/issue/MK-42/...`) gets the origin
 `linear MK-42`; an identifier counts only written in upper case right after the word linear
 (`linear MK-42`, `Linear: MK-42`) or given as `--origin linear:mk-42` (any case, stored upper),
-never a bare `MK-42` in prose (the same rule as Sentry, so `J-86` and `D-55` stay safe). With
+never a bare `MK-42` in prose (the same rule as Sentry, so `J-86` stays safe). With
 the connection, the runner writes `origin/linear-MK-42.md` at claim - identifier, title, state, team,
 priority, assignee, dates, URL, parent, the description verbatim, labels, attachments and up to
 20 comments oldest first (each cut at 2000 characters); never an email or an avatar - and links
@@ -732,11 +732,11 @@ tracked `.gitignore` (an operator commit; nightqueue never writes it). The
 `/.claude/worktrees/` and `/.claude/settings.local.json` lines an older nightqueue wrote into
 a checkout's `.git/info/exclude` are harmless, but they hide interactive worktrees from the
 dirty check too; delete them by hand once no job that started before the upgrade is open, and
-from then on an interactive worktree gates as above. The operator's QA worktrees (D-58) live
+from then on an interactive worktree gates as above. The operator's QA worktrees live
 apart from every job's, at `<NIGHTQUEUE_HOME>/qa/<project_id>/<id>`: outside the checkout, so
 they never gate a job, and ephemeral - `nightqueue sandbox worktree` creates and drops them, and
 `nightqueue open`, `nightqueue doctor --fix` and the operator's SubagentStop hook sweep them (see
-[the CLI](cli.md#sandbox)). An operator before D-58 left its own under
+[the CLI](cli.md#sandbox)). An operator before the generalist operator left its own under
 `<NIGHTQUEUE_HOME>/operator-qa/`, which `nightqueue doctor` reports as legacy leftovers.
 Two same-project jobs whose slugs collide on one branch name fail safely, one job at a
 time. The ``2 runners on `<project>` ``
@@ -1215,7 +1215,7 @@ process is running); it prints each step and `J-<id> post-close: origin done, lo
 and exits `1` when a step ended `warning`. No note, notice line or log carries a secret: the
 providers' HTTP never returns an error message, a URL or a header.
 
-**The close merges only a head it or CI verified (D-54).** Every step reads the pull request
+**The close merges only a head it or CI verified.** Every step reads the pull request
 again and works on the head GitHub reports now; the recorded `data.headSha` is the head the
 last step took, never a condition. An open pull request GitHub answers without a head commit
 stops every step with `pr-unreadable`, `--force` included, and no merge is ever issued without
@@ -1341,11 +1341,6 @@ less than 60 s of merger time stops as `real-conflict`; raise `queue.closeTimeou
 larger merges. A `config.json` that already carries `"closeTimeoutS": 600` (setup writes
 every default) keeps 600 until you edit it. The close lease lasts the timeout plus 60 s, so a
 close killed hard blocks the next one for up to that long.
-
-**A close never touches a decision.** Decisions are the operator's record, written only
-outside a queue run. The close writes nothing to the decisions log and prints no decision
-line, `--json` has no `decisions` key, and a `proposed` row stays `proposed` until the operator
-settles it. `--decisions` is an unknown option. The MCP `queue_close` does the same.
 
 **What `--force` does.** `--force` (`force: true` over MCP) means "do not hold me back for
 tests", nothing more: preflight notes the pull request's red, pending or unreadable checks

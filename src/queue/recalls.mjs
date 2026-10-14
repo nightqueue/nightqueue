@@ -3,7 +3,7 @@ import { lanePhase, PHASES } from "./narrate.mjs";
 import { laneName, parseAttemptMarker, parseEventLine } from "./stream.mjs";
 import { eachLineYielding } from "./yielding-lines.mjs";
 
-const RECALL_TOOL_RE = /__(lesson_recall|memory_recall|decision_recall|index_recall)$/;
+const RECALL_TOOL_RE = /__(lesson_recall|memory_recall|index_recall)$/;
 const CONTEXT_TOOL_RE = /__(phase_prompt|context_for_phase)$/;
 export const LESSONS_HEADING = "Applicable lessons";
 export const MEMORY_HEADING = "Project memory";
@@ -11,9 +11,9 @@ const CONTEXT_SECTIONS = new Set([LESSONS_HEADING, MEMORY_HEADING]);
 const SECTION_RE = /^## (.+?)\s*$/;
 const CONTEXT_HIT_RE = /^- \[([LM]\d+)\]\s+(.*?)\s*$/;
 const KIND_OF_PREFIX = { L: "lesson", M: "memory" };
-const LIST_KEYS = ["items", "hits", "results", "files", "decisions"];
+const LIST_KEYS = ["items", "hits", "results", "files"];
 const REF_PREFIX = { lesson_recall: "L", memory_recall: "M" };
-const KIND_OF_TOOL = { decision_recall: "decision", lesson_recall: "lesson", index_recall: "index", memory_recall: "memory" };
+const KIND_OF_TOOL = { lesson_recall: "lesson", index_recall: "index", memory_recall: "memory" };
 const LESSON_TEXT_FIELDS = [
   ["root_cause", "Root cause"],
   ["solution", "Solution"],

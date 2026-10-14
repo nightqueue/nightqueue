@@ -1,5 +1,5 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
+import { CallToolRequestSchema, ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js";
 import { isAbsolute } from "node:path";
 import { z } from "zod";
 import { saveProject } from "../cli/project.mjs";
@@ -15,17 +15,6 @@ import {
   suggestName,
 } from "../config/projects.mjs";
 import { loadConfig, saveConfig } from "../config/store.mjs";
-import { DECISION_STATUSES, decisionFullView, decisionView } from "../memory/decisions.mjs";
-import {
-  SCOPE_CONFLICT,
-  SCOPE_MISSING,
-  orgTargetOf,
-  ownerDescription,
-  ownerNames,
-  ownerRef,
-  projectTargetOf,
-  rowOwner,
-} from "../memory/scope.mjs";
 import {
   MAX_ATTEMPTS_RANGE,
   PRIORITY_RANGE,
@@ -36,7 +25,7 @@ import { memoryView } from "../memory/memory.mjs";
 import { jobRef, parseJobRef, parseRecordId, requireKey } from "../memory/refs.mjs";
 import { startAdvisoryLines } from "../queue/advisory.mjs";
 import { claimingRunners, noRunnerWait, onceOnlyLine, parkedBacklogLine, pausedRunnerLine, pendingJobs, runnersOnline, runnersOnlineSplit, staleRuntimeHint, windowWaitingLine } from "../queue/hints.mjs";
-import { refuseDecisionWriteInsideJob, refuseHomeWriteInsideJob, refuseMemoryDeleteInsideJob } from "../queue/home-guard.mjs";
+import { refuseHomeWriteInsideJob, refuseMemoryDeleteInsideJob } from "../queue/home-guard.mjs";
 import { blockerLines } from "../queue/claim.mjs";
 import { lastMaintenance } from "../queue/maintenance.mjs";
 import { jobIdOfPrUrl } from "../queue/pr-lookup.mjs";
@@ -91,12 +80,12 @@ import { readVersion } from "../cli/version.mjs";
 import {
   newContractState,
   refuseOldShapes,
+  refuseRemovedTool,
   refuseRenamedFields,
   refuseRetiredFields,
   STALE_CONTRACT_ADVISORY,
   StaleContractError,
   TOOL_CONTRACT,
-  upgradeOldShapes,
   withContract,
 } from "./tool-contract.mjs";
 
@@ -111,9 +100,7 @@ const SERVER_INSTRUCTIONS = [
   "Every job ends as an open pull request (`done`), as `done` with no pull request when the run concluded on purpose that no code change is needed (its conclusion in `notice_md`), or stopped at a gate with its reason in `notice_md`.",
   "At a gate, read `notice_md` whole with `queue_status`, present it to the person, and answer with `queue_retry` only after the person answers; a done job is closed with `queue_close`.",
   "Call `queue_status` to see what is pending before suggesting a batch.",
-  "decisions are the operator's record of the project's standing constraints - recall them before proposing architecture and save one, outside a queue run, when the user settles a design question; inside a queue job they are read-only context and never bind the run",
-  "a constraint the conversation states for two or more repos of the same org is saved ONCE with `org`, never once per repo: a project reads its own decisions and its org's",
-  "`lesson_save` and `memory_save` record what a session learned - a lesson for an error or correction, a memory (`key`/`value`) for a fact of the project's code; both are allowed inside a queue job, unlike decisions.",
+  "`lesson_save` and `memory_save` record what a session learned - a lesson for an error or correction, a memory (`key`/`value`) for a fact of the project's code; both are allowed inside a queue job.",
   "At the end of a session that changed or learned something, offer `/nightqueue:reflect` once: it proposes lessons and memories and saves only the ones the person confirms.",
   ...trackerInstructionLines(),
 ].join("\n");
@@ -127,12 +114,8 @@ const serverPrStates = createPrStateCache();
 
 const target = z.enum(LESSON_TARGETS).nullable().optional();
 const optionalText = z.string().nullable().optional();
-const optionalNumbers = z.array(z.union([z.number().int().min(1), z.string()])).nullable().optional();
 const jobRefInput = z.union([z.number().int().min(1), z.string()]);
 const jobIdField = jobRefInput.describe("The job's ref (`J-77`) or its plain id.");
-const decisionRefInput = z.union([z.string(), z.number().int()]);
-const optionalDecisionStatus = z.enum(DECISION_STATUSES).nullable().optional();
-const looseDecisionStatus = z.string().nullable().optional();
 
 const phaseSchema = z.object({
   phase: z.string(),
@@ -165,12 +148,6 @@ function refuseRegistrationInsideJob(cwd, env) {
     `refusing to register ${cwd} from inside job \`${own}\`: an unattended run never registers a project; ` +
       "ask the operator to run `nightqueue init` there",
   );
-}
-
-// Project of the run this process belongs to, as `{ id, name }`; null outside a job, and null too when the job id names no job.
-async function callerProject(own, env) {
-  const job = await openStore(env).jobs.getJob(own);
-  return job?.project_id ? { id: job.project_id, name: job.project } : null;
 }
 
 // Refuses to write a run named from the outside while inside a job: the state.json of a run belongs to the job that owns it.
@@ -351,62 +328,11 @@ function requireCwd(cwd) {
   return path;
 }
 
-// Answer of a decision save the gate held back: nothing was written, and every candidate must be named.
-function needsReviewAnswer(candidates) {
-  return {
-    ok: false,
-    status: "needs_review",
-    candidates,
-    hint: "nothing was saved: save again naming every candidate by its `number`, in `supersedes` (replaced whole) or in `unrelated` (left untouched)",
-  };
-}
-
-// Answer of a saved decision, with the rows it superseded and the job that proposed it.
-function savedDecisionAnswer(saved) {
-  return {
-    ok: true,
-    id: saved.id,
-    number: saved.number,
-    ref: saved.ref,
-    scope: saved.scope,
-    owner: saved.org ?? saved.project,
-    ...(saved.superseded.length ? { superseded: saved.superseded } : {}),
-    ...(saved.statusDefaulted ? { status_defaulted: true } : {}),
-  };
-}
-
-// Owner a decisions tool names: `project` (the registered NAME) XOR `org`, refusing both and neither; resolved once to its ids.
-async function ownerArgs(args, env) {
-  const project = typeof args.project === "string" && args.project.trim() !== "" ? args.project.trim() : null;
-  const org = typeof args.org === "string" && args.org.trim() !== "" ? args.org.trim() : null;
-  if (project && org) throw new UserError(SCOPE_CONFLICT);
-  const store = openStore(env);
-  if (org) return orgTargetOf(await requireOrg(store, org));
-  if (!project) throw new UserError(SCOPE_MISSING);
-  return projectTargetOf(await requireProject(store, project));
-}
-
 // Tells whether an optional argument was sent: an explicit null is treated exactly like an absent one.
 function sent(value) {
   return value !== undefined && value !== null;
 }
 
-// The project a bare `D-<n>` linked from an owner is read in: the project of a project owner, none for an org or the global owner.
-function projectContext({ scope, projectId }) {
-  return { projectId: scope === "project" ? (projectId ?? null) : null };
-}
-
-// Resolves an optional decision ref linked from an owner to the decision id, leaving an absent one absent.
-async function linkedDecisionId(value, owner, env) {
-  return sent(value) ? await openStore(env).decisions.decisionIdOfRef(value, projectContext(owner)) : value;
-}
-
-// The project a bare `D-<n>` of `decision_update` is read in: the `project` named, else the caller job's project, else none.
-async function decisionUpdateContext(args, env) {
-  const named = typeof args.project === "string" && args.project.trim() !== "" ? args.project.trim() : null;
-  if (named) return { projectId: (await requireProject(openStore(env), named)).id };
-  return { projectId: (await callerContext(env)).projectId };
-}
 
 // Project row the job goes to, or the offer to register the directory of the caller when nothing is registered for it.
 async function resolveQueueTarget({ project, cwd }, env) {
@@ -561,32 +487,6 @@ async function queuedAnswer({ job, registered = null }, env) {
   };
 }
 
-// Refuses a decision a job may not read: inside a job only the job's project's decisions and its org's; outside a job every one is readable.
-async function requireReadableDecision({ id, row }, env) {
-  const own = callerJobId(env);
-  if (own === null) return;
-  const mine = await callerProject(own, env);
-  const project = mine === null ? null : await openStore(env).projects.byId(mine.id);
-  const sameOrg = row.scope === "org" && project !== null && project.org_id === row.org_id;
-  const sameProject = row.scope !== "org" && mine !== null && mine.id === (row.project_id ?? null);
-  if (sameOrg || sameProject) return;
-  throw new UserError(
-    `decision \`${id}\` belongs to ${ownerDescription(row)}, not \`${mine?.name ?? "unknown"}\`; inside job \`${own}\` only a decision of the job's project or of its org is readable`,
-  );
-}
-
-// The one decision `decision_recall` reads by `id`, whole whatever its status; `query`, `limit` and an owner beside the id are refused.
-async function decisionDetail(args, env) {
-  if (sent(args.query) || sent(args.limit) || sent(args.org)) {
-    throw new UserError("pass `id` alone (with `project` only to read a bare `D-<n>`) to read one decision, or `project`/`org` with `query`/`limit` without `id` to recall the accepted ones");
-  }
-  const store = openStore(env);
-  const ref = String(args.id).trim();
-  const row = await store.decisions.getDecision(await store.decisions.decisionIdOfRef(ref, await decisionUpdateContext(args, env)));
-  if (!row) throw new UserError(`decision \`${ref}\` does not exist`);
-  await requireReadableDecision({ id: ref, row }, env);
-  return { ...decisionFullView(row), job_ref: row.job_id ? jobRef(row.job_id) : null };
-}
 
 // Clamps the size of a job listing into the accepted window.
 function jobLimit(limit) {
@@ -674,8 +574,7 @@ async function degradedPhaseContext(args, build) {
 function guard(name, handler, session) {
   return async (args) => {
     try {
-      const upgraded = await upgradeOldShapes(name, args ?? {}, session);
-      return asText(withContract(await handler(upgraded.args), upgraded.deprecated));
+      return asText(withContract(await handler(args ?? {})));
     } catch (err) {
       if (err instanceof StoreUnavailableError) return storeUnavailableAnswer(err);
       const message = redactSecrets(err instanceof StaleContractError ? err.message : `${name}: ${err?.message ?? String(err)}`, session.env);
@@ -878,7 +777,7 @@ function trackerWriteTools(env) {
   ].map((tool) => trackerWriteTool(tool, env));
 }
 
-// The thirty-five tools of the plugin contract, with the parameter names the plugin actually sends.
+// The thirty-one tools of the plugin contract, with the parameter names the plugin actually sends.
 function toolDefinitions(env, state) {
   return [
     {
@@ -1021,7 +920,7 @@ function toolDefinitions(env, state) {
     {
       name: "memory_recall",
       config: {
-        description: "Recalls project facts and decisions from the shared memory.",
+        description: "Recalls project facts from the shared memory.",
         inputSchema: { query: optionalText, project: optionalText },
       },
       handler: async (args) => {
@@ -1037,7 +936,7 @@ function toolDefinitions(env, state) {
       name: "memory_save",
       config: {
         description:
-          "Records one project fact or decision of the code as `key`/`value` (NOT a `decision_*` record). A key the project already has is kept, never overwritten: the answer says `deduped: true` with the stored value. Allowed inside a job.",
+          "Records one project fact of the code as `key`/`value`. A key the project already has is kept, never overwritten: the answer says `deduped: true` with the stored value. Allowed inside a job.",
         inputSchema: { project: optionalText, key: z.string(), value: z.string() },
       },
       handler: async (args) => {
@@ -1225,7 +1124,7 @@ function toolDefinitions(env, state) {
       guardsHome: true,
       config: {
         description:
-          "Registers the git repository of `cwd` as a project without queueing anything, so its decisions and lessons can be used before any job. Call it only after the person said yes to registering it - never on your own initiative. " +
+          "Registers the git repository of `cwd` as a project without queueing anything, so its lessons and memories can be used before any job. Call it only after the person said yes to registering it - never on your own initiative. " +
           "`cwd` is the absolute working directory; the repository root is resolved from it, and a linked worktree resolves to its main checkout. `name` defaults to the folder's suggested name, `key` to the suggested key, `org` to the default org (an unknown org is refused with the list of orgs). " +
           "A directory already registered is answered with `registered: false` and the existing project, and nothing is written. Refused from inside a job.",
         inputSchema: {
@@ -1430,122 +1329,6 @@ function toolDefinitions(env, state) {
       },
     },
     {
-      name: "decision_save",
-      config: {
-        description:
-          "Records one architecture decision: the context that forced it, what was decided and what it costs. " +
-          "Owned by `project` (the registered NAME, never a path) or by `org`, never both — an org decision binds every project of that org and is the right shape when the constraint holds for more than one repo of the same product. " +
-          "Numbered inside its owner, and named by its ref (`D-1`, `D-2` per project; `DLW/D-1`, `DLW/D-2` per org, after the org's key); a missing or invalid `status` falls back to `proposed` (the answer then carries `status_defaulted: true`). " +
-          "Before saving, the title is searched against the owner's accepted and proposed decision titles, and the title plus decision text against their meaning. " +
-          'When it overlaps any, nothing is saved and the answer is `status: "needs_review"` with `candidates` (id, number, title, status, via). ' +
-          "Save again naming EVERY candidate by its `number` or its `ref` (a ref must name a decision of the same owner): in `supersedes` the ones this decision replaces WHOLE (they become `superseded` and point at the new row, so restate in the new text what still holds), in `unrelated` the ones it leaves untouched. " +
-          "Any candidate left unnamed refuses again. Refused inside a queue job: decisions are the operator's record, written only outside a run.",
-        inputSchema: {
-          project: optionalText,
-          org: optionalText,
-          title: z.string(),
-          context: z.string(),
-          decision: z.string(),
-          consequences: optionalText,
-          status: looseDecisionStatus,
-          supersedes: optionalNumbers,
-          unrelated: optionalNumbers,
-        },
-      },
-      handler: async (args) => {
-        refuseDecisionWriteInsideJob(env, "`decision_save`");
-        const store = openStore(env);
-        const owner = ownerRef(await ownerArgs(args, env));
-        const saved = await store.decisions.saveReviewedDecision({
-          ...owner,
-          title: args.title,
-          context: args.context,
-          decision: args.decision,
-          consequences: args.consequences,
-          status: args.status,
-          supersedes: await store.decisions.ownDecisionNumbers(args.supersedes, owner),
-          unrelated: await store.decisions.ownDecisionNumbers(args.unrelated, owner),
-        });
-        return saved.needsReview ? needsReviewAnswer(saved.candidates) : savedDecisionAnswer(saved);
-      },
-    },
-    {
-      name: "decision_update",
-      config: {
-        description:
-          "Changes a decision by its ref in `id` (`D-7`, `DLW/D-3`, `NQ/D-7`): accept or reject a proposed one, correct its text, or point `superseded_by` at the ref of the decision that replaced it. " +
-          "A bare `D-<n>` is read in `project` (the registered NAME); `superseded_by` is read in the updated decision's owner. " +
-          "Only the fields present are touched; an explicit `null` is treated exactly like an absent one. " +
-          '`status: "superseded"` requires `superseded_by`, unless the decision already names its successor. ' +
-          "Refused inside a queue job: decisions are the operator's record, written only outside a run.",
-        inputSchema: {
-          id: decisionRefInput,
-          project: optionalText,
-          title: optionalText,
-          context: optionalText,
-          decision: optionalText,
-          consequences: optionalText,
-          status: optionalDecisionStatus,
-          superseded_by: decisionRefInput.nullable().optional(),
-        },
-      },
-      handler: async (args) => {
-        refuseDecisionWriteInsideJob(env, "`decision_update`");
-        const store = openStore(env);
-        const id = await store.decisions.decisionIdOfRef(args.id, await decisionUpdateContext(args, env));
-        const current = await store.decisions.getDecision(id);
-        const row = await store.decisions.updateDecision(id, {
-          title: args.title,
-          context: args.context,
-          decision: args.decision,
-          consequences: args.consequences,
-          status: args.status,
-          superseded_by: await linkedDecisionId(args.superseded_by, rowOwner(current), env),
-        });
-        return { ok: true, decision: decisionView(row) };
-      },
-    },
-    {
-      name: "decision_list",
-      config: {
-        description:
-          "The decisions log in numbering order, optionally filtered by status. With `project`, the project's own rows plus the rows of its org, org rows first, each carrying its `scope` and its `owner`; with `org`, only that org's rows. " +
-          "Compact rows: the full text of one decision comes from `decision_recall`.",
-        inputSchema: { project: optionalText, org: optionalText, status: optionalDecisionStatus },
-      },
-      handler: async (args) => {
-        const owner = await ownerArgs(args, env);
-        const rows = await openStore(env).decisions.listDecisions({ ...ownerRef(owner), status: args.status });
-        return { ...ownerNames(owner), decisions: rows.map(decisionView) };
-      },
-    },
-    {
-      name: "decision_recall",
-      config: {
-        description:
-          "Standing constraints, before proposing architecture. With `project`, the project's decisions and its org's, org rows first, each carrying its `scope` and its `owner`; with `org`, only that org's. " +
-          "Only accepted decisions come back, with their text untruncated, because this feeds prompts. " +
-          'An item with via "fallback" did not match the query: it is recent context, never an answer. ' +
-          "With `id` (a decision ref: `D-45`, `DLW/D-3`, `NQ/D-7`) and no `query`, `limit` or `org`, that ONE decision whole whatever its status (proposed, rejected, superseded too), with `job_ref` of the job that proposed it; a bare `D-<n>` is read in `project`, or inside a job in the job's project, and inside a job only a decision of the job's project or of its org is readable.",
-        inputSchema: {
-          id: decisionRefInput.nullable().optional(),
-          project: optionalText,
-          org: optionalText,
-          query: optionalText,
-          limit: z.number().int().min(1).max(20).nullable().optional(),
-        },
-      },
-      handler: async (args) => {
-        if (sent(args.id)) return await decisionDetail(args, env);
-        const rows = await openStore(env).decisions.recallDecisions({
-          ...ownerRef(await ownerArgs(args, env)),
-          query: args.query,
-          limit: Number.isInteger(args.limit) ? args.limit : RECALL_LIMIT,
-        });
-        return rows.map(decisionFullView);
-      },
-    },
-    {
       name: "run_phase_done",
       config: {
         description:
@@ -1644,7 +1427,22 @@ function toolHandler(tool, env) {
   };
 }
 
-// Builds the MCP server with the thirty-five tools of the plugin contract.
+// Puts the older-definitions refusal in front of the SDK's tool call, so a removed tool is never answered as an unknown one.
+function refuseRemovedToolCalls(server, state) {
+  const callTool = server.server._requestHandlers?.get("tools/call");
+  if (typeof callTool !== "function") throw new Error("nightqueue: the MCP SDK has no tools/call handler to wrap, so a removed tool cannot be refused");
+  server.server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
+    try {
+      refuseRemovedTool(request.params?.name, state);
+    } catch (err) {
+      if (!(err instanceof StaleContractError)) throw err;
+      return { content: [{ type: "text", text: err.message }], isError: true };
+    }
+    return await callTool(request, extra);
+  });
+}
+
+// Builds the MCP server with the thirty-one tools of the plugin contract.
 export function createServer(env = process.env) {
   const server = new McpServer(
     {
@@ -1664,6 +1462,7 @@ export function createServer(env = process.env) {
     schemas.set(tool.name, tool.config.inputSchema);
     server.registerTool(tool.name, tool.config, guard(tool.name, toolHandler(tool, env), session));
   }
+  refuseRemovedToolCalls(server, state);
   // The SDK validates the call before the handler and refuses with one problem; this refusal carries every problem, the whole contract and what was received, which is what lets an agent fix the next call instead of repeating the same payload.
   server.validateToolInput = async (tool, args, toolName) => {
     refuseRenamedFields(toolName, args, state);

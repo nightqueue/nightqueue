@@ -6,7 +6,6 @@ import { test } from "node:test";
 import { isId } from "../../src/config/ids.mjs";
 import { configPath, dbPath, homeDir, preV18BackupPath, preVersionBackupPath, runDir, runsIdMarkerPath } from "../../src/config/paths.mjs";
 import { closeDb, DB_USER_VERSION, openDb, openDbReadOnly, schemaVersionOn } from "../../src/memory/db.mjs";
-import { listDecisions, saveDecision } from "../../src/memory/decisions.mjs";
 import { addJob, claimJobById, getJob, sweepOrphans } from "../../src/memory/jobs.mjs";
 import { saveLesson } from "../../src/memory/lessons.mjs";
 import { recentMemories } from "../../src/memory/memory.mjs";
@@ -104,7 +103,7 @@ test("a runner holding a live lease refuses the migration with one line and noth
   };
   const { env, fixture } = v17Home(t, "v18-live-lease", { seed: running("+1 hour") });
   assert.throws(() => migrateTestHome(env), (err) => LEASE_REFUSAL.test(err.message) && err.message.split("\n").length === 1);
-  assert.throws(() => openDb(env), (err) => err.code === "SCHEMA_OUTDATED" && /database at v17, this nightqueue expects v25: run `nightqueue update`/.test(err.message));
+  assert.throws(() => openDb(env), (err) => err.code === "SCHEMA_OUTDATED" && /database at v17, this nightqueue expects v26: run `nightqueue update`/.test(err.message));
   assert.equal(diskVersion(env), 17);
   assert.equal(existsSync(preV18BackupPath(env)), false, "a refused migration published a copy");
   assert.ok(readFileSync(dbPath(env)).equals(fixture), "a refused migration wrote to the database");
@@ -485,7 +484,9 @@ test("acceptance: every table of a v17 home is rebuilt by id with the same rows,
   t.after(() => before.close());
   const tracker = new DatabaseSync(preVersionBackupPath(env, 24), { readOnly: true });
   t.after(() => tracker.close());
-  const source = (table) => (TRACKER_TABLES.includes(table) ? tracker : db);
+  const v25 = new DatabaseSync(preVersionBackupPath(env, 26), { readOnly: true });
+  t.after(() => v25.close());
+  const source = (table) => (TRACKER_TABLES.includes(table) ? tracker : table === "decisions" ? v25 : db);
   assert.ok(readFileSync(preV18BackupPath(env)).equals(fixture), "the pre-v18 copy is not the v17 database byte for byte");
   assert.deepEqual(db.prepare("SELECT name FROM sqlite_master WHERE name LIKE 'issue%'").all(), [], "v24 left a tracker object");
 
@@ -517,7 +518,8 @@ test("acceptance: every table of a v17 home is rebuilt by id with the same rows,
 
   const match = (mirror, word, connection = db) => connection.prepare(`SELECT rowid FROM ${mirror} WHERE ${mirror} MATCH ?`).all(word).map((row) => row.rowid);
   assert.deepEqual(match("lessons_fts", "zebracrossing"), [1]);
-  assert.deepEqual(match("decisions_fts", "zebradecision"), [1]);
+  assert.deepEqual(match("decisions_fts", "zebradecision", v25), [1]);
+  assert.deepEqual(db.prepare("SELECT name FROM sqlite_master WHERE name LIKE 'decisions%'").all(), [], "v26 left a decisions object");
   assert.deepEqual(match("issues_fts", "zebraitem", tracker), [1]);
   assert.deepEqual(match("issue_comments_fts", "zebracomment", tracker), [1]);
   const indexed = db.prepare("SELECT COUNT(*) AS n FROM jobs_fts").get().n;
@@ -527,11 +529,11 @@ test("acceptance: every table of a v17 home is rebuilt by id with the same rows,
 
   const api = projects.api;
   assert.deepEqual(
-    listDecisions({ projectId: api.id }, env).map((row) => [row.scope, row.org ?? row.project, row.number]),
-    [["org", "acme", 1], ["project", "api", 1], ["project", null, 1]],
-    "a project reads its own decisions, its org's first, and the global ones, never another org's",
+    v25.prepare("SELECT scope, number FROM decisions WHERE project_id = ? ORDER BY id").all(api.id).map((row) => [row.scope, row.number]),
+    [["project", 1]],
+    "the api decision lost its owner id before v26",
   );
-  assert.equal(saveDecision({ projectId: api.id, title: "t", context: "c", decision: "d" }, env).id, 6, "a decision id was reused");
+  assert.equal(v25.prepare("SELECT seq FROM sqlite_sequence WHERE name = 'decisions'").get().seq, 5, "the decision counter went back before v26");
   const orgRows = tracker.prepare("SELECT p.name, r.status FROM issue_projects r JOIN projects p ON p.id = r.project_id WHERE r.item_id = 1 ORDER BY p.name").all();
   assert.deepEqual(orgRows.map((row) => [row.name, row.status]), [["api", "in_progress"], ["web", "todo"]]);
 

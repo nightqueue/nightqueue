@@ -54,7 +54,7 @@ Nothing leaves it.
 - **An 8-phase pipeline.** On bugs and risky changes: triage, exploration, architecture, implementation,
   adversarial QA, verification, runtime validation, commit and report — each
   phase run by a dedicated agent, each one gated by the previous artifact.
-- **A memory that compounds.** Lessons, project decisions and structural indexes
+- **A memory that compounds.** Lessons, project memories and structural indexes
   survive between runs. The recall is hybrid (BM25 + optional local
   embeddings), scoped per project and per org, and every run makes the next one
   cheaper.
@@ -62,7 +62,7 @@ Nothing leaves it.
   written notice; you answer it with one command and the job goes back to the
   queue.
 - **Orgs and projects.** One home, many repositories, grouped by org, each with
-  its own decisions log.
+  its own lessons and memory.
 
 ## How a job runs
 
@@ -77,7 +77,7 @@ A low-risk change (docs, copy, config) skips straight to implement → verify �
 
 Each phase is a dedicated subagent with its own instructions (`plugin/agents/`),
 running inside a git worktree of your repository, in a job environment it cannot
-leave. What it learns — lessons, decisions, structural indexes of the codebase —
+leave. What it learns — lessons, memories, structural indexes of the codebase —
 is written to a local SQLite home and recalled by the next job through the
 nightqueue MCP server. The full promise between the pipeline and the runner is
 written down in [docs/runtime-contract.md](docs/runtime-contract.md).
@@ -88,7 +88,7 @@ written down in [docs/runtime-contract.md](docs/runtime-contract.md).
 |---|---|
 | A Linear issue, queued with `origin: [{kind: "linear", ref}]` over MCP (from `tracker_issues`) or `--origin linear:MK-42` on the CLI | The Studio in the browser: queue, jobs and settings (`nightqueue studio`) |
 | One line in the terminal: `nightqueue queue add "<request>"` | The CLI: `nightqueue queue add`, `run`, `status` and `retry` |
-| A plan under discussion in Claude Code: `/nightqueue:queue` | The MCP server, from any Claude client: `queue_add`, `queue_status`, and memory tools such as `lesson_recall` and `decision_recall` |
+| A plan under discussion in Claude Code: `/nightqueue:queue` | The MCP server, from any Claude client: `queue_add`, `queue_status`, and memory tools such as `lesson_recall` and `memory_recall` |
 
 ## Why nightqueue
 
@@ -96,7 +96,7 @@ written down in [docs/runtime-contract.md](docs/runtime-contract.md).
 |---|---|---|
 | Who drives | you, prompt by prompt | the pipeline, phase by phase |
 | Root cause | fixes what you described | reproduces first and fixes the cause on bugs and risky changes; proves every job |
-| Memory | gone when the window closes | lessons and decisions persist per org |
+| Memory | gone when the window closes | lessons and memories persist per org |
 | Quality gate | whatever you remember to ask | your project's own checks on every run, plus adversarial QA on complex jobs |
 | Output | a diff in a terminal | a reviewable pull request with a report |
 | When it runs | while you watch | while you sleep |
@@ -145,10 +145,6 @@ nightqueue studio [--port <n>] [--no-open]    # the queue in the browser, on 127
 
 # memory
 nightqueue memory stats
-nightqueue decision list | show <number|ref>     [--project <name> | --org <name>]
-nightqueue decision export <number|ref> [--dir <path>] [--force]
-nightqueue decision import <file.md> [--status <s>] [--superseded-by <n|ref>] [--supersedes <n|ref,...>] [--unrelated <n|ref,...>]
-nightqueue decision update <number|ref> --status accepted|rejected|superseded [--superseded-by <n|ref>]
 
 # home
 nightqueue org add|list|rename|key|remove|repair
@@ -197,7 +193,7 @@ follows the [code of conduct](CODE_OF_CONDUCT.md).
 |---|---|
 | [Install](docs/install.md) | `init`, what it sets up, updating, trying without installing |
 | [Queue](docs/queue.md) | jobs, runners, tiers, gates, logs, writing a job |
-| [Memory](docs/memory.md) | lessons, recall, decisions, the MCP tools |
+| [Memory](docs/memory.md) | lessons, memories, recall, the MCP tools |
 | [CLI](docs/cli.md) | every command, configuration, `doctor` |
 | [Runtime contract](docs/runtime-contract.md) | what the pipeline and the runner promise each other |
 | [Developing](docs/developing.md) | tests, releases, contributing |

@@ -325,15 +325,10 @@ function seedFreshLinks(env) {
   const insert = (sql, ...params) => Number(db.prepare(sql).run(...params).lastInsertRowid);
   const job = insert("INSERT INTO jobs (project_id, prompt) VALUES (?, 'linked job')", projectId);
   insert("INSERT INTO jobs (project_id, prompt) VALUES (?, 'other job')", projectId);
-  const decision = "INSERT INTO decisions (scope, project_id, number, title, context, decision, job_id) VALUES ('project', ?, ?, ?, 'c', 'd', ?)";
-  const superseded = insert(decision, projectId, 1, "superseded", null);
-  const supersededTarget = insert(decision, projectId, 2, "successor", null);
-  const linkedDecision = insert(decision, projectId, 3, "linked", job);
-  db.prepare("UPDATE decisions SET status = 'superseded', superseded_by = ? WHERE id = ?").run(supersededTarget, superseded);
   const run = insert("INSERT INTO pipeline_runs (project_id, slug, tier, outcome, job_id) VALUES (?, 'run-linked', 'M', 'done', ?)", projectId, job);
   insert("INSERT INTO pipeline_phases (run_id, seq, phase) VALUES (?, 1, 'triage')", run);
   insert("INSERT INTO pipeline_phases (run_id, seq, phase) VALUES (?, 2, 'plan')", run);
-  return { job, supersededTarget, linkedDecision, run };
+  return { job, run };
 }
 
 // The ids of the rows of a table whose column points at the given row.
@@ -402,9 +397,8 @@ test("on a fresh home, every reference follows its delete rule", (t) => {
   const env = makeHome(t, "v20-actions-fresh");
   const links = seedFreshLinks(env);
   const db = openDb(env);
-  assertJobDeleteSetsNull(db, links, ["decisions", "pipeline_runs"]);
-  assert.throws(() => db.prepare("DELETE FROM decisions WHERE id = ?").run(links.supersededTarget), /FOREIGN KEY constraint failed/);
-  db.prepare("DELETE FROM decisions WHERE id = ?").run(links.linkedDecision);
+  assert.deepEqual(db.prepare("SELECT name FROM sqlite_master WHERE name LIKE 'decisions%'").all(), [], "a fresh home has decisions");
+  assertJobDeleteSetsNull(db, links, ["pipeline_runs"]);
   assertRunDeleteCascades(db, links);
   assert.deepEqual(db.prepare("PRAGMA foreign_key_check").all(), []);
 });

@@ -16,7 +16,7 @@ export function HistoryCard({ projects, onRepick, onPurge }: HistoryCardProps) {
     <section aria-label="known from history" className="rounded-lg border border-dashed border-button-line">
       <div className="flex flex-col gap-0.5 px-4 py-3">
         <h2 className="m-0 text-sm font-medium tracking-[.3px] text-muted uppercase">Known from history</h2>
-        <span className="text-sm text-dim">These projects have no checkout any more; their jobs, decisions and memory are kept until you purge them.</span>
+        <span className="text-sm text-dim">These projects have no checkout any more; their jobs, lessons and memory are kept until you purge them.</span>
       </div>
       {projects.map((project) => (
         <div key={project.id} className="flex flex-wrap items-center gap-3 border-t border-dashed border-line px-4 py-3">

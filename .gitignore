@@ -8,6 +8,5 @@ studio/dist/
 .claude/settings.local.json
 .claude/worktrees/
 .nightqueue/
-docs/decisions/
 .DS_Store
 *.bundle

@@ -68,8 +68,8 @@ function diskVersion(env) {
   }
 }
 
-test("the schema is v25", () => {
-  assert.equal(DB_USER_VERSION, 25);
+test("the schema is v26", () => {
+  assert.equal(DB_USER_VERSION, 26);
 });
 
 test("a v23 home with issues, comments and an org item migrates to v24: the tracker gone, every job kept and indexed, a pre-v24 copy", (t) => {
@@ -82,9 +82,9 @@ test("a v23 home with issues, comments and an org item migrates to v24: the trac
   assert.equal(before.issues, 2);
 
   const result = migrateHomeDatabase(env, { backupPath: preVersionBackupPath(env, 24) });
-  assert.deepEqual(result, { migrated: true, from: 23, to: 25, backup: preVersionBackupPath(env, 24) });
+  assert.deepEqual(result, { migrated: true, from: 23, to: 26, backup: preVersionBackupPath(env, 24) });
   const db = openDb(env);
-  assert.equal(db.prepare("PRAGMA user_version").get().user_version, 25);
+  assert.equal(db.prepare("PRAGMA user_version").get().user_version, 26);
   assert.deepEqual(trackerObjects(db), []);
   assert.equal(countOf(db, "jobs_fts"), 3);
   assert.deepEqual(jobIndexTriggers(db), JOB_INDEX_TRIGGERS);
@@ -158,7 +158,7 @@ test("re-opening a migrated v24 home is a no-op: nothing pending, the job index 
 
 test("a fresh home is v24 with the job index and no tracker, the same tables and triggers as a migrated home", (t) => {
   const fresh = openDb(makeHome(t, "v24-fresh"));
-  assert.equal(fresh.prepare("PRAGMA user_version").get().user_version, 25);
+  assert.equal(fresh.prepare("PRAGMA user_version").get().user_version, 26);
   assert.deepEqual(trackerObjects(fresh), []);
   assert.deepEqual(jobIndexTriggers(fresh), JOB_INDEX_TRIGGERS);
   const env = makeHome(t, "v24-converge");

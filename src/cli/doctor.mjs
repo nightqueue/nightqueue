@@ -1367,7 +1367,7 @@ function checkHomeWorktrees(ctx, { projects, owners, releasable, fix }) {
 
 const LEGACY_OPERATOR_QA_LABEL = "operator-qa (legacy)";
 
-// Reports, read-only, the QA worktrees an operator before D-58 left under `operator-qa`; no job ever owns one, so each is a leftover.
+// Reports, read-only, the QA worktrees an operator before the generalist operator left under `operator-qa`; no job ever owns one, so each is a leftover.
 function checkOperatorQa(ctx, { projects }) {
   const rowOf = (project) => (dir, entries) => leftoverCheck(ctx, { project, dir, entries, owners: new Map(), legacy: false, kind: LEGACY_OPERATOR_QA_LABEL });
   return scanHomeRoot({ base: legacyOperatorQaDir(ctx.env), projects, label: LEGACY_OPERATOR_QA_LABEL, rowsOf: (project, root) => scanWorktreeDir(ctx, { project, root, rowOf: rowOf(project) }) });

@@ -338,7 +338,7 @@ test("a failure inside the scope check fails open and never blocks the job", (t)
   assert.equal(runAgentForeground({ input: mainCall("Read", hostile, worktree), env }), "");
 });
 
-const OPERATOR_REASON_PREFIX = "D-58: ";
+const OPERATOR_REASON_PREFIX = "operator guard: ";
 
 // The operator's env of the same fixture: no job id, the operator mode, and the home its runs live in.
 function operatorFixture(t) {
@@ -349,7 +349,7 @@ function operatorFixture(t) {
   return { ...fixture, env: { ...rest, NIGHTQUEUE_MODE: "operator" } };
 }
 
-test("the operator reads anything on disk, and the secrets file, a `.env*` file or a Grep over the home is refused under D-58", (t) => {
+test("the operator reads anything on disk, and the secrets file, a `.env*` file or a Grep over the home is refused by the operator guard", (t) => {
   const { env, runDir, plugin, worktree } = operatorFixture(t);
   for (const [tool, toolInput] of [
     ["Read", { file_path: join(runDir, "03-plan.md") }],
@@ -371,7 +371,7 @@ test("the operator reads anything on disk, and the secrets file, a `.env*` file 
   }
 });
 
-test("the operator's main thread never edits, and its Bash outside the D-58 list is denied while the list passes untouched", (t) => {
+test("the operator's main thread never edits, and its Bash outside the operator guard's list is denied while the list passes untouched", (t) => {
   const { env, worktree } = operatorFixture(t);
   for (const tool of ["Edit", "Write", "MultiEdit", "NotebookEdit"]) {
     const reason = denyReasonOf(runAgentForeground({ input: mainCall(tool, { file_path: join(worktree, "x") }, worktree), env }));

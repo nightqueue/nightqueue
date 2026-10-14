@@ -3,11 +3,10 @@ import { rmSync } from "node:fs";
 import { test } from "node:test";
 import { defaultContext, run } from "../../src/cli/index.mjs";
 import { openDb } from "../../src/memory/db.mjs";
-import { getDecision, saveDecision } from "../../src/memory/decisions.mjs";
 import { addJob, claimJobById, getJob, jobView } from "../../src/memory/jobs.mjs";
 import { CLOSE_MERGED_QUERY_LIMIT } from "../../src/queue/close-merged.mjs";
 import { createPrStateCache } from "../../src/queue/pr-state.mjs";
-import { ensureProject, makeHome, makeProject, projectIdOf } from "../../test-support/memory.mjs";
+import { ensureProject, makeHome, makeProject } from "../../test-support/memory.mjs";
 import { fakeCloseDeps, mergedPr, openPr } from "../../test-support/close.mjs";
 
 // A home with the pull request checks switched back on, the default `makeHome` turns off.
@@ -160,13 +159,6 @@ test("a running job with a merged pull request is never closed", async (t) => {
   assert.deepEqual(result.out, ["nothing to close"]);
 });
 
-// A decision the given job proposed, stamped straight in the database.
-function proposal(env, { jobId, title }) {
-  const saved = saveDecision({ projectId: projectIdOf(env, "alpha"), title, context: "why", decision: "what", status: "proposed" }, env);
-  openDb(env).prepare("UPDATE decisions SET job_id = ? WHERE id = ?").run(jobId, saved.id);
-  return saved;
-}
-
 // A pull request cache that already knows the url as merged, so the close asks gh nothing.
 async function mergedCache(env, prUrl) {
   const prStates = createPrStateCache({ viewImpl: async () => ({ ok: true, state: "MERGED", mergedAt: "2026-09-11T15:54:01Z" }) });
@@ -174,31 +166,27 @@ async function mergedCache(env, prUrl) {
   return prStates;
 }
 
-test("close --merged leaves the proposals of every job it closed proposed and prints no accepted line", async (t) => {
-  const env = makeCloseHome(t, "close-merged-decisions-untouched");
+test("close --merged prints one closed line per job it closed and nothing else", async (t) => {
+  const env = makeCloseHome(t, "close-merged-closed-line");
   const prUrl = "https://github.com/acme/api/pull/1";
   const merged = terminalJob(env, { prUrl });
-  const first = proposal(env, { jobId: merged, title: "leases are renewed by their owner" });
 
   const result = await runQueueClose(env, ["queue", "close", "--merged"], { prStates: await mergedCache(env, prUrl) });
 
   assert.equal(result.code, 0, result.err.join("\n"));
-  assert.equal(getDecision(first.id, env).status, "proposed");
   assert.deepEqual(result.out, [`closed J-${merged}`]);
 });
 
 test("close --merged --json answers one parseable line with no `decisions` key", async (t) => {
-  const env = makeCloseHome(t, "close-merged-decisions-json");
+  const env = makeCloseHome(t, "close-merged-json");
   const prUrl = "https://github.com/acme/api/pull/1";
-  const json = terminalJob(env, { prUrl });
-  const first = proposal(env, { jobId: json, title: "runners register in one table" });
+  terminalJob(env, { prUrl });
 
   const result = await runQueueClose(env, ["queue", "close", "--merged", "--json"], { prStates: await mergedCache(env, prUrl) });
 
   assert.equal(result.code, 0, result.err.join("\n"));
   assert.equal(result.out.length, 1, result.out.join("\n"));
   assert.deepEqual(Object.keys(JSON.parse(result.out[0])).sort(), ["closed", "refused", "undetermined", "worktrees"]);
-  assert.equal(getDecision(first.id, env).status, "proposed");
 });
 
 test("close --merged --decisions is an unknown option and closes nothing", async (t) => {

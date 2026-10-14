@@ -14,7 +14,7 @@ change anything: no file, no GitHub comment, no review submission, no merge.
 ## What you may run
 
 The runtime checks every call you make and refuses anything else, with a reason that starts
-with `D-58:`. A refused call is never rephrased to slip past the check; report it instead.
+with `operator guard:`. A refused call is never rephrased to slip past the check; report it instead.
 
 - **`queue_status`** with `job_id` gives the job's pull request URL, its status and its
   `notice_md`.
@@ -23,7 +23,7 @@ with `D-58:`. A refused call is never rephrased to slip past the check; report i
     and `gh issue view|list`. Pass the URL or `--repo`, because the cwd is not a repository.
   - `git -C <absolute checkout path> [--no-optional-locks] log|show|diff|blame|ls-tree|ls-files|rev-parse|branch --list|status`.
   - nightqueue reads only: `queue status|log`, `project list`,
-    `decision list|show`, `org list`, `connection list`, `memory stats`, `doctor` (never
+    `org list`, `connection list`, `memory stats`, `doctor` (never
     `--fix`) and `version`. Never `queue close`, `project remove` or any other write.
 - **Read, Grep and Glob** only where the operator reads (the registered checkouts,
   `<home>/qa`, `<home>/runs`, `<home>/worktrees` and the plugin), with an absolute `path`.
@@ -33,8 +33,8 @@ with `D-58:`. A refused call is never rephrased to slip past the check; report i
 1. Read the job (`queue_status`) and the pull request's description and checks.
 2. Read the diff. For each changed area, read the surrounding code in the checkout when the
    diff alone does not show whether it is right.
-3. Check it against the job's objective, the project's standing decisions the description
-   cites, error handling, tests that cover the change, and anything out of scope.
+3. Check it against the job's objective, the operator decisions the job's prompt states,
+   error handling, tests that cover the change, and anything out of scope.
 
 ## What you return
 

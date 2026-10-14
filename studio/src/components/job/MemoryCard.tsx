@@ -23,27 +23,23 @@ const PREVIEW_HITS = 3;
 type HitKind = Exclude<RecallKind, "context">;
 
 const KIND_TEXT: Record<HitKind, string> = {
-  decision: "text-mem-decision",
   lesson: "text-mem-lesson",
   index: "text-mem-index",
   memory: "text-note",
 };
 
 const KIND_BAR: Record<HitKind, string> = {
-  decision: "bg-mem-decision",
   lesson: "bg-mem-lesson",
   index: "bg-mem-index",
   memory: "bg-note",
 };
 
 const KIND_WORDS: { kind: HitKind; one: string; many: string }[] = [
-  { kind: "decision", one: "decision", many: "decisions" },
   { kind: "lesson", one: "lesson", many: "lessons" },
   { kind: "memory", one: "memory", many: "memories" },
 ];
 
 const BADGE_KINDS: { kind: HitKind; letter: string; one: string; many: string }[] = [
-  { kind: "decision", letter: "D", one: "decision", many: "decisions" },
   { kind: "lesson", letter: "L", one: "lesson", many: "lessons" },
   { kind: "memory", letter: "M", one: "memory", many: "memories" },
   { kind: "index", letter: "I", one: "index file", many: "index files" },
@@ -99,7 +95,7 @@ function isApplied(hit: RecallHit): boolean {
   return appliedOf(hit).length > 0;
 }
 
-// The non-zero counts of a context block's hits per kind, decisions first.
+// The non-zero counts of a context block's hits per kind, lessons first.
 function kindParts(hits: RecallHit[], recall: Recall): KindPart[] {
   return KIND_WORDS.map(({ kind, one, many }) => {
     const count = hits.filter((hit) => hitKindOf(hit, recall) === kind).length;
@@ -107,12 +103,12 @@ function kindParts(hits: RecallHit[], recall: Recall): KindPart[] {
   }).filter((part) => part.count > 0);
 }
 
-// The kind counts as `51 decisions · 4 lessons`.
+// The kind counts as `4 lessons · 2 memories`.
 function kindPartsLabel(parts: KindPart[]): string {
   return parts.map((part) => `${part.count} ${part.word}`).join(" · ");
 }
 
-// The non-zero hit counts of a context block per badge kind, in D, L, M, I order.
+// The non-zero hit counts of a context block per badge kind, in L, M, I order.
 function badgeCounts(hits: RecallHit[], recall: Recall): BadgeCount[] {
   return BADGE_KINDS.map(({ kind, letter, one, many }) => {
     const count = hits.filter((hit) => hitKindOf(hit, recall) === kind).length;
@@ -245,7 +241,7 @@ function IndexRef({ path, prUrl, className }: { path: string; prUrl: string; cla
   );
 }
 
-// The ref of a hit: opens the drawer for a decision, lesson or memory, links to the PR diff for an index file.
+// The ref of a hit: opens the drawer for a lesson or memory, links to the PR diff for an index file.
 function HitRef({ hit, kind, job, onOpen }: { hit: RecallHit; kind: HitKind; job: JobDetail; onOpen: OpenEntry }) {
   const className = `flex-none font-mono text-[11px] font-medium ${KIND_TEXT[kind]}`;
   if (!hit.ref) return <span className={className}>?</span>;
@@ -407,7 +403,7 @@ export function MemoryCard({ job, running }: { job: JobDetail; running: boolean 
       {recalls.isError && !recalls.data && <MemoryMessage>{`The recalls cannot be read: ${errorText(recalls.error)}`}</MemoryMessage>}
       {recalls.data && <RecallList answer={recalls.data} job={job} onOpen={setOpened} />}
       {recalls.data && <MemoryFooter answer={recalls.data} jobRefText={ref} />}
-      {opened && <MemoryDrawer entry={opened} project={job.project} onClose={() => setOpened(null)} />}
+      {opened && <MemoryDrawer entry={opened} onClose={() => setOpened(null)} />}
     </section>
   );
 }

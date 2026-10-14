@@ -216,7 +216,7 @@ export function jobWorktreePath(projectId, slug, env = process.env) {
   return join(worktreesDir(env), projectId, slug);
 }
 
-// Directory where an operator before D-58 left its QA worktrees, one sub-directory per project id; only doctor still reads it.
+// Directory where an operator before the generalist operator left its QA worktrees, one sub-directory per project id; only doctor still reads it.
 export function legacyOperatorQaDir(env = process.env) {
   return join(homeDir(env), "operator-qa");
 }

@@ -38,7 +38,7 @@ function snapshot(env, id) {
   return { slug: row.slug, status: row.status, pr_url: row.pr_url, branch: row.branch, result: row.result };
 }
 
-test("the operator seed heading the migration spares is the one operator runs wrote before D-58", () => {
+test("the operator seed heading the migration spares is the one operator runs wrote before the operator guard", () => {
   assert.equal(OPERATOR_SEED_HEADING, "## PRIOR RUN (operator)");
 });
 

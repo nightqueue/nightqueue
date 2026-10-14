@@ -16,8 +16,8 @@ Type: {{TYPE}}
 {{INJECTED_LESSONS}}
 
 Rules: the lesson `target` is the phase where the error was made; a recurrence is re-saved with
-the lesson's EXACT `title`; every save carries `project` = the Project below; never
-`decision_save` - a choice of the code is a memory (`memory_save`).
+the lesson's EXACT `title`; every save carries `project` = the Project below; a choice of the
+code is a memory (`memory_save`).
 Return (≤10 lines): `REFLECTION: <n> saved · <n> recurrences · <n> skipped`, then one line per ref.
 
 {{>_shell-rule}}

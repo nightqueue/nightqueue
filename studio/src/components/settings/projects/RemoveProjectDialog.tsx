@@ -16,16 +16,15 @@ interface RemoveProjectDialogProps {
 
 const FILLED_DANGER = "!border-gate-bar !bg-gate-bar !text-bg enabled:hover:!bg-[#f06a62] max-sm:min-h-[46px] max-sm:w-full";
 
-// The four counters of what a purge deletes.
+// The three counters of what a purge deletes.
 function Counters({ counters }: { counters: FootprintCounters }) {
   const cells = [
     ["jobs", counters.jobs],
-    ["decisions", counters.decisions],
     ["memory rows", counters.memoryRows],
     ["lessons", counters.lessons],
   ] as const;
   return (
-    <div className="grid grid-cols-4 gap-2 max-sm:grid-cols-2">
+    <div className="grid grid-cols-3 gap-2 max-sm:grid-cols-2">
       {cells.map(([label, value]) => (
         <div key={label} className="flex flex-col rounded-md border border-line px-3 py-2">
           <span className="font-mono text-[18px] text-fg">{value}</span>
@@ -72,7 +71,7 @@ export function RemoveProjectDialog({ project, onClose }: RemoveProjectDialogPro
   return (
     <SettingsDialog title={<><span className="text-red">⚠</span> Remove {project.name}?</>} label={`Remove ${project.name}`} width="narrow" phone="sheet" alert onClose={onClose} onSubmit={submit} footer={footer}>
       {mode.kind === "running" && <div className="text-[13px] text-[#d6dae3]">{`A job is working on ${project.name} right now; a project cannot be removed under it.`}</div>}
-      {mode.kind === "plain" && <div className="text-[13px] text-[#d6dae3]">{`No job, decision, lesson or memory belongs to ${project.name}; only its registration goes.`}</div>}
+      {mode.kind === "plain" && <div className="text-[13px] text-[#d6dae3]">{`No job, lesson or memory belongs to ${project.name}; only its registration goes.`}</div>}
       {mode.kind === "typed" && (
         <>
           <div className="text-[13px] text-[#d6dae3]">{`${project.name} owns ${plural(mode.rows, "row")}. Removing it deletes all of them and its run directory.`}</div>

@@ -346,7 +346,7 @@ async function runAdd(argv, ctx) {
 }
 
 const RUN_DIR_RETIRED =
-  "`--run-dir` was removed by D-58: operator runs no longer exist, so there is no run to bind; put what was found in the prompt";
+  "`--run-dir` was removed with the operator runs: operator runs no longer exist, so there is no run to bind; put what was found in the prompt";
 
 const ADD_OPTIONS = {
   priority: { type: "string" },

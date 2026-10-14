@@ -4,6 +4,7 @@ import { configPath, dbPath, homeDir } from "../src/config/paths.mjs";
 import { ensureHome } from "../src/config/store.mjs";
 import { closeDb } from "../src/memory/db.mjs";
 import { bringToV17 } from "../src/memory/migration/legacy.mjs";
+import { DECISIONS_FTS_V25, DECISIONS_INDEXES_V25, decisionsDdlV25 } from "../src/memory/migration/decisions-shape.mjs";
 import { issueCommentsDdl, issueProjectsDdl, issuesDdl } from "../src/memory/migration/tracker-shape.mjs";
 
 const { DatabaseSync } = await import("node:sqlite");
@@ -31,8 +32,14 @@ export function restorePreV22Names(db) {
   }
 }
 
-// Gives a home opened at the current schema the tracker tables a pre-v22 build had, from their frozen shapes, under their pre-v22 names.
+// Gives a home opened at the current schema the `decisions` table every v20 to v25 build had, from its frozen shape, with its indexes and lexical mirror.
+export function plantDecisionsV25(db) {
+  db.exec(`${decisionsDdlV25("decisions")}\n${DECISIONS_INDEXES_V25}\n${DECISIONS_FTS_V25}`);
+}
+
+// Gives a home opened at the current schema the tracker tables a pre-v22 build had, from their frozen shapes, under their pre-v22 names, beside its decisions.
 export function plantPreV22Tracker(db) {
+  plantDecisionsV25(db);
   db.exec(`${issuesDdl("issues")}\n${issueCommentsDdl("issue_comments")}\n${issueProjectsDdl("issue_projects")}`);
   restorePreV22Names(db);
 }

@@ -4,7 +4,6 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { runDir } from "../../src/config/paths.mjs";
 import { LESSON_TARGET_OF, PROMPT_TARGETS, phasePrompt, promptsDir, renderTemplate, templateOf } from "../../src/mcp/phase-prompt.mjs";
-import { saveDecision } from "../../src/memory/decisions.mjs";
 import { addJob, claimJobById, persistRunFacts } from "../../src/memory/jobs.mjs";
 import { saveLesson } from "../../src/memory/lessons.mjs";
 import { recordInjected } from "../../src/hooks/state.mjs";
@@ -265,16 +264,10 @@ test("two phases of one run never get the same lesson, as with `context_for_phas
   assert.deepEqual(lessonIds(verifier.prompt).filter((id) => lessonIds(coder.prompt).includes(id)), []);
 });
 
-test("the architect prompt carries no decisions section, even with accepted and proposed rows saved", async (t) => {
-  const { env, home, run } = makeRun(t, "phase-prompt-architect", { tier: "complex" });
-  saveDecision({ projectId: run.projectId, title: "the worker keeps a lease", context: "c", decision: "renew the lease every tick", status: "accepted" }, home);
-  saveDecision({ projectId: run.projectId, title: "the queue gets priorities", context: "c", decision: "p1 first", status: "proposed" }, home);
-  const { prompt, model, open_items } = await phasePrompt({ target: "architect", delivery_constraints: "it must not touch native code" }, { run, env });
+test("the architect prompt runs on opus and carries the delivery constraints", async (t) => {
+  const { env, run } = makeRun(t, "phase-prompt-architect", { tier: "complex" });
+  const { prompt, model } = await phasePrompt({ target: "architect", delivery_constraints: "it must not touch native code" }, { run, env });
   assert.equal(model, "opus");
-  assert.equal(prompt.includes("## Standing decisions"), false, prompt);
-  assert.equal(prompt.includes("## Proposed (not binding)"), false, prompt);
-  assert.equal(prompt.includes("the worker keeps a lease"), false, prompt);
-  assert.equal((open_items ?? []).some((item) => item.includes("decision")), false, String(open_items));
   assert.ok(prompt.includes("Delivery constraints (the limit of what may be delivered — NEVER design; omit the line if there is none):\nit must not touch native code\n"));
 });
 

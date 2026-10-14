@@ -1,20 +1,19 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { USAGE as DECISION_USAGE } from "../src/cli/decision.mjs";
 import { USAGE as QUEUE_USAGE } from "../src/cli/queue.mjs";
 
-const USAGE_BY_GROUP = { queue: QUEUE_USAGE, decision: DECISION_USAGE };
+const USAGE_BY_GROUP = { queue: QUEUE_USAGE };
 
-// Every `nightqueue queue`/`nightqueue decision` line of a fenced `sh` block of a doc, comment stripped.
+// Every `nightqueue queue` line of a fenced `sh` block of a doc, comment stripped.
 function commandLinesOf(path) {
   const text = readFileSync(fileURLToPath(new URL(path, import.meta.url)), "utf8");
   const blocks = [...text.matchAll(/```sh\n([\s\S]*?)```/g)].map((match) => match[1]);
   return blocks
     .flatMap((block) => block.split("\n"))
     .map((line) => line.replace(/\s+#.*$/, "").trim())
-    .filter((line) => line.startsWith("nightqueue queue ") || line.startsWith("nightqueue decision "));
+    .filter((line) => line.startsWith("nightqueue queue "));
 }
 
 // The subcommand names a doc line points at: the word right after the group, plus every `| word` chained after it.
@@ -51,10 +50,29 @@ function checkLine(line) {
   }
 }
 
+const REMOVED_DECISION_NAMES = /nightqueue decision\b|\bdecision_(save|update|list|recall)\b/;
+
+// Every markdown file of docs/, as a path relative to this test, plus the README.
+function docPaths() {
+  const docsDir = fileURLToPath(new URL("../docs/", import.meta.url));
+  const docs = readdirSync(docsDir, { recursive: true }).filter((name) => String(name).endsWith(".md"));
+  return [...docs.map((name) => `../docs/${name}`), "../README.md"];
+}
+
+test("no doc nor the README names the removed decision command or tools", () => {
+  const hits = docPaths().flatMap((path) =>
+    readFileSync(fileURLToPath(new URL(path, import.meta.url)), "utf8")
+      .split("\n")
+      .map((line, index) => ({ path, line, number: index + 1 }))
+      .filter(({ line }) => REMOVED_DECISION_NAMES.test(line)),
+  );
+  assert.deepEqual(hits.map(({ path, number, line }) => `${path}:${number}: ${line}`), []);
+});
+
 for (const path of ["../docs/cli.md", "../README.md"]) {
-  test(`every nightqueue queue/decision line of ${path} matches its USAGE`, () => {
+  test(`every nightqueue queue line of ${path} matches its USAGE`, () => {
     const lines = commandLinesOf(path);
-    assert.ok(lines.length > 0, `no nightqueue queue/decision lines found in ${path}`);
+    assert.ok(lines.length > 0, `no nightqueue queue lines found in ${path}`);
     for (const line of lines) checkLine(line);
   });
 }

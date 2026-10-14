@@ -1,68 +1,15 @@
 import { StoreUnavailableError, storeWarningLine } from "../config/errors.mjs";
 import { updateNoticeLine } from "../host/update-notice.mjs";
-import { PROPOSED_HEADING, STANDING_HEADING, decisionTitleLine } from "../memory/decisions.mjs";
 import { preselectedProject, projectFromCwd } from "../memory/registry-access.mjs";
-import { decisionRef } from "../memory/scope.mjs";
 import { openStore } from "../store/open.mjs";
-import { clip, section } from "./block.mjs";
+import { section } from "./block.mjs";
 import { recordInjected } from "./state.mjs";
 
 const LESSON_LIMIT = 12;
 const MEMORY_LIMIT = 10;
-const DECISION_LIMIT = 8;
-const DECISION_MAX = 200;
 const MAX_OUTPUT = 9000;
-const LESSONS_FLOOR = 3500;
-const PROPOSED_BUDGET = 1000;
-const OMISSION_RESERVE = 80;
 const HEADER = "# Nightqueue context";
 const FOOTER = "Call `lesson_save` as soon as an error costs a second attempt, and `lesson_recall` before acting.";
-const DECISIONS_ROOM = MAX_OUTPUT - HEADER.length - FOOTER.length - 4 - LESSONS_FLOOR;
-
-// Joins a heading and its lines into a section, or nothing when there is no line.
-function sectionOf(heading, lines) {
-  return lines.length ? `## ${heading}\n${lines.join("\n")}` : "";
-}
-
-// The leading lines whose section stays within the budget.
-function leadingLines(heading, lines, budget) {
-  const kept = [];
-  let used = heading.length + 3;
-  for (const line of lines) {
-    used += line.length + 1;
-    if (used > budget) break;
-    kept.push(line);
-  }
-  return kept;
-}
-
-// The line closing a title section that could not list every title.
-function omissionLine(count) {
-  return `- ${count} more title(s) left out; \`decision_list\` has them all.`;
-}
-
-// Lists every title when they fit the budget, else the ones that fit and how many were left out.
-function titlesSection(heading, rows, budget) {
-  const lines = rows.map(decisionTitleLine);
-  const whole = sectionOf(heading, lines);
-  if (whole.length <= budget) return whole;
-  const kept = leadingLines(heading, lines, budget - OMISSION_RESERVE);
-  return sectionOf(heading, [...kept, omissionLine(lines.length - kept.length)]);
-}
-
-// Characters the given sections take in the block, separators included.
-function spent(sections) {
-  return sections.reduce((total, text) => total + (text ? text.length + 2 : 0), 0);
-}
-
-// The decision sections, each within its own budget so the lessons always keep their floor and the detail gives way first.
-function decisionSections({ titles, decisions, proposed }) {
-  const pending = titlesSection(PROPOSED_HEADING, proposed, PROPOSED_BUDGET);
-  const standing = titlesSection(STANDING_HEADING, titles, DECISIONS_ROOM - spent([pending]));
-  const detailHeading = `${STANDING_HEADING} in detail`;
-  const detailLines = leadingLines(detailHeading, decisions.map(decisionLine), DECISIONS_ROOM - spent([pending, standing]));
-  return [standing, sectionOf(detailHeading, detailLines), pending];
-}
 
 // One lesson line of the session block.
 function lessonLine(lesson) {
@@ -73,11 +20,6 @@ function lessonLine(lesson) {
 // One memory line of the session block.
 function memoryLine(memory) {
   return `- ${memory.key}: ${memory.value}`;
-}
-
-// One standing decision of the session block, short on purpose: the full text comes from `decision_recall`.
-function decisionLine(decision) {
-  return `- ${decisionRef(decision)} ${clip(`${decision.title}: ${decision.decision}`, DECISION_MAX)}`;
 }
 
 // Marks the lessons as injected in the corpus, tolerating a write failure that must not cost the block.
@@ -122,7 +64,7 @@ function preselectedLine(project, preselected) {
   return preselected ? `Current project (preselected by nightqueue open): ${project.name}` : "";
 }
 
-// The context block of a session: the preselected project, top lessons, and the project memories and decisions.
+// The context block of a session: the preselected project, top lessons and the project memories.
 async function sessionBlock({ input, env, fetchImpl }) {
   const cwd = typeof input?.cwd === "string" && input.cwd.trim() ? input.cwd : process.cwd();
   const { project, preselected } = blockProject(cwd, env);
@@ -138,11 +80,7 @@ async function memoryBlock({ input, env, fetchImpl, project, lead }) {
   const store = openStore(env);
   const lessons = await store.lessons.recallLessons({ projectId: project.id, limit: LESSON_LIMIT });
   const memories = await store.memory.recentMemories({ projectId: project.id, limit: MEMORY_LIMIT });
-  const titles = await store.decisions.decisionTitles({ projectId: project.id, status: "accepted" });
-  const decisions = await store.decisions.recallDecisions({ projectId: project.id, limit: DECISION_LIMIT });
-  const proposed = await store.decisions.decisionTitles({ projectId: project.id, status: "proposed" });
   const sections = [
-    ...decisionSections({ titles, decisions, proposed }),
     section("Lessons learned (do not repeat these mistakes)", lessons, lessonLine),
     section(`Project memory (${project?.name ?? "global"})`, memories, memoryLine),
   ].filter(Boolean);

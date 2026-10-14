@@ -135,7 +135,7 @@ function safeOrchestratorScopeReason(call) {
   }
 }
 
-// The operator's answer under D-58: its guard's denial, else a root/home scan denial for Bash, and nothing is ever moved to the foreground.
+// The operator's answer under the operator guard: its guard's denial, else a root/home scan denial for Bash, and nothing is ever moved to the foreground.
 function guardOperator({ input, toolName, toolInput, env }) {
   const reason = operatorDecision({ input, env });
   if (reason) return denyAnswer(reason);
@@ -143,7 +143,7 @@ function guardOperator({ input, toolName, toolInput, env }) {
   return denied ? denyAnswer(rootScanReason(denied)) : "";
 }
 
-// Normalises a subagent launch to the foreground, and a Bash call likewise, denying one that scans from the root or the home, and keeps the orchestrator's own reads and Bash inside its run; inside an unattended run, so `claude -p` never kills a background one at its wait ceiling, and for the operator of `nightqueue open`, the D-58 guard and scan denial only.
+// Normalises a subagent launch to the foreground, and a Bash call likewise, denying one that scans from the root or the home, and keeps the orchestrator's own reads and Bash inside its run; inside an unattended run, so `claude -p` never kills a background one at its wait ceiling, and for the operator of `nightqueue open`, the operator guard and scan denial only.
 export function runAgentForeground({ input, env = process.env }) {
   const mode = guardMode(env);
   if (mode === null) return "";

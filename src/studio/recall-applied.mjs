@@ -1,6 +1,6 @@
 // Best-effort reader of which recalled refs a run went on to use: a hit counts as applied when its ref is cited, as a
 // whole token, in a run artifact of the asking phase or later, or in a commit message of the job's worktree. Read-only
-// and local (D-24): a ref cited only in a PR body, or in commits after the worktree was removed, is not seen.
+// and local: a ref cited only in a PR body, or in commits after the worktree was removed, is not seen.
 import { readdir, readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { runDir } from "../config/paths.mjs";

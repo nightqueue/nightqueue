@@ -2,7 +2,6 @@ import { UserError } from "../config/errors.mjs";
 import { dbPath, homeDir } from "../config/paths.mjs";
 import { checkpointWal, openDb, openDbReadOnly, requireCurrentSchema, retireConnection, schemaVersionOn } from "../memory/db.mjs";
 import * as dbHealth from "../memory/db-health.mjs";
-import * as decisions from "../memory/decisions.mjs";
 import * as dedup from "../memory/dedup.mjs";
 import * as index from "../memory/index.mjs";
 import * as jobs from "../memory/jobs.mjs";
@@ -132,28 +131,6 @@ function indexDomain(env) {
     saveProjectIndex: async (spec) => index.saveProjectIndex(spec, env),
     fillProjectIndex: async (spec) => index.fillProjectIndex(spec, env),
     recallProjectIndex: async (spec) => index.recallProjectIndex(spec, env),
-  };
-}
-
-// The decisions; the two read paths take the store's own connection, which is what makes them work read-only.
-function decisionsDomain(env, db) {
-  return {
-    getDecision: async (id) => decisions.getDecision(id, env),
-    getDecisionByNumber: async (spec) => decisions.getDecisionByNumber(spec, env, db()),
-    decisionOfRef: async (ref, context) => decisions.decisionOfRef(ref, context, env, db()),
-    decisionIdOfRef: async (ref, context) => decisions.decisionIdOfRef(ref, context, env, db()),
-    ownDecisionNumbers: async (entries, owner) => decisions.ownDecisionNumbers(entries, owner, env, db()),
-    saveDecision: async (decision) => decisions.saveDecision(decision, env),
-    saveReviewedDecision: async (spec) => decisions.saveReviewedDecision(spec, env),
-    updateDecision: async (id, patch) => decisions.updateDecision(id, patch, env),
-    listDecisions: async (spec) => decisions.listDecisions(spec, env, db()),
-    decisionTitles: async (spec) => decisions.decisionTitles(spec, env, db()),
-    setDecisionEmbedding: async (spec) => decisions.setDecisionEmbedding(spec, env),
-    decisionsMissingEmbedding: async (spec) => decisions.decisionsMissingEmbedding(spec, env),
-    recentDecisions: async (spec) => decisions.recentDecisions(spec, env),
-    searchDecisionsLexical: async (spec) => decisions.searchDecisionsLexical(spec, env),
-    searchDecisionsSemantic: async (spec) => decisions.searchDecisionsSemantic(spec, env),
-    recallDecisions: async (spec) => decisions.recallDecisions(spec, env),
   };
 }
 
@@ -341,7 +318,6 @@ export function createLocalStore(env = process.env, { readOnly = false, onClose 
     lessons: lessonsDomain(env, db),
     memory: memoryDomain(env),
     index: indexDomain(env),
-    decisions: decisionsDomain(env, db),
     orgs: orgsDomain(db),
     projects: projectsDomain(db),
     db: dbDomain(env),

@@ -311,17 +311,18 @@ request, no line, on every surface.
 **After an update that bumps the tool contract, restart the clients.** The MCP tools have a
 contract number (`nightqueue doctor` shows it as `tool contract`, and every MCP answer carries
 it as `contract`). It goes up when a tool's input changes incompatibly - contract 2 is the one
-where issues and decisions are named by ref (`NQ-12`, `D-7`) instead of an internal id, and
+where issues are named by ref (`NQ-12`) instead of an internal id, and
 contract 3 the one where the tracker tools are named `issue_*` and `queue_add` takes `issue_id`,
 contract 4 the one where the tracker is removed, contract 5 the one that adds
-`tracker_issues` (Linear issues through the home's Linear connection), and contract 6 the one
-where `queue_add`'s `origin` is a list of `{kind, ref}` (`[]` for none).
+`tracker_issues` (Linear issues through the home's Linear connection), contract 6 the one
+where `queue_add`'s `origin` is a list of `{kind, ref}` (`[]` for none), contract 7 the one that
+adds `lesson_delete` and `memory_delete`, and contract 8 the one that removes the `decision_*`
+tools.
 A client keeps the tool definitions it read when it connected, so after such an update reopen
 the ones still running: Claude Code sessions (start a new one), Claude Desktop and Cowork
 conversations (open a new conversation, or restart the app), and a running `nq open`. Until
 then an old client is answered `your client has the tool definitions of an older nightqueue`,
-or, during the grace release, its old ids are accepted with a `deprecated_input` warning and
-`queue_status` adds the advisory `this client's tool contract is older than the server`.
+and `queue_status` adds the advisory `this client's tool contract is older than the server`.
 
 **There is no auto-update, and that is a decision.** This runtime executes
 unattended jobs: a batch started at night runs for hours with nobody watching it.

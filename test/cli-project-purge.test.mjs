@@ -7,7 +7,7 @@ import { runsDir } from "../src/config/paths.mjs";
 import { defaultContext, run } from "../src/cli/index.mjs";
 import { openDb } from "../src/memory/db.mjs";
 import { DATA_TABLES } from "../src/memory/ddl.mjs";
-import { ensureProject, makeHome, makeOrg, orgIdOf } from "../test-support/memory.mjs";
+import { ensureProject, makeHome, makeOrg } from "../test-support/memory.mjs";
 
 // Terminal double answering the first question with the given line, or no terminal at all when the answer is null.
 function terminal(answer) {
@@ -28,7 +28,7 @@ async function cli(env, argv, { answer = null } = {}) {
 }
 
 // Gives a project one row in every table that owns rows by project id, plus the links that reach it from outside, all tagged with `tag`.
-function seedProject(db, { id, orgId, tag, jobStatus = "cancelled" }) {
+function seedProject(db, { id, tag, jobStatus = "cancelled" }) {
   const job = db.prepare("INSERT INTO jobs (project_id, prompt, status) VALUES (?, ?, ?) RETURNING id").get(id, `${tag} job`, jobStatus).id;
   db.prepare("INSERT INTO lessons (project_id, title, root_cause, solution, prevention) VALUES (?, ?, 'rc', 'sol', 'prev')").run(id, `${tag}lesson`);
   db.prepare("INSERT INTO memory (project_id, key, value) VALUES (?, 'k', ?)").run(id, `${tag}memory`);
@@ -37,8 +37,6 @@ function seedProject(db, { id, orgId, tag, jobStatus = "cancelled" }) {
   const run = db.prepare("INSERT INTO pipeline_runs (project_id, slug, tier, outcome, job_id) VALUES (?, 's', 'small', 'ok', ?) RETURNING id").get(id, job).id;
   db.prepare("INSERT INTO pipeline_phases (run_id, seq, phase) VALUES (?, 1, 'coder')").run(run);
   db.prepare("INSERT INTO project_key_aliases (key, project_id) VALUES (?, ?)").run(`OLD${tag.toUpperCase()}`.slice(0, 5), id);
-  const decision = db.prepare("INSERT INTO decisions (scope, project_id, number, title, context, decision, job_id) VALUES ('project', ?, 1, ?, 'c', 'd', ?) RETURNING id").get(id, `${tag}decision`, job).id;
-  db.prepare("INSERT INTO decisions (scope, org_id, title, context, decision, status, superseded_by) VALUES ('org', ?, ?, 'c', 'd', 'superseded', ?)").run(orgId, `${tag}orgdecision`, decision);
 }
 
 // The rows of every table that point at a project id.
@@ -53,11 +51,10 @@ function rowsOf(db, projectId) {
 function twoProjects(t, name, options = {}) {
   const env = makeHome(t, name);
   makeOrg(env, "acme");
-  const orgId = orgIdOf(env, "acme");
   const db = openDb(env);
   const ids = { a: ensureProject(env, "alpha", { org: "acme" }), b: ensureProject(env, "beta", { org: "acme" }) };
-  seedProject(db, { id: ids.a, orgId, tag: "a", ...options });
-  seedProject(db, { id: ids.b, orgId, tag: "b" });
+  seedProject(db, { id: ids.a, tag: "a", ...options });
+  seedProject(db, { id: ids.b, tag: "b" });
   for (const id of Object.values(ids)) {
     mkdirSync(join(runsDir(env), id, "slug"), { recursive: true });
     writeFileSync(join(runsDir(env), id, "slug", "state.json"), "{}");
@@ -84,11 +81,10 @@ test("project remove --purge --yes deletes the project and every row it owns, an
   assert.deepEqual(rowsOf(db, ids.b), beforeB);
   assert.equal(existsSync(join(runsDir(env), ids.a)), false);
   assert.equal(existsSync(join(runsDir(env), ids.b, "slug", "state.json")), true);
-  for (const [table, word] of [["lessons_fts", "alesson"], ["memory_fts", "amemory"], ["decisions_fts", "adecision"]]) {
+  for (const [table, word] of [["lessons_fts", "alesson"], ["memory_fts", "amemory"]]) {
     assert.equal(ftsHits(db, table, word), 0, `${table} keeps no ${word}`);
   }
   assert.equal(ftsHits(db, "lessons_fts", "blesson"), 1);
-  assert.equal(db.prepare("SELECT superseded_by FROM decisions WHERE title = 'aorgdecision'").get().superseded_by, null);
 });
 
 test("purge is refused while the project has a running or a closing job, and removes nothing", async (t) => {
