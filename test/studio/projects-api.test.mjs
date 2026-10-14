@@ -6,6 +6,7 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { configPath, runsDir, secretsPath } from "../../src/config/paths.mjs";
 import { loadConfig, saveConfig, saveSecrets } from "../../src/config/store.mjs";
+import { actsOnOrigin } from "../../src/integrations/registry.mjs";
 import { openDb } from "../../src/memory/db.mjs";
 import { saveDecision } from "../../src/memory/decisions.mjs";
 import { addJob, claimJobById } from "../../src/memory/jobs.mjs";
@@ -145,6 +146,20 @@ test("an ordered PATCH stops at the refused path step: name and key stay applied
   assertCode(await home.call("PATCH", `/api/projects/${id}`, { path: other.path }), 409, "already-registered");
   assertCode(await home.call("PATCH", `/api/projects/${id}`, { key: other.key }), 409, "key-taken");
   assertCode(await home.call("PATCH", `/api/projects/${id}`, { org: "nope" }), 422, "org-unknown");
+});
+
+test("PATCH sets then unsets the only sentry setting: the integration is acted on, then stored as null and no longer acted on", async (t) => {
+  const home = await projectsHome(t, "projects-patch-unset");
+  const id = (await home.call("POST", "/api/projects", { path: home.repo("api"), key: "UNS" })).body.project.id;
+  assert.equal(await home.store.projects.integrations(id), null);
+  const set = await home.call("PATCH", `/api/projects/${id}`, { integrations: { set: { "sentry.onClosed": "resolved" } } });
+  assert.equal(set.status, 200);
+  assert.equal(actsOnOrigin("sentry", await home.store.projects.integrations(id)), true);
+  const unset = await home.call("PATCH", `/api/projects/${id}`, { integrations: { unset: ["sentry.onClosed"] } });
+  assert.equal(unset.status, 200);
+  assert.equal(unset.body.project.integrations, null);
+  assert.equal(await home.store.projects.integrations(id), null);
+  assert.equal(actsOnOrigin("sentry", await home.store.projects.integrations(id)), false);
 });
 
 test("a move to an org that does not use the destination is previewed in GET and unlinks it on PATCH", async (t) => {

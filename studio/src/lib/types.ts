@@ -503,6 +503,8 @@ export interface ProviderSettingKey {
 
 export interface ProviderSettings {
   kind: string;
+  label?: string;
+  cardinality?: string | null;
   keys: ProviderSettingKey[];
 }
 

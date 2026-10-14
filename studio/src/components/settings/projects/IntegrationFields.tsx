@@ -1,4 +1,5 @@
-import { listValue, toggledList, type ProviderControls, type SettingControl } from "../../../lib/projects";
+import { isActive, listValue, toggledList, type ProviderControls, type SettingControl } from "../../../lib/projects";
+import { Button } from "../../ui";
 import { INPUT_CLASS } from "../bits";
 
 interface IntegrationFieldsProps {
@@ -7,6 +8,7 @@ interface IntegrationFieldsProps {
   initial: Record<string, string>;
   disabled: boolean;
   onChange: (key: string, value: string) => void;
+  onToggle: (provider: ProviderControls, on: boolean) => void;
 }
 
 interface ControlProps {
@@ -28,14 +30,15 @@ function SwitchControl({ setting, value, disabled, onChange }: ControlProps) {
   );
 }
 
-// An enum or connection setting as a select; the empty choice leaves it unset.
+// An enum or connection setting as a select; a setting with a default is always set, the others may stay unset.
 function SelectControl({ setting, value, disabled, onChange }: ControlProps) {
-  const unset = setting.control === "connection" ? "none" : setting.defaultText ? `default (${setting.defaultText})` : "not set";
-  const stale = value !== "" && !setting.options.includes(value);
+  const hasDefault = setting.control !== "connection" && setting.defaultText !== "";
+  const shown = value || setting.defaultText;
+  const stale = shown !== "" && !setting.options.includes(shown);
   return (
-    <select aria-label={setting.key} className={INPUT_CLASS} value={value} disabled={disabled} onChange={(event) => onChange(event.target.value)}>
-      <option value="">{unset}</option>
-      {stale && <option value={value}>{`${value} (not allowed for this org)`}</option>}
+    <select aria-label={setting.key} className={INPUT_CLASS} value={shown} disabled={disabled} onChange={(event) => onChange(event.target.value)}>
+      {!hasDefault && <option value="">{setting.control === "connection" ? "none" : "not set"}</option>}
+      {stale && <option value={shown}>{`${shown} (not allowed for this org)`}</option>}
       {setting.options.map((option) => (
         <option key={option} value={option}>
           {option}
@@ -80,21 +83,48 @@ function SettingRow({ setting, value, dirty, disabled, onChange }: ControlProps 
   );
 }
 
-// The Integrations section of the drawer: one box per provider, its settings rendered by declared type.
-export function IntegrationFields({ providers, values, initial, disabled, onChange }: IntegrationFieldsProps) {
+// The header of a provider box: its state (active, not configured, unavailable) and the Enable or Disable action.
+function ProviderHeader({ provider, active, disabled, onToggle }: { provider: ProviderControls; active: boolean; disabled: boolean; onToggle: (on: boolean) => void }) {
+  if (provider.disabled) {
+    return (
+      <div className="flex items-center justify-between px-3 py-2 text-sm">
+        <span className="font-medium">{provider.label}</span>
+        <span className="text-dim">nothing to set per project</span>
+      </div>
+    );
+  }
+  if (!active && !provider.available) {
+    return <div className="px-3 py-2 text-sm text-dim">{`${provider.label} unavailable: the org has no ${provider.label} connection`}</div>;
+  }
+  return (
+    <div className="flex items-center justify-between px-3 py-2 text-sm">
+      <span className="font-medium">
+        {provider.label}
+        <span className="text-dim">{active ? " · active" : " · not configured"}</span>
+      </span>
+      <Button size="sm" disabled={disabled} className="max-sm:min-h-11" onClick={() => onToggle(!active)}>
+        {active ? "Disable" : "Enable"}
+      </Button>
+    </div>
+  );
+}
+
+// The Integrations section of the drawer: one box per provider, its settings shown only while it is active.
+export function IntegrationFields({ providers, values, initial, disabled, onChange, onToggle }: IntegrationFieldsProps) {
   return (
     <div className="flex flex-col gap-2.5">
-      {providers.map((provider) => (
-        <div key={provider.kind} className={`rounded-lg border border-line ${provider.disabled ? "opacity-60" : ""}`}>
-          <div className="flex items-center justify-between px-3 py-2 text-sm">
-            <span className="font-medium capitalize">{provider.kind}</span>
-            {provider.disabled && <span className="text-dim">nothing to set per project</span>}
+      {providers.map((provider) => {
+        const active = isActive(provider, values);
+        return (
+          <div key={provider.kind} className={`rounded-lg border border-line ${provider.disabled ? "opacity-60" : ""}`}>
+            <ProviderHeader provider={provider} active={active} disabled={disabled} onToggle={(on) => onToggle(provider, on)} />
+            {active &&
+              provider.controls.map((setting) => (
+                <SettingRow key={setting.key} setting={setting} value={values[setting.key] ?? ""} dirty={(values[setting.key] ?? "") !== (initial[setting.key] ?? "")} disabled={disabled} onChange={(value) => onChange(setting.key, value)} />
+              ))}
           </div>
-          {provider.controls.map((setting) => (
-            <SettingRow key={setting.key} setting={setting} value={values[setting.key] ?? ""} dirty={(values[setting.key] ?? "") !== (initial[setting.key] ?? "")} disabled={disabled} onChange={(value) => onChange(setting.key, value)} />
-          ))}
-        </div>
-      ))}
+        );
+      })}
     </div>
   );
 }

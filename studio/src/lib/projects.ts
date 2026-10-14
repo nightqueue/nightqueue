@@ -82,6 +82,8 @@ export interface SettingControl {
 
 export interface ProviderControls {
   kind: string;
+  label: string;
+  available: boolean;
   disabled: boolean;
   controls: SettingControl[];
 }
@@ -150,7 +152,7 @@ export function normalizeProject(raw: unknown): SettingsProject | null {
 function normalizeProvider(raw: unknown): ProviderSettings | null {
   if (!isPlainObject(raw) || typeof raw.kind !== "string") return null;
   const keys = Array.isArray(raw.keys) ? raw.keys.filter((entry) => isPlainObject(entry) && typeof entry.key === "string" && typeof entry.type === "string") : [];
-  return { kind: raw.kind, keys: keys as unknown as ProviderSettingKey[] };
+  return { kind: raw.kind, label: text(raw.label, raw.kind), cardinality: typeof raw.cardinality === "string" ? raw.cardinality : null, keys: keys as unknown as ProviderSettingKey[] };
 }
 
 // The Settings › Projects answer with hostile fields dropped.
@@ -406,6 +408,8 @@ function controlOf(type: string): ControlKind {
 export function settingControls(providers: ProviderSettings[], org: OrgRow | undefined): ProviderControls[] {
   return providers.map((provider) => ({
     kind: provider.kind,
+    label: provider.label ?? provider.kind,
+    available: !provider.cardinality || orgConnectionsOf(org, provider.kind).length > 0,
     disabled: provider.keys.length === 0,
     controls: provider.keys.map((entry) => {
       const control = controlOf(entry.type);
@@ -413,6 +417,16 @@ export function settingControls(providers: ProviderSettings[], org: OrgRow | und
       return { key: entry.key, label: entry.key.slice(provider.kind.length + 1), control, options, defaultText: textOf(entry.default) };
     }),
   }));
+}
+
+// Tells whether a provider is active in the draft: any of its settings is stored.
+export function isActive(provider: ProviderControls, values: Record<string, string>): boolean {
+  return provider.controls.some((setting) => (values[setting.key] ?? "") !== "");
+}
+
+// The values that turn a provider on (its declared defaults, explicit) or off (every setting unset).
+export function toggleValues(provider: ProviderControls, on: boolean): Record<string, string> {
+  return Object.fromEntries(provider.controls.map((setting) => [setting.key, on ? setting.defaultText : ""]));
 }
 
 // The list a checkbox setting shows: the draft's entries, else the default's.
@@ -432,7 +446,7 @@ export function integrationsSummary(project: SettingsProject, providers: Provide
     .filter((provider) => provider.keys.length > 0)
     .map((provider) => {
       const set = provider.keys.map((entry) => ({ label: entry.key.slice(provider.kind.length + 1), value: textOf(storedAt(project.integrations, entry.key)) })).filter((entry) => entry.value !== "");
-      if (!set.length) return { text: `${provider.kind} · defaults`, dim: true };
+      if (!set.length) return { text: `${provider.kind} · not configured`, dim: true };
       return { text: `${provider.kind} · ${set.map((entry) => `${entry.label} ${entry.value}`).join(" · ")}`, dim: false };
     })
     .slice(0, 2);

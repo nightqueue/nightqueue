@@ -26,6 +26,7 @@ export function integrationKeys() {
 export function providerSettingsView() {
   return providers().map((provider) => ({
     kind: provider.kind,
+    ...(provider.connection ? { label: provider.label ?? provider.kind, cardinality: provider.connection.cardinality ?? null } : {}),
     keys: Object.entries(provider.settings ?? {}).map(([path, spec]) => ({
       key: `${provider.kind}.${path}`,
       type: spec.type,
