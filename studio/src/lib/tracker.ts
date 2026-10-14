@@ -21,6 +21,24 @@ export interface FilterOption {
 
 export const DEFAULT_TRACKER_PREFS: TrackerPrefs = { team: "", project: "", view: "open" };
 
+export interface LabelTint {
+  borderColor: string;
+  backgroundColor: string;
+  color: string;
+}
+
+const HEX_COLOR = /^#[0-9a-f]{6}$/i;
+
+// The tinted badge style of a hex label color, legible on the dark studio; undefined (neutral badge) for a missing or malformed color.
+export function labelTint(color: string | null | undefined): LabelTint | undefined {
+  if (typeof color !== "string" || !HEX_COLOR.test(color)) return undefined;
+  return {
+    borderColor: `color-mix(in srgb, ${color} 55%, transparent)`,
+    backgroundColor: `color-mix(in srgb, ${color} 18%, transparent)`,
+    color: `color-mix(in srgb, ${color} 55%, white)`,
+  };
+}
+
 const NO_PRIORITY_RANK = 5;
 
 export interface IssueGroup {

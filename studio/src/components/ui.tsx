@@ -1,4 +1,4 @@
-import type { ButtonHTMLAttributes, ReactNode } from "react";
+import type { ButtonHTMLAttributes, CSSProperties, ReactNode } from "react";
 
 export type ButtonVariant = "default" | "primary" | "ghost" | "run" | "danger";
 
@@ -42,9 +42,13 @@ export function Chip({ on = false, children, ...props }: ButtonHTMLAttributes<HT
   );
 }
 
-// A static mode tag, shaped like an active chip.
-export function Tag({ children }: { children: ReactNode }) {
-  return <span className="inline-flex min-h-6 items-center rounded-full border border-button-line bg-row-line px-2 py-0.5 text-sm text-fg">{children}</span>;
+// A static mode tag, shaped like an active chip, with an optional inline style.
+export function Tag({ children, style }: { children: ReactNode; style?: CSSProperties }) {
+  return (
+    <span style={style}className="inline-flex min-h-6 items-center rounded-full border border-button-line bg-row-line px-2 py-0.5 text-sm text-fg">
+      {children}
+    </span>
+  );
 }
 
 // The mono key-like label the footers use for a command.

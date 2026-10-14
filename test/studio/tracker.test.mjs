@@ -6,6 +6,7 @@ import {
   groupIssues,
   isOption,
   issueDraft,
+  labelTint,
   parseTrackerPrefs,
   projectOptions,
   serializeTrackerPrefs,
@@ -66,6 +67,18 @@ test("groupIssues orders a group by priority urgent to low then no priority, new
     item("MK-6", { priority: 2 }),
   ];
   assert.deepEqual(groupIssues(items, "open")[0].items.map((issue) => issue.ref), ["MK-4", "MK-3", "MK-6", "MK-2", "MK-5", "MK-1"]);
+});
+
+test("labelTint tints a hex color and leaves a missing or malformed one neutral", () => {
+  const bug = labelTint("#eb5757");
+  assert.ok(bug.borderColor.includes("#eb5757") && bug.backgroundColor.includes("#eb5757") && bug.color.includes("#eb5757"));
+  for (const color of [null, undefined, "", "red", "#fff", "#eb5757; x", 12]) assert.equal(labelTint(color), undefined, String(color));
+});
+
+test("groupIssues keeps each item's labelDetails with its color", () => {
+  const labelDetails = [{ name: "Bug", color: "#eb5757" }, { name: "plain", color: null }];
+  const groups = groupIssues([item("MK-9", { labels: ["Bug", "plain"], labelDetails })], "open");
+  assert.deepEqual(groups[0].items[0].labelDetails, labelDetails);
 });
 
 test("groupIssues of a non-list answers no groups", () => {
