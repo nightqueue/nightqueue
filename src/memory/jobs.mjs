@@ -1082,8 +1082,8 @@ export function failClose(id, { worker, close } = {}, env = process.env) {
   return writeCloseDurably({ id, statement, values, witness: closeWitness(CLOSE_WITNESS_COLUMNS, owner), env }) !== null;
 }
 
-// Closes a done job whose merge its checklist records, releases the lease and appends the settled line to its notice, in one statement; null means the WHERE refused it.
-export function settleClose(id, { worker, close, noticeLine } = {}, env = process.env) {
+// Closes a done job whose merge its checklist records, releases the lease, leaving its notice untouched, in one statement; null means the WHERE refused it.
+export function settleClose(id, { worker, close } = {}, env = process.env) {
   const db = openDb(env);
   const statement = db.prepare(
     `UPDATE jobs
@@ -1092,18 +1092,14 @@ export function settleClose(id, { worker, close, noticeLine } = {}, env = proces
             close = ?,
             pr_title = COALESCE(?, pr_title),
             close_worker = NULL,
-            close_lease_until = NULL,
-            notice_md = CASE
-              WHEN notice_md IS NULL OR trim(notice_md) = '' THEN ?
-              ELSE rtrim(notice_md, ' ' || char(10)) || char(10) || char(10) || ? END
+            close_lease_until = NULL
       WHERE id = ? AND close_status = 'closing' AND close_worker = ? AND status = 'done'
       RETURNING *`,
   );
   const owner = requireText("worker", worker);
-  const base = requireText("noticeLine", noticeLine);
   const jobId = requireId(id);
   const closeText = requireCloseText(close);
-  const values = [closeText, storableTitle(parseCloseColumn(closeText)?.data?.title), base, base, jobId, owner];
+  const values = [closeText, storableTitle(parseCloseColumn(closeText)?.data?.title), jobId, owner];
   const row = writeCloseDurably({ id, statement, values, witness: closeWitness(TERMINAL_CLOSE_WITNESS_COLUMNS, owner), env });
   return row ? jobView(withProjectFacts(db, row), { full: true }) : null;
 }

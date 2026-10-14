@@ -205,6 +205,12 @@ What a runtime has to provide, and what it can rely on:
   <plan path>` (`<plan path>` unknown when the classifier was given none); a clean run
   reaching neither reading is `failed` otherwise, keeping its final text as the reason.
 
+A notice holds only the job's own account: it carries no `Record:` line and a close appends
+no `Closed:` line. The PR, the merge and the status are shown from the job's fields
+(`pr_url`, `pr_title`, `close.data`, `status`); only a post-close `After close: ...` line for
+a warning or skip is appended. The Discord thread reply is the whole notice, cut at the
+embed limit with `…`.
+
 These names are a machine contract, not prose: the pipeline files are the
 source of truth for them, and any runtime that reads them must match them
 exactly.

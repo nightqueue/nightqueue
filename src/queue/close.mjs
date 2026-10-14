@@ -1281,7 +1281,7 @@ async function settleRun(run) {
   let closed = null;
   let refusal = null;
   try {
-    closed = await settleClosed({ store, id: job.id, worker, close: checklist, noticeLine: checklist.data.noticeLine, env: run.env });
+    closed = await settleClosed({ store, id: job.id, worker, close: checklist, env: run.env });
   } catch (err) {
     refusal = err?.message ?? String(err);
   }
@@ -1384,6 +1384,7 @@ function postCloseContext(run, stepName) {
     integrations: facts.integrations,
     orgId: facts.orgId,
     title: jobTitle({ ...job, pr_title: checklist.data.title ?? job.pr_title }),
+    operatorTitle: job.title ?? null,
     noticeMd: job.notice_md ?? null,
     mergeSha: checklist.data.mergeSha ?? null,
     mergedAt: checklist.data.mergedAt ?? null,
@@ -1504,8 +1505,8 @@ export async function runClosePipeline({ store, job, worker, env = process.env, 
 }
 
 // The settle step's write: closes the job in one store write and only then releases its worktree; a refused settle touches nothing on disk.
-export async function settleClosedJob({ store, id, worker, close, noticeLine, env = process.env, killImpl } = {}) {
-  const job = await store.jobs.settleClose(id, { worker, close, noticeLine });
+export async function settleClosedJob({ store, id, worker, close, env = process.env, killImpl } = {}) {
+  const job = await store.jobs.settleClose(id, { worker, close });
   if (!job) return { job: null, worktree: null };
   const worktree = await releaseJobWorktree({ job, env, killImpl, force: true });
   return { job, worktree };

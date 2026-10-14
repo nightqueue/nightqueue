@@ -228,8 +228,7 @@ test("the reply posts in the matching channel, else probes the guild's webhooks 
   assert.deepEqual(byChannel.calls[0].body, {
     content: "",
     embeds: [{
-      title: "✅ Fixed - fix the crash",
-      description: "Fix the crash",
+      description: "fix the crash",
       url: RESULT.prUrl,
       fields: [
         { name: "PR", value: `[#7](${RESULT.prUrl})`, inline: true },
@@ -273,12 +272,12 @@ test("the reply posts in the matching channel, else probes the guild's webhooks 
 
 test("the log posts the closed job once to its webhook as one embed, cut to Discord's limits, and skips any other event", async () => {
   const fetch = fakeFetch({ [`POST ${OPS_URL}?wait=true`]: {} });
-  const logged = await discord.log({ event: "closed", job: { ...JOB, title: "fix(crash): the crash", slug: "the-crash" }, result: RESULT, settings: {}, connection: OPS, http: httpOf(fetch) });
+  const logged = await discord.log({ event: "closed", job: { ...JOB, title: "fix(crash): the crash", operatorTitle: "the crash is fixed", slug: "the-crash" }, result: RESULT, settings: {}, connection: OPS, http: httpOf(fetch) });
   assert.deepEqual(logged, { status: "done", note: "logged through ops" });
   assert.deepEqual(fetch.calls[0].body, {
     content: "",
     embeds: [{
-      title: "J-1 closed · the-crash",
+      title: "J-1 closed · the crash is fixed",
       description: "fix(crash): the crash",
       url: RESULT.prUrl,
       fields: [
@@ -318,36 +317,39 @@ const ORIGINS = [
   { kind: "discord", ref: `${GUILD}/${THREAD}`, label: "thread", url: `https://discord.com/channels/${GUILD}/${THREAD}`, title: null },
 ];
 
-test("the reply answers the reported problem: Linear title, the whole What was done text, and every link but the thread", async () => {
+test("the reply is the whole notice with no title on top, and every link but the thread comes from the job's fields", async () => {
   const notice = "✅ Fixed — the crash is gone\n\nWhat was done: a guard was added. Nothing else changed.\n\nHow it was validated: tests.";
   const fetch = fakeFetch({ [`POST ${CHAT_URL}?wait=true`]: {} });
   const job = { ...JOB, notice_md: notice };
   await discord.onClosed({ ref: `${GUILD}/${CHAT_CHANNEL}/${MESSAGE}`, job, result: RESULT, origins: ORIGINS, settings: {}, slot: null, connections: [CHAT], http: httpOf(fetch) });
   const [embed] = fetch.calls[0].body.embeds;
-  assert.equal(embed.title, "✅ Fixed - Login crashes");
-  assert.equal(embed.description, "A guard was added. Nothing else changed.");
+  assert.equal(embed.title, undefined);
+  assert.equal(embed.description, notice);
+  assert.equal(embed.footer.text, "merged as abc1234");
   assert.deepEqual(embed.fields.map((field) => [field.name, field.value]), [
     ["PR", `[#7](${RESULT.prUrl})`],
     ["Linear", `[MK-47](${ORIGINS[0].url})`],
     ["Sentry", `[REACT-T-N82](${ORIGINS[1].url})`],
   ]);
-  const sentryOnly = { ...job, title: "fix the crash" };
+  const sentryOnly = { ...job, title: "fix the crash", notice_md: "" };
   await discord.onClosed({ ref: `${GUILD}/${CHAT_CHANNEL}`, job: sentryOnly, result: RESULT, origins: [ORIGINS[1], { kind: "linear", ref: "MK-48", label: "MK-48", url: null, title: null }], settings: {}, slot: null, connections: [CHAT], http: httpOf(fetch) });
   const [second] = fetch.calls[1].body.embeds;
-  assert.equal(second.title, "✅ Fixed - TypeError");
+  assert.equal(second.title, undefined);
+  assert.equal(second.description, "fix the crash");
   assert.deepEqual(second.fields.slice(1).map((field) => [field.name, field.value]), [["Linear", "MK-48"], ["Sentry", `[REACT-T-N82](${ORIGINS[1].url})`]]);
   await discord.onClosed({ ref: `${GUILD}/${CHAT_CHANNEL}`, job: { ...JOB, notice_md: `What was done: ${"x".repeat(5000)}` }, result: RESULT, origins: "oops", settings: {}, slot: null, connections: [CHAT], http: httpOf(fetch) });
   const [long] = fetch.calls[2].body.embeds;
-  assert.equal(long.title, "✅ Fixed - fix the crash");
   assert.equal(long.description.length, 4096);
   assert.ok(long.description.endsWith("…"));
+  await discord.onClosed({ ref: `${GUILD}/${CHAT_CHANNEL}`, job: { ...JOB, title: "", notice_md: "  " }, result: RESULT, origins: [], settings: {}, slot: null, connections: [CHAT], http: httpOf(fetch) });
+  assert.equal(fetch.calls[3].body.embeds[0].description, `[#7](${RESULT.prUrl})`);
 });
 
-test("the log carries PR, Project, then Linear, Sentry and Thread, with title and description as before", async () => {
+test("the log carries PR, Project, then Linear, Sentry and Thread, titled by the Linear issue", async () => {
   const fetch = fakeFetch({ [`POST ${OPS_URL}?wait=true`]: {} });
-  await discord.log({ event: "closed", job: { ...JOB, slug: "the-crash" }, result: RESULT, origins: ORIGINS, settings: {}, connection: OPS, http: httpOf(fetch) });
+  await discord.log({ event: "closed", job: { ...JOB, slug: "the-crash", operatorTitle: "the crash is fixed" }, result: RESULT, origins: ORIGINS, settings: {}, connection: OPS, http: httpOf(fetch) });
   const [embed] = fetch.calls[0].body.embeds;
-  assert.equal(embed.title, "J-1 closed · the-crash");
+  assert.equal(embed.title, "J-1 closed · Login crashes");
   assert.equal(embed.description, "fix the crash");
   assert.deepEqual(embed.fields.map((field) => [field.name, field.value]), [
     ["PR", `[#7](${RESULT.prUrl})`],
@@ -358,6 +360,13 @@ test("the log carries PR, Project, then Linear, Sentry and Thread, with title an
   ]);
   await discord.log({ event: "closed", job: JOB, result: RESULT, origins: [], settings: {}, connection: OPS, http: httpOf(fetch) });
   assert.deepEqual(fetch.calls[1].body.embeds[0].fields.map((field) => field.name), ["PR", "Project"]);
+  const sentryOnly = [ORIGINS[1]];
+  await discord.log({ event: "closed", job: { ...JOB, operatorTitle: "the crash is fixed" }, result: RESULT, origins: sentryOnly, settings: {}, connection: OPS, http: httpOf(fetch) });
+  assert.equal(fetch.calls[2].body.embeds[0].title, "J-1 closed · TypeError");
+  await discord.log({ event: "closed", job: { ...JOB, operatorTitle: "the crash is fixed" }, result: RESULT, origins: [], settings: {}, connection: OPS, http: httpOf(fetch) });
+  assert.equal(fetch.calls[3].body.embeds[0].title, "J-1 closed · the crash is fixed");
+  await discord.log({ event: "closed", job: { ...JOB, title: "", slug: "the-crash" }, result: RESULT, origins: [], settings: {}, connection: OPS, http: httpOf(fetch) });
+  assert.equal(fetch.calls[4].body.embeds[0].title, "J-1 closed · the-crash");
 });
 
 test("a discord origin is described offline as a thread jump link", () => {
@@ -365,9 +374,9 @@ test("a discord origin is described offline as a thread jump link", () => {
   assert.deepEqual(discord.origin.describe(`${GUILD}/${THREAD}`).url, `https://discord.com/channels/${GUILD}/${THREAD}`);
 });
 
-// A notice in the real shape: headline, other paragraphs, "What was done:", and the closing lines.
+// A notice in the real shape: headline, other paragraphs and "What was done:".
 function noticeOf(header, done) {
-  return `${header}\n\nWhat was missing: something.\n\nWhat was done: ${done}\n\nHow it was validated: tests.\n\nRecord: • PR https://x/pull/1\nClosed: PR #1 merged as abc1234 on 2026-10-02`;
+  return `${header}\n\nWhat was missing: something.\n\nWhat was done: ${done}\n\nHow it was validated: tests.`;
 }
 
 const CLOSED_JOBS = [
@@ -413,14 +422,14 @@ test("noticeSummary: no What was done paragraph, blank notice, a Partially fixed
   assert.equal(noticeSummary("✅ Delivered — a headline with enough words\n\nWhat was done: is it? yes!").firstDone, "is it?");
 });
 
-test("the closed card of J-117 is titled by ref and slug, described by the full PR title and the first sentence", async () => {
+test("the closed card of J-117 is titled by ref and the job title, described by the full PR title and the first sentence", async () => {
   const [, , j117] = CLOSED_JOBS;
-  const job = { id: 2, ref: j117.ref, slug: j117.slug, title: j117.title, project: "nightqueue", notice_md: noticeOf(j117.header, j117.done) };
+  const job = { id: 2, ref: j117.ref, slug: j117.slug, title: j117.title, operatorTitle: j117.headline, project: "nightqueue", notice_md: noticeOf(j117.header, j117.done) };
   const result = { prUrl: "https://github.com/acme/nightqueue/pull/42", prNumber: 42, mergeSha: "2e2e7aa1234", mergedAt: "2026-10-02T10:00:00.000Z" };
   const fetch = fakeFetch({ [`POST ${OPS_URL}?wait=true`]: {} });
   await discord.log({ event: "closed", job, result, settings: {}, connection: OPS, http: httpOf(fetch) });
   const [embed] = fetch.calls[0].body.embeds;
-  assert.equal(embed.title, "J-117 closed · task-queue-status-carries-a-derived");
+  assert.equal(embed.title, "J-117 closed · the queue status now shows what each running job is doing right now");
   assert.equal(embed.url, result.prUrl);
   assert.equal(embed.description, "refactor(queue): queue_status carries a derived live block per running job\nOne shared calculation, read on demand from the job's log, now feeds both the terminal and the tool.");
   assert.deepEqual(embed.fields.map((field) => [field.name, field.value, field.inline]), [["PR", `[#42](${result.prUrl})`, true], ["Project", "nightqueue", true]]);
@@ -428,7 +437,7 @@ test("the closed card of J-117 is titled by ref and slug, described by the full 
   assert.equal(embed.timestamp, result.mergedAt);
 });
 
-test("the closed card keeps the full PR title for a weak headline, a missing notice, a notice without What was done, and a missing slug", async () => {
+test("the closed card keeps the full PR title for a weak headline, a missing notice and a notice without What was done", async () => {
   const [, j116] = CLOSED_JOBS;
   const describe = async (job) => {
     const fetch = fakeFetch({ [`POST ${OPS_URL}?wait=true`]: {} });
@@ -437,10 +446,10 @@ test("the closed card keeps the full PR title for a weak headline, a missing not
   };
   const weak = await describe({ title: j116.title, notice_md: noticeOf(j116.header, j116.done) });
   assert.equal(weak.description, "fix(store): migrate the home schema only in setup/update, never on open\nOpening the database never upgrades it now.");
-  assert.equal(weak.title, "J-1 closed");
+  assert.equal(weak.title, `J-1 closed · ${j116.title}`);
   const noNotice = await describe({ title: j116.title, slug: "migrate-only-in-setup-update" });
   assert.equal(noNotice.description, "fix(store): migrate the home schema only in setup/update, never on open");
-  assert.equal(noNotice.title, "J-1 closed · migrate-only-in-setup-update");
+  assert.equal(noNotice.title, `J-1 closed · ${j116.title}`);
   const noDone = await describe({ title: "fix the crash", notice_md: "✅ Fixed — the crash is gone for every user" });
   assert.equal(noDone.description, "fix the crash");
 });
@@ -458,9 +467,10 @@ test("closing a job queued from a discord link replies and logs once; a --steps 
     { name: "log", status: "done", note: "discord: logged through ops" },
   ]);
   assert.deepEqual(fetch.calls.map((call) => [call.method, call.url]), [["POST", `${CHAT_URL}?wait=true`], ["POST", `${OPS_URL}?wait=true`]]);
-  assert.match(fetch.calls[1].body.embeds[0].title, /^J-\d+ closed · bot-crash$/);
+  assert.match(fetch.calls[1].body.embeds[0].title, /^J-\d+ closed · fix the crash$/);
   assert.equal(fetch.calls[1].body.embeds[0].description, "fix the crash\nAn empty message is now ignored.");
-  assert.equal(fetch.calls[0].body.embeds[0].description, "An empty message is now ignored. Nothing else changed.");
+  assert.equal(fetch.calls[0].body.embeds[0].description, "✅ Fixed — the bot no longer crashes on an empty message\n\nWhat was done: an empty message is now ignored. Nothing else changed.");
+  assert.equal(fetch.calls[0].body.embeds[0].title, undefined);
   assert.doesNotMatch(fetch.calls[1].body.content, /http/);
   assert.equal(fetch.calls[1].body.embeds[0].url, RESULT.prUrl);
   const checklist = JSON.parse(row.close);
@@ -488,7 +498,7 @@ test("discord.replyToOrigin=false sends no reply, and an unset replyToOrigin rep
     { name: "log", status: "skipped", note: "no log destination" },
   ]);
   assert.equal(silent.calls.length, 0);
-  assert.match(off.row.notice_md, /\n\nClosed: PR #7 merged as abc1234 on 2026-10-01$/);
+  assert.doesNotMatch(off.row.notice_md, /Closed:/);
 
   const unset = await runCli(home.env, ["project", "integrations", "alpha", "unset", "discord.replyToOrigin"]);
   assert.deepEqual(unset.out, ["no integrations"]);

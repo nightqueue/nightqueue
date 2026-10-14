@@ -87,7 +87,7 @@ test("a pull request closed without merge releases the job's worktree, the same 
   assert.equal(row.status, "cancelled");
 });
 
-test("a pull request merged by hand is recorded at preflight as the operator's, never merged again, and settles the job with the Closed line appended", async (t) => {
+test("a pull request merged by hand is recorded at preflight as the operator's, never merged again, and settles the job leaving its notice untouched", async (t) => {
   const home = closeHome(t, "close-steps-merged");
   const fake = fakeCloseDeps({ pr: mergedPr() });
   const { outcome, row, checklist } = await close(home, fake);
@@ -103,7 +103,8 @@ test("a pull request merged by hand is recorded at preflight as the operator's, 
   assert.equal(checklist.steps.merge.note, "merged outside a close as abc1234; canonical checkout fast-forwarded on main");
   assert.equal(row.status, "closed");
   assert.equal(row.close_status, null);
-  assert.equal(row.notice_md, "A\n\nClosed: PR #7 merged as abc1234 on 2026-09-21");
+  assert.equal(row.notice_md, "A");
+  assert.equal(checklist.data.noticeLine, "Closed: PR #7 merged as abc1234 on 2026-09-21");
   assertCanonicalUntouched(fake.log, home.checkout);
 });
 
@@ -580,7 +581,7 @@ test("settle refuses a close whose merge is not recorded with its commit", async
   assert.equal(ready.data.noticeLine, "Closed: PR #7 merged as abc1234 on 2026-09-21");
 });
 
-test("settle closes the job, releases its worktree, appends the Closed line to the notice, and run_notice stays hidden", async (t) => {
+test("settle closes the job, releases its worktree, leaves the notice untouched, and run_notice stays hidden", async (t) => {
   const { checkout } = publishedCheckout(t, "close-steps-settle");
   const env = { ...makeHome(t, "close-steps-settle"), ...gitVars() };
   registerCheckout(env, { path: checkout, name: "alpha" });
@@ -602,9 +603,10 @@ test("settle closes the job, releases its worktree, appends the Closed line to t
   assert.deepEqual(checklist.steps.settle.worktree, { path: worktree.path, status: "removed" });
   assert.equal(row.status, "closed");
   assert.equal(row.close_status, null);
-  assert.equal(row.notice_md, "the run's notice\n\nClosed: PR #7 merged as abc1234 on 2026-09-21");
+  assert.equal(row.notice_md, "the run's notice");
+  assert.equal(checklist.data.noticeLine, "Closed: PR #7 merged as abc1234 on 2026-09-21");
   const detail = await withReadOnlyStore(env, (store) => jobDetailView(store, id));
-  assert.equal("run_notice" in detail, false, "the Closed line made the row's notice look replaced");
+  assert.equal("run_notice" in detail, false, "the row's notice looks replaced");
 });
 
 // A done job with a PR whose run recorded the worktree, its close acquired, ready to settle.
