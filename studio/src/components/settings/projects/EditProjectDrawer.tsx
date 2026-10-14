@@ -20,6 +20,7 @@ import {
   settingControls,
   stepLabel,
   stepRefusalOf,
+  toggleValues,
 } from "../../../lib/projects";
 import { showToast } from "../../../lib/toast";
 import type { OrgRow, ProviderSettings, SettingsProject } from "../../../lib/types";
@@ -73,7 +74,8 @@ function useDraft(project: SettingsProject, providers: ProviderSettings[]) {
   const [draft, setDraft] = useState<Draft>(initial);
   const set = (field: keyof Omit<Draft, "integrations">, value: string) => setDraft((current) => ({ ...current, [field]: value }));
   const setSetting = (key: string, value: string) => setDraft((current) => ({ ...current, integrations: { ...current.integrations, [key]: value } }));
-  return { initial, setInitial, draft, set, setSetting };
+  const setSettings = (values: Record<string, string>) => setDraft((current) => ({ ...current, integrations: { ...current.integrations, ...values } }));
+  return { initial, setInitial, draft, set, setSetting, setSettings };
 }
 
 // The ordered save of the drawer: on a refused step, the applied ones become the new baseline and the refusal is kept for its section.
@@ -203,7 +205,7 @@ export function EditProjectDrawer({ project, providers, orgs, onClose, onRemove 
           <CheckoutFields form={{ ...form, set: (field, value) => edit(() => form.set(field, value)) }} project={project} orgs={orgs} disabled={busy} onChangeFolder={() => setChoosing(true)} />
         </Section>
         <Section title="Integrations" steps={["integrations"]} outcome={outcome}>
-          <IntegrationFields providers={controls} values={form.draft.integrations} initial={form.initial.integrations} disabled={busy} onChange={(key, value) => edit(() => form.setSetting(key, value))} />
+          <IntegrationFields providers={controls} values={form.draft.integrations} initial={form.initial.integrations} disabled={busy} onChange={(key, value) => edit(() => form.setSetting(key, value))} onToggle={(provider, on) => edit(() => form.setSettings(toggleValues(provider, on)))} />
         </Section>
         <Section title="Danger zone" steps={[]} outcome={null}>
           <DangerZone project={project} onRemove={() => onRemove(project)} />

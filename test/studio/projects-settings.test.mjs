@@ -13,6 +13,8 @@ import {
   footprintCounters,
   groupByOrg,
   historyProjects,
+  integrationsSummary,
+  isActive,
   moveNote,
   normalizeKeyInput,
   normalizeProjectsAnswer,
@@ -25,6 +27,7 @@ import {
   settingControls,
   stepRefusalOf,
   summaryLine,
+  toggleValues,
   typedMatches,
 } from "../../studio/src/lib/projects.ts";
 
@@ -96,6 +99,26 @@ test("drawer: the move note reads the server's preview, and controls follow each
   assert.deepEqual(controls[0].controls[1].options, ["dlw-log"]);
   const fresh = settingControls([{ kind: "pager", keys: [{ key: "pager.level", type: "enum", values: ["low", "high"] }] }], ORGS[0]);
   assert.deepEqual(fresh[0].controls[0], { key: "pager.level", label: "level", control: "select", options: ["low", "high"], defaultText: "" });
+});
+
+test("drawer: a provider is not configured until enabled, only enabled where the org has the connection, and Enable stores the defaults", () => {
+  const withCardinality = [{ ...PROVIDERS[0], label: "Discord", cardinality: "many" }, { ...PROVIDERS[1], label: "Sentry", cardinality: "one" }, PROVIDERS[2]];
+  const orgSlot = { ...ORGS[0], connections: { discord: ["dlw-log"], sentry: "sentry-dlw" } };
+  const [discord, sentry] = settingControls(withCardinality, orgSlot);
+  assert.deepEqual([discord.available, sentry.available], [true, true]);
+  assert.deepEqual(settingControls(withCardinality, ORGS[2]).map((provider) => provider.available), [false, false, true]);
+  const initial = draftOf(project(), withCardinality);
+  assert.equal(isActive(sentry, initial.integrations), false);
+  assert.deepEqual(integrationsSummary(project(), withCardinality).map((line) => line.text), ["discord · not configured", "sentry · not configured"]);
+  assert.deepEqual(changedSteps(initial, { ...initial }), []);
+  const enabled = { ...initial, integrations: { ...initial.integrations, ...toggleValues(sentry, true) } };
+  assert.equal(isActive(sentry, enabled.integrations), true);
+  assert.deepEqual(buildPatch(initial, enabled).integrations, { set: { "sentry.onClosed": "resolved" }, unset: [] });
+  const discordOn = { ...initial, integrations: { ...initial.integrations, ...toggleValues(discord, true) } };
+  assert.deepEqual(buildPatch(initial, discordOn).integrations, { set: { "discord.replyToOrigin": "true", "discord.log.events": "closed,failed" }, unset: [] });
+  const stored = draftOf(project({ integrations: { sentry: { onClosed: "resolved" } } }), withCardinality);
+  const disabled = { ...stored, integrations: { ...stored.integrations, ...toggleValues(sentry, false) } };
+  assert.deepEqual(buildPatch(stored, disabled).integrations, { set: {}, unset: ["sentry.onClosed"] });
 });
 
 test("remove: a running job disables it, rows need the exact typed name, and the counters sum to the footprint", () => {
