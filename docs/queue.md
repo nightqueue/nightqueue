@@ -175,6 +175,16 @@ retries whole. With no Linear connection the coverage is
 is `skipped`; the job never fails for it. The Studio's Issues card and the `tracker_issues` MCP
 tool list the workspace's issues by Linear team and project; queueing from one sends
 `origin: [{kind: "linear", ref}]` and the nightqueue `project` the operator picks.
+`tracker_issues` also searches by `text` (title or description, case-insensitive) and `label` (one
+name, exact, case-insensitive), and `tracker_read` reads one issue whole: description, comments
+(up to 50, returned oldest first, `comments_truncated` true when there are more), attachments, assignee, state, priority, labels, team and project, an
+empty field answered as `null` or `[]`. The operator writes through `tracker_create`,
+`tracker_comment` and `tracker_update` (title, description, priority, state, assignee - `me` or
+`none` too - and labels added or removed) only after the person's explicit ok; a state, label or
+assignee name that is unknown or names several is refused with the valid names and nothing is
+sent. A queue job reads the tracker but every write from inside one is refused before anything is
+sent; nothing deletes or archives an issue. No answer and no error ever carries the API key: a
+failure is a fixed text, and the MCP server replaces any stored secret in an error with `[redacted]`.
 
 **Discord.** A prompt with a Discord message link
 (`https://discord.com/channels/<guild>/<channel>/<message>`, also `ptb.`/`canary.` and

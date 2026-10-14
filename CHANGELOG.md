@@ -58,6 +58,14 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **The operator reads, searches and writes Linear issues.** New MCP tools `tracker_read` (one
+  issue whole: description, comments, attachments, assignee, state, priority, labels, team and
+  project), `tracker_create`, `tracker_comment` and `tracker_update`; `tracker_issues` gains the
+  `text` and `label` search. The writes run only after the person's explicit ok and are refused
+  inside a queue job before anything is sent; nothing deletes or archives an issue. The MCP
+  server now replaces any stored secret in an error answer, and in the input and the whole answer
+  of every tracker tool, with `[redacted]`. Still tool contract
+  7: the server has thirty-five tools now; MCP clients must restart to see them.
 - **Delete a lesson or a memory.** `nightqueue lesson delete <id>` and `nightqueue memory delete
   <id>` (`L344`/`M446` or the plain number, `--project` to check the owner), and the MCP tools
   `lesson_delete` and `memory_delete` (`id` and `project` required) remove one row and its search

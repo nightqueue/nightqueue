@@ -530,3 +530,44 @@ test("tracker filters lists the teams and merges their projects by name", async 
   const failed = await linear.tracker.filters({ connection: RECORD, http: httpOf(fakeFetch({ teams: { status: 500 } })) });
   assert.deepEqual(failed, { detail: "teams not read (HTTP 500)" });
 });
+
+test("tracker issues adds the text and label search to the filter only when given", async () => {
+  const fetch = fakeFetch({ issues: { body: { data: { issues: { nodes: [], pageInfo: { hasNextPage: false } } } } } });
+  const http = httpOf(fetch);
+  await linear.tracker.issues({ state: "all", text: "login", label: "bug" }, { connection: RECORD, http });
+  await linear.tracker.issues({ state: "all", text: null, label: null }, { connection: RECORD, http });
+  assert.deepEqual(fetch.calls.map((call) => call.variables.filter), [
+    { or: [{ title: { containsIgnoreCase: "login" } }, { description: { containsIgnoreCase: "login" } }], labels: { some: { name: { eqIgnoreCase: "bug" } } } },
+    {},
+  ]);
+});
+
+test("tracker issue reads the issue whole with team, project and bounded texts, never through the enrichment query", async () => {
+  const issue = { ...fullIssue({ description: "d".repeat(50_010) }), team: { key: "MK", name: "Mobile" }, project: { name: "Auth" } };
+  issue.comments = { nodes: [{ body: "c".repeat(10_050), createdAt: "2026-10-01T11:00:00.000Z", user: { name: "Ana" } }], pageInfo: { hasNextPage: true } };
+  const fetch = fakeFetch({ issue: { body: { data: { issue } } } });
+  const answer = await linear.tracker.issue("MK-42", { connection: RECORD, http: httpOf(fetch) });
+  assert.ok(fetch.calls[0].query.includes("project { name }"), fetch.calls[0].query);
+  assert.ok(fetch.calls[0].query.includes("comments(first: 50"), fetch.calls[0].query);
+  assert.equal(fetch.calls[0].auth, API_KEY);
+  assert.deepEqual(answer.issue.team, { key: "MK", name: "Mobile" });
+  assert.equal(answer.issue.project, "Auth");
+  assert.equal(answer.issue.description.length, 50_000);
+  assert.equal(answer.issue.description_truncated, true);
+  assert.equal(answer.issue.comments[0].body.length, 10_000);
+  assert.equal(answer.issue.comments_truncated, true);
+  assert.deepEqual(answer.issue.parent, { ref: "MK-1", title: "Auth epic" });
+
+  const refused = await linear.tracker.issue("MK-42", { connection: RECORD, http: httpOf(fakeFetch({ issue: { body: { errors: [{ message: SECRET_MESSAGE }] } } })) });
+  assert.deepEqual(refused, { detail: "issue MK-42 not read (the service refused the query)" });
+});
+
+test("tracker comment reports an unconfirmed, lost or HTTP 200 errored write as uncertain and an HTTP refusal as certain", async () => {
+  const context = { issue: { body: { data: { issue: { id: "uuid-42", identifier: "MK-42", team: { key: "MK", states: { nodes: STATES } } } } } } };
+  const comment = (route) => linear.tracker.comment({ ref: "MK-42", body: "hi" }, { connection: RECORD, http: httpOf(fakeFetch({ ...context, commentCreate: route })) });
+  assert.deepEqual(await comment({ body: { data: { commentCreate: { success: false } } } }), { detail: "comment not posted on MK-42 (the service did not confirm)", uncertain: true });
+  assert.deepEqual(await comment({ status: 502 }), { detail: "comment not posted on MK-42 (HTTP 502)", uncertain: true });
+  assert.deepEqual(await comment({ status: 400 }), { detail: "comment not posted on MK-42 (HTTP 400)", uncertain: false });
+  assert.deepEqual(await comment({ body: { errors: [{ message: SECRET_MESSAGE }] } }), { detail: "comment not posted on MK-42 (the service refused the query)", uncertain: true });
+  assert.deepEqual(await comment({ body: { data: { commentCreate: { success: true } }, errors: [{ message: "nested field failed" }] } }), { detail: "comment not posted on MK-42 (the service refused the query)", uncertain: true });
+});
