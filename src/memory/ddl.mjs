@@ -1,4 +1,4 @@
-import { CLOSED_REQUIRES_MERGE, sqlList } from "./schema.mjs";
+import { CLOSED_INVARIANT, sqlList } from "./schema.mjs";
 
 // The current (v22) schema of the memory database: one source for a fresh creation and for the v22 migration; the frozen
 // v18, v19 and v20 shapes the earlier migrations build live under `migration/`.
@@ -210,7 +210,7 @@ export function pipelineRunsDdl(name) {
 );`;
 }
 
-// The `jobs` table under a given name: the queue, every job owned by a project id, a closed job always carrying its merge (`origin` is added per open by migration/v21.mjs).
+// The `jobs` table under a given name: the queue, every job owned by a project id, a closed job carrying its merge, or its resolution without change (`origin` is added per open by migration/v21.mjs).
 export function jobsDdl(name) {
   return `CREATE TABLE IF NOT EXISTS ${name} (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -256,7 +256,7 @@ export function jobsDdl(name) {
   close TEXT,
   close_lease_until TEXT,
   close_worker TEXT,
-  ${CLOSED_REQUIRES_MERGE}
+  ${CLOSED_INVARIANT}
 );`;
 }
 
@@ -310,6 +310,12 @@ CREATE TABLE IF NOT EXISTS pipeline_phases (
 ${decisionsDdl("decisions")}
 `;
 
+// The indexes of the `jobs` table, which a rebuild of that table alone recreates.
+export const JOBS_INDEXES = `
+CREATE INDEX IF NOT EXISTS jobs_claim_idx ON jobs(status, priority, created_at);
+CREATE INDEX IF NOT EXISTS jobs_project_slug_idx ON jobs(project_id, slug);
+`;
+
 export const INDEXES = `
 CREATE INDEX IF NOT EXISTS lessons_recall_idx ON lessons(archived, project_id, created_at);
 CREATE INDEX IF NOT EXISTS lessons_embedding_idx ON lessons(embedding_model);
@@ -317,8 +323,7 @@ CREATE INDEX IF NOT EXISTS memory_project_idx ON memory(project_id, created_at);
 CREATE INDEX IF NOT EXISTS project_index_project_idx ON project_index(project_id, updated_at);
 CREATE INDEX IF NOT EXISTS pipeline_runs_project_idx ON pipeline_runs(project_id, created_at);
 CREATE INDEX IF NOT EXISTS pipeline_phases_run_idx ON pipeline_phases(run_id, seq);
-CREATE INDEX IF NOT EXISTS jobs_claim_idx ON jobs(status, priority, created_at);
-CREATE INDEX IF NOT EXISTS jobs_project_slug_idx ON jobs(project_id, slug);
+${JOBS_INDEXES}
 CREATE UNIQUE INDEX IF NOT EXISTS decisions_number_idx ON decisions(project_id, number);
 CREATE UNIQUE INDEX IF NOT EXISTS decisions_org_number_idx ON decisions(org_id, number) WHERE scope = 'org';
 CREATE INDEX IF NOT EXISTS decisions_job_idx ON decisions(job_id) WHERE job_id IS NOT NULL;

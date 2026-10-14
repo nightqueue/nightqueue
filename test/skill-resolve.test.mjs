@@ -33,6 +33,7 @@ const OUTCOME_ANCHORS = [
   "**The outcome of the run.**",
   "**The delivery is recorded by the command itself**",
   "**Before printing the gate block, record the outcome**",
+  "**A run terminated by `NO-CHANGE-NEEDED`.**",
 ];
 
 // The target every per-phase placeholder of a plugin text names, in the order the prompts appear.
@@ -229,19 +230,23 @@ test("the QA stage A gate records its marker with the tool, before stage B is la
   assert.ok(gate.includes("never by writing the file"), "the stage A gate no longer forbids hand-writing the marker");
 });
 
-test("the outcome record is documented at its three points, with the enum the runtime really accepts", () => {
+test("the outcome record is documented at its three points and the NO-CHANGE-NEEDED report, with the enum the runtime really accepts", () => {
   for (const anchor of OUTCOME_ANCHORS) {
     assert.ok(passageAt(anchor).includes("run_outcome"), `${anchor} no longer calls \`run_outcome\``);
   }
-  assert.ok(passageAt(OUTCOME_ANCHORS[0]).includes("`status` accepts ONLY `done`"), "the status enum of the record is no longer closed");
+  assert.ok(passageAt(OUTCOME_ANCHORS[0]).includes("`status` accepts ONLY `done`, `gate` and `no_change`"), "the status enum of the record is no longer closed");
+  assert.ok(passageAt(OUTCOME_ANCHORS[0]).includes("exactly THREE points"), "the outcome record no longer names its three points");
   assert.ok(passageAt(OUTCOME_ANCHORS[1]).includes('`status: "done"`'), "Phase 7 no longer records the delivery");
   assert.ok(passageAt(OUTCOME_ANCHORS[2]).includes('`status: "gate"`'), "the gate no longer records its outcome");
+  assert.ok(passageAt(OUTCOME_ANCHORS[3]).includes('`status: "no_change"`'), "a NO-CHANGE-NEEDED run no longer records its conclusion");
+  assert.ok(passageAt(OUTCOME_ANCHORS[3]).includes("does NOT write it (it would reach the origins)"), "the NO-CHANGE-NEEDED notice is no longer told to leave the next-step line to the runtime");
+  assert.equal(SKILL.includes("ends with the line `Next step:"), false, "the skill asks the run to write the next-step line, which reaches the origins");
   assert.ok(passageAt(OUTCOME_ANCHORS[1]).includes("not a parameter"), "Phase 7 is told to send the pull request URL again");
 
   for (const field of ["state?.outcome", "record.status", "record.prUrl", "record.notice"]) {
     assert.ok(CLASSIFY.includes(field), `the outcome record loses \`${field}\`: \`classify.mjs\` no longer reads it`);
   }
-  assert.deepEqual(RUN_OUTCOME_STATUSES, ["done", "gate"], "the runtime accepts a status the skill never documents");
+  assert.deepEqual(RUN_OUTCOME_STATUSES, ["done", "gate", "no_change"], "the runtime accepts a status the skill never documents");
   assert.ok(CLASSIFY.includes("RUN_OUTCOME_STATUSES.includes(record.status)"), "classify.mjs no longer reads the shared status enum");
 });
 

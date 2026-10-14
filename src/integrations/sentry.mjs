@@ -171,14 +171,21 @@ function closeStatusOf(settings) {
   return CLOSE_STATUSES.includes(settings?.onClosed) ? settings.onClosed : "resolved";
 }
 
-// The note left on the issue once it is resolved.
-function closeNote(result) {
+// The note left on the issue of a job resolved without a code change: the fact, then the run's conclusion.
+function noChangeNote(result, job) {
+  const head = `Resolved without a code change (${job?.ref ?? "unknown job"}, nightqueue)`;
+  return result?.conclusion ? `${head}: ${result.conclusion}` : head;
+}
+
+// The note left on the issue once it is resolved: the merge, or the resolution without change.
+function closeNote(result, job) {
+  if (result?.resolution === "no-change") return noChangeNote(result, job);
   const sha = typeof result?.mergeSha === "string" ? result.mergeSha.slice(0, 7) : "unknown";
   return `Fixed by ${result?.prUrl ?? "the merged pull request"}, merged as ${sha}`;
 }
 
-// Resolves the issue the job came from and leaves a best-effort note naming the merge.
-async function closeSentryIssue({ ref, result, settings, slot, http }) {
+// Resolves the issue the job came from and leaves a best-effort note naming the merge or the resolution without change.
+async function closeSentryIssue({ ref, job, result, settings, slot, http }) {
   if (!slot) return { status: "skipped", note: "no sentry connection in the org", notice: true };
   const resolved = await issueIdOf(ref, { record: slot, http });
   if (!resolved.id) return { status: "warning", note: resolved.detail };
@@ -186,7 +193,7 @@ async function closeSentryIssue({ ref, result, settings, slot, http }) {
   const issueUrl = `${apiRoot(slot)}/issues/${resolved.id}/`;
   const update = await http(issueUrl, { method: "PUT", headers: authHeaders(slot), body: { status } });
   if (!update.ok) return { status: "warning", note: `issue ${resolved.id} not marked ${status} (${update.detail})` };
-  const comment = await http(`${issueUrl}comments/`, { method: "POST", headers: authHeaders(slot), body: { text: closeNote(result) } });
+  const comment = await http(`${issueUrl}comments/`, { method: "POST", headers: authHeaders(slot), body: { text: closeNote(result, job) } });
   if (!comment.ok) return { status: "warning", note: `issue ${resolved.id} marked ${status}; note not posted (${comment.detail})`, notified: true };
   return { status: "done", note: `issue ${resolved.id} marked ${status}` };
 }

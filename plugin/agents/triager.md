@@ -74,7 +74,8 @@ symptom.**
    `/modular-quiz` in a loop, the paywall never appears"), not the interpretation. That
    symptom is the TARGET: the final cause has to produce it step by step. Reproduce/
    observe the real state whenever possible, reading only what is necessary. It does not reproduce →
-   verdict NOT-REPRODUCIBLE with the evidence. Close.
+   verdict NOT-REPRODUCIBLE with the evidence. Close. It reproduces but is proven to need no
+   code change in this repository → verdict NO-CHANGE-NEEDED (step 7).
 
 2. **Raise the cause hypotheses.** List every plausible cause with the evidence
    that would *confirm* it and the one that would *refute* it. When the symptom admits more than one
@@ -185,9 +186,22 @@ symptom.**
    NOT-REPRODUCIBLE (or NEEDS-CLARIFICATION if data is missing to validate it) with
    whatever was left open.
 
+7. **No code change needed.** Issue `NO-CHANGE-NEEDED` only when DIRECT evidence proves that
+   the reported behavior needs no code change in this repository: the cause is proven outside
+   the code it controls (a third-party service, an account or data setting, infrastructure),
+   it is already fixed on the base branch, or the behavior is correct by design. Write the
+   evidence and the conclusion in `## Diagnosis` and `## Validated brief`: that conclusion is
+   what the job's origins are told when it is closed. Example: the symptom is reproduced and
+   proven to come from a setting of an external service, with no line of this repository on its
+   path. A hypothesis nobody confirmed or reproduced is still NOT-REPRODUCIBLE, never this
+   verdict.
+
 ### If the task is a feature/refactor
 
 1. Confront the objective of the brief with the current code: what exists, what is missing.
+   The current code already meets EVERY requirement, proven with file:line evidence for each →
+   verdict `NO-CHANGE-NEEDED`, with that evidence and the conclusion in `## Validated brief`.
+   Close.
 2. List the concrete requirements and objectives of the change.
 3. There is ambiguity or a missing requirement → verdict NEEDS-CLARIFICATION with objective
    questions. Close.
@@ -257,7 +271,7 @@ nothing — no citation is a valid answer, and an uncited lesson gets no negativ
 label anywhere.
 When a recalled lesson or decision shapes what you do, write its ref (`L379`, `D-58`) in your report.
 
-## Verdict: PROCEED | NOT-REPRODUCIBLE | NEEDS-CLARIFICATION
+## Verdict: PROCEED | NO-CHANGE-NEEDED | NOT-REPRODUCIBLE | NEEDS-CLARIFICATION
 
 Evidence level: <1|2|3|4>
 

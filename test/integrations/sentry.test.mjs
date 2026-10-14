@@ -297,6 +297,29 @@ test("onClosed sets the configured status, leaves a note, and turns a refused up
   assert.ok(!all.includes(TOKEN));
 });
 
+test("onClosed on a job resolved without change sets the onClosed status and notes the conclusion, never a pull request or a sha", async () => {
+  const conclusion = "The crash comes from a browser extension, not from this code.";
+  for (const [settings, status] of [[{}, "resolved"], [{ onClosed: "resolvedInNextRelease" }, "resolvedInNextRelease"]]) {
+    const fetch = fakeFetch(issueRoutes());
+    const answer = await sentry.onClosed({
+      ref: "4507",
+      job: { id: 1, ref: "J-1", title: "fix the crash", project: "alpha" },
+      result: { prUrl: null, prNumber: null, mergeSha: null, resolution: "no-change", conclusion },
+      settings,
+      slot: { ...RECORD, name: "sn" },
+      connections: [],
+      http: httpOf(fetch),
+    });
+    assert.deepEqual(answer, { status: "done", note: `issue 4507 marked ${status}` });
+    assert.deepEqual(fetch.calls.map((call) => [call.method, call.body]), [
+      ["PUT", JSON.stringify({ status })],
+      ["POST", JSON.stringify({ text: `Resolved without a code change (J-1, nightqueue): ${conclusion}` })],
+    ]);
+    const note = fetch.calls[1].body;
+    for (const word of ["Fixed by", "merged as", "pull request", "/pull/"]) assert.equal(note.includes(word), false, `the no-change note says ${word}`);
+  }
+});
+
 test("closing a job queued from a sentry link resolves the issue, and a refused update leaves the job closed with a notice line", async (t) => {
   const home = sentryHome(t, "sentry-close");
   setIntegrations(home.env, home.projectId, { sentry: { onClosed: "resolved" } });

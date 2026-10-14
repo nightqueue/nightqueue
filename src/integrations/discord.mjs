@@ -12,6 +12,9 @@ const EMBED_DESCRIPTION_MAX = 4096;
 const EMBED_FIELD_MAX = 1024;
 const EMBED_FOOTER_MAX = 2048;
 const MERGED_COLOR = 0x2ECC71;
+const NO_CHANGE_COLOR = 0x95A5A6;
+const NO_CHANGE_FOOTER = "resolved without a code change";
+const NO_CHANGE_SENTENCE = "Resolved without a code change.";
 const DONE_LABEL = "What was done:";
 const MAX_FIELDS = 25;
 const ORIGIN_ORDER = Object.freeze(["linear", "sentry", "discord"]);
@@ -202,10 +205,21 @@ export function noticeSummary(noticeMd) {
   return { headline, firstDone: sentence || null };
 }
 
-// The two-line description of a closed job: the pull request title as GitHub holds it (prefix and all), then the first "What was done:" sentence of the notice; the notice headline stands in for a job whose title is unknown.
-function closedDescription(job) {
+// Whether the close resolved the job without a code change, with no pull request to name or link.
+function isNoChange(result) {
+  return result?.resolution === "no-change";
+}
+
+// The no-change sentence followed by the run's conclusion, when the run left one.
+function noChangeText(result) {
+  return result?.conclusion ? `${NO_CHANGE_SENTENCE}\n\n${result.conclusion}` : NO_CHANGE_SENTENCE;
+}
+
+// The two-line description of a closed job: the pull request title as GitHub holds it (prefix and all), then the first "What was done:" sentence of the notice, or the no-change sentence and the run's conclusion; the notice headline stands in for a job whose title is unknown.
+function closedDescription(job, result) {
   const summary = noticeSummary(job?.notice_md);
   const title = String(job?.title ?? "").trim() || capitalise(summary?.headline ?? "");
+  if (isNoChange(result)) return cut(`${title}\n${noChangeText(result)}`, EMBED_DESCRIPTION_MAX);
   if (!summary?.firstDone) return cut(title, EMBED_DESCRIPTION_MAX);
   return cut(`${title}\n${capitalise(summary.firstDone)}`, EMBED_DESCRIPTION_MAX);
 }
@@ -216,6 +230,18 @@ function mergeEmbed(result) {
   if (result?.prUrl) embed.url = result.prUrl;
   if (result?.mergedAt) embed.timestamp = result.mergedAt;
   return embed;
+}
+
+// The embed parts both messages share for a job resolved without change: its footer, resolution time and color, with no link.
+function noChangeEmbed(result) {
+  const embed = { footer: { text: NO_CHANGE_FOOTER }, color: NO_CHANGE_COLOR };
+  if (result?.resolvedAt) embed.timestamp = result.resolvedAt;
+  return embed;
+}
+
+// The embed parts both messages share, by how the job closed.
+function closingEmbed(result) {
+  return isNoChange(result) ? noChangeEmbed(result) : mergeEmbed(result);
 }
 
 // The pull request as a masked link, or plain text when its url or number is missing.
@@ -241,15 +267,17 @@ function problemTitle(job, origins) {
   return candidates.map((candidate) => String(candidate ?? "").trim()).find(Boolean) ?? "";
 }
 
-// The whole notice as the reply text, cut at the embed limit; the pull request title or link stands in for an empty notice.
+// The whole notice as the reply text, cut at the embed limit; the pull request title or link stands in for an empty notice, and a job resolved without change gets the no-change sentence and the run's conclusion.
 function replyDescription(job, result) {
+  if (isNoChange(result)) return cut(noChangeText(result), EMBED_DESCRIPTION_MAX);
   const notice = String(job?.notice_md ?? "").trim();
   const text = notice || String(job?.title ?? "").trim() || pullRequestLink(result);
   return cut(text, EMBED_DESCRIPTION_MAX);
 }
 
-// The PR field both messages carry.
+// The PR field both messages carry; none for a job resolved without change.
 function mergeFields(result) {
+  if (isNoChange(result)) return [];
   return [{ name: "PR", value: cut(pullRequestLink(result), EMBED_FIELD_MAX), inline: true }];
 }
 
@@ -269,7 +297,7 @@ function originFields(origins, kinds) {
 function replyContent(result, job, origins) {
   const known = originsOf(origins);
   return {
-    ...mergeEmbed(result),
+    ...closingEmbed(result),
     description: replyDescription(job, result),
     fields: [...mergeFields(result), ...originFields(known, ["linear", "sentry"])].slice(0, MAX_FIELDS),
   };
@@ -304,9 +332,9 @@ function closedLogContent(job, result, origins) {
   const ref = job?.ref ?? "job";
   const problem = problemTitle(job, originsOf(origins));
   return {
-    ...mergeEmbed(result),
+    ...closingEmbed(result),
     title: cut(problem ? `${ref} closed · ${problem}` : `${ref} closed`, EMBED_TITLE_MAX),
-    description: closedDescription(job),
+    description: closedDescription(job, result),
     fields: [
       ...mergeFields(result),
       { name: "Project", value: cut(job?.project ?? "unknown", EMBED_FIELD_MAX), inline: true },

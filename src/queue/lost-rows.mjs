@@ -1,11 +1,13 @@
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { jobLogPath, jobWorktreePath, logsDir, runDir, runsDir } from "../config/paths.mjs";
+import { NO_CHANGE_RESOLUTION } from "../memory/jobs.mjs";
 import { jobRef } from "../memory/refs.mjs";
-import { brokenGateNotice, classifyJobResult } from "./classify.mjs";
+import { brokenGateNotice, classifyJobResult, noChangeNotice } from "./classify.mjs";
 import { subdirectories } from "./job-run.mjs";
 import { liveRunners } from "./registry.mjs";
 import { isStateObject, readRunState } from "./resume.mjs";
+import { NO_CHANGE_OUTCOME } from "./run-state.mjs";
 import { extractNoticeFromStream, extractPrUrlFromStream, isPrUrl, lastAttemptStream } from "./stream.mjs";
 
 const RECOVERABLE_STATUSES = ["done", "gate", "failed", "cancelled"];
@@ -142,9 +144,20 @@ function prUrlOf(entry, stream) {
   return recorded ?? (stream ? extractPrUrlFromStream(stream) : null) ?? null;
 }
 
+// The status the pipeline's own outcome stands for; a `no_change` conclusion is a `done` with no pull request only when it carries its notice.
+function outcomeStatusOf(entry, stream) {
+  if (entry.outcome?.status !== NO_CHANGE_OUTCOME) return recoverableStatus(entry.outcome?.status);
+  return noticeOf(entry, stream) ? "done" : null;
+}
+
+// The status the disk recorded for a job: the witness's, then the pipeline's outcome, or null when neither says.
+function recordedStatusOf(entry, stream) {
+  return recoverableStatus(entry.terminal?.status) ?? outcomeStatusOf(entry, stream);
+}
+
 // The status the disk last recorded for a job, for the report.
 function lastStatusOf(entry, stream, env) {
-  const recorded = recoverableStatus(entry.terminal?.status) ?? recoverableStatus(entry.outcome?.status);
+  const recorded = recordedStatusOf(entry, stream);
   if (recorded) return recorded;
   return stream ? classifiedFromLog(entry, stream, env).status ?? "unknown" : "unknown";
 }
@@ -155,14 +168,22 @@ function noticeOf(entry, stream) {
   return (stream ? extractNoticeFromStream(stream) : null) ?? recorded;
 }
 
+// Tells whether a run's disk record says it was resolved without change: its witness carries the marker or its pipeline recorded `no_change`.
+function recordsNoChange(entry) {
+  return entry.terminal?.resolution === NO_CHANGE_RESOLUTION || entry.outcome?.status === NO_CHANGE_OUTCOME;
+}
+
 // Re-derives the row a lost job recovers as: the witness, the pipeline's outcome, the log, or a failure that says the run left none.
 export function deriveRecovered(entry, env = process.env) {
   const stream = lastAttemptOf(entry, env);
   const prUrl = prUrlOf(entry, stream);
-  const recorded = recoverableStatus(entry.terminal?.status) ?? recoverableStatus(entry.outcome?.status);
+  const recorded = recordedStatusOf(entry, stream);
   if (recorded) {
     const noticeMd = noticeOf(entry, stream);
     if (recorded === "gate" && !noticeMd) return { status: "failed", noticeMd: brokenGateNotice(planPathOf(entry, env)), prUrl };
+    if (recorded === "done" && !prUrl && recordsNoChange(entry)) {
+      return { status: recorded, noticeMd: noChangeNotice(noticeMd), prUrl, resolution: NO_CHANGE_RESOLUTION };
+    }
     return { status: recorded, noticeMd, prUrl };
   }
   if (!stream) return { status: "failed", noticeMd: NO_OUTCOME_NOTICE, prUrl };

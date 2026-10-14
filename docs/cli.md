@@ -366,6 +366,7 @@ nightqueue queue session 42 --json                    # session, attempt and cwd
 nightqueue queue session 42 --prompt "look at the gate"   # resume it with a request as the next message
 
 nightqueue queue close 42                             # merge a done job's pull request and close the job, detached
+nightqueue queue close 43                             # close a done job resolved without change (no pull request): nothing merged, origins told
 nightqueue queue close 42 --foreground                # run the four steps in this process, one line per step
 nightqueue queue close 42 --foreground --json         # JSON on stdout, the job and the close outcome
 nightqueue queue close --merged                       # close every done job gh confirms merged
@@ -446,8 +447,8 @@ code is the resumed session's own. `--prompt <text>` is passed to `nightqueue op
 only ever reads it - it answers `job_id`, `attempt`, `session`, `cwd` and `worktree_released`,
 and never resumes or executes anything itself.
 
-`queue close <id>` is the operator's act that takes one `done` job with a pull request to
-`closed` through the closing pipeline described below - the only way any job becomes `closed` -
+`queue close <id>` is the operator's act that takes one `done` job with a pull request, or one
+resolved without change, to `closed` through the closing pipeline described below - the only way any job becomes `closed` -
 and releases the job's worktree once it is closed, printing `worktree removed: <path>` or
 `worktree kept: <path> - <reason>`. `queue close --merged` runs the same pipeline, in this
 process, on every `done` job whose pull request `gh` itself confirms merged, prints `closed
@@ -486,7 +487,10 @@ pull request checks and the rebase suite and nothing else: status and attributio
 (`pr-not-the-job-branch`) still stop the close, and a conflict always stops a forced close:
 the merger never runs under `--force`. Without it, a small textual conflict may be resolved by
 the bounded merger agent before the suite runs. A second close of a closed
-job answers ``job `<id>` is already closed``. `queue.closeTimeoutS` (default `1800`, range
+job answers ``job `<id>` is already closed``. A `done` job with no pull request, resolved
+without change, closes with no gh or git call (preflight, conflict and merge `skipped`) and
+prints `J-<id> closed: resolved without change (no pull request)`; `--force` is refused on it.
+`queue.closeTimeoutS` (default `1800`, range
 `60..3600`) bounds the whole close, the merger included. For a project with integrations, the
 post-close steps origin and log run after settle on the closed job and never stop it: a failure
 is an `After close: <step> warning - <note>` line in the notice (the origin step writes one per

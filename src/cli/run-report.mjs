@@ -56,6 +56,7 @@ function passedWithoutRuntimeDebt(state) {
 function commitStep(state) {
   const outcome = isStateObject(state.outcome) ? state.outcome : {};
   if (outcome.status === "done" && typeof outcome.prUrl === "string") return { icon: "✅", highlight: `PR ${outcome.prUrl}` };
+  if (outcome.status === "no_change") return { icon: "✅", highlight: "no change needed - resolved without a pull request" };
   if (entriesOf(state, "commit").length > 0) return { icon: "✅", highlight: "committed, no pull request recorded" };
   return { icon: "⚠️", highlight: "no pull request recorded" };
 }

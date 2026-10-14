@@ -345,6 +345,31 @@ test("the reply is the whole notice with no title on top, and every link but the
   assert.equal(fetch.calls[3].body.embeds[0].description, `[#7](${RESULT.prUrl})`);
 });
 
+test("a job resolved without change replies and logs with its conclusion, no PR field, no link, no merge footer", async () => {
+  const conclusion = "✅ Resolved — no code change needed\n\nThe crash comes from a browser extension.";
+  const result = { prUrl: null, prNumber: null, mergeSha: null, mergedAt: null, resolution: "no-change", conclusion, resolvedAt: "2026-10-14T10:00:00.000Z" };
+  const job = { ...JOB, notice_md: conclusion };
+  const fetch = fakeFetch({ [`POST ${CHAT_URL}?wait=true`]: {}, [`POST ${OPS_URL}?wait=true`]: {} });
+  const replied = await discord.onClosed({ ref: `${GUILD}/${CHAT_CHANNEL}/${MESSAGE}`, job, result, origins: ORIGINS, settings: {}, slot: null, connections: [CHAT], http: httpOf(fetch) });
+  const logged = await discord.log({ event: "closed", job, result, origins: ORIGINS, settings: {}, connection: OPS, http: httpOf(fetch) });
+  assert.deepEqual([replied.status, logged.status], ["done", "done"]);
+
+  const [reply] = fetch.calls[0].body.embeds;
+  assert.equal(reply.description, `Resolved without a code change.\n\n${conclusion}`);
+  assert.deepEqual(reply.fields.map((field) => field.name), ["Linear", "Sentry"]);
+  const [log] = fetch.calls[1].body.embeds;
+  assert.equal(log.description, `fix the crash\nResolved without a code change.\n\n${conclusion}`);
+  assert.deepEqual(log.fields.map((field) => field.name), ["Project", "Linear", "Sentry", "Thread"]);
+  for (const embed of [reply, log]) {
+    assert.equal(embed.url, undefined);
+    assert.equal(embed.footer.text, "resolved without a code change");
+    assert.equal(embed.timestamp, result.resolvedAt);
+    assert.notEqual(embed.color, 0x2ecc71);
+    const text = JSON.stringify(embed);
+    for (const word of ["merged as", "pull request", "/pull/", "\"PR\""]) assert.equal(text.includes(word), false, `the no-change embed says ${word}`);
+  }
+});
+
 test("the log carries PR, Project, then Linear, Sentry and Thread, titled by the Linear issue", async () => {
   const fetch = fakeFetch({ [`POST ${OPS_URL}?wait=true`]: {} });
   await discord.log({ event: "closed", job: { ...JOB, slug: "the-crash", operatorTitle: "the crash is fixed" }, result: RESULT, origins: ORIGINS, settings: {}, connection: OPS, http: httpOf(fetch) });

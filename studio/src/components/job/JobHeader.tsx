@@ -1,6 +1,6 @@
 import { Link } from "@tanstack/react-router";
 import { GitMerge, Play, RotateCcw, Terminal, X } from "lucide-react";
-import { canCancel, hasLog, hasSession, rawLogUrl, sessionCommand } from "../../lib/actions";
+import { canCancel, hasCloseTarget, hasLog, hasSession, rawLogUrl, sessionCommand } from "../../lib/actions";
 import { copyText } from "../../lib/clipboard";
 import { activeMs, attemptCount, attemptsLabel, durationLabel, formatDurationMs, hhmmssUtc, hhmmUtc, jobOriginsLabel, timeoutLabel, wallMs } from "../../lib/format";
 import { jobRef, jobTitle } from "../../lib/queue";
@@ -61,10 +61,10 @@ function pillStyleOf(status: JobStatus, closeState: JobCloseState | null) {
 }
 
 // The status pill of the header: the status icon and label, coloured by close state then status.
-function StatusPill({ status, closeState, closing, label }: { status: JobStatus; closeState: JobCloseState | null; closing: boolean; label: string }) {
+function StatusPill({ status, closeState, closing, noChange, label }: { status: JobStatus; closeState: JobCloseState | null; closing: boolean; noChange: boolean; label: string }) {
   return (
     <span className={`inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-sm leading-[18px] font-medium ${pillStyleOf(status, closeState)}`}>
-      <StatusIcon status={status} closeState={closeState} closing={closing} size={16} />
+      <StatusIcon status={status} closeState={closeState} closing={closing} noChange={noChange} size={16} />
       {label}
     </span>
   );
@@ -142,7 +142,7 @@ function ClosingBadge({ close }: { close: CloseState }) {
 // The close slot of a done job: the primary Close job, or the close pipeline's progress while it runs.
 function CloseAction({ job, close }: { job: JobDetail; close: CloseState }) {
   if (job.status !== "done") return null;
-  const noPr = !job.pr_url;
+  const noPr = !hasCloseTarget(job);
   return (
     <span title={noPr && !close.closing ? NO_PR_TOOLTIP : undefined}>
       <Button variant="primary" className="w-28" disabled={noPr || close.closing} onClick={close.onClose}>
@@ -221,7 +221,7 @@ export function JobHeader({ job, statusLabel, closeState, runTier, actions, onCa
           <span className="font-mono font-medium">{jobRef(job.id)}</span> - {jobTitle(job)}
         </h1>
         <div className="flex flex-wrap items-center gap-2.5">
-          <StatusPill status={job.status} closeState={closeState} closing={actions.close.closing} label={statusLabel} />
+          <StatusPill status={job.status} closeState={closeState} closing={actions.close.closing} noChange={job.resolution === "no-change"} label={statusLabel} />
           {tier && <HeaderChip>{tier}</HeaderChip>}
           <HeaderChip>{`p${job.priority}`}</HeaderChip>
           <HeaderChip title={BUDGET_COUNTER_TOOLTIP}>{`attempt ${job.attempts} / ${job.max_attempts}`}</HeaderChip>

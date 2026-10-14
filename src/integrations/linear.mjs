@@ -216,8 +216,20 @@ async function mutate(http, record, { query, variables, field }) {
   return answer.data?.[field]?.success === true ? { ok: true } : { ok: false, detail: UNCONFIRMED };
 }
 
-// The comment left on the issue once its pull request merged.
+// Whether the close resolved the job without a code change, with no pull request to name or attach.
+function isNoChange(result) {
+  return result?.resolution === "no-change";
+}
+
+// The comment left on the issue of a job resolved without a code change: the fact, then the run's conclusion.
+function noChangeComment({ job, result }) {
+  const head = `Resolved without a code change (${job?.ref ?? "unknown job"}, nightqueue).`;
+  return result?.conclusion ? `${head}\n\n${result.conclusion}` : head;
+}
+
+// The comment left on the issue once its pull request merged, or once the job was resolved without change.
 function closeComment({ job, result }) {
+  if (isNoChange(result)) return noChangeComment({ job, result });
   return `Merged ${result?.prUrl ?? "the merged pull request"} (${job?.ref ?? "unknown job"}, nightqueue)`;
 }
 
@@ -272,9 +284,10 @@ function postCloseComment({ http, slot, issue, job, result }) {
   return mutate(http, slot, { query: COMMENT_MUTATION, variables: { issueId: issue.id, body: closeComment({ job, result }) }, field: "commentCreate" });
 }
 
-// Attaches the pull request, then comments naming the merge, skipping what an earlier close already did and answering both outcomes.
+// Attaches the pull request (nothing to attach when resolved without change), then comments, skipping what an earlier close already did and answering both outcomes.
 async function attachAndComment(call) {
-  const attach = call.progress?.attached === true ? { ok: true } : await attachPullRequest(call);
+  const nothingToAttach = call.progress?.attached === true || isNoChange(call.result);
+  const attach = nothingToAttach ? { ok: true } : await attachPullRequest(call);
   const comment = call.progress?.commented === true ? { ok: true } : await postCloseComment(call);
   return { attach, comment };
 }

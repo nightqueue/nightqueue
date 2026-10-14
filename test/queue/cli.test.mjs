@@ -321,20 +321,22 @@ test("a closed job is terminal for cancel, for retry and for close, and retry st
   assert.equal(getJob(failed, env).status, "pending");
 });
 
-test("queue close takes one id and refuses every job that is not done with a pull request, by name, writing nothing (exit 1)", (t) => {
+test("queue close takes one id and refuses every job that is not done, and --force on one with no pull request, by name, writing nothing (exit 1)", (t) => {
   const env = makeCliHome(t, "cli-close");
   const pending = enqueue(env, "fix the runner");
   const noPr = enqueue(env, "fix the parser");
-  openDb(env).prepare("UPDATE jobs SET status = 'done' WHERE id = ?").run(noPr);
+  openDb(env).prepare(`UPDATE jobs SET status = 'done', result = '{"resolution":"no-change"}' WHERE id = ?`).run(noPr);
+  const unmarked = enqueue(env, "fix the cache");
+  openDb(env).prepare("UPDATE jobs SET status = 'done' WHERE id = ?").run(unmarked);
   const failed = enqueue(env, "fix the queue");
   openDb(env).prepare("UPDATE jobs SET status = 'failed', pr_url = ? WHERE id = ?").run("https://github.com/acme/api/pull/43", failed);
   const gated = enqueue(env, "fix the gate");
   openDb(env).prepare("UPDATE jobs SET status = 'gate', pr_url = ? WHERE id = ?").run("https://github.com/acme/api/pull/44", gated);
   const cases = [
     [pending, new RegExp(`job \`${pending}\` is pending; it has not produced a pull request yet`)],
-    [noPr, /nothing to close: the job has no pull request/],
     [failed, new RegExp(`job \`${failed}\` failed; retry it or cancel it - only a done job is closed`)],
     [gated, new RegExp(`job \`${gated}\` is waiting at a gate`)],
+    [unmarked, /nothing to close: the job has no pull request/],
     [99, /unknown job `99`/],
   ];
   for (const [id, reason] of cases) {
@@ -346,6 +348,11 @@ test("queue close takes one id and refuses every job that is not done with a pul
       if (before) assert.deepEqual(getJob(id, env), before, `the refused close wrote to job ${id}`);
     }
   }
+  const noPrBefore = getJob(noPr, env);
+  const forcedNoPr = runCli(env, ["queue", "close", String(noPr), "--force", "--foreground"]);
+  assert.equal(forcedNoPr.status, 1, forcedNoPr.stdout);
+  assert.match(forcedNoPr.stderr, new RegExp(`job \`${noPr}\` has no pull request: --force only skips pull request checks; close it without --force`));
+  assert.deepEqual(getJob(noPr, env), noPrBefore, "the refused forced close wrote to the job with no pull request");
   assert.match(runCli(env, ["queue", "close"]).stderr, /missing argument; usage: nightqueue queue close <id>/);
   assert.match(runCli(env, ["queue", "close", String(pending), String(noPr)]).stderr, /unexpected argument/);
 });

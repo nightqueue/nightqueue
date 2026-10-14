@@ -21,6 +21,12 @@ export function closedLine({ number, sha, at }) {
   return `${CLOSED_PREFIX}PR #${number} merged as ${String(sha ?? "").slice(0, 7)} on ${day}`;
 }
 
+// The line a close resolved without change records: `Closed: resolved without change on <YYYY-MM-DD>`.
+export function resolvedLine({ at }) {
+  const day = new Date(Date.parse(String(at ?? "")) || Date.now()).toISOString().slice(0, 10);
+  return `${CLOSED_PREFIX}resolved without change on ${day}`;
+}
+
 // A close checklist as an object, from the parsed view or the raw column text; anything else is null.
 export function parseCloseChecklist(value) {
   if (value && typeof value === "object" && !Array.isArray(value)) return value;
@@ -110,9 +116,10 @@ export function closeChecklistLines(job, nowMs = Date.now()) {
   if (state === null) return [];
   const close = parseCloseChecklist(job.close) ?? {};
   const header = `${"close".padEnd(16)}${state}, attempt ${close.attempts ?? 0}`;
+  const resolution = close.data?.resolvedWithoutChange === true ? [`${"resolution".padEnd(16)}resolved without change (no pull request)`] : [];
   const steps = CLOSE_STEP_NAMES.map((name) => checklistLine(name, close.steps?.[name]));
   const stopped = closeStoppedLine(job);
-  return [header, ...steps, ...postCloseLines(close), ...(stopped ? [stopped] : [])];
+  return [header, ...resolution, ...steps, ...postCloseLines(close), ...(stopped ? [stopped] : [])];
 }
 
 // The checklist lines of the post-close steps a close actually recorded; a close without them shows none.

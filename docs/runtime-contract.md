@@ -76,6 +76,9 @@ What a runtime has to provide, and what it can rely on:
   - `outcome{status, at, notice?, prUrl?}`: `run_outcome` (`status`, `notice`),
     `nightqueue run pr` (`status: "done"`) and the runner, which writes `prUrl` at
     finalize from what the session really published - it is never a parameter.
+    `status: "no_change"` is the run's deliberate conclusion that no code change is
+    needed (triage verdict `NO-CHANGE-NEEDED`) and is refused without a `notice`, the
+    conclusion its origins are told when the job is closed.
   - `prTemplate{source, path?, headings, at}`: `nightqueue run pr` (both the
     `--template` query and the publishing call), the template the body is checked
     against - `repo` with its path, or `nightqueue`.
@@ -204,6 +207,11 @@ What a runtime has to provide, and what it can rely on:
   fixed notice `the run stopped at a gate but its notice does not carry the question - see
   <plan path>` (`<plan path>` unknown when the classifier was given none); a clean run
   reaching neither reading is `failed` otherwise, keeping its final text as the reason.
+  A clean run whose `state.json` records `outcome.status: "no_change"` with a notice, and
+  whose attempt committed nothing (its telemetry is neither `pr_opened` nor
+  `local_commit`), is `done` with no pull request and the conclusion as its notice - never
+  the `nothing to close` line; a stop, a timeout or a failed exit still wins over it, and the
+  record without a notice is `failed`.
 
 A notice holds only the job's own account: it carries no `Record:` line and a close appends
 no `Closed:` line. The PR, the merge and the status are shown from the job's fields
@@ -446,7 +454,7 @@ The thirty-five MCP tools, with the parameters `nightqueue mcp` actually accepts
 | `run_phase_done` | `phase`, `artifact?`, `verdict?`, `note?`, `reason?` (why the phase ran again; omitted on its first run), `project?`, `slug?` |
 | `run_terminate` | `phase`, `reason`, `project?`, `slug?` |
 | `run_skip` | `phase`, `by`, `reason`, `project?`, `slug?` |
-| `run_outcome` | `status` (`done`, `gate`), `notice?`, `project?`, `slug?` |
+| `run_outcome` | `status` (`done`, `gate`, `no_change`), `notice?` (required with `no_change`), `project?`, `slug?` |
 | `run_set` | `type?`, `tier?`, `tier_raise_reason?`, `branch?`, `worktree?`, `qa_stage_a?{artifact, verdict?}`, `project?`, `slug?` |
 
 The five `run_*` tools are the only way the pipeline records its run (see the
@@ -616,9 +624,12 @@ also offers `nightqueue queue close --merged`, which closes every `done` job who
 merged in one call), and `queue_retry` sends a gated, failed or cancelled job back to the queue - its
 `run` starts a DETACHED runner, the same one the `--run` of the CLI starts unless
 it is asked for `--foreground`. `queue_close` answers `{ ok, started, job_id, pid, logPath, follow }` without
-waiting for the merge: a `done` job with a pull request only, and every
-other status (``job `N` is already closed`` for a closed one), a job without a pull request or one
-already under a live close lease refused by name with nothing written; calling it again resumes a
+waiting for the merge: a `done` job only - with a pull request, or resolved without change
+(no pull request: preflight, conflict and merge recorded `skipped`, settle recording
+`data.resolvedWithoutChange`, origin and log telling the origins with the run's conclusion) -
+and every other status (``job `N` is already closed`` for a closed one), `force` on a job with no
+pull request, or one already under a live close lease refused by name with nothing written;
+`closed` means merged or resolved without change through this pipeline; calling it again resumes a
 close that stopped at the step that failed. The STATUS cell of a job whose close holds or stopped
 reads `closing`, `close failed` or `close stalled` alone (the step and the reason stay in the LAST cell and
 in `queue status <id>`); the studio rows carry the same as `studio.status_label` plus
@@ -680,7 +691,7 @@ error for a field it had nothing to put in. The closed
 vocabularies are `target` (`triager`, `architect`, `coder`, `qa`, `verifier`, plus
 `explore` for the `target` of `context_for_phase`), the run `phase` (`triage`,
 `explore`, `architecture`, `implementation`, `qa`, `verification`, `runtime`,
-`commit`), the run `status` of `run_outcome` (`done`, `gate` - how the process
+`commit`), the run `status` of `run_outcome` (`done`, `gate`, `no_change` - how the process
 ended stays the runtime's call),
 `tier` (`trivial`, `simple`, `complex`), `task_type` (`bug/error`,
 `feature/refactor`), `outcome` (`pr_opened`, `local_commit`, `no_commit`),

@@ -9,8 +9,11 @@ import { isPrUrl } from "./stream.mjs";
 // The lock of one run's state.json: a holder only ever keeps it for a single read and write, so a lock this old can only have been left behind by a dead process.
 const RUN_LOCK = { timeoutMs: 5000, staleAfterMs: 15000 };
 
-// The only two outcomes the pipeline may record in `state.json`; how the process ended stays the runtime's call.
-export const RUN_OUTCOME_STATUSES = ["done", "gate"];
+// The only outcomes the pipeline may record in `state.json` (a delivery, a gate, or a deliberate conclusion that no code change is needed); how the process ended stays the runtime's call.
+export const RUN_OUTCOME_STATUSES = ["done", "gate", "no_change"];
+
+// The outcome of a run that concluded on purpose that no code change is needed: the job ends `done` with no pull request.
+export const NO_CHANGE_OUTCOME = "no_change";
 
 // The keys of `state.json` only the runtime writes: no pipeline writer may set them, whole or by a dotted name.
 export const RUNTIME_ONLY_KEYS = ["job"];
@@ -132,6 +135,9 @@ export function recordTermination({ projectId, slug, phase, reason, env = proces
 // Records how the run ended; the pull request URL is the runtime's to write, so an outcome already carrying one keeps it.
 export function recordOutcome({ projectId, slug, status, notice, env = process.env } = {}) {
   if (!RUN_OUTCOME_STATUSES.includes(status)) return refuseEnum("status", status, RUN_OUTCOME_STATUSES);
+  if (status === NO_CHANGE_OUTCOME && trimmedText(notice) === null) {
+    return kept("a no_change outcome needs the run's conclusion as its notice: it is what the origins are told on close");
+  }
   return record({
     projectId,
     slug,

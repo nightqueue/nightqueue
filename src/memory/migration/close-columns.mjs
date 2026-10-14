@@ -1,5 +1,5 @@
 import { addColumnIfMissing, dropColumnIfPresent, hasColumn } from "../columns.mjs";
-import { CLOSED_REQUIRES_MERGE, RESULT_OBJECT_BASE } from "../schema.mjs";
+import { CLOSED_INVARIANT, RESULT_OBJECT_BASE } from "../schema.mjs";
 
 const LEGACY_COLUMNS = ["ship_status", "ship", "ship_worker", "ship_lease_until"];
 const ENDED_STATUSES = "status IN ('closed', 'merged')";
@@ -97,7 +97,7 @@ export function migrateCloseColumns(db) {
   closeRecordedMerges(db);
   recordMergesOutsideAClose(db);
   rewriteNoticeLines(db);
-  addColumnIfMissing(db, "jobs", "close_worker", `TEXT ${CLOSED_REQUIRES_MERGE}`);
+  addColumnIfMissing(db, "jobs", "close_worker", `TEXT ${CLOSED_INVARIANT}`);
   copyLegacyWorker(db);
   for (const column of LEGACY_COLUMNS) dropColumnIfPresent(db, "jobs", column);
 }

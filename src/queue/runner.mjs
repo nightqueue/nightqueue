@@ -6,6 +6,7 @@ import { jobLogPath, jobWorktreePath, logsDir, runDir } from "../config/paths.mj
 import { ensureHome } from "../config/store.mjs";
 import { ghPrList } from "../host/gh.mjs";
 import { packageRoot, spawnRoot } from "../host/paths.mjs";
+import { NO_CHANGE_RESOLUTION } from "../memory/jobs.mjs";
 import { sqliteToIso } from "../memory/schema.mjs";
 import { openStore, openStoreReadOnly } from "../store/open.mjs";
 import { acquire, bashTimeoutS, concurrencyCap, gate, inheritUserEnvironment, isPaused, leaseHeartbeatMs, release, renew, resumeSessionEnabled, stillOwned } from "./claim.mjs";
@@ -33,6 +34,9 @@ import { runMaintenance } from "./maintenance.mjs";
 import { appendPendingWrite, PENDING_KEYS, replayPendingWrites } from "./pending-writes.mjs";
 import { clearRunOutcome, decideResume, isRunPath, isSafeSegment, ownRunState, readRunState, renameRunDir, resumeHandoff, writeRunTerminal } from "./resume.mjs";
 import { JOB_BLOCK_ALREADY_RECORDED, recordJobBlock, recordPrUrl, recordResume, recordRunFields } from "./run-state.mjs";
+import { DISABLED_BACKGROUND_ESCAPE_LINE } from "./run-notice.mjs";
+
+export { DISABLED_BACKGROUND_ESCAPE_LINE } from "./run-notice.mjs";
 import { buildPrompt, IDLE_TIMEOUT_S, provisionalSlug, slugCandidates, spawnClaude } from "./spawn.mjs";
 import { orchestratorRoots, sessionTranscriptPath } from "./orchestrator-scope.mjs";
 import {
@@ -563,6 +567,7 @@ async function writeWitness(job, { outcome, runSlug }, { store, env }) {
       terminal: {
         status: outcome.status,
         prUrl: outcome.prUrl ?? null,
+        ...resolutionKey(outcome),
         finishedAt: row?.status === outcome.status && row?.finished_at ? sqliteToIso(row.finished_at) : new Date().toISOString(),
         writtenBy: packageRoot(),
         pid: process.pid,
@@ -624,10 +629,6 @@ async function inspectJobWorktree(run, state, ctx) {
     killImpl: ctx.deps.killImpl ?? killProcess,
   });
 }
-
-// The line appended once when the last attempt shows the host backgrounding a task despite the disable env var the runtime sets.
-export const DISABLED_BACKGROUND_ESCAPE_LINE =
-  "⚠️ the host moved a command to the background although background tasks are disabled - the CLI may have dropped CLAUDE_CODE_DISABLE_BACKGROUND_TASKS";
 
 // Appends the disabled-background escape line once when the last attempt shows one, mirroring it to the runner's own log.
 function withDisabledBackgroundEscape(noticeMd, log) {
@@ -700,6 +701,11 @@ async function finalize(job, run, ctx) {
   return finish.pending ? { ...report, error: finish.error, pending: finish.pending } : { ...report, error: finish.error };
 }
 
+// The no-change marker of a done outcome resolved without change, as a key to spread, or nothing for every other outcome.
+function resolutionKey(outcome) {
+  return outcome?.status === "done" && !outcome.prUrl && outcome.resolution === NO_CHANGE_RESOLUTION ? { resolution: NO_CHANGE_RESOLUTION } : {};
+}
+
 // The exact finish a run writes on its row, worker included, so a queued copy replays it unchanged.
 function finishSpec(job, run, { state, noticeMd, env }) {
   return {
@@ -714,6 +720,7 @@ function finishSpec(job, run, { state, noticeMd, env }) {
       idleTimedOut: run.result.idleTimedOut,
       attempts: run.attempt,
       files: implementedFiles(job, run, state, env),
+      ...resolutionKey(run.outcome),
     },
     prUrl: run.outcome.prUrl,
     prTitle: state?.outcome?.prTitle,
