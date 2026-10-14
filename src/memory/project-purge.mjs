@@ -4,8 +4,6 @@ import { inTransaction } from "./tx.mjs";
 
 // The purge of a project: the project and every row it owns, children first, in one transaction.
 
-const OWN_DECISIONS = "SELECT id FROM decisions WHERE project_id = ?";
-
 // The rows only reachable through an owned row, as [table, SQL counting them].
 const DEPENDENT_COUNTS = [
   ["pipeline_phases", "SELECT COUNT(*) AS n FROM pipeline_phases WHERE run_id IN (SELECT id FROM pipeline_runs WHERE project_id = ?)"],
@@ -31,8 +29,6 @@ function requireNoActiveJob(db, project) {
 
 // Deletes every row of the project, then the project, in the order the foreign keys accept.
 function deleteOwnedRows(db, projectId) {
-  db.prepare(`UPDATE decisions SET superseded_by = NULL WHERE superseded_by IN (${OWN_DECISIONS})`).run(projectId);
-  db.prepare("DELETE FROM decisions WHERE project_id = ?").run(projectId);
   for (const table of ["pipeline_runs", "lessons", "memory", "project_index", "project_libs", "jobs", "project_key_aliases"]) {
     db.prepare(`DELETE FROM ${table} WHERE project_id = ?`).run(projectId);
   }

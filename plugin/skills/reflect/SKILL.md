@@ -68,5 +68,5 @@ Answer with the saved refs in one line: `Saved: L<id>, M<id>, …`, or
 
 ## Never
 
-- Never record a decision record: this skill writes lessons and memories only.
+- Never write anything but lessons and memories.
 - Never queue a job, and never call `queue_add`.

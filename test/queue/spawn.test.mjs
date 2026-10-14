@@ -587,7 +587,7 @@ test("an inherited value of the no-orphan-background vars never leaks into the c
   assert.equal(capturedEnv.BASH_MAX_TIMEOUT_MS, "3600000", "an inherited max timeout leaked into the child");
 });
 
-test("a job started from inside an operator session never inherits the operator mode, project or pid (D-58)", async (t) => {
+test("a job started from inside an operator session never inherits the operator mode, project or pid (operator guard)", async (t) => {
   const env = makeHome(t, "spawn-operator-session");
   env.NIGHTQUEUE_MODE = "operator";
   env.NIGHTQUEUE_PROJECT = FIXED_PROJECT_ID;

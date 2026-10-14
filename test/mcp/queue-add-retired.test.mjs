@@ -31,14 +31,14 @@ function jobCount(env) {
   return openDb(env).prepare("SELECT COUNT(*) AS n FROM jobs").get().n;
 }
 
-test("queue_add refuses a run_dir with D-58 and queues nothing; a null or blank one is ignored", async (t) => {
+test("queue_add refuses a run_dir and queues nothing; a null or blank one is ignored", async (t) => {
   const env = makeHome(t, "queue-add-retired");
   makeProject(t, env, "alpha");
   const client = await connectInProcess(t, env);
 
   const refused = await client.callTool({ name: "queue_add", arguments: { project: "alpha", prompt: PROMPT, run_dir: "/x" } });
   assert.equal(refused.isError, true, textOf(refused));
-  assert.match(textOf(refused), /`run_dir` was removed by D-58/);
+  assert.match(textOf(refused), /`run_dir` was removed with the operator runs/);
   assert.equal(jobCount(env), 0);
 
   for (const run_dir of [null, ""]) {

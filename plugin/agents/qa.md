@@ -14,7 +14,7 @@ whether it reproduced. You do not fix anything, and you leave nothing behind.
 ## The anchor (read first)
 
 The runtime checks every call you make and refuses anything outside the shapes below, with a
-reason that starts with `D-58:`. This is a best-effort **anchor, not a sandbox**: it keeps
+reason that starts with `operator guard:`. This is a best-effort **anchor, not a sandbox**: it keeps
 your commands pointed at your QA worktree, it does not isolate the machine. Respect it as a
 rule, never probe it. A refused call is never rephrased to slip past the check; report it
 instead.

@@ -3,11 +3,8 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
-import { openDb } from "../../src/memory/db.mjs";
-import { getDecision, saveDecision } from "../../src/memory/decisions.mjs";
 import { addJob, getJob } from "../../src/memory/jobs.mjs";
-import { setOrgKey, setProjectKey } from "../../src/memory/registry.mjs";
-import { ensureProject, makeHome, makeProject, orgIdOf, projectIdOf, seedDoneJob } from "../../test-support/memory.mjs";
+import { ensureProject, makeHome, seedDoneJob } from "../../test-support/memory.mjs";
 
 const CLI = fileURLToPath(new URL("../../bin/nightqueue.mjs", import.meta.url));
 
@@ -37,69 +34,6 @@ async function refusalOf(client, name, args) {
   assert.equal(result.isError, true, `${name} was not refused: ${textOf(result)}`);
   return textOf(result);
 }
-
-// A decision of an owner, with only the text every decision needs.
-function decision(owner, title) {
-  return { ...owner, title, context: `context of ${title}`, decision: `decision of ${title}`, status: "accepted" };
-}
-
-// A home with alpha (AP) and beta (BT) in org acme (AM), each owner holding decisions, then alpha renamed to NQ and acme to AC.
-function makeRefsHome(t, name) {
-  const env = makeHome(t, name);
-  makeProject(t, env, "alpha", { org: "acme" });
-  makeProject(t, env, "beta", { org: "acme" });
-  const alpha = { projectId: projectIdOf(env, "alpha") };
-  const beta = { projectId: projectIdOf(env, "beta") };
-  const acme = { orgId: orgIdOf(env, "acme") };
-  saveDecision(decision(alpha, "alpha pins sqlite"), env);
-  saveDecision(decision(alpha, "alpha logs as json"), env);
-  saveDecision(decision(beta, "beta ships weekly"), env);
-  saveDecision(decision(acme, "every repo runs one node"), env);
-  const db = openDb(env);
-  setProjectKey(db, { id: alpha.projectId, key: "NQ" });
-  setOrgKey(db, { id: acme.orgId, key: "AC" });
-  return { env };
-}
-
-test("decision_update takes a decision ref: `D-<n>` needs a project, `<KEY>/D-<n>` names its owner, old keys resolve", async (t) => {
-  const { env } = makeRefsHome(t, "mcp-refs-decisions");
-  const client = await connect(t, env);
-
-  assert.match(
-    await refusalOf(client, "decision_update", { id: "D-1", status: "rejected" }),
-    /`D-1` names a decision of a project: pass the project, or write it `<KEY>\/D-1`/,
-  );
-  assert.match(await refusalOf(client, "decision_update", { id: 1, status: "rejected" }), /older nightqueue/);
-  assert.match(await refusalOf(client, "decision_update", { id: "NQ-1", status: "rejected" }), /expected a decision ref/);
-  assert.match(await refusalOf(client, "decision_update", { id: "NQ/D-9", status: "rejected" }), /unknown decision `NQ\/D-9`/);
-
-  const named = payloadOf(await client.callTool({ name: "decision_update", arguments: { id: "D-1", project: "alpha", title: "alpha pins sqlite 3" } }));
-  assert.deepEqual([named.decision.ref, named.decision.title], ["D-1", "alpha pins sqlite 3"]);
-  const alias = payloadOf(await client.callTool({ name: "decision_update", arguments: { id: "AP/D-1", status: "superseded", superseded_by: "D-2" } }));
-  assert.equal(alias.decision.status, "superseded");
-  assert.equal(getDecision(1, env).superseded_by, 2);
-  const org = payloadOf(await client.callTool({ name: "decision_update", arguments: { id: "AM/D-1", title: "every repo runs node 24" } }));
-  assert.deepEqual([org.decision.ref, org.decision.scope], ["AC/D-1", "org"]);
-  assert.match(
-    await refusalOf(client, "decision_update", { id: "BT/D-1", status: "superseded", superseded_by: "NQ/D-2" }),
-    /belongs to project `alpha`, not project `beta`/,
-  );
-});
-
-test("decision_save names candidates by number or by a ref of the same owner, and refuses a ref of another owner", async (t) => {
-  const { env } = makeRefsHome(t, "mcp-refs-decision-save");
-  const client = await connect(t, env);
-  const base = { project: "alpha", title: "alpha keeps one worker", context: "c", decision: "d", status: "proposed" };
-
-  assert.match(await refusalOf(client, "decision_save", { ...base, unrelated: ["AC/D-1"] }), /`AC\/D-1` is not a decision of project `alpha`/);
-  assert.match(await refusalOf(client, "decision_save", { ...base, unrelated: ["D-7"] }), /unknown decision `D-7`/);
-  const saved = payloadOf(await client.callTool({ name: "decision_save", arguments: { ...base, unrelated: ["D-1", "NQ/D-2"] } }));
-  assert.equal(saved.ref, "D-3");
-  const orgSaved = payloadOf(
-    await client.callTool({ name: "decision_save", arguments: { org: "acme", title: "acme tags releases", context: "c", decision: "d", unrelated: ["AM/D-1", 1] } }),
-  );
-  assert.equal(orgSaved.ref, "AC/D-2");
-});
 
 test("the job tools take a job ref or a plain id, and refuse anything else", async (t) => {
   const env = makeHome(t, "mcp-refs-jobs");
@@ -139,15 +73,4 @@ test("queue_status finds a job by the pull request it opened: one, none, several
   assert.match(await refusalOf(client, "queue_status", { pr_url: "https://github.com/acme/api/pull/8" }), /no job opened `https:\/\/github.com\/acme\/api\/pull\/8`/);
   assert.match(await refusalOf(client, "queue_status", { pr_url: "https://gitlab.com/acme/api/-/merge_requests/7" }), /not a GitHub pull request URL/);
   assert.match(await refusalOf(client, "queue_status", { pr_url: "https://github.com/acme/api/pull/7", job_id: one }), /pass either `job_id` or `pr_url`, never both/);
-});
-
-test("inside a job every decision ref is refused by the rule, its own project's included, and no row changes", async (t) => {
-  const { env } = makeRefsHome(t, "mcp-refs-visibility");
-  const job = addJob({ projectId: projectIdOf(env, "alpha"), prompt: "fix alpha" }, env);
-  const client = await connect(t, { ...env, NIGHTQUEUE_JOB_ID: String(job.id) });
-
-  for (const id of ["BT/D-1", "AC/D-1", "D-1"]) {
-    assert.match(await refusalOf(client, "decision_update", { id, status: "rejected" }), /decisions are the operator's record, written only outside a queue run/);
-  }
-  for (const id of [1, 3, 4]) assert.equal(getDecision(id, env).status, "accepted", `the refused update reached decision ${id}`);
 });

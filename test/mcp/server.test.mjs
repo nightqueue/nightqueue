@@ -10,13 +10,12 @@ import { homeDir, jobLogPath, logsDir, PACKAGE_NAME, queuePausedPath, runnersDir
 import { loadConfig, loadSecrets, saveConfig, saveSecrets } from "../../src/config/store.mjs";
 import { packageRoot } from "../../src/host/paths.mjs";
 import { closeDb, openDb, openDbReadOnly } from "../../src/memory/db.mjs";
-import { saveDecision } from "../../src/memory/decisions.mjs";
 import { addJob, claimJobById, getJob, parkJob } from "../../src/memory/jobs.mjs";
 import { DB_USER_VERSION } from "../../src/memory/schema.mjs";
 import { clockLabel } from "../../src/queue/hints.mjs";
 import { writeRunnerRecord } from "../../src/queue/registry.mjs";
 import { assertIsolatedEnv, isolatedHostVars } from "../../test-support/host.mjs";
-import { ensureProject, makeDir, makeHome, makeProject, orgIdOf, projectIdOf, seedLegacyV8Home } from "../../test-support/memory.mjs";
+import { ensureProject, makeDir, makeHome, makeProject, projectIdOf, seedLegacyV8Home } from "../../test-support/memory.mjs";
 import { FAKE_CLAUDE } from "../../test-support/queue-fake.mjs";
 import * as registry from "../../src/memory/registry.mjs";
 
@@ -27,10 +26,6 @@ const HOME_REFUSAL =
 
 const CONTRACT_TOOLS = [
   "context_for_phase",
-  "decision_list",
-  "decision_recall",
-  "decision_save",
-  "decision_update",
   "index_recall",
   "index_save",
   "lesson_delete",
@@ -97,12 +92,13 @@ function textOf(result) {
   return result.content.map((block) => block.text).join("\n");
 }
 
-test("the server exposes exactly the thirty-five tools of the contract", async (t) => {
+test("the server exposes exactly the thirty-one tools of the contract, none of them a decision tool", async (t) => {
   const env = makeHome(t, "mcp-tools");
   const client = await connect(t, env);
   const names = (await client.listTools()).tools.map((tool) => tool.name).sort();
   assert.deepEqual(names, CONTRACT_TOOLS);
-  assert.equal(names.length, 35,"the contract list and the server disagree on how many tools there are");
+  assert.equal(names.some((name) => name.startsWith("decision_")), false);
+  assert.equal(names.length, 31, "the contract list and the server disagree on how many tools there are");
 });
 
 test("tracker_issues with no tracker connection is a normal answer carrying the refusal and the contract", async (t) => {
@@ -114,7 +110,7 @@ test("tracker_issues with no tracker connection is a normal answer carrying the 
     error: "no-connection",
     provider: "linear",
     hint: 'connect it: echo "$LINEAR_API_KEY" | nightqueue connection add linear --type linear',
-    contract: 7,
+    contract: 8,
   });
 });
 
@@ -142,7 +138,7 @@ test("every new tracker tool with no tracker connection answers the no-connectio
       error: "no-connection",
       provider: "linear",
       hint: 'connect it: echo "$LINEAR_API_KEY" | nightqueue connection add linear --type linear',
-      contract: 7,
+      contract: 8,
     }, name);
   }
 });
@@ -210,12 +206,12 @@ test("the server never migrates a v8 home: a tool answers store-unavailable with
   assert.equal(status.error, "store-unavailable");
   assert.equal(status.code, "SCHEMA_OUTDATED");
   assert.equal(status.hint, "nightqueue update");
-  assert.match(status.message, /database at v8, this nightqueue expects v25: run `nightqueue update`/);
+  assert.match(status.message, /database at v8, this nightqueue expects v26: run `nightqueue update`/);
 
   const db = openDbReadOnly(env, { anySchema: true });
   t.after(() => db.close());
   assert.equal(db.prepare("PRAGMA user_version").get().user_version, 8);
-  assert.equal(DB_USER_VERSION, 25);
+  assert.equal(DB_USER_VERSION, 26);
 });
 
 test("the handshake carries the instructions that teach the backlog model", async (t) => {
@@ -236,14 +232,13 @@ test("the handshake carries the instructions that teach the backlog model", asyn
     "read `notice_md` whole with `queue_status`",
     "queue_retry` only after the person answers",
     "`queue_close`",
-    "settles a design question",
     "`lesson_save` and `memory_save` record what a session learned",
     "offer `/nightqueue:reflect` once: it proposes lessons and memories and saves only the ones the person confirms",
-    "both are allowed inside a queue job, unlike decisions",
+    "both are allowed inside a queue job.",
   ]) {
     assert.ok(instructions.includes(idea), `\`${idea}\` is missing from the instructions:\n${instructions}`);
   }
-  for (const removed of ["Queue every task or plan the moment it comes up", "Do not start jobs as they are queued", "issue_id", "the issues are where"]) {
+  for (const removed of ["Queue every task or plan the moment it comes up", "Do not start jobs as they are queued", "issue_id", "the issues are where", "decision"]) {
     assert.equal(instructions.includes(removed), false, `the removed line \`${removed}\` is back in the instructions`);
   }
 });
@@ -314,23 +309,14 @@ test("the lesson, memory, index, phase and pipeline tools refuse an unknown proj
     ["context_for_phase", { target: "coder", project: "ghost" }],
     ["phase_prompt", { target: "coder", project: "ghost", slug: "a-run" }],
     ["pipeline_log", { project: "ghost", slug: "a-run", tier: "simple", outcome: "investigated" }],
-    ["decision_save", { project: "ghost", title: "t", context: "c", decision: "d" }],
-    ["decision_list", { project: "ghost" }],
-    ["decision_recall", { project: "ghost" }],
   ]) {
     const refused = await client.callTool({ name, arguments: args });
     assert.equal(refused.isError, true, name);
     assert.match(textOf(refused), /unknown project `ghost`; known projects: alpha/, name);
   }
-  for (const name of ["decision_list"]) {
-    const refused = await client.callTool({ name, arguments: { org: "ghost" } });
-    assert.equal(refused.isError, true, name);
-    assert.match(textOf(refused), /unknown org `ghost`; existing orgs: default/, name);
-  }
   assert.equal(lessons(), 0, "a refused lesson_save wrote a row");
   assert.equal(count("project_index"), 0, "a refused index_save wrote a row");
   assert.equal(count("pipeline_runs"), 0, "a refused pipeline_log wrote a row");
-  assert.equal(count("decisions"), 0, "a refused decision_save wrote a row");
 
   mkdirSync(join(alpha, "src"));
   const inside = payloadOf(await client.callTool({ name: "lesson_save", arguments: { ...LESSON, project: join(alpha, "src") } }));
@@ -483,7 +469,7 @@ test("the index round trip reports the freshness of the checkout", async (t) => 
       },
     }),
   );
-  assert.deepEqual(saved, { ok: true, files: 1, libs: 0, contract: 7 });
+  assert.deepEqual(saved, { ok: true, files: 1, libs: 0, contract: 8 });
 
   const fresh = payloadOf(
     await client.callTool({ name: "index_recall", arguments: { project: "alpha", repo_root: repo } }),
@@ -644,7 +630,7 @@ test("queue_add enqueues by project NAME and refuses a path or a project nobody 
     timeoutS: 600,
     origin: [],
     hint: "queued J-1 for `alpha` (1 pending). 0 runners online - pending jobs will wait until `nightqueue queue run` starts one.",
-    contract: 7,
+    contract: 8,
   });
   assert.equal(getJob(1, env).prompt, "fix the worker");
 
@@ -1437,7 +1423,7 @@ test("queue_stop answers the CLI line per runner, and refuses an unknown pid", a
   const client = await connect(t, env);
 
   const empty = payloadOf(await client.callTool({ name: "queue_stop", arguments: {} }));
-  assert.deepEqual(empty, { ok: true, runners: [{ outcome: "absent", pid: null, message: "runner is not running" }], contract: 7 });
+  assert.deepEqual(empty, { ok: true, runners: [{ outcome: "absent", pid: null, message: "runner is not running" }], contract: 8 });
 
   const unknown = await client.callTool({ name: "queue_stop", arguments: { pid: 999999 } });
   assert.equal(unknown.isError, true, textOf(unknown));
@@ -1594,60 +1580,14 @@ test("lesson_save with no title answers a one-line error, never the zod dump", a
   assert.doesNotMatch(text, /Invalid arguments for tool/, "the zod dump leaked through");
 });
 
-// A home with alpha and beta in org acme, holding a proposed and a rejected decision of alpha, one of beta and an accepted one of the org.
-function makeDecisionRecallHome(t, name) {
-  const env = makeHome(t, name);
-  makeProject(t, env, "alpha", { org: "acme" });
-  makeProject(t, env, "beta", { org: "acme" });
-  const alpha = { projectId: projectIdOf(env, "alpha") };
-  const job = addJob({ projectId: alpha.projectId, prompt: "propose a decision" }, env).id;
-  const text = (title, status) => ({ title, context: `context of ${title}`, decision: `decision of ${title}`, status });
-  const proposal = saveDecision({ ...alpha, ...text("alpha proposes a cache", "proposed") }, env);
-  openDb(env).prepare("UPDATE decisions SET job_id = ? WHERE id = ?").run(job, proposal.id);
-  saveDecision({ ...alpha, ...text("alpha drops the cache", "rejected") }, env);
-  saveDecision({ projectId: projectIdOf(env, "beta"), ...text("beta ships weekly", "accepted") }, env);
-  saveDecision({ orgId: orgIdOf(env, "acme"), ...text("every repo runs one node", "accepted") }, env);
-  return { env, job };
-}
-
-test("decision_recall with an id reads one decision whole whatever its status, and recalls only accepted ones without it", async (t) => {
-  const { env, job } = makeDecisionRecallHome(t, "mcp-recall-by-id");
+test("a call to a removed decision tool is refused with the older-definitions line", async (t) => {
+  const env = makeHome(t, "mcp-decision-tools-gone");
+  makeProject(t, env, "alpha");
   const client = await connect(t, env);
-  const recall = (args) => client.callTool({ name: "decision_recall", arguments: args });
-
-  const proposed = payloadOf(await recall({ id: "D-1", project: "alpha" }));
-  assert.deepEqual(
-    [proposed.title, proposed.context, proposed.decision, proposed.status, proposed.job_ref, proposed.scope],
-    ["alpha proposes a cache", "context of alpha proposes a cache", "decision of alpha proposes a cache", "proposed", `J-${job}`, "project"],
-  );
-  assert.ok("superseded_by" in proposed && "consequences" in proposed && "updated_at" in proposed && "owner" in proposed);
-  const rejected = payloadOf(await recall({ id: "D-2", project: "alpha" }));
-  assert.deepEqual([rejected.status, rejected.job_ref], ["rejected", null]);
-
-  const orgRef = payloadOf(await recall({ id: "AM/D-1" }));
-  assert.deepEqual([orgRef.scope, orgRef.title], ["org", "every repo runs one node"]);
-
-  for (const extra of [{ query: "cache" }, { limit: 3 }]) {
-    const refused = await recall({ id: "D-1", project: "alpha", ...extra });
-    assert.equal(refused.isError, true);
-    assert.match(textOf(refused), /pass `id` alone/);
+  for (const name of ["decision_save", "decision_update", "decision_list", "decision_recall"]) {
+    const answer = await client.callTool({ name, arguments: { project: "alpha", title: "t", context: "c", decision: "d" } }).catch((err) => err);
+    const text = String(answer?.message ?? textOf(answer));
+    assert.ok(answer instanceof Error || answer.isError === true, `${name} answered: ${text}`);
+    assert.match(text, /your client has the tool definitions of an older nightqueue/, name);
   }
-  const unknown = await recall({ id: "D-99", project: "alpha" });
-  assert.equal(unknown.isError, true);
-  assert.match(textOf(unknown), /D-99/);
-
-  const accepted = payloadOf(await recall({ project: "alpha" }));
-  assert.deepEqual(accepted.map((row) => row.title), ["every repo runs one node"]);
-});
-
-test("decision_recall with an id inside a job reads its own project's and its org's decisions, and refuses a sibling's", async (t) => {
-  const { env, job } = makeDecisionRecallHome(t, "mcp-recall-by-id-job");
-  const client = await connect(t, { ...env, NIGHTQUEUE_JOB_ID: String(job) });
-  const recall = (args) => client.callTool({ name: "decision_recall", arguments: args });
-
-  assert.equal(payloadOf(await recall({ id: "D-1" })).status, "proposed");
-  assert.equal(payloadOf(await recall({ id: "AM/D-1" })).scope, "org");
-  const refused = await recall({ id: "BT/D-1" });
-  assert.equal(refused.isError, true);
-  assert.match(textOf(refused), /only a decision of the job's project or of its org is readable/);
 });

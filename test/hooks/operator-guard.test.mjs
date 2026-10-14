@@ -6,7 +6,6 @@ import { idTime, newId } from "../../src/config/ids.mjs";
 import { configPath, dbPath, qaDir, runsDir, secretsPath } from "../../src/config/paths.mjs";
 import { operatorDecision } from "../../src/hooks/operator-guard.mjs";
 import { operatorSettings, desiredHooks } from "../../src/host/settings.mjs";
-import { SUBCOMMAND_NAMES as DECISION_SUBCOMMANDS } from "../../src/cli/decision.mjs";
 import { SUBCOMMAND_NAMES as PROJECT_SUBCOMMANDS } from "../../src/cli/project.mjs";
 import { SUBCOMMAND_NAMES as QUEUE_SUBCOMMANDS } from "../../src/cli/queue.mjs";
 import { OPERATOR_CLI_COMMANDS, OPERATOR_SUBCOMMANDS, agentRole } from "../../src/queue/operator-scope.mjs";
@@ -31,10 +30,10 @@ function sub(agentType, toolName, toolInput) {
   return { ...main(toolName, toolInput), agent_id: "a1", agent_type: agentType };
 }
 
-// Asserts the call is denied with a one-line D-58 reason.
+// Asserts the call is denied with a one-line operator guard reason.
 function assertDenied(input, env) {
   const reason = operatorDecision({ input, env });
-  assert.ok(typeof reason === "string" && reason.startsWith("D-58: "), `${JSON.stringify(input.tool_input)} -> ${reason}`);
+  assert.ok(typeof reason === "string" && reason.startsWith("operator guard: "), `${JSON.stringify(input.tool_input)} -> ${reason}`);
   assert.equal(reason.includes("\n"), false);
 }
 
@@ -54,7 +53,7 @@ test("every top-level CLI command is classified for the operator exactly once, s
 });
 
 test("every subcommand of a family that writes files or widens the scope is classified exactly once", () => {
-  const families = { queue: QUEUE_SUBCOMMANDS, decision: DECISION_SUBCOMMANDS, project: PROJECT_SUBCOMMANDS };
+  const families = { queue: QUEUE_SUBCOMMANDS, project: PROJECT_SUBCOMMANDS };
   assert.deepEqual(Object.keys(OPERATOR_SUBCOMMANDS).sort(), Object.keys(families).sort());
   for (const [family, names] of Object.entries(families)) {
     assert.ok(OPERATOR_CLI_COMMANDS.allowed.includes(family), family);
@@ -65,8 +64,6 @@ test("every subcommand of a family that writes files or widens the scope is clas
 test("the main thread refuses the subcommands and flags that write files, widen its scope or start the runner", (t) => {
   const { env, checkout } = operatorFixture(t);
   const allowed = [
-    "nightqueue decision list",
-    "nightqueue decision show D-1",
     "nightqueue project list",
     "nightqueue queue add --project alpha fix-it",
     "nightqueue queue run",
@@ -74,15 +71,14 @@ test("the main thread refuses the subcommands and flags that write files, widen 
   ];
   for (const command of allowed) assertAllowed(main("Bash", { command }), env);
   const refused = [
-    "nightqueue decision export --dir /tmp/x --force",
-    "nightqueue decision import /tmp/d.json",
     `nightqueue project add ${checkout}`,
     "nightqueue project move alpha --path /tmp/elsewhere",
     "nightqueue queue add --project alpha fix-it --run",
     "nightqueue queue add --run=true x",
     "nightqueue doctor --fix",
     "nightqueue queue",
-    "nightqueue decision",
+    "nightqueue decision list",
+    "nightqueue decision show D-1",
   ];
   for (const command of refused) assertDenied(main("Bash", { command }), env);
 });
@@ -107,7 +103,7 @@ test("the main thread never edits", (t) => {
   for (const tool of ["Edit", "Write", "MultiEdit", "NotebookEdit"]) assertDenied(main(tool, { file_path: join(checkout, "x") }), env);
 });
 
-test("the main thread runs only the D-58 Bash list", (t) => {
+test("the main thread runs only the operator guard's Bash list", (t) => {
   const { env, checkout } = operatorFixture(t);
   const allowed = [
     "nightqueue queue status",
@@ -313,8 +309,6 @@ test("a read-only subagent runs only the nightqueue reads, never a command the m
     "nightqueue queue status",
     "nightqueue queue log J-1",
     "nightqueue project list",
-    "nightqueue decision list",
-    "nightqueue decision show D-1",
     "nightqueue doctor --json",
     "nightqueue version",
   ];
@@ -328,6 +322,8 @@ test("a read-only subagent runs only the nightqueue reads, never a command the m
     "nightqueue project remove alpha --purge",
     "nightqueue connection remove gh",
     "nightqueue decision update D-1 --status superseded",
+    "nightqueue decision list",
+    "nightqueue decision show D-1",
     "nightqueue doctor --fix",
     "nightqueue queue status --follow",
     "nightqueue constructor",
@@ -340,8 +336,8 @@ test("a failure inside the guard refuses an edit or a Bash call and lets a read 
   const hostile = {};
   Object.defineProperty(hostile, "command", { enumerable: true, get() { throw new Error("boom"); } });
   Object.defineProperty(hostile, "file_path", { enumerable: true, get() { throw new Error("boom"); } });
-  assert.match(operatorDecision({ input: main("Bash", hostile), env }), /^D-58: .*boom/);
-  assert.match(operatorDecision({ input: sub("qa", "Write", hostile), env }), /^D-58: .*boom/);
+  assert.match(operatorDecision({ input: main("Bash", hostile), env }), /^operator guard: .*boom/);
+  assert.match(operatorDecision({ input: sub("qa", "Write", hostile), env }), /^operator guard: .*boom/);
   assert.equal(operatorDecision({ input: main("Read", hostile), env }), null);
 });
 

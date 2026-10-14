@@ -120,26 +120,6 @@
  */
 
 /**
- * @typedef {object} DecisionsDomain
- * @property {(id: number) => Promise<object|null>} getDecision
- * @property {(spec?: object) => Promise<object|null>} getDecisionByNumber
- * @property {(ref: string, context?: {projectId?: string|null}) => Promise<object>} decisionOfRef the one decision a ref names (`D-<n>` in the project context, `<KEY>/D-<n>`, `G/D-<n>`), refusing an unknown or ambiguous ref
- * @property {(ref: string, context?: {projectId?: string|null}) => Promise<number>} decisionIdOfRef the id of the one decision a ref names
- * @property {(entries: Array<number|string>|null|undefined, owner: object) => Promise<number[]|null|undefined>} ownDecisionNumbers the per-owner numbers a list of numbers or refs names, refusing a ref of another owner
- * @property {(decision: object) => Promise<object>} saveDecision
- * @property {(spec: object) => Promise<object>} saveReviewedDecision
- * @property {(id: number, patch?: object) => Promise<object>} updateDecision
- * @property {(spec?: object) => Promise<object[]>} listDecisions
- * @property {(spec?: object) => Promise<object[]>} decisionTitles
- * @property {(spec: object) => Promise<boolean>} setDecisionEmbedding
- * @property {(spec?: object) => Promise<object[]>} decisionsMissingEmbedding
- * @property {(spec?: object) => Promise<object[]>} recentDecisions
- * @property {(spec?: object) => Promise<object[]>} searchDecisionsLexical
- * @property {(spec?: object) => Promise<object[]>} searchDecisionsSemantic
- * @property {(spec?: object) => Promise<object[]>} recallDecisions
- */
-
-/**
  * The registry of orgs: an org is a row with an id and a renamable name.
  * @typedef {object} OrgsDomain
  * @property {() => Promise<object[]>} list every org, earliest first
@@ -203,7 +183,6 @@
  * @property {LessonsDomain} lessons
  * @property {MemoryDomain} memory
  * @property {IndexDomain} index
- * @property {DecisionsDomain} decisions
  * @property {OrgsDomain} orgs
  * @property {ProjectsDomain} projects
  * @property {DbDomain} db
@@ -297,24 +276,6 @@ export const STORE_CONTRACT = Object.freeze({
   ],
   memory: ["saveMemory", "saveMemoryDeduped", "deleteMemory","recentMemories", "searchMemories", "memoryByKey", "recallMemories"],
   index: ["saveProjectIndex", "fillProjectIndex", "recallProjectIndex"],
-  decisions: [
-    "getDecision",
-    "getDecisionByNumber",
-    "decisionOfRef",
-    "decisionIdOfRef",
-    "ownDecisionNumbers",
-    "saveDecision",
-    "saveReviewedDecision",
-    "updateDecision",
-    "listDecisions",
-    "decisionTitles",
-    "setDecisionEmbedding",
-    "decisionsMissingEmbedding",
-    "recentDecisions",
-    "searchDecisionsLexical",
-    "searchDecisionsSemantic",
-    "recallDecisions",
-  ],
   orgs: ["list", "byName", "byId", "add", "rename", "setKey", "suggestKey", "keyAliases", "remove"],
   projects: ["list", "byName", "byId", "integrations", "setIntegrations", "at", "ofOrg", "add", "rename", "setKey", "suggestKey", "keyAliases", "move", "remove", "footprint", "purge"],
   db: ["files", "quickCheck", "quickCheckMainAlone", "integrityCheck", "checkpointTruncate"],
@@ -348,11 +309,6 @@ export const READ_ONLY_METHODS = Object.freeze([
   "jobs.listCloses",
   "jobs.jobsWithPrNumber",
   "jobs.lastLogResults",
-  "decisions.listDecisions",
-  "decisions.decisionTitles",
-  "decisions.getDecisionByNumber",
-  "decisions.decisionOfRef",
-  "decisions.decisionIdOfRef",
   "orgs.list",
   "orgs.byName",
   "orgs.byId",

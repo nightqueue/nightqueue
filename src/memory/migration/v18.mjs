@@ -1,15 +1,8 @@
 import { UserError } from "../../config/errors.mjs";
 import { preV18BackupPath } from "../../config/paths.mjs";
 import { loadRawConfig } from "../../config/store.mjs";
-import {
-  FTS,
-  OWNER_CHECK,
-  jobsDdl,
-  lessonsDdl,
-  memoryDdl,
-  projectIndexDdl,
-  projectLibsDdl,
-} from "../ddl.mjs";
+import { FTS, jobsDdl, lessonsDdl, memoryDdl, projectIndexDdl, projectLibsDdl } from "../ddl.mjs";
+import { DECISIONS_FTS_V25, OWNER_CHECK } from "./decisions-shape.mjs";
 import { importLegacyRegistry, stripLegacyConfig } from "./legacy-config.mjs";
 import { bringToV17 } from "./legacy.mjs";
 import { foreignKeyViolations, hasTable, rebuildTable, runOneShot, userVersion } from "./one-shot.mjs";
@@ -120,6 +113,7 @@ function finishSchema(db, violationsBefore) {
   db.exec(INDEXES_V20);
   db.exec(ROADMAP_COMMENT_GUARDS_V19);
   db.exec(FTS);
+  db.exec(DECISIONS_FTS_V25);
   db.exec(ROADMAP_FTS_V20);
   for (const mirror of FTS_MIRRORS_V20) db.exec(`INSERT INTO ${mirror}(${mirror}) VALUES('rebuild')`);
   const violations = foreignKeyViolations(db);

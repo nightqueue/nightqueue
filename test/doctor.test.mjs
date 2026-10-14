@@ -11,7 +11,6 @@ import { moveProject } from "../src/memory/registry.mjs";
 import { ensureHome } from "../src/config/store.mjs";
 import { closeDb, openDb } from "../src/memory/db.mjs";
 import { acquireClose, addJob, claimJobById, failClose } from "../src/memory/jobs.mjs";
-import { saveDecision } from "../src/memory/decisions.mjs";
 import { saveLesson } from "../src/memory/lessons.mjs";
 import { shimContent } from "../src/host/runtime.mjs";
 import { createQaWorktree } from "../src/queue/qa-worktree.mjs";
@@ -89,7 +88,7 @@ test("a host that went through setup has no failing check", async (t) => {
   assert.equal(statusOf(report, "database"), "warn");
   assert.equal(statusOf(report, "runtime"), "ok");
   assert.equal(statusOf(report, "tool contract"), "ok");
-  assert.match(report.checks.find((check) => check.name === "tool contract").detail, /^contract 7;/);
+  assert.match(report.checks.find((check) => check.name === "tool contract").detail, /^contract 8;/);
   assert.equal(statusOf(report, "shim nightqueue"), "ok");
   assert.equal(statusOf(report, "path"), "warn");
   assert.equal(statusOf(report, "embedding"), "warn");
@@ -370,7 +369,7 @@ test("the database check reads the schema version of an existing database", asyn
 
   const { report } = await diagnose(host.env);
   assert.equal(statusOf(report, "database"), "ok");
-  assert.match(report.checks.find((check) => check.name === "database").detail, /schema v25/);
+  assert.match(report.checks.find((check) => check.name === "database").detail, /schema v26/);
 });
 
 test("the database check warns about a v8 home and points at the command that migrates it", async (t) => {
@@ -380,7 +379,7 @@ test("the database check warns about a v8 home and points at the command that mi
   const { report } = await diagnose(host.env);
   const database = report.checks.find((check) => check.name === "database");
   assert.equal(database.status, "warn");
-  assert.match(database.detail, /schema v8, this nightqueue expects v25/);
+  assert.match(database.detail, /schema v8, this nightqueue expects v26/);
   assert.equal(database.hint, "run `nightqueue update`");
   assert.doesNotMatch(database.hint, /nightqueue memory stats/);
 });
@@ -393,7 +392,7 @@ test("the database check fails a schema newer than this build and asks for an up
   const { report } = await diagnose(host.env);
   const database = report.checks.find((check) => check.name === "database");
   assert.equal(database.status, "fail");
-  assert.match(database.detail, /schema v99, newer than this nightqueue \(v25\): update nightqueue \/ restart the client that runs the old version/);
+  assert.match(database.detail, /schema v99, newer than this nightqueue \(v26\): update nightqueue \/ restart the client that runs the old version/);
   assert.match(database.hint, /inspect/);
 });
 
@@ -709,19 +708,6 @@ test("the orchestrator check reads a database without the counter columns as zer
   assert.equal(raw.prepare("PRAGMA table_info(jobs)").all().some((column) => column.name === "orch_turns"), false, "the doctor migrated the database");
 });
 
-test("doctor has no decision proposals check: a proposal left on a closed job is the operator's to settle, not a warning", async (t) => {
-  const host = makeHostEnv(t, "doctor-proposals");
-  makeProject(t, host.env, "alpha");
-  const closed = seedClosedJob(host.env, { project: "alpha", prompt: "closed one" });
-  const saved = saveDecision({ projectId: projectIdOf(host.env, "alpha"), title: "left proposed", context: "why", decision: "what", status: "proposed" }, host.env);
-  openDb(host.env).prepare("UPDATE decisions SET job_id = ? WHERE id = ?").run(closed, saved.id);
-  closeDb(host.env);
-
-  const { report } = await diagnose(host.env);
-
-  assert.equal(report.checks.some((entry) => entry.name === "decision proposals"), false);
-});
-
 test("--json is the only thing on stdout of the real process, and the exit code follows the report", (t) => {
   const home = join(makeDir(t, "doctor-stdout"), "home");
   const configDir = makeDir(t, "doctor-stdout-config");
@@ -985,7 +971,7 @@ test("doctor --fix that git cannot make hold again keeps a warning, never a repa
   assert.equal(fixed.hint, `git -C '${checkout}' worktree repair '${path}'`);
 });
 
-test("a QA worktree an operator before D-58 left under the home is reported as a legacy operator-qa leftover, and an unknown id as not registered", async (t) => {
+test("a QA worktree an operator before the generalist operator left under the home is reported as a legacy operator-qa leftover, and an unknown id as not registered", async (t) => {
   const host = makeHostEnv(t, "doctor-operator-qa");
   const checkout = registerRealCheckout(t, host.env, "doctor-operator-qa");
   const path = join(legacyOperatorQaDir(host.env), ensureProject(host.env, "alpha"), "qa-hunt");

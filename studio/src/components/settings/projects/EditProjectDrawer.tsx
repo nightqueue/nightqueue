@@ -160,7 +160,7 @@ function DangerZone({ project, onRemove }: { project: SettingsProject; onRemove:
   const rows = footprintCounters(project.footprint).total;
   return (
     <div className="flex flex-wrap items-center gap-3 rounded-lg border border-red-strong px-3 py-3">
-      <span className="text-sm text-muted">{rows ? `It owns ${plural(rows, "row")}: jobs, decisions, lessons and memory.` : "It owns no rows yet."}</span>
+      <span className="text-sm text-muted">{rows ? `It owns ${plural(rows, "row")}: jobs, lessons and memory.` : "It owns no rows yet."}</span>
       <Button variant="danger" className="ml-auto max-sm:ml-0 max-sm:min-h-11 max-sm:w-full" onClick={onRemove}>
         Remove…
       </Button>

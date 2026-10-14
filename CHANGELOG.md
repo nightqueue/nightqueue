@@ -8,6 +8,13 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Breaking
 
+- **Decisions are removed, with their data.** Schema v26 drops the `decisions` table, its search
+  index and its triggers, so `nightqueue update` is required; every decision row is deleted, and
+  lessons, memories and jobs are untouched. The pre-update copy `nightqueue.db.pre-v26` beside the
+  database still holds them. Gone: `decision_save`, `decision_update`, `decision_list` and
+  `decision_recall` (tool contract 8: MCP clients must restart), `nightqueue decision`, the
+  decisions block of the session context, decision hits in the studio's memory card, and the
+  decision corpus of `embed backfill`. Operator guard refusals now start with `operator guard:`.
 - **A queue job never writes a decision.** Decisions are the operator's record, written only
   outside a queue run, and they never bind the pipeline. Inside a queue job `decision_save`,
   `decision_update`, `nightqueue decision import` and `nightqueue decision update` are refused

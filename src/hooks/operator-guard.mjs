@@ -1,7 +1,7 @@
 import { isAbsolute } from "node:path";
 import { globStaticPrefix, isOrchestratorCall, readTarget } from "../queue/orchestrator-scope.mjs";
 import {
-  OPERATOR_DECISION,
+  OPERATOR_GUARD,
   agentRole,
   checkoutRoots,
   describeAgentDenial,
@@ -54,7 +54,7 @@ function readReason(input, env) {
 function malformedReason(toolName, toolInput) {
   const plain = toolInput !== null && typeof toolInput === "object" && !Array.isArray(toolInput);
   if (plain || !INPUT_REQUIRED_TOOLS.has(toolName)) return null;
-  return `${OPERATOR_DECISION}: this ${toolName} call carries no tool_input object, so it cannot be checked and is refused`;
+  return `${OPERATOR_GUARD}: this ${toolName} call carries no tool_input object, so it cannot be checked and is refused`;
 }
 
 // Deny reason of a main-thread Bash command outside the operator's list, or null.
@@ -63,7 +63,7 @@ function mainBashReason(command, env) {
   return mainBashAllowed(command, roots) ? null : describeMainBashDenial(error);
 }
 
-// Deny reason of a call from the operator's own main thread, or null when D-58 allows it.
+// Deny reason of a call from the operator's own main thread, or null when the operator guard allows it.
 function mainThreadReason(input, env) {
   const toolName = input.tool_name;
   const toolInput = input.tool_input ?? {};
@@ -92,7 +92,7 @@ function readonlySubagentReason(toolName, toolInput, { agentType, env }) {
   return readonlySubagentBashAllowed(toolInput.command, roots) ? null : describeReadonlySubagentBashDenial(agentType, error);
 }
 
-// Deny reason of a subagent's call under D-58: its reads in the operator's roots, the rest by the role its agent type names.
+// Deny reason of a subagent's call under the operator guard: its reads in the operator's roots, the rest by the role its agent type names.
 function subagentReason(input, env) {
   const toolInput = input.tool_input ?? {};
   if (READ_TOOLS.has(input.tool_name)) return readReason(input, env);
@@ -102,10 +102,10 @@ function subagentReason(input, env) {
 
 // Reason of a call the guard could not decide: anything but a read is refused rather than let through.
 function failClosedReason(toolName, err) {
-  return `${OPERATOR_DECISION}: the operator guard could not check this ${toolName ?? "tool"} call (${err?.message ?? String(err)}), so it is refused`;
+  return `${OPERATOR_GUARD}: the operator guard could not check this ${toolName ?? "tool"} call (${err?.message ?? String(err)}), so it is refused`;
 }
 
-// The deny reason of an operator session's tool call under D-58, or null when the call is allowed; a failure refuses all but reads.
+// The deny reason of an operator session's tool call under the operator guard, or null when the call is allowed; a failure refuses all but reads.
 export function operatorDecision({ input, env = process.env }) {
   try {
     const malformed = malformedReason(input?.tool_name, input?.tool_input);

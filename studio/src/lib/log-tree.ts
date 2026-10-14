@@ -1,7 +1,7 @@
 import { compactCount, formatDurationMs, usdLabel } from "./format.ts";
 import type { AttemptRow, JobStatus, NarrationEvent } from "./types";
 
-export const MEMORY_TOOLS: ReadonlySet<string> = new Set(["lesson_recall", "memory_recall", "decision_recall", "index_recall", "context_for_phase"]);
+export const MEMORY_TOOLS: ReadonlySet<string> = new Set(["lesson_recall", "memory_recall", "index_recall", "context_for_phase"]);
 
 export const PHASE_NAMES: ReadonlyMap<number, string> = new Map([
   [0, "brief"],

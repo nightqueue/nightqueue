@@ -10,7 +10,7 @@ export function ProjectsEmpty({ onAdd, children }: { onAdd: () => void; children
       <section className="flex flex-col items-start gap-4 rounded-lg border border-line bg-surface px-6 py-7 max-sm:px-4">
         <div className="flex flex-col gap-1">
           <h2 className="m-0 text-[16px] font-semibold">No project yet</h2>
-          <p className="m-0 text-[13px] text-muted">A project is a git repository nightqueue works in. Every job, decision and memory belongs to one, inside an org.</p>
+          <p className="m-0 text-[13px] text-muted">A project is a git repository nightqueue works in. Every job, lesson and memory belongs to one, inside an org.</p>
         </div>
         <ol className="m-0 flex list-decimal flex-col gap-1 pl-5 text-[13px] text-[#d6dae3]">
           {STEPS.map((step) => (

@@ -1,12 +1,9 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { getDecision, getDecisionByNumber, saveDecision } from "../src/memory/decisions.mjs";
 import { addJob, getJob, listJobs } from "../src/memory/jobs.mjs";
-import { ensureProject, makeDir, makeHome, makeProject, orgIdOf, projectIdOf, seedDoneJob } from "../test-support/memory.mjs";
+import { ensureProject, makeDir, makeHome, makeProject, seedDoneJob } from "../test-support/memory.mjs";
 
 const CLI = fileURLToPath(new URL("../bin/nightqueue.mjs", import.meta.url));
 
@@ -29,21 +26,11 @@ function refused(env, args, cwd) {
   return result.stderr;
 }
 
-// A decision of an owner, with only the text every decision needs.
-function decision(owner, title) {
-  return { ...owner, title, context: `context of ${title}`, decision: `decision of ${title}`, status: "accepted" };
-}
-
-// A home with alpha (AP, the cwd) and beta (BT) in org acme (AM), each owner holding decisions, then alpha renamed to NQ and acme to AC.
+// A home with alpha (AP, the cwd) and beta (BT) in org acme (AM), then alpha renamed to NQ and acme to AC.
 function makeRefsHome(t, name) {
   const env = makeHome(t, name);
   const cwd = makeProject(t, env, "alpha", { org: "acme" });
   makeProject(t, env, "beta", { org: "acme" });
-  const alpha = { projectId: projectIdOf(env, "alpha") };
-  saveDecision(decision(alpha, "alpha pins sqlite"), env);
-  saveDecision(decision(alpha, "alpha logs as json"), env);
-  saveDecision(decision({ projectId: projectIdOf(env, "beta") }, "beta ships weekly"), env);
-  saveDecision(decision({ orgId: orgIdOf(env, "acme") }, "every repo runs one node"), env);
   ok(env, ["project", "key", "alpha", "NQ"], cwd);
   ok(env, ["org", "key", "acme", "AC"], cwd);
   return { env, cwd, elsewhere: makeDir(t, `${name}-elsewhere`) };
@@ -59,39 +46,12 @@ test("`nightqueue issues` is an unknown command and `queue add --issue` an unkno
   assert.deepEqual(listJobs({}, env), [], "a refused `queue add` queued a job");
 });
 
-test("decision show, export and update take a number, `D-<n>` or `<KEY>/D-<n>`, old keys included", (t) => {
-  const { env, cwd, elsewhere } = makeRefsHome(t, "cli-refs-decisions");
+test("`nightqueue decision` is an unknown command, whatever its subcommand", (t) => {
+  const { env, cwd } = makeRefsHome(t, "cli-refs-decisions");
 
-  assert.match(ok(env, ["decision", "show", "D-1"], cwd), /alpha pins sqlite/);
-  assert.match(ok(env, ["decision", "show", "2"], cwd), /alpha logs as json/);
-  assert.match(ok(env, ["decision", "show", "AP/D-2"], elsewhere), /alpha logs as json/);
-  assert.match(ok(env, ["decision", "show", "nq/d-1", "--project", "alpha"], elsewhere), /alpha pins sqlite/);
-  assert.match(ok(env, ["decision", "show", "AM/D-1"], elsewhere), /every repo runs one node[\s\S]*org: acme/);
-  assert.match(ok(env, ["decision", "show", "D-1", "--project", "beta"], elsewhere), /beta ships weekly/);
-  assert.match(refused(env, ["decision", "show", "D-1"], elsewhere), /no project registered for .*pass --project <name>/);
-  assert.match(refused(env, ["decision", "show", "NQ/D-1", "--project", "beta"], elsewhere), /`NQ\/D-1` is a decision of `alpha`, not of `beta`; drop --project\/--org/);
-  assert.match(refused(env, ["decision", "show", "NQ/D-9"], elsewhere), /unknown decision `NQ\/D-9`/);
-  assert.match(refused(env, ["decision", "show", "J-1"], cwd), /`<number>` expects a positive integer, got `J-1`/);
-
-  const dir = makeDir(t, "cli-refs-export");
-  const path = ok(env, ["decision", "export", "AC/D-1", "--dir", dir], elsewhere).trim();
-  assert.ok(readFileSync(path, "utf8").includes("Decision AC/D-1 in the acme store."), readFileSync(path, "utf8"));
-
-  assert.match(refused(env, ["decision", "update", "NQ/D-1", "--status", "superseded", "--superseded-by", "BT/D-1"], elsewhere), /belongs to project `beta`, not project `alpha`/);
-  ok(env, ["decision", "update", "AP/D-1", "--status", "superseded", "--superseded-by", "D-2"], elsewhere);
-  assert.equal(getDecisionByNumber({ projectId: projectIdOf(env, "alpha"), number: 1 }, env).superseded_by, 2);
-  ok(env, ["decision", "update", "BT/D-1", "--status", "rejected"], elsewhere);
-  assert.equal(getDecision(3, env).status, "rejected");
-});
-
-test("decision import names candidates by number or by a ref of the same owner, and refuses a ref of another owner", (t) => {
-  const { env, cwd } = makeRefsHome(t, "cli-refs-import");
-  const file = join(makeDir(t, "cli-refs-import-file"), "overlap.md");
-  writeFileSync(file, "# alpha pins sqlite forever\n\nStatus: Accepted (2026-02-02).\n\n## Context\n\nc\n\n## Decision\n\nd\n");
-
-  assert.match(refused(env, ["decision", "import", file, "--unrelated", "AC/D-1"], cwd), /`AC\/D-1` is not a decision of project `alpha`/);
-  assert.match(refused(env, ["decision", "import", file, "--unrelated", "NQ-1"], cwd), /`--unrelated` expects a decision number or ref/);
-  assert.match(ok(env, ["decision", "import", file, "--unrelated", "NQ/D-1,2"], cwd), /imported as D-3/);
+  for (const sub of ["list", "show", "export", "import", "update"]) {
+    assert.match(refused(env, ["decision", sub, "D-1"], cwd), /unknown command `decision`/, sub);
+  }
 });
 
 test("every queue command that names a job takes its ref or its plain id, and refuses anything else", (t) => {

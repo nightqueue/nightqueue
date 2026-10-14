@@ -354,7 +354,7 @@ a 404, and a malformed escape is a 400. `GET /api/jobs/<ref>/log?from=<byte>` an
 integer is a 400. Without `from` the route answers the last MiB, as before. All of these are
 read-only and sit behind the same token gate as the rest of `/api`.
 
-**Operator sessions (D-58).** `nightqueue open` (and `nightqueue queue session`, and a studio
+**Operator sessions.** `nightqueue open` (and `nightqueue queue session`, and a studio
 terminal through them) starts `claude` with `NIGHTQUEUE_MODE=operator`,
 `NIGHTQUEUE_OPERATOR_PID=<pid of the launcher>` and, only when a project is preselected,
 `NIGHTQUEUE_PROJECT=<project id>`; an inherited value of any of the three is dropped first, and
@@ -371,20 +371,20 @@ runs `nightqueue hook subagent-stop` (timeout 60 s); `permissions.allow` pre-app
 issue, a library's docs) without a prompt; the guard does not judge those two tools, since they
 neither edit nor execute.
 
-The `agent-foreground` hook in operator mode is the D-58 guard. Each refusal is a PreToolUse
-`deny` whose reason is one line starting `D-58:`, naming what is allowed instead; it never moves
+The `agent-foreground` hook in operator mode is the operator guard. Each refusal is a PreToolUse
+`deny` whose reason is one line starting `operator guard:`, naming what is allowed instead; it never moves
 a call to the foreground. The main thread (no `agent_id` in the payload) may not use `Edit`,
 `Write`, `MultiEdit` or `NotebookEdit`; reads anything on disk but `<home>/secrets.json` and any
 `.env*` file, never a Grep whose `path` is the home or a parent of it (the sweep would read the
 secrets file) nor a path that cannot be resolved (an absolute Glob `pattern` or Grep `glob` is
 judged by its static prefix too); Bash only as one bare command with no shell
 operator or backslash:
-`nightqueue|nq <queue|decision|project|org|connection|doctor|memory|lesson|libs|version> …`
-(not `queue session`, `decision export|import`, `project add|move`, `queue add --run`,
+`nightqueue|nq <queue|project|org|connection|doctor|memory|lesson|libs|version> …`
+(not `queue session`, `project add|move`, `queue add --run`,
 `doctor --fix`, `--follow` or `--foreground`) or a read-only `git -C <checkout> …`; and
 `Agent`/`Task` only for the `triage`, `qa` and `reviewer` subagents (`<role>`,
 `nightqueue:<role>` or `plugin_nightqueue_<role>`). Every top-level CLI command is classified as
-allowed or refused in one list, and so is every subcommand of `queue`, `decision` and `project`;
+allowed or refused in one list, and so is every subcommand of `queue` and `project`;
 a test keeps both exhaustive. Every subagent reads exactly where the main thread reads. The
 `qa` subagent may edit only inside a qa worktree `<home>/qa/<project id>/<id>`; its Bash is
 `nightqueue sandbox worktree <project>`, `nightqueue sandbox worktree --drop <path>`, or a
@@ -396,7 +396,7 @@ included); in any segment of the chain `nightqueue` runs only as `nightqueue san
 `gh` only as a read, and `git` never as `push`, `remote` or `config`. This anchor is
 best-effort, **not a sandbox**: it reads the command line, and a program the command starts can
 still reach outside the worktree. Any other subagent may not edit, and its Bash is one bare
-`nightqueue|nq` read (`queue status|log`, `project list`, `decision list|show`,
+`nightqueue|nq` read (`queue status|log`, `project list`,
 `org list`, `connection list`, `memory stats`, `doctor` without `--fix`, `version`), the main
 thread's `git -C` reads, `gh pr view|diff|checks|list|status` or `gh issue view|list`. The
 guard fails closed: an error inside it refuses every tool but `Read`/`Grep`/`Glob`, an `Edit`,
@@ -417,7 +417,9 @@ a worktree another live session holds is never dropped. It always answers nothin
 fails the session. What it misses, `nightqueue open` and `nightqueue doctor --fix` drop once the
 worktree is stale (see [the CLI](cli.md#sandbox)).
 
-The thirty-five MCP tools, with the parameters `nightqueue mcp` actually accepts:
+The thirty-one MCP tools of tool contract 8, with the parameters `nightqueue mcp` actually
+accepts (every answer carries `contract: 8`; a call to a tool an older contract had and this one
+dropped is answered with the older-definitions line):
 
 | tool | parameters |
 |---|---|
@@ -447,10 +449,6 @@ The thirty-five MCP tools, with the parameters `nightqueue mcp` actually accepts
 | `queue_cancel` | `job_id`, `reason?`, `stop?`, `release_worktree?` |
 | `queue_close` | `job_id`, `force?` |
 | `queue_retry` | `job_id`, `note?`, `fresh?`, `run?` |
-| `decision_save` | `project`, `title`, `context`, `decision`, `consequences?`, `status?` (`proposed`, `accepted`, `superseded`, `rejected`; default `accepted`) (refused inside a queue job) |
-| `decision_update` | `id` (a decision ref), `project?` (the owner of a `D-<n>`), `title?`, `context?`, `decision?`, `consequences?`, `status?`, `superseded_by?` (a decision ref) (refused inside a queue job) |
-| `decision_list` | `project`, `status?` |
-| `decision_recall` | `project`, `query?`, `limit?` (1-20); or `id` (a decision ref) alone for one decision whole, whatever its status |
 | `run_phase_done` | `phase`, `artifact?`, `verdict?`, `note?`, `reason?` (why the phase ran again; omitted on its first run), `project?`, `slug?` |
 | `run_terminate` | `phase`, `reason`, `project?`, `slug?` |
 | `run_skip` | `phase`, `by`, `reason`, `project?`, `slug?` |
@@ -464,14 +462,14 @@ overridden - naming another job's run from inside one is never an accident worth
 guessing at; outside a job both are required. A row that carries no slug yet is
 answered with the `SLUG:` line to print, never with a guessed run directory.
 
-Retired fields (D-58: operator runs no longer exist). `queue_add` `run_dir`, and `run_set`
+Retired fields (operator runs no longer exist). `queue_add` `run_dir`, and `run_set`
 `origin`, `evidence_level` and `plan_status`, are gone from the schemas, and a call that still
-sends one with a value is refused before validation with a `UserError` that names the field and
-D-58 and says to put what was found in `prompt` - the schema alone would
+sends one with a value is refused before validation with a `UserError` that names the field,
+says it was removed with the operator runs and says to put what was found in `prompt` - the schema alone would
 strip it silently. A `null`, absent
 or blank value is ignored, so an older cached client that sends `run_dir: null` still queues.
 The CLI `nightqueue queue add --run-dir <dir>` is
-refused with the same D-58 reason. A legacy pending job whose stored prompt or `state.json`
+refused with the same reason. A legacy pending job whose stored prompt or `state.json`
 still carries the operator-run markers (`## PRIOR RUN (operator)`, `origin: operator`) runs as
 before: the resume cap and the `Re-run:` lines read them, nothing writes them.
 
@@ -503,7 +501,7 @@ whole prompt of one /resolve subagent, rendered from the templates under
 every value from it: the tier and type `nightqueue run start` recorded, the `## Brief` of
 `<RUN_DIR>/00-brief.md` (refused, naming the path, when it is missing), the routing row of
 `src/queue/routing.mjs`, the same context block `context_for_phase` answers (with the same
-per-run lesson exclusion); no target carries a decisions section. `coder` and
+per-run lesson exclusion). `coder` and
 `verifier` render the fast-track prompt on `trivial`/`simple`. A placeholder the run cannot
 fill is an error, never a half prompt; a target the tier does not route is rendered with
 an `open_items` line.
@@ -543,7 +541,7 @@ that contains it; a `cwd` inside a git repository that is registered nowhere
 answers `{ "needs_registration": true, "cwd", "suggested_name", "org", "hint" }`
 instead of failing, and only a second call carrying `register: true` (after the
 user confirmed it) registers the repository and queues the job. An unattended run
-never registers anything: inside a job the call is refused. `prompt` is required. There is no prior-run seed any more: `run_dir` was removed by D-58 (above), and no
+never registers anything: inside a job the call is refused. `prompt` is required. There is no prior-run seed any more: `run_dir` was removed with the operator runs (above), and no
 code path writes a `## PRIOR RUN (operator)` block.
 Every job `queue_status` answers (listing and one job) carries `title`, a string or `null`,
 derived on read and never stored: the first non-empty line of the prompt's brief
@@ -649,7 +647,7 @@ job GitHub still shows and counts as pending. The same head aborted again under 
 a refused re-run or a check with no run id stops the close with
 `checks-aborted`, and `force` lists such checks as `aborted`. A pull request
 closed without merge ends the close by cancelling the job, one merged by hand is recorded as
-`merged outside a close`, and the settle step never writes a decision: a `proposed` row stays `proposed`. Inside a job
+`merged outside a close`. Inside a job
 it is refused, like the CLI (see [Queue](queue.md#closing-a-job)).
 
 Worktree disposal after a merged close: the settle step removes the job's worktree with
@@ -663,7 +661,8 @@ runner's `done` path and a cancel are unchanged: a dirty or unpushed worktree is
 reason. `nightqueue doctor --fix` also force-removes a home worktree whose every owning job is `closed`
 or `cancelled` (naming what it dropped; one no job names stays listed), prunes an entry git registers whose directory is gone, and removes an
 orphaned empty directory; an orphaned directory with content is only listed with its `rm -rf`
-command. This reopens decision D-27 (a worktree with uncommitted work is never removed).
+command. These two paths are the only ones that remove a worktree with uncommitted work;
+everywhere else such a worktree is kept.
 
 The conflict step is the one place a close runs an agent. When the rebase stops on conflicts
 that code finds eligible (no `--force`, a `scripts.test`, no risk-list or generated file, markers
@@ -681,9 +680,7 @@ suite green; pushed <a> -> <b>`. Everything else aborts the rebase and stops the
 (`{ status: "resolved" | "unresolved" | "not-eligible", reason?, hunks?, files? }`).
 
 Inside a job, a tool that takes a free id only reaches its own: `queue_retry`
-retries the job it is running. `decision_save` and `decision_update` are refused
-inside a job whatever the id - decisions are the operator's record, written only outside a
-queue run - and nothing is written. Outside a job none of these restrictions apply.
+retries the job it is running. Outside a job that restriction does not apply.
 
 Every optional parameter accepts an explicit `null` and treats it exactly like
 an absent one, so a caller that fills its whole argument object never gets an
@@ -696,8 +693,7 @@ ended stays the runtime's call),
 `tier` (`trivial`, `simple`, `complex`), `task_type` (`bug/error`,
 `feature/refactor`), `outcome` (`pr_opened`, `local_commit`, `no_commit`),
 `gate_stop` (`critique`, `triage`, `architect`, `qa`, `verification`, `runtime`,
-`user`), the phase `status` (`ok`, `failed`, `skipped`), the decision `status`
-(`proposed`, `accepted`, `superseded`, `rejected`). A value outside them comes back as an error message, never as a stack.
+`user`), the phase `status` (`ok`, `failed`, `skipped`). A value outside them comes back as an error message, never as a stack.
 
 **A lockfile is published only when it is proved reproducible.** `run publish` (and
 `run commit`) refuse every lockfile (`package-lock.json`, `yarn.lock`, `pnpm-lock.yaml`,

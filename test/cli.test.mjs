@@ -78,7 +78,6 @@ test("--help lists every command and exits 0", () => {
     "hook",
     "embed",
     "memory",
-    "decision",
     "queue",
     "version",
   ];
@@ -86,6 +85,7 @@ test("--help lists every command and exits 0", () => {
     assert.match(result.stdout, new RegExp(`^  ${command}`, "m"));
   }
   assert.doesNotMatch(result.stdout, /^ {2}reflect/m);
+  assert.doesNotMatch(result.stdout, /^ {2}decision/m);
   assert.equal(runCli(tmpdir(), []).status, 0);
 });
 

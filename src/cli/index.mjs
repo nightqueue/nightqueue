@@ -5,7 +5,6 @@ import { saveConfig, saveSecrets } from "../config/store.mjs";
 import { warmupModel } from "../memory/embedding.mjs";
 import { refuseHomeWriteInsideJob } from "../queue/home-guard.mjs";
 import * as connection from "./connection.mjs";
-import * as decision from "./decision.mjs";
 import * as doctor from "./doctor.mjs";
 import * as embed from "./embed.mjs";
 import * as hook from "./hook.mjs";
@@ -42,7 +41,6 @@ const COMMANDS = new Map([
   ["embed", embed.run],
   ["memory", memory.run],
   ["lesson", lesson.run],
-  ["decision", decision.run],
   ["queue", queue.run],
   ["verify", verify.run],
   ["sandbox", sandbox.run],
@@ -57,7 +55,7 @@ const HELP_FLAGS = new Set(["--help", "-h", "help"]);
 
 const HELP_OPTIONS = new Set(["--help", "-h"]);
 
-const READ_ONLY_COMMANDS = new Set(["doctor", "version", "decision", "verify", "sandbox", "libs", "open"]);
+const READ_ONLY_COMMANDS = new Set(["doctor", "version", "verify", "sandbox", "libs", "open"]);
 
 const READ_ONLY_SUBCOMMANDS = new Set(["list", "test"]);
 
@@ -91,7 +89,7 @@ commands:
   org default <name>                        make an org the default: where init, project add and project_register put a project when no org is named
   project add <path> [--org] [--name] [--key <KEY>]  register a project (same behaviour as init)
   project list [--json]                     list projects, their key, their org and whether the path still exists
-  project rename <old> <new>                rename a project (one row: its jobs, decisions and memory follow)
+  project rename <old> <new>                rename a project (one row: its jobs, lessons and memory follow)
   project key <name> <KEY>                  change a project's key; the old key keeps resolving
   project remove <name> [--purge [--yes]]   unregister a project; --purge also deletes every row it owns (asks first)
   project move <name> [<org>] [--path <p>]  move a project to another org and/or give it a new checkout
@@ -101,27 +99,22 @@ commands:
   connection test <name>                    check a stored connection against its service
   connection list [--json]                  list connections, their type and the orgs using them
   connection remove <name>                  unbind a connection from every org and delete its secret
-  mcp                                       start the stdio MCP server that exposes the thirty-five memory and queue tools
+  mcp                                       start the stdio MCP server that exposes the thirty-one memory and queue tools
   mcp --http [--port <n>] [--token <t>]     serve the same tools over Streamable HTTP on 127.0.0.1
   studio [--port <n>] [--api-only] [--no-open]  serve nightqueue studio, the local web cockpit, on 127.0.0.1
   hook <name>                               run a hook (session-start, prompt-context, agent-foreground, merger-guard, subagent-stop), reading the event JSON from stdin
   embed install                             install the embedding library into the home and download its weights
   embed download                            download the embedding weights into the home (the only network path)
-  embed backfill                            compute the embeddings of the lessons and decisions that still have none
+  embed backfill                            compute the embeddings of the lessons that still have none
   memory stats [--json]                     count lessons, memories, index entries and runs per project
   memory delete <id> [--project <name>]     delete one memory (M446 or 446) and its search entry; refused inside a queue job
   lesson delete <id> [--project <name>]     delete one lesson (L344 or 344) and its search entry; refused inside a queue job
-  decision list [--project|--org] [--status]  list the architecture decisions of a project and of its org
-  decision show <number|ref> [--project|--org]  print one decision in full (D-7, DLW/D-3)
-  decision export <number|ref> [--dir] [--force]  write one decision as a markdown file (default: docs, folder decisions, of the current directory); never writes the database
-  decision import <file.md> [--status] [--superseded-by <n|ref>] [--supersedes <n|ref,...>] [--unrelated <n|ref,...>]  save a markdown decision file, reviewed like decision_save, and stamp its row number into it
-  decision update <number|ref> --status accepted|rejected|superseded [--superseded-by <n|ref>]  accept, reject or supersede a decision, same as decision_update
   queue add [project] <prompt...> [--run]   enqueue an unattended /nightqueue:resolve run; --run starts it detached
   queue status [J-<id>|<PR URL>] [--json]  show one job or the table of the queue plus the counts per status
   queue status --follow [s] [--until-idle]  keep the table on screen, redrawn every s seconds (default 2)
   queue run [--job | --watch] [--max]       start the runner detached, one job at a time; --max <n> exits after n jobs, --foreground runs it here, --stop ends a watcher
   queue cancel <id> [--reason "..."]        cancel a pending, gated, done, failed or orphaned job; a done or failed one also releases its worktree
-  queue close <id> | --merged               merge a done job's pull request and close the job: preflight, conflict, merge, settle; detached unless --foreground; --merged closes every done job whose pull request is merged; the decisions a job proposed are accepted as it closes
+  queue close <id> | --merged               merge a done job's pull request and close the job: preflight, conflict, merge, settle; detached unless --foreground; --merged closes every done job whose pull request is merged
   queue retry <id> [--note] [--fresh]       send a gated, failed or cancelled job back to the queue; --run starts it detached
   queue repair [<id>] [--from-disk]         re-classify a gated or failed job from its own log; corrects a lost PR link; bare, replays every run's pending writes; --from-disk recreates the jobs the table lost from their runs on disk
   queue pause | resume                      stop claiming new jobs, or claim again

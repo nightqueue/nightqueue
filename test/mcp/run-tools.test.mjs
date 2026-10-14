@@ -254,7 +254,7 @@ test("outside a job `pipeline_log` records the operator's outcomes, and inside a
   assert.match(textOf(refused), /outcome `investigated` is the operator's/);
 });
 
-test("`run_set` refuses the operator fields D-58 retired, and a null one is ignored", async (t) => {
+test("`run_set` refuses the fields retired with the operator runs, and a null one is ignored", async (t) => {
   const env = makeHome(t, "mcp-run-set-retired");
   makeProject(t, env, "alpha");
   const client = await connect(t, env);
@@ -263,7 +263,7 @@ test("`run_set` refuses the operator fields D-58 retired, and a null one is igno
   for (const [field, value] of [["origin", "operator"], ["evidence_level", 3], ["plan_status", "draft"]]) {
     const refused = await client.callTool({ name: "run_set", arguments: { ...run, type: "bug/error", [field]: value } });
     assert.equal(refused.isError, true, field);
-    assert.match(textOf(refused), new RegExp(`\`${field}\` was removed by D-58`));
+    assert.match(textOf(refused), new RegExp(`\`${field}\` was removed with the operator runs`));
   }
 
   payloadOf(await client.callTool({ name: "run_set", arguments: { ...run, type: "bug/error", origin: null, evidence_level: null, plan_status: null } }));

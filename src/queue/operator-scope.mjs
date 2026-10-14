@@ -4,12 +4,12 @@ import { SHIM_NAME, SHORTCUT_SHIM_NAMES, qaDir, secretsPath } from "../config/pa
 import { registeredCheckouts } from "../memory/registry-access.mjs";
 import { FORBIDDEN_SHELL_CHARS, canonicalPath, insideRoots, isDeniedFlag, tokenize } from "./orchestrator-scope.mjs";
 
-export const OPERATOR_DECISION = "D-58";
+export const OPERATOR_GUARD = "operator guard";
 
 // Every top-level command of the CLI, classified for the operator's main thread: the allowed ones read or record through the
 // registry and the queue, the refused ones install, serve, run code, nest a session or act on a run; a new command must land in one.
 export const OPERATOR_CLI_COMMANDS = Object.freeze({
-  allowed: Object.freeze(["queue", "decision", "project", "org", "connection", "doctor", "memory", "lesson", "libs", "version"]),
+  allowed: Object.freeze(["queue", "project", "org", "connection", "doctor", "memory", "lesson", "libs", "version"]),
   refused: Object.freeze(["setup", "init", "open", "update", "mcp", "studio", "hook", "embed", "verify", "sandbox", "run"]),
 });
 
@@ -20,7 +20,6 @@ export const OPERATOR_SUBCOMMANDS = Object.freeze({
     allowed: Object.freeze(["add", "status", "run", "cancel", "close", "retry", "repair", "pause", "resume", "log"]),
     refused: Object.freeze(["session"]),
   }),
-  decision: Object.freeze({ allowed: Object.freeze(["list", "show", "update"]), refused: Object.freeze(["export", "import"]) }),
   project: Object.freeze({
     allowed: Object.freeze(["list", "rename", "key", "remove", "integrations"]),
     refused: Object.freeze(["add", "move"]),
@@ -39,7 +38,6 @@ const ANY_SUBCOMMAND = "*";
 export const READONLY_SUBAGENT_COMMANDS = new Map([
   ["queue", Object.freeze(["status", "log"])],
   ["project", Object.freeze(["list"])],
-  ["decision", Object.freeze(["list", "show"])],
   ["org", Object.freeze(["list"])],
   ["connection", Object.freeze(["list"])],
   ["memory", Object.freeze(["stats"])],
@@ -184,7 +182,7 @@ function ghReadAllowed(args) {
   return GH_READS.get(args[0])?.includes(args[1]) === true;
 }
 
-// Tells whether a Bash command is one the operator's main thread may run under D-58.
+// Tells whether a Bash command is one the operator's main thread may run under the operator guard.
 export function mainBashAllowed(command, checkouts = []) {
   const tokens = bareTokens(command);
   return tokens !== null && (nightqueueAllowed(tokens, mainSubcommands) || gitReadAllowed(tokens, checkouts));
@@ -300,7 +298,7 @@ function registryNote(error) {
 // Reason of a main-thread edit: the operator never edits.
 export function describeMainWriteDenial(toolName) {
   return (
-    `${OPERATOR_DECISION}: the operator never edits - ${toolName} is refused on its main thread; ` +
+    `${OPERATOR_GUARD}: the operator never edits - ${toolName} is refused on its main thread; ` +
     "queue the change with queue_add after the person's go, or hand a reproduction to nightqueue:qa"
   );
 }
@@ -314,7 +312,7 @@ export function describeReadDenial({ target, refusal, env = process.env }) {
     sweep: `a Grep over ${shown} would read the home's secrets file (${secretsPath(env)}) below it; narrow \`path\` to the directory you need`,
     unresolved: `${shown} cannot be resolved; pass an absolute \`path\``,
   }[refusal] ?? `${shown} is refused`;
-  return `${OPERATOR_DECISION}: the operator and its subagents read anything on disk but the secrets file and \`.env*\` files, and ${because}`;
+  return `${OPERATOR_GUARD}: the operator and its subagents read anything on disk but the secrets file and \`.env*\` files, and ${because}`;
 }
 
 // The refused subcommands and flags of the main thread, as a reason shows them (`queue session`, `doctor --fix`, …).
@@ -324,7 +322,7 @@ function describeMainRefusals() {
   return [...subcommands, ...flags].map((shown) => `\`${shown}\``).join(", ");
 }
 
-// The nightqueue reads of a read-only subagent, as a reason shows them (`queue status|log`, `decision list|show`, …).
+// The nightqueue reads of a read-only subagent, as a reason shows them (`queue status|log`, `project list`, …).
 function describeReadonlyCommands() {
   return [...READONLY_SUBAGENT_COMMANDS]
     .map(([command, subcommands]) => (subcommands === ANY_SUBCOMMAND ? command : `${command} ${subcommands.join("|")}`))
@@ -334,7 +332,7 @@ function describeReadonlyCommands() {
 // Reason of a main-thread Bash command outside the operator's list.
 export function describeMainBashDenial(registryError = null) {
   return (
-    `${OPERATOR_DECISION}: the operator runs only \`nightqueue|nq ${OPERATOR_CLI_COMMANDS.allowed.join("|")} …\` ` +
+    `${OPERATOR_GUARD}: the operator runs only \`nightqueue|nq ${OPERATOR_CLI_COMMANDS.allowed.join("|")} …\` ` +
     `(never ${describeMainRefusals()}, \`--follow\` or \`--foreground\`) and ` +
     "`git -C <registered checkout> [--no-optional-locks] log|show|diff|blame|ls-tree|ls-files|rev-parse|branch --list|status` " +
     "(status only after --no-optional-locks; never --output, --ext-diff, --no-index or --exec), " +
@@ -345,20 +343,20 @@ export function describeMainBashDenial(registryError = null) {
 // Reason of a main-thread subagent launch of a type the operator does not delegate to.
 export function describeAgentDenial(subagentType) {
   const shown = typeof subagentType === "string" && subagentType.trim() ? subagentType : "a subagent with no type";
-  return `${OPERATOR_DECISION}: the operator delegates only to nightqueue:triage, nightqueue:qa and nightqueue:reviewer; ${shown} is refused`;
+  return `${OPERATOR_GUARD}: the operator delegates only to nightqueue:triage, nightqueue:qa and nightqueue:reviewer; ${shown} is refused`;
 }
 
 // Reason of an edit by a subagent other than qa.
 export function describeSubagentWriteDenial(agentType) {
   const shown = typeof agentType === "string" && agentType.trim() ? agentType : "this";
-  return `${OPERATOR_DECISION}: the ${shown} subagent never edits; only nightqueue:qa writes, inside its qa worktree`;
+  return `${OPERATOR_GUARD}: the ${shown} subagent never edits; only nightqueue:qa writes, inside its qa worktree`;
 }
 
 // Reason of a read-only subagent's Bash command outside its list.
 export function describeReadonlySubagentBashDenial(agentType, registryError = null) {
   const shown = typeof agentType === "string" && agentType.trim() ? agentType : "this";
   return (
-    `${OPERATOR_DECISION}: the ${shown} subagent runs only read-only commands: \`nightqueue|nq ${describeReadonlyCommands()}\` ` +
+    `${OPERATOR_GUARD}: the ${shown} subagent runs only read-only commands: \`nightqueue|nq ${describeReadonlyCommands()}\` ` +
     "(never `doctor --fix`, `--follow` or `--foreground`), the operator's `git -C <registered checkout>` reads, " +
     "`gh pr view|diff|checks|list|status` and `gh issue view|list`, " +
     `each one bare command with no shell operator or backslash${registryNote(registryError)}`
@@ -368,13 +366,13 @@ export function describeReadonlySubagentBashDenial(agentType, registryError = nu
 // Reason of a qa subagent edit outside its qa worktree.
 export function describeQaWriteDenial(path, env = process.env) {
   const shown = typeof path === "string" && path ? path : "a path that cannot be resolved";
-  return `${OPERATOR_DECISION}: the qa subagent writes only inside its qa worktree (${qaShown(env)}), and ${shown} is outside it`;
+  return `${OPERATOR_GUARD}: the qa subagent writes only inside its qa worktree (${qaShown(env)}), and ${shown} is outside it`;
 }
 
 // Reason of a qa subagent Bash command outside its anchor.
 export function describeQaBashDenial(env = process.env) {
   return (
-    `${OPERATOR_DECISION}: the qa subagent runs every command as \`cd <qa worktree> && …\` (${qaShown(env)}), with no cd/pushd/popd after it, ` +
+    `${OPERATOR_GUARD}: the qa subagent runs every command as \`cd <qa worktree> && …\` (${qaShown(env)}), with no cd/pushd/popd after it, ` +
     "no `..`, no `$(…)`, `$'…'`, backtick, backslash or variable, no `~`, no glob or brace next to a dot, " +
     "and no absolute path outside that worktree but /dev/null (`-C/x` included); after it nightqueue runs only as `nightqueue sandbox <command>`, " +
     "gh only as `gh pr view|diff|checks|list|status` or `gh issue view|list`, and git never as push, remote or config; " +

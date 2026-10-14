@@ -46,11 +46,14 @@ test("the operator offers the reflect skill in its Reflect section, saving with 
   assert.ok(OPERATOR.includes("`lesson_save`, `memory_save`,"));
 });
 
-test("operator.md is at most 170 lines, names D-58 and its three subagents, and holds nothing of the operator runs", () => {
+test("operator.md is at most 170 lines, names the operator guard and its three subagents, and holds nothing of the operator runs or the decisions", () => {
   assert.ok(OPERATOR.split("\n").length <= 170, `operator.md has ${OPERATOR.split("\n").length} lines`);
-  assert.ok(OPERATOR.includes("D-58"));
+  assert.ok(OPERATOR.includes("## The operator guard contract (read first)"));
+  assert.ok(OPERATOR.includes("starts with `operator guard:`"));
+  assert.ok(OPERATOR.includes("## Operator decisions (binding)"));
+  assert.equal(/\bD-\d+/.test(OPERATOR), false, "operator.md still cites a D-<n> ref");
   for (const role of OPERATOR_ROLES) assert.ok(OPERATOR.includes(`nightqueue:${role}`), `operator.md does not name nightqueue:${role}`);
-  for (const gone of ["RUN_DIR", "run_set", "PRIOR RUN", "operator-qa", "run check", "nightqueue:triager", "nightqueue:architect", "nightqueue:verifier"]) {
+  for (const gone of ["RUN_DIR", "run_set", "PRIOR RUN", "operator-qa", "run check", "nightqueue:triager", "nightqueue:architect", "nightqueue:verifier", "decision_", "Standing decisions", "decision export"]) {
     assert.equal(OPERATOR.includes(gone), false, `operator.md still names ${gone}`);
   }
 });
@@ -64,7 +67,7 @@ test("the operator opens naming itself and the projects, and asks for project an
     "**the nightqueue operator**",
     "`name · key · <n> pending",
     "Current project (preselected by nightqueue open)",
-    "`lesson_recall` and `decision_recall`",
+    "`lesson_recall` once, with that `project`",
     "1. Queue from the brief.",
     "call `queue_add` with `project`",
     "(set by the operator - the pipeline may only raise it, with evidence, never lower it)",

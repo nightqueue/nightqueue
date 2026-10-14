@@ -63,7 +63,7 @@ function bareReferenceProblems(lines) {
   const bare = lines.find((line) => !REFERENCE_LINE.test(line.trim()) && !line.trim().startsWith("```") && BARE_REFERENCE.test(line));
   if (!bare) return [];
   const reference = BARE_REFERENCE.exec(bare)[0].trim().replace(/^[^#]/, "");
-  return [rejected(`the body carries a bare \`${reference}\` outside a Fixes/Closes line: name a decision by its ref (\`D-24\`), or write the number inside a code span`)];
+  return [rejected(`the body carries a bare \`${reference}\` outside a Fixes/Closes line: name a job by its ref (\`J-24\`), or write the number inside a code span`)];
 }
 
 // A placeholder left over from a template, which every body is refused for whatever its template.

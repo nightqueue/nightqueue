@@ -1,4 +1,4 @@
-import { OWNER_CHECK } from "../ddl.mjs";
+import { OWNER_CHECK } from "./decisions-shape.mjs";
 import { sqlList } from "../schema.mjs";
 
 // The frozen shapes of the removed issue tracker: the constants and DDLs the v18 to v22 steps built it with, kept byte-equal

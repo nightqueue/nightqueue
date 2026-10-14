@@ -81,15 +81,8 @@ test("every domain of the store writes and reads back on a real home", async (t)
   assert.equal(indexed.files, 1);
   assert.equal((await store.index.recallProjectIndex({ projectId: alphaId })).files.length, 1);
 
-  await store.decisions.saveDecision({
-    projectId: projectIdOf(env, "alpha"),
-    title: "the store is the only path to sqlite",
-    context: "the sql was spread across the cli",
-    decision: "every call goes through the store",
-  });
-  assert.equal((await store.decisions.listDecisions({ projectId: projectIdOf(env, "alpha") })).length, 1);
-
   assert.equal(Object.hasOwn(store, "issues"), false, "the store still carries an issues domain");
+  assert.equal(Object.hasOwn(store, "decisions"), false, "the store still carries a decisions domain");
 
   const acme = await store.orgs.add("acme");
   assert.equal((await store.orgs.byName("acme")).id, acme.id);

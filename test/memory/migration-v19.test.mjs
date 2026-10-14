@@ -15,8 +15,8 @@ const { DatabaseSync } = await import("node:sqlite");
 
 const MIGRATE_URL = new URL("../../test-support/migrate.mjs", import.meta.url).href;
 const TRACKER_TABLES = ["issues", "issue_comments", "issue_projects"];
-const KEPT_TABLES = ["orgs", "projects", "decisions", "jobs", "lessons", "memory"];
-const TABLES = [...KEPT_TABLES, ...TRACKER_TABLES];
+const KEPT_TABLES = ["orgs", "projects", "jobs", "lessons", "memory"];
+const TABLES = [...KEPT_TABLES, "decisions", ...TRACKER_TABLES];
 
 // A checkout directory the fixture registers for `nightqueue`.
 function checkout(t) {
@@ -86,7 +86,11 @@ test("a v18 home migrates to v19: row counts kept, items numbered per owner, key
     orgRepeats: raw.prepare("SELECT COUNT(*) AS n FROM (SELECT org_id, number FROM issues WHERE scope = 'org' GROUP BY org_id, number HAVING COUNT(*) > 1)").get().n,
     matched: raw.prepare("SELECT rowid FROM issues_fts WHERE issues_fts MATCH 'item'").all().length,
   }));
-  assert.deepEqual({ ...counts(db, undefined, KEPT_TABLES), ...tracker.counts }, before.counts, "a table lost or gained rows");
+  const decisions = readRaw(preVersionBackupPath(env, 26), (raw) => ({
+    counts: counts(raw, undefined, ["decisions"]),
+    numbers: raw.prepare("SELECT id, number FROM decisions ORDER BY id").all().map((row) => ({ ...row })),
+  }));
+  assert.deepEqual({ ...counts(db, undefined, KEPT_TABLES), ...decisions.counts, ...tracker.counts }, before.counts, "a table lost or gained rows");
 
   assert.deepEqual(tracker.numbers, [[1, 1], [2, 1], [3, 1], [5, 2], [6, 2], [7, 2], [8, 3]]);
   assert.equal(tracker.projectRepeats, 0);
@@ -98,7 +102,7 @@ test("a v18 home migrates to v19: row counts kept, items numbered per owner, key
     { nightqueue: "NQ", api: "AP", nqWeb: "NW", default: "DA", dlweb: "DW" },
   );
   assert.equal(new Set(Object.values(keys)).size, Object.values(keys).length, "a key repeats across projects and orgs");
-  assert.deepEqual(db.prepare("SELECT id, number FROM decisions ORDER BY id").all().map((row) => ({ ...row })), before.decisions);
+  assert.deepEqual(decisions.numbers, before.decisions);
 
   assert.ok(readFileSync(preV19BackupPath(env)).equals(fixture), "the pre-v19 copy is not the v18 database byte for byte");
   assert.equal(readRaw(preV19BackupPath(env), (raw) => schemaVersionOn(raw)), 18);

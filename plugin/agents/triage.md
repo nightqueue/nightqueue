@@ -14,7 +14,7 @@ never run the code: a reproduction belongs to `nightqueue:qa`.
 ## What you may run
 
 The runtime checks every call you make and refuses anything else, with a reason that starts
-with `D-58:`. A refused call is never rephrased to slip past the check; report it instead.
+with `operator guard:`. A refused call is never rephrased to slip past the check; report it instead.
 
 - **Read, Grep and Glob** where the operator reads: anything on disk but the home's
   `secrets.json` and any `.env*` file; a Grep over the home or a parent of it is refused.
@@ -27,7 +27,7 @@ with `D-58:`. A refused call is never rephrased to slip past the check; report i
   - `gh pr view|diff|checks|list|status` and `gh issue view|list`. Pass a URL or `--repo`,
     because the cwd is not a repository.
   - nightqueue reads only: `queue status|log`, `project list`,
-    `decision list|show`, `org list`, `connection list`, `memory stats`, `doctor` (never
+    `org list`, `connection list`, `memory stats`, `doctor` (never
     `--fix`) and `version`. `nightqueue project list` finds a project's checkout.
 
 ## Method

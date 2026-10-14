@@ -2,6 +2,7 @@ import { dbPath } from "../src/config/paths.mjs";
 import { addJob } from "../src/memory/jobs.mjs";
 import { closeDb } from "../src/memory/db.mjs";
 import { INDEXES, ISSUE_COMMENT_GUARDS, ISSUE_FTS, ISSUE_NUMBER_INDEXES, issueCommentsDdl, issueProjectsDdl, issuesDdl } from "../src/memory/migration/tracker-shape.mjs";
+import { plantDecisionsV25 } from "./legacy-home.mjs";
 import { ensureProject, seedDoneJob } from "./memory.mjs";
 
 const { DatabaseSync } = await import("node:sqlite");
@@ -18,9 +19,10 @@ function seedJobs(env) {
   return { done, beta, pending };
 }
 
-// Turns the open v24 schema back into the v23 one: no job index, and the tracker created from its frozen shapes.
+// Turns the open current schema back into the v23 one: no job index, the decisions and the tracker created from their frozen shapes.
 function plantV23Schema(db) {
   db.exec("DROP TRIGGER IF EXISTS jobs_fts_ai; DROP TRIGGER IF EXISTS jobs_fts_au; DROP TRIGGER IF EXISTS jobs_fts_ad; DROP TABLE IF EXISTS jobs_fts");
+  plantDecisionsV25(db);
   db.exec(`${issuesDdl("issues")}\n${issueCommentsDdl("issue_comments")}\n${issueProjectsDdl("issue_projects")}`);
   db.exec(ISSUE_COMMENT_GUARDS);
   db.exec(ISSUE_FTS);

@@ -14,15 +14,6 @@ function writesRunnerHost(env) {
   return pinned !== "" && pinned === claudeConfigDir(env);
 }
 
-// Refuses a decision write from inside a queue run, whatever the home: decisions are the operator's record.
-export function refuseDecisionWriteInsideJob(env, action) {
-  const own = callerJobId(env);
-  if (own === null) return;
-  throw new UserError(
-    `refused: ${action} inside ${jobRef(own)}: decisions are the operator's record, written only outside a queue run; a run reads them (\`decision_recall\`, \`decision_list\`) and never writes one`,
-  );
-}
-
 // Refuses deleting a lesson or a memory from inside a queue run: what the corpus keeps is the operator's call.
 export function refuseMemoryDeleteInsideJob(env, action) {
   const own = callerJobId(env);

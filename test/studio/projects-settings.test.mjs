@@ -122,12 +122,12 @@ test("drawer: a provider is not configured until enabled, only enabled where the
 });
 
 test("remove: a running job disables it, rows need the exact typed name, and the counters sum to the footprint", () => {
-  const footprint = [{ table: "jobs", total: 3 }, { table: "decisions", total: 2 }, { table: "lessons", total: 1 }, { table: "memory", total: 4 }, { table: "job_attempts", total: 3 }, { table: "project_key_aliases", total: 1 }];
+  const footprint = [{ table: "jobs", total: 3 }, { table: "lessons", total: 1 }, { table: "memory", total: 4 }, { table: "job_attempts", total: 3 }, { table: "project_key_aliases", total: 1 }];
   const counters = footprintCounters(footprint);
-  assert.deepEqual(counters, { jobs: 3, decisions: 2, lessons: 1, memoryRows: 8, total: 14 });
+  assert.deepEqual(counters, { jobs: 3, lessons: 1, memoryRows: 8, total: 12 });
   assert.equal(counters.total, footprint.reduce((sum, entry) => sum + entry.total, 0));
   assert.deepEqual(removeMode(project({ runningJob: { ref: "J-12" }, footprint })), { kind: "running", text: "J-12 is running on this project — cancel it first." });
-  assert.deepEqual(removeMode(project({ footprint })), { kind: "typed", rows: 14 });
+  assert.deepEqual(removeMode(project({ footprint })), { kind: "typed", rows: 12 });
   assert.deepEqual(removeMode(project()), { kind: "plain" });
   assert.equal(typedMatches("api", "api"), true);
   assert.equal(typedMatches("API", "api"), false);

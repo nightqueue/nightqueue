@@ -248,7 +248,7 @@ test("desiredHooks carries the orchestrator-scope matcher, the one source every 
   assert.equal(preToolUse[0].matcher, "Agent|Task|Bash|Read|Grep|Glob");
 });
 
-test("operatorSettings fences the edit tools and sweeps qa worktrees on SubagentStop, leaving the host's hook list unchanged (D-58)", () => {
+test("operatorSettings fences the edit tools and sweeps qa worktrees on SubagentStop, leaving the host's hook list unchanged (operator guard)", () => {
   const before = desiredHooks(ENV);
   const settings = operatorSettings(ENV);
   assert.deepEqual(settings.hooks.PreToolUse.map((group) => group.matcher), ["Agent|Task|Bash|Read|Grep|Glob|Edit|Write|MultiEdit|NotebookEdit"]);

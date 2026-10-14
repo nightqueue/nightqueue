@@ -1,13 +1,9 @@
 import { UserError } from "../config/errors.mjs";
 
 export const KEY_RE = /^[A-Z][A-Z0-9]{1,4}$/;
-export const GLOBAL_KEY = "G";
 
 const NUMBER = "([1-9]\\d*)";
-const OWNER = "([A-Z][A-Z0-9]{1,4}|G)";
 const JOB_RE = new RegExp(`^(?:J-)?${NUMBER}$`);
-const BARE_DECISION_RE = new RegExp(`^D-${NUMBER}$`);
-const OWNED_DECISION_RE = new RegExp(`^${OWNER}/D-${NUMBER}$`);
 const SUFFIXES = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
 const KEY_CHARS = `${SUFFIXES}0123456789`;
 const FALLBACK_PREFIX = { project: "P", org: "O" };
@@ -32,53 +28,18 @@ function positiveNumber(text) {
   return Number.isSafeInteger(number) && number > 0 ? number : null;
 }
 
-// Refuses to render a ref whose key or number is missing.
-function requireRefParts(what, row, key) {
-  if (typeof key !== "string" || key === "" || positiveNumber(row?.number) === null) {
-    throw new Error(`cannot render the ref of ${what} ${row?.id ?? "(no id)"}: its owner key or number is missing`);
-  }
-}
-
-// Picks the owner key a decision row renders with: its org, its project, or the global pseudo-key.
-function rowKey(row) {
-  if (row?.scope === "org") return row.org_key;
-  return (row?.project_id ?? null) === null ? GLOBAL_KEY : row.project_key;
-}
-
-// Renders the ref of a decision (`D-<n>`, `<ORGKEY>/D-<n>` or `G/D-<n>`).
-export function decisionRef(row) {
-  const key = isProjectRow(row) ? "D" : rowKey(row);
-  requireRefParts("decision", row, key);
-  return isProjectRow(row) ? `D-${row.number}` : `${key}/D-${row.number}`;
-}
-
-// Tells whether a row belongs to a registered project, whose decision refs need no key.
-function isProjectRow(row) {
-  return row?.scope !== "org" && (row?.project_id ?? null) !== null;
-}
-
 // Canonicalises a ref candidate to trimmed upper-case text, or null when it is not text or a number.
 function refText(value) {
   if (typeof value === "number") return String(value);
   return typeof value === "string" ? value.trim().toUpperCase() : null;
 }
 
-// Parses a job or decision ref into its kind and parts, or null when it is neither.
+// Parses a job ref (`J-<id>`) or a plain job id into `{ kind: "job", id }`, or null when it is neither.
 export function parseRef(value) {
   const text = refText(value);
-  if (text === null) return null;
-  const job = JOB_RE.exec(text);
-  if (job) return numbered({ kind: "job" }, "id", job[1]);
-  const bare = BARE_DECISION_RE.exec(text);
-  if (bare) return numbered({ kind: "decision", key: null }, "number", bare[1]);
-  const owned = OWNED_DECISION_RE.exec(text);
-  return owned ? numbered({ kind: "decision", key: owned[1] }, "number", owned[2]) : null;
-}
-
-// Completes a parsed ref with its number, or null when the number is out of range.
-function numbered(ref, field, digits) {
-  const number = positiveNumber(digits);
-  return number === null ? null : { ...ref, [field]: number };
+  const job = text === null ? null : JOB_RE.exec(text);
+  const id = job ? positiveNumber(job[1]) : null;
+  return id === null ? null : { kind: "job", id };
 }
 
 // Resolves a job ref (`J-<id>`) or a plain job id to the id, refusing anything else.

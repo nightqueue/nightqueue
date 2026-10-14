@@ -25,7 +25,7 @@ the lessons the run was given.
   prevented it is known. In an interactive session it is omitted when none fits.
 - `attempts` is optional: an integer ≥2, sent only when the attempts were actually counted.
 - A `decision` is saved with `memory_save` as a `key` (a short stable noun phrase) and a
-  `value`. It is NEVER saved with `decision_save` or `decision_update`.
+  `value`.
 
 **Each field is ONE short English sentence.**
 

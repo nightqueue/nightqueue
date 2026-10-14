@@ -83,7 +83,7 @@ function NewOrgDialog({ onClose }: { onClose: () => void }) {
   );
 }
 
-// The Rename org dialog: one row, so its projects, decisions and bindings follow.
+// The Rename org dialog: one row, so its projects and bindings follow.
 function RenameOrgDialog({ org, onClose }: { org: OrgRow; onClose: () => void }) {
   const [name, setName] = useState(org.name);
   const ready = name.trim() !== "" && name.trim() !== org.name;
@@ -92,7 +92,7 @@ function RenameOrgDialog({ org, onClose }: { org: OrgRow; onClose: () => void })
       <Field label="New name">
         <input className={`${INPUT_CLASS} font-mono`} value={name} autoFocus spellCheck={false} onChange={(event) => setName(event.target.value)} />
       </Field>
-      <div className="text-sm text-dim">Its projects, decisions and connection bindings follow the new name.</div>
+      <div className="text-sm text-dim">Its projects and connection bindings follow the new name.</div>
     </OrgForm>
   );
 }

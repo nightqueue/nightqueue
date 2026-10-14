@@ -112,8 +112,7 @@ subsection — never a subsection without a file. `nightqueue run pr` answers
 
 - **A bare `#<number>` anywhere.** GitHub reads it as a reference to an issue or a
   pull request OF THIS REPOSITORY: it opens a cross-reference in an unrelated thread
-  and notifies it. A decision is named by its ref (`D-1`), never `#1`; any other number
-  goes inside a code span (`` `#24` ``). The only `#<number>` allowed is a real
+  and notifies it. Any other number goes inside a code span (`` `#24` ``). The only `#<number>` allowed is a real
   reference to an issue of this repository in the `Fixes`/`Closes` line.
 - A job ref (`J-24`), the run slug, a `Refs` line or an `Opened by nightqueue` line:
   `nightqueue run pr` appends the traceability footer from the job row and refuses a

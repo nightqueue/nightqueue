@@ -15,10 +15,6 @@ const EXCEPTIONS = Object.freeze({
 
 // Every foreign key of the schema, as `table.column` -> `parent(column) ON DELETE rule`: a rule never changes silently.
 const EXPECTED = Object.freeze({
-  "decisions.job_id": "jobs(id) ON DELETE SET NULL",
-  "decisions.org_id": "orgs(id) ON DELETE RESTRICT",
-  "decisions.project_id": "projects(id) ON DELETE RESTRICT",
-  "decisions.superseded_by": "decisions(id) ON DELETE RESTRICT",
   "job_attempts.job_id": "jobs(id) ON DELETE CASCADE",
   "jobs.project_id": "projects(id) ON DELETE RESTRICT",
   "lessons.project_id": "projects(id) ON DELETE RESTRICT",

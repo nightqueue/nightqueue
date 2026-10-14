@@ -4,7 +4,7 @@ description: >-
   Reflects over one finished /resolve run and saves its lessons and memories on
   its own, applying the nightqueue reflect rubric. Use it in /resolve Phase 9
   (Reflect), once at the end of every run, delivered or terminated. It writes no
-  file and records no decision.
+  file.
 tools: Read, mcp__nightqueue__lesson_recall, mcp__nightqueue__lesson_save, mcp__nightqueue__memory_save
 ---
 
@@ -41,7 +41,7 @@ no `.jsonl`. The timeline and the handoffs are the whole record of the run.
 3. Save on your own, without asking for confirmation: `lesson_save` for a lesson, `memory_save`
    for a memory. Every call carries `project` = the `Project:` line of the prompt. `memory_save`
    keeps an existing key by itself (`deduped: true`): report that memory as `kept`.
-4. Never record a decision: a choice of the code is a memory, saved with `memory_save`.
+4. A choice of the code is a memory, saved with `memory_save`.
 
 No candidate at all is a valid result.
 

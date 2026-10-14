@@ -177,7 +177,7 @@ export async function setProjectKey(store, name, key) {
   return await store.projects.setKey(project.id, key);
 }
 
-// Renames a project: one registry row, so every job, decision and memory keyed by its id follows it.
+// Renames a project: one registry row, so every job, lesson and memory keyed by its id follows it.
 export async function renameProject(store, oldName, newName) {
   const project = await requireProject(store, oldName);
   assertName("project", newName);

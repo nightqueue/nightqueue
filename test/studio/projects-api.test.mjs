@@ -8,7 +8,6 @@ import { configPath, runsDir, secretsPath } from "../../src/config/paths.mjs";
 import { loadConfig, saveConfig, saveSecrets } from "../../src/config/store.mjs";
 import { actsOnOrigin } from "../../src/integrations/registry.mjs";
 import { openDb } from "../../src/memory/db.mjs";
-import { saveDecision } from "../../src/memory/decisions.mjs";
 import { addJob, claimJobById } from "../../src/memory/jobs.mjs";
 import { saveLesson } from "../../src/memory/lessons.mjs";
 import { jobRef } from "../../src/memory/refs.mjs";
@@ -221,7 +220,6 @@ test("DELETE refuses a project with rows or a running job, purges exactly its fo
   const kept = ensureProject(home.env, "kept");
   for (const projectId of [doomed, kept]) {
     addJob({ projectId, prompt: "fix it" }, home.env);
-    saveDecision({ projectId, title: "a rule", context: "c", decision: "d", status: "accepted" }, home.env);
     saveLesson({ projectId, title: "a lesson", root_cause: "r", solution: "s", prevention: "p" }, home.env);
   }
   mkdirSync(join(runsDir(home.env), doomed, "slug"), { recursive: true });

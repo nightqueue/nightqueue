@@ -45,13 +45,13 @@ the current shape. Decision numbers, comments, notices and prompts are not
 touched - text written before keeps its old spelling. The same live-lease refusal
 applies, naming the job `J-<id>`.
 
-Schema v20 gives every column that holds another row's id a foreign key with its
-own delete rule: a comment and a per-project row of an item go with the item
+Schema v20 gave every column that held another row's id a foreign key with its
+own delete rule: a comment and a per-project row of an item went with the item
 (`issue_comments.item_id`, `issue_projects.item_id`: cascade); the job
-of an item, of a per-project row, of a decision and of a pipeline run is cleared
-when that job is deleted (`job_id`: set null), and so is the decision an item
-links (`issues.decision_id`); a decision that another one names in
-`superseded_by` cannot be deleted (restrict). A v19 database migrates once, in
+of an item, of a per-project row, of a decision and of a pipeline run was cleared
+when that job was deleted (`job_id`: set null), and so was the decision an item
+linked (`issues.decision_id`); a decision that another one named in
+`superseded_by` could not be deleted (restrict). A v19 database migrates once, in
 the same open as the v18 and v19 steps when they are pending: a copy
 `nightqueue.db.pre-v20` first, then one transaction that rebuilds `decisions`,
 the three issue tables and `pipeline_runs`
@@ -132,6 +132,18 @@ per-open ones included, every row in id order, the id sequence kept - recreates 
 the `jobs_fts` triggers, and checks that every job is kept and indexed, that the new invariant
 is in the schema and that no foreign key breaks. The same live-lease refusal applies.
 
+Schema v26 removes decisions, with their data: the table `decisions` goes, with its full-text
+mirror `decisions_fts`, its three triggers and its four indexes. A v25 database migrates once, in
+`nightqueue update` (or `setup`) and after the earlier steps when they are pending
+(`src/memory/migration/v26.mjs`): a copy `nightqueue.db.pre-v26` first (kept as it is when it is
+already there), then one transaction that refuses when any other table still has a foreign key
+to `decisions`, drops the triggers, the mirror and the table, and checks that no decisions object
+is left, that every lesson, memory and job is kept and that no foreign key breaks. The decision
+rows stay only in the copy. A home that never had the table migrates the same way, and so does a
+v22 to v25 home whose decision rows name a missing job or decision: the check for rows that point
+at a missing row skips the decisions there, since v26 drops them. The same live-lease refusal
+applies.
+
 **A sick database degrades, it does not kill.** The file can break under a live process - a
 home on a network or FUSE mount, a copy taken by hand, a second sqlite opened on the live
 file. Every open and every store call classifies what SQLite throws by its numeric `errcode`
@@ -159,7 +171,7 @@ A database older than the build is the same class with the code `SCHEMA_OUTDATED
 `nightqueue update` and the message `database at v<file>, this nightqueue expects v<code>: run
 \`nightqueue update\``: the MCP tools answer it as `store-unavailable`, the SessionStart hook
 and the MCP server's startup print `nightqueue memory unavailable (SCHEMA_OUTDATED at <home>):
-database at v20, this nightqueue expects v25: run \`nightqueue update\``, and `doctor` names
+database at v20, this nightqueue expects v26: run \`nightqueue update\``, and `doctor` names
 `nightqueue update`. It is never an outage: the runner does not back off on it, it stops with
 the message, since waiting never brings an older schema up to date.
 
@@ -170,14 +182,10 @@ label like a name - identity stays the id - so `nightqueue project key` /
 `org key` change one row and keep the old key in `project_key_aliases` /
 `org_key_aliases`, where it still resolves to the same owner and no other owner
 can take it. Everything is printed by a **ref** built from the current key, and
-every tool and command that takes a job or a decision reads one:
-`J-<id>` for a job (the plain id too), `D-<n>` for a decision of the project in context, `<KEY>/D-<n>` for a
-decision named by its owner (`DLW/D-3`), and `G` for the rows that have no owner
-(`G/D-2`). Decisions no longer take an internal id; an integer
-where one of their refs belongs is refused. Every MCP answer that carries a job
-or a decision carries its `ref` next to the existing `id`/`number`.
+every tool and command that takes a job reads one: `J-<id>` (the plain id too). Every MCP
+answer that carries a job carries its `ref` next to the existing `id`.
 
-Twelve tables plus four full text mirrors:
+Eleven tables plus three full text mirrors:
 
 | table | what it holds |
 |---|---|
@@ -185,14 +193,13 @@ Twelve tables plus four full text mirrors:
 | `projects` | one row per project: its id (a ULID), its name (unique, renamable), its key (unique across projects and orgs, renamable), its checkout path (unique; none for a project known only from history) and the id of its org |
 | `project_key_aliases`, `org_key_aliases` | the old keys of a project or an org, which keep resolving to it; never edited, removed with their owner |
 | `lessons` | one lesson per mistake: title, root cause, solution, prevention rule, target phase, how many attempts it cost, how often it was injected and violated, and its embedding |
-| `memory` | project facts and durable decisions, as key and value, per project or global |
+| `memory` | project facts and durable choices of the code, as key and value, per project or global |
 | `project_index` | the file to responsibility map of a project, with the mtime the file had when it was indexed |
 | `project_libs` | the libraries of a project with the version that was actually resolved |
 | `pipeline_runs` | one row per `/resolve` run: tier, task type, outcome, gate stop, duration, model and session |
 | `pipeline_phases` | one row per phase of a run: sequence, phase, model, status, retry, duration and the `reason` the phase ran again (added on open to an older database, null on a first run) |
 | `jobs` | one row per queue job: project, prompt, priority, status, attempts, lease, slug, session, branch, pull request, notice, usage and cost |
-| `decisions` | one architecture decision per row: number inside its project, title, context, decision, consequences, status, the decision that superseded it, and its embedding |
-| `lessons_fts`, `memory_fts`, `decisions_fts` | FTS5 mirrors of the three text tables, kept in sync by triggers on insert, update and delete |
+| `lessons_fts`, `memory_fts` | FTS5 mirrors of the two text tables, kept in sync by triggers on insert, update and delete |
 | `jobs_fts` | FTS5 index of each job's slug, brief (the first 1500 characters of its prompt) and notice, kept by triggers on insert, update and delete, read by the triager's `## Related jobs` |
 
 **Hybrid recall.** A recall with a query always runs BM25 over the FTS mirror,
@@ -212,8 +219,7 @@ rest. When a query matched nothing, the same recent list comes back marked
 **Hooks.** Two, both reading the event JSON from stdin:
 
 - `nightqueue hook session-start` prints the block injected at the start of a
-  session: the standing decisions of the project (the accepted ones, its own and
-  its org's, one line each), then the top lessons and its memories, and it records
+  session: the top lessons of the project and its memories, and it records
   what it injected in `state/<session>.json` and in the corpus.
 - `nightqueue hook prompt-context` prints the lessons and memories relevant to the
   prompt that was just submitted, skipping what this session already saw, and
@@ -242,8 +248,7 @@ nightqueue `SessionEnd` entry (a third-party one stays).
 
 The rubric has three kinds: an `error` or a `correction` becomes a **lesson** (`title`,
 `root_cause`, `solution`, `prevention`, `target`) saved with `lesson_save`; a `decision` of the
-code becomes a **memory** (`key`, `value`) saved with `memory_save` - never a `decision_*`
-record. Each field is one short sentence; a typo, a one-ticket detail, what the code already
+code becomes a **memory** (`key`, `value`) saved with `memory_save`. Each field is one short sentence; a typo, a one-ticket detail, what the code already
 says, a secret and a restatement are skipped. Before proposing, the candidate is looked up
 with `lesson_recall`/`memory_recall`.
 
@@ -281,18 +286,14 @@ worker are no longer read or written and can be deleted.
 **Commands.**
 
 ```sh
-nightqueue mcp                     # start the stdio MCP server with the thirty-five tools
+nightqueue mcp                     # start the stdio MCP server with the thirty-one tools
 nightqueue mcp --http --port 4747 --token <t>   # serve the same tools over Streamable HTTP on 127.0.0.1
 nightqueue hook session-start      # run a hook, reading the event JSON from stdin
 nightqueue embed download          # download the embedding weights (the only network path)
-nightqueue embed backfill          # embed the lessons and the decisions that still have no vector
+nightqueue embed backfill          # embed the lessons that still have no vector
 nightqueue memory stats [--json]   # counts per project
 nightqueue lesson delete <id> [--project <name>]   # delete one lesson (L344 or 344) and its search entry
 nightqueue memory delete <id> [--project <name>]   # delete one memory (M446 or 446) and its search entry
-nightqueue decision list [--project <name> | --org <name>] [--status <status>]   # the decisions log
-nightqueue decision show <number> [--project <name> | --org <name>]              # one decision, in full
-nightqueue decision export <number> [--dir <path>] [--force]                     # one decision as a markdown file
-nightqueue decision import <file.md> [--status <s>] [--superseded-by <n>] [--supersedes <n,...>] [--unrelated <n,...>]   # save a markdown decision file
 ```
 
 **Environment variables.**
@@ -327,35 +328,6 @@ package: `nightqueue embed install` (or a yes during `nightqueue init`) puts it 
 audits clean. Without it every recall still answers through BM25 and the whole
 test suite still passes.
 
-### Decisions
-
-One more thing the runtime remembers, next to the lessons and the memories.
-
-A decision belongs to exactly one **owner**, and an owner is a project or an org: a
-decision several repos of the same product share is saved ONCE at org scope
-instead of once per repo, and every project of that org reads it. A write names
-`project` or `org`, never both; a read by `project` answers the project's rows
-PLUS its org's, org rows first, each carrying its `scope` and its `owner`, while
-a read by `org` answers that org's rows alone. A project never sees the rows of
-another org.
-
-A **decision** is one architecture decision of its owner, numbered inside that
-owner (`D-1`, `D-2`, ... per project; `DLW/D-1`, `DLW/D-2` per org, and the numbering
-of one owner never touches another's): a title, the `context` that forced the
-choice, the `decision` itself, the `consequences` it costs, and a status among
-`proposed`, `accepted`, `superseded` and `rejected`. A decision that was replaced points at the one that replaced it
-through `superseded_by`. Decisions are the operator's own record, written only
-outside a queue run, and they never bind the pipeline. Only `accepted` decisions
-are recalled: the block the `SessionStart` hook injects lists the title of EVERY
-accepted decision of the project and of its org under `## Standing decisions`,
-org rows first, followed by `## Standing decisions in detail` with the text of the
-8 most recently updated. A `proposed` decision is listed by its title only, under
-a separate `## Proposed (not binding)` section. Inside a queue job that block is
-context only, never a constraint of the run, and no phase prompt the runtime
-builds carries a decisions section. The other two statuses are read with
-`decision_list`, `nightqueue decision list` and `nightqueue decision show`, and
-never reach a prompt.
-
 **Related jobs.** The triager phase of `/resolve` gets a lexical search over the job
 history of the job's project - each job's slug, brief and notice - as a `## Related jobs`
 block of its phase context: at most five jobs, best first, one
@@ -367,46 +339,11 @@ notice, and a match already cited is not repeated. A citation that resolves to n
 project (an unknown ref, another project's job, a pull request no job of the project opened, or
 one several of them opened) gets one line saying so.
 
-**Private by design.** Decisions live only in `$NIGHTQUEUE_HOME/nightqueue.db`, the
-same file as the rest of the memory. The runtime writes nothing into the
-repository and publishes nothing; the one thing it puts in a pull request is the
-footer `nightqueue run pr` appends (`Opened by nightqueue · J-<n>` inside a job, plus ` · <kind> <ref>` for every origin of the job; `Opened by nightqueue` outside a job): no `docs/adr/` tree, no `ISSUES.md`; only an explicit `nightqueue decision export`
-writes a file. The only ways in are the MCP tools below and the one deliberate
-terminal write, `nightqueue decision import` (see below), and the only ways to
-read them from a terminal are the two read-only commands
-(`nightqueue decision list` and `nightqueue decision show <number>`), which resolve the project from the current directory when
-`--project` is omitted, read one org alone with `--org <name>` instead, never
-write, and never register a project. Read-only
-means the database too: the two open it read-only, so they never create it and
-never migrate it, and a home where nothing was ever saved reads as an empty one
-(`no decisions for <project>`) instead of a SQLite error.
-
-**One source, moved on purpose.** `nightqueue decision export <number>` writes
-one decision as a markdown file, `<dir>/<nnnn>-<slug>.md` (default
-`docs/decisions/` of the current directory; `--force` replaces an existing
-file). It reads the database read-only like `show`, so it never creates nor
-writes it; publishing that file stays a deliberate pull request of the operator.
-`nightqueue decision import <file.md>` is the one deliberate decision write from
-a terminal: it reads an exported file or a hand-written ADR of the same shape
-(`# <title>`, a `Status:` line with its date, `## Context`, `## Decision`,
-`## Consequences`; any other `##` section stays inside the field it follows),
-takes the status from the file unless `--status` overrides it
-(`--superseded-by <n>` imports it `superseded`, pointing at `D-n`), and saves it
-through the same review as `decision_save`: an overlap refuses with the
-candidates until each is named in `--supersedes` or `--unrelated`. On success it
-prints `imported as D-n` and stamps `Decision D-n in the <owner> store.` into the
-file's header (a header written before v19, `Decision #n ...`, is still read); a file whose header already names an existing row of the owner is
-refused, so a re-run imports nothing twice. The runtime itself never reads
-`docs/decisions/`.
-
-**The four MCP tools** (parameters marked `?` are optional):
-
-| tool | what it does |
-|---|---|
-| `decision_save` | records one decision: `project` or `org`, `title`, `context`, `decision`, `consequences?`, `status?` (default `accepted`), `supersedes?`, `unrelated?`; answers the `id`, the `number`, the `ref` and the owner it got. When the title overlaps an accepted or proposed title of the same owner, or the title plus decision is close in meaning to one, nothing is saved and it answers `status: "needs_review"` with the `candidates`; saving again names every candidate by `number` or `ref` (of the same owner), in `supersedes` (they become `superseded` and point at the new row, in the same transaction) or in `unrelated`. Refused inside a queue job, and nothing is written |
-| `decision_update` | changes a decision by `id`, its ref (`D-7` in `project?`, `DLW/D-3` anywhere): any of `title`, `context`, `decision`, `consequences`, `status`, `superseded_by` — this is how a `proposed` one is accepted or rejected; `status: "superseded"` requires `superseded_by`, unless the row already names its successor; the row it answers is a compact one, truncated like `decision_list`. Refused inside a queue job, and nothing is changed |
-| `decision_list` | the log in numbering order: `project` or `org`, `status?`; compact rows, org rows first |
-| `decision_recall` | the standing constraints: `project` or `org`, `query?`, `limit?`; only `accepted` decisions, hybrid BM25 plus semantic, org rows first, and the text comes back untruncated because it feeds prompts. With `id` (a decision ref) alone, that one decision whole whatever its status (a `proposed`, `rejected` or `superseded` one too) with `job_ref` of the job that proposed it; a bare `D-<n>` is read in `project` (inside a job, the job's project), `query` or `limit` beside `id` is refused, and inside a job only a decision of the job's project or of its org is readable |
+**Private by design.** The memory lives only in `$NIGHTQUEUE_HOME/nightqueue.db`. The
+runtime writes nothing into the repository and publishes nothing; the one thing it puts in a
+pull request is the footer `nightqueue run pr` appends (`Opened by nightqueue · J-<n>` inside a
+job, plus ` · <kind> <ref>` for every origin of the job; `Opened by nightqueue` outside a job):
+no `docs/adr/` tree, no `ISSUES.md`.
 
 As everywhere else in the server, an explicit `null` is treated exactly like an
 absent parameter, and `project` is the registered NAME, never a path. A name no
@@ -415,31 +352,11 @@ included - with `unknown project` and the list of the known ones, and nothing is
 written; only the lesson, memory and index tools also accept a path, which
 means the project whose checkout contains it, or the global scope when no
 checkout does.
-Decisions are written only outside a queue run. Inside a job (`NIGHTQUEUE_JOB_ID`
-set) `decision_save` and `decision_update`, like `nightqueue decision import` and
-`nightqueue decision update`, are refused with a message naming the rule -
-`decisions are the operator's record, written only outside a queue run` - before
-anything is opened or written, whatever the home. A job reads decisions
-(`decision_recall`, `decision_list`) and never writes one. Outside a job the
-operator saves and updates any project from anywhere.
 
-Rows point at their owner by id: a decision carries
-`project_id` or `org_id`, and every other table carries `project_id` alone (a
+Rows point at their owner by id: every table carries `project_id` alone (a
 project's org is always the one of its `projects` row). Renaming an org or a
 project (`nightqueue org rename`, `nightqueue project rename`) changes that one
 row, and every view shows the new name at once. An org or a project that still
 owns rows cannot be removed: the database refuses the removal, and the message
 names how many rows of which table it still owns - nothing is removed.
-
-**How `/resolve` uses them.** As optional context, never as a constraint of the run.
-The session block may carry `## Standing decisions`, and a phase may read
-`decision_recall` or `decision_list`; a conflict with a decision is never, by
-itself, a gate. A run never saves or updates a decision, the architect never
-proposes one, and the architect's phase prompt carries no decisions section.
-
-**A close never touches a decision.** `nightqueue queue close <id>`,
-`nightqueue queue close --merged` and the MCP `queue_close` write nothing to the
-decisions log, print no decision line, and their `--json` has no `decisions` key. A
-`proposed` row - one a job saved before this rule included - stays `proposed` until the
-operator accepts or rejects it with `decision_update` or `nightqueue decision update`.
 

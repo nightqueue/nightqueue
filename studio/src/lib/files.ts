@@ -5,7 +5,7 @@ export const KIND_META: Record<DiffKind, { label: string; tone: string }> = {
   new: { label: "new file", tone: "text-green" },
   mod: { label: "modified", tone: "text-muted" },
   del: { label: "deleted", tone: "text-red" },
-  ren: { label: "renamed", tone: "text-mem-decision" },
+  ren: { label: "renamed", tone: "text-log-mem" },
 };
 
 export type DrawerStep = { move: number } | { close: true } | null;

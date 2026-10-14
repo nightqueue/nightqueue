@@ -190,7 +190,7 @@ $NIGHTQUEUE_HOME/          # 0700
 ```
 
 Orgs and projects are rows of the memory database, each identified by an id
-(a ULID) and carrying a name that can change: every job, decision, lesson and
+(a ULID) and carrying a name that can change: every job, lesson, memory and
 run directory points at the id, so a rename touches one row. `config.json` keeps
 only what is not identity - the queue and embedding settings, the connection
 bound to each org (`orgConnections`, keyed by org id) and `defaultOrg` (an org
@@ -262,14 +262,14 @@ nightqueue org add acme                            # create an org (its key is s
 nightqueue org add acme --key ACM                  # ...under an explicit key
 nightqueue org key acme AC                         # change its key; the old one keeps resolving
 nightqueue org list --json                         # orgs (with their id, key and old keys), connection slots, project counts
-nightqueue org rename acme acme-inc                # one row: its projects, decisions and bindings follow
+nightqueue org rename acme acme-inc                # one row: its projects and bindings follow
 nightqueue org remove acme-inc                     # refused while it still owns projects or rows
 nightqueue org default acme                        # where init, project add and project_register put a project when no org is named
 
 nightqueue project add ~/code/api --key API        # register a repository under an explicit key
 nightqueue project key api AP                      # change its key; API-<n> refs keep resolving
 nightqueue project list                            # name, key, path (or "no path"), org, whether the path still exists
-nightqueue project rename api api-v2               # one row: its jobs, decisions, memory and runs follow
+nightqueue project rename api api-v2               # one row: its jobs, lessons, memory and runs follow
 nightqueue project move api acme                   # move a project to another org
 nightqueue project move api --path ~/code/api      # give it a new checkout (or one it never had)
 nightqueue project remove api                      # refused while it owns rows, listing them and hinting --purge
@@ -341,15 +341,8 @@ question is ``Key for project `<name>` [NQ]:`` - Enter keeps it - and `--key <KE
 up front; without a terminal the suggestion is taken. `project key <name> <KEY>` and `org key
 <name> <KEY>` change a key in one row and keep the old one as an alias of the same owner, so a
 ref written with it still resolves and no other owner can take it. Everything the runtime
-prints names things by ref, and every command and tool that takes one accepts it:
-
-- a job is `J-<id>` (the plain id is still accepted);
-- a decision is `D-<n>` inside its project, `<ORGKEY>/D-<n>` for an org decision, and
-  `<KEY>/D-<n>` anywhere else;
-- a row with no owner uses the key `G` (`G/D-2`).
-
-Decisions no longer take an internal id anywhere; the decision commands below
-still take a plain per-owner number with `--project`/`--org`.
+prints names things by ref, and every command and tool that takes one accepts it: a job is
+`J-<id>` (the plain id is still accepted).
 
 ## Queue
 
@@ -411,8 +404,7 @@ stream's `## Notice`, the pull request, slug and branch; the row carries
 `recovered from disk: status=<s> prUrl=<u|->`. It prints one `J-<n> <project>/<slug>: <result>`
 line per job, where the result is `recovered as <status>`, `exists` (the row is there - a second
 run, or the loser of two concurrent ones), `skipped: still running` or `project-missing`, then
-the tail of the job logs no run explains, which cannot be rebuilt. Nothing is written to the
-decisions. A recovered row is a record, not a task: its prompt was not kept on
+the tail of the job logs no run explains, which cannot be rebuilt. A recovered row is a record, not a task: its prompt was not kept on
 disk, so `queue retry` (and `queue_retry`) refuses it with ``J-<n> was rebuilt from disk by
 `nightqueue queue repair --from-disk` and its prompt was not kept, so it cannot run again; queue
 the task anew with `nightqueue queue add` ``.
@@ -437,7 +429,7 @@ when the job carries one, else its first `session_id` - by resuming it with `nig
 project's checkout with a warning line (`(worktree released, using the checkout)`) once the
 worktree was already released. A `pending` or a `running` job is refused by name - a live
 runner owns a running job's session, a pending one has none yet - and so is a job that never
-reached the agent at all. The resumed session runs under the operator guard (D-58, see
+reached the agent at all. The resumed session runs under the operator guard (see
 [Open](#open)): it reads and queues, and delegates only to `triage`, `qa` and `reviewer`. `--print` stops there and prints the equivalent `cd '<cwd>' && nightqueue
 open --resume <session>` line instead of running it, and `--json` prints `{ jobId, attempt, session,
 cwd, worktreeReleased, command }` as the only thing on stdout; without either flag the exit
@@ -456,9 +448,6 @@ J-<id>` or `J-<id> not closed: <reason>` for each, and reports `<n> jobs left un
 nightqueue queue close --merged again` when some could not be checked within the call's own
 deadline. A `failed`, `gate` or `cancelled` job is never closed, whatever its pull request
 says: retry it, or cancel it.
-
-A close never touches the decisions log: a `proposed` decision stays `proposed` until the
-operator settles it (`nightqueue decision update` / `decision_update`).
 
 `queue cancel <id>` accepts a `pending`, gated, orphaned, `done` or `failed` job. For a `done`
 or `failed` one it also releases the job's worktree, printing `worktree removed: <path>` or
@@ -531,58 +520,6 @@ an error. With `--project <name>`, an id that belongs to another project is refu
 delete nothing in those cases and are refused inside a queue job. A deleted row never comes back in
 `lesson_recall`, `memory_recall` or `context_for_phase`. The MCP tools `lesson_delete` and
 `memory_delete` do the same and require `project`.
-
-## Decisions
-
-```sh
-nightqueue decision list                                                 # the log of the current project, plus its org's
-nightqueue decision list --org acme --status accepted                    # one org's accepted decisions only
-nightqueue decision show 7                                               # one decision, in full
-nightqueue decision export 7 --dir docs/decisions                        # write it as a markdown file
-nightqueue decision import docs/decisions/0007-foo.md                    # save a markdown decision file
-nightqueue decision import docs/decisions/0007-foo.md --supersedes 3,4   # ...replacing D-3 and D-4 whole
-nightqueue decision update 7 --status accepted                           # accept a proposed decision
-nightqueue decision update 7 --status superseded --superseded-by 9       # supersede D-7 with D-9
-```
-
-`decision list`, `show <number>`, `export <number>` and `import <file.md>` each resolve the
-owner from `--project <name>` (the registered NAME, never a path), `--org <name>`, or the
-project of the current directory when neither is given - naming both is refused. `show`,
-`export` and `update` also take a ref: `D-7` is read in that same owner, and `DLW/D-3` names
-its owner by key, needs no flag and is refused next to a flag naming another owner.
-`--superseded-by`, `--supersedes` and `--unrelated` take numbers or refs of the same owner. `list` and
-`show` open the database read-only, so they never create it and never migrate it: a home where
-nothing was ever saved reads as an empty one instead of a SQLite error.
-
-`decision update <number> --status accepted|rejected|superseded [--superseded-by <n>]`
-is the terminal's way to settle a proposal, or to change a
-decision's status by hand - the same write `decision_update` does. `superseded` requires
-`--superseded-by <n>`, the number of the decision that replaced it (of the same owner);
-any other status refuses that flag. It prints the updated decision the same way `show`
-does.
-
-`decision export <number>` writes the decision as `<dir>/<nnnn>-<slug>.md` (default
-`docs/decisions/` of the current directory), refusing to replace an existing file unless
-`--force`. `decision import <file.md>` reads that same shape back - `# <title>`, a `Status:`
-line, `## Context`, `## Decision`, `## Consequences` - and saves it through the same gate
-`decision_save` uses (below); `--status` overrides the file's own `Status:` line, and
-`--superseded-by <n>` implies `superseded` and conflicts with any other `--status`. On success
-it prints `imported as <label>` and stamps the pointer line into the file's header, so a re-run
-of the same file is refused as already imported instead of saved twice.
-
-A `decision_save` call and `decision import` are gated the same way. Before saving, the title
-(and, for the MCP tool, the title plus the decision text) is checked against every accepted and
-proposed decision of the same owner. An overlap saves nothing and answers `needs_review` with
-the candidates it found; the caller names EVERY one of them before anything is written -
-`supersedes <n,...>` for the ones the new decision replaces WHOLE (they become `superseded` and
-point at the new row, so the new text has to restate whatever of theirs still holds),
-`unrelated <n,...>` for the ones it leaves untouched. A candidate left unnamed refuses the save
-again, naming it once more.
-
-Decisions are the operator's record, written only outside a queue run: inside a queue job
-(`NIGHTQUEUE_JOB_ID` set) `decision import` and `decision update` are refused, like the MCP
-`decision_save` and `decision_update`, and nothing is written. `list`, `show` and `export`
-stay available everywhere.
 
 ## Doctor
 
@@ -765,7 +702,7 @@ A directory under `<NIGHTQUEUE_HOME>/worktrees/` named after an id no registered
 checkout has (a project removed with `--purge` leaves it) is one `warn` row
 `worktrees <id>` `project not registered`, with `inspect '<dir>'`.
 
-The operator's QA worktrees (D-58) live at `<NIGHTQUEUE_HOME>/qa/<project_id>/<id>`, apart from
+The operator's QA worktrees live at `<NIGHTQUEUE_HOME>/qa/<project_id>/<id>`, apart from
 every job's (see [Sandbox](#sandbox)); one row `qa <project>/<id>` is printed per entry:
 
 - stale (older than 6 hours, its session's pid gone, or its directory gone while git still
@@ -782,7 +719,7 @@ every job's (see [Sandbox](#sandbox)); one row `qa <project>/<id>` is printed pe
 
 Without `--fix` the qa rows write nothing.
 
-QA worktrees an operator made before D-58 live at
+QA worktrees an operator made before the generalist operator live at
 `<NIGHTQUEUE_HOME>/operator-qa/<project_id>/<slug>`. Nothing creates them any more; each
 directory there is a read-only leftover row `operator-qa (legacy) <project>/<dir>` with the
 same cleanup commands as above (never `rm -rf` for a directory that still holds a `.git` link),
@@ -956,7 +893,7 @@ its run state and the project registry. Two kinds exist:
   `failed`, `done` or `cancelled` is accepted; any other status is a `409` naming it. One live
   session per job: a second create returns the same terminal (`reused: true`), or a `409` when
   it carries an instruction.
-- `operator`: runs `nightqueue open`, the operator session in the nightqueue home (D-58), with
+- `operator`: runs `nightqueue open`, the operator session in the nightqueue home, with
   `<project>` preselected when the body names one (`nightqueue open <project>`). A named project
   must be registered (`404` otherwise, `400` when blank); one whose checkout is gone still
   opens.
@@ -1025,7 +962,7 @@ nightqueue sandbox worktree --drop <path>          # dropped <path> (or: gone <p
 
 `nightqueue sandbox worktree <project> | --drop <path>` is the one exception to the verbatim
 forwarding: a first argument `worktree` manages the ephemeral QA worktrees of the operator's
-`qa` subagent (D-58) instead of running a program of that name. `<project>` (a registered name,
+`qa` subagent instead of running a program of that name. `<project>` (a registered name,
 else id; an unknown one is refused, and git's first line is the error when the checkout cannot
 give a worktree) gets a worktree detached at the checkout's `HEAD` under
 `<NIGHTQUEUE_HOME>/qa/<project id>/<id>`, `<id>` a fresh ULID; exactly one line
@@ -1076,9 +1013,9 @@ agent's body when `claude --help` does not list `--agent`; `nightqueue doctor` r
 the operator settings, `--setting-sources project,local` (the operator's interactive session keeps
 the `local` source; a queued job's child gets `--setting-sources project` only), the plugin and
 the nightqueue MCP server, and `NIGHTQUEUE_MODE=operator`, which puts the guard hook in operator
-mode (D-58, below). It never holds the config lock.
+mode (below). It never holds the config lock.
 
-**Home mode (D-58).** The operator is generalist: the session always runs in the nightqueue
+**Home mode.** The operator is generalist: the session always runs in the nightqueue
 home (`NIGHTQUEUE_HOME`, `~/.nightqueue` by default), never in a checkout, and a missing home is
 refused with one line naming `nightqueue setup`. A project is only *preselected*: the one named
 (`open <project>`, by name, else by id; an unknown one is refused, a registered project whose
@@ -1104,10 +1041,10 @@ after git's own expiry; a failure is one warning line. Then the stale qa worktre
 `operator · dropped <n> stale qa worktree(s)`. `queue session` and a studio terminal run both
 too, through the same launcher.
 
-**The guard (D-58).** The operator investigates, plans and queues; it never edits and never
+**The guard.** The operator investigates, plans and queues; it never edits and never
 executes. The PreToolUse hook of an operator session (matcher
 `Agent|Task|Bash|Read|Grep|Glob|Edit|Write|MultiEdit|NotebookEdit`) answers every refusal with
-one line starting `D-58:`:
+one line starting `operator guard:`:
 
 - main thread: `Edit`, `Write`, `MultiEdit` and `NotebookEdit` are refused; `Read`, `Grep` and
   `Glob` read anything on disk except `secrets.json` and any `.env*` file (`.env`, `.env.local`,
@@ -1115,9 +1052,9 @@ one line starting `D-58:`:
   read `secrets.json`, a path that cannot be resolved is refused, and an absolute Glob `pattern`
   or Grep `glob` is judged by its static prefix;
   Bash only as one bare command (no `;`, `&&`, `|`, redirection, substitution or backslash) that
-  is either `nightqueue|nq <command> …` with `<command>` one of `queue`, `decision`,
+  is either `nightqueue|nq <command> …` with `<command>` one of `queue`,
   `project`, `org`, `connection`, `doctor`, `memory`, `libs`, `version` - never `queue session`,
-  `decision export|import`, `project add|move`, `queue add --run` or `doctor --fix`, never
+  `project add|move`, `queue add --run` or `doctor --fix`, never
   `--follow` or `--foreground` - or `git -C <checkout> [--no-optional-locks] <read> …` on a
   registered checkout, `<read>` one of `log`, `show`, `diff`, `blame`, `ls-tree`, `ls-files`,
   `rev-parse`, `branch --list` and `--no-optional-locks status` (never `--output*`,
@@ -1128,7 +1065,7 @@ one line starting `D-58:`:
   `nightqueue sandbox worktree --drop <path>`, or `cd <path inside a qa worktree> && …` (see
   [Sandbox](#sandbox));
 - any other subagent (`triage`, `reviewer`): no edit tool; Bash is one bare nightqueue read
-  (`queue status|log`, `project list`, `decision list|show`, `org list`,
+  (`queue status|log`, `project list`, `org list`,
   `connection list`, `memory stats`, `doctor` without `--fix`, `version`), the main thread's
   `git -C` reads, `gh pr view|diff|checks|list|status` or `gh issue view|list`;
 - every subagent reads exactly where the main thread reads, so delegating never reaches the

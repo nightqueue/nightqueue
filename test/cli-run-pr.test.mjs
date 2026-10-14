@@ -416,7 +416,7 @@ test("`run pr` rejects a placeholder, a missing section and a section out of ord
     "MISSING: Not tested: line after the last QA subsection",
   ]);
   assert.deepEqual(await problems("run-pr-bare", BODY.replace(REPORT, `${REPORT} see #12`)), [
-    "REJECTED: the body carries a bare `#12` outside a Fixes/Closes line: name a decision by its ref (`D-24`), or write the number inside a code span",
+    "REJECTED: the body carries a bare `#12` outside a Fixes/Closes line: name a job by its ref (`J-24`), or write the number inside a code span",
   ]);
 
   assert.deepEqual(remoteBranches(remote), ["main"]);

@@ -37,23 +37,12 @@ test("a read-only store refuses a write by name instead of falling back to a wri
   assert.equal(await store.jobs.status(1), null, "an allowed read still answers: there is no job 1");
 });
 
-test("a read-only store answers the decision titles, a pure read", async (t) => {
-  const env = makeHome(t, "store-readonly-titles");
+test("a read-only store answers the registry, a pure read", async (t) => {
+  const env = makeHome(t, "store-readonly-registry");
   makeProject(t, env, "alpha");
-  await openStore(env).decisions.saveDecision({
-    projectId: projectIdOf(env, "alpha"),
-    title: "the queue owns the worktree",
-    context: "two runners raced",
-    decision: "one worktree per job",
-    status: "accepted",
-  });
   const store = openStoreReadOnly(env);
 
-  const titles = await store.decisions.decisionTitles({ projectId: projectIdOf(env, "alpha") });
-  assert.deepEqual(
-    titles.map((row) => row.title),
-    ["the queue owns the worktree"],
-  );
+  assert.equal((await store.projects.byName("alpha")).id, projectIdOf(env, "alpha"));
 });
 
 test("closing a read-write store releases the instance and never closes the connection of the home", async (t) => {
