@@ -365,6 +365,7 @@ export interface TrackerItem {
   ref: string;
   title: string;
   team: string | null;
+  project: string | null;
   state: TrackerState;
   priority: number;
   priorityLabel: string | null;

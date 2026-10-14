@@ -496,12 +496,16 @@ test("closing a job whose issue is already completed makes no state move, and --
 });
 
 test("tracker issues builds the filter from the given fields only and maps the nodes", async () => {
-  const node = { identifier: "MK-42", title: "Fix the login", url: ISSUE_URL, priority: 2, priorityLabel: "High", updatedAt: "2026-10-02", state: { name: "Todo", type: "unstarted" }, team: { key: "MK" }, labels: { nodes: [{ name: "bug" }] } };
-  const fetch = fakeFetch({ issues: { body: { data: { issues: { nodes: [node], pageInfo: { hasNextPage: true } } } } } });
+  const node = { identifier: "MK-42", title: "Fix the login", url: ISSUE_URL, priority: 2, priorityLabel: "High", updatedAt: "2026-10-02", state: { name: "Todo", type: "unstarted" }, team: { key: "MK" }, project: { name: "Auth" }, labels: { nodes: [{ name: "bug" }] } };
+  const noProject = { ...node, identifier: "MK-43", project: null };
+  const fetch = fakeFetch({ issues: { body: { data: { issues: { nodes: [node, noProject], pageInfo: { hasNextPage: true } } } } } });
   const http = httpOf(fetch);
   const answer = await linear.tracker.issues({ team: "MK", project: "Auth", state: "open", limit: 10 }, { connection: RECORD, http });
   assert.deepEqual(answer, {
-    items: [{ ref: "MK-42", title: "Fix the login", team: "MK", state: { name: "Todo", type: "unstarted" }, priority: 2, priorityLabel: "High", labels: ["bug"], url: ISSUE_URL, updatedAt: "2026-10-02" }],
+    items: [
+      { ref: "MK-42", title: "Fix the login", team: "MK", project: "Auth", state: { name: "Todo", type: "unstarted" }, priority: 2, priorityLabel: "High", labels: ["bug"], url: ISSUE_URL, updatedAt: "2026-10-02" },
+      { ref: "MK-43", title: "Fix the login", team: "MK", project: null, state: { name: "Todo", type: "unstarted" }, priority: 2, priorityLabel: "High", labels: ["bug"], url: ISSUE_URL, updatedAt: "2026-10-02" },
+    ],
     truncated: true,
   });
   await linear.tracker.issues({ state: "closed" }, { connection: RECORD, http });

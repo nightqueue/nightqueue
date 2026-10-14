@@ -21,13 +21,34 @@ export interface FilterOption {
 
 export const DEFAULT_TRACKER_PREFS: TrackerPrefs = { team: "", project: "", view: "open" };
 
-const CLOSED_TYPES = new Set(["completed", "canceled"]);
-
 const NO_PRIORITY_RANK = 5;
 
-// Whether an issue sits in a done or canceled state.
-export function isClosedIssue(item: TrackerItem): boolean {
-  return CLOSED_TYPES.has(item.state?.type ?? "");
+export interface IssueGroup {
+  key: string;
+  label: string;
+  items: TrackerItem[];
+}
+
+const OPEN_GROUPS = [
+  { key: "review", label: "In Review" },
+  { key: "progress", label: "In Progress" },
+  { key: "todo", label: "Todo" },
+  { key: "backlog", label: "Backlog" },
+];
+
+const CLOSED_GROUPS = [
+  { key: "done", label: "Done" },
+  { key: "canceled", label: "Canceled" },
+];
+
+// The key of the status group an issue belongs to; a state of an unknown type falls in Backlog.
+function groupKey(item: TrackerItem): string {
+  const type = item.state?.type ?? "";
+  if (type === "started") return /review/i.test(item.state?.name ?? "") ? "review" : "progress";
+  if (type === "unstarted") return "todo";
+  if (type === "completed") return "done";
+  if (type === "canceled") return "canceled";
+  return "backlog";
 }
 
 // The sort rank of a priority: urgent (1) to low (4) first, no priority (0 or unknown) last.
@@ -46,12 +67,13 @@ function byPriorityThenUpdate(a: TrackerItem, b: TrackerItem): number {
   return priorityRank(a.priority) - priorityRank(b.priority) || updatedTime(b) - updatedTime(a);
 }
 
-// Splits the issues into open ones (by priority, then newest update) and done or canceled ones (newest update first).
-export function groupIssues(items: TrackerItem[]): { open: TrackerItem[]; closed: TrackerItem[] } {
+// The non-empty status groups in the fixed order, Done and Canceled last and only under the all view; each sorted by priority then newest update.
+export function groupIssues(items: TrackerItem[], view: TrackerView): IssueGroup[] {
   const list = Array.isArray(items) ? items : [];
-  const open = list.filter((item) => !isClosedIssue(item)).sort(byPriorityThenUpdate);
-  const closed = list.filter(isClosedIssue).sort((a, b) => updatedTime(b) - updatedTime(a));
-  return { open, closed };
+  const shown = view === "all" ? [...OPEN_GROUPS, ...CLOSED_GROUPS] : OPEN_GROUPS;
+  return shown
+    .map((group) => ({ ...group, items: list.filter((item) => groupKey(item) === group.key).sort(byPriorityThenUpdate) }))
+    .filter((group) => group.items.length > 0);
 }
 
 // The team choices of the filter, "all teams" first.
