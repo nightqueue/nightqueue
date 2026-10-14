@@ -370,8 +370,14 @@ export interface TrackerItem {
   priority: number;
   priorityLabel: string | null;
   labels: string[];
+  labelDetails?: TrackerLabel[];
   url: string | null;
   updatedAt: string | null;
+}
+
+export interface TrackerLabel {
+  name: string;
+  color: string | null;
 }
 
 export interface TrackerFilters {

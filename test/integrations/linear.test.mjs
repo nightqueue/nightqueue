@@ -503,8 +503,8 @@ test("tracker issues builds the filter from the given fields only and maps the n
   const answer = await linear.tracker.issues({ team: "MK", project: "Auth", state: "open", limit: 10 }, { connection: RECORD, http });
   assert.deepEqual(answer, {
     items: [
-      { ref: "MK-42", title: "Fix the login", team: "MK", project: "Auth", state: { name: "Todo", type: "unstarted" }, priority: 2, priorityLabel: "High", labels: ["bug"], url: ISSUE_URL, updatedAt: "2026-10-02" },
-      { ref: "MK-43", title: "Fix the login", team: "MK", project: null, state: { name: "Todo", type: "unstarted" }, priority: 2, priorityLabel: "High", labels: ["bug"], url: ISSUE_URL, updatedAt: "2026-10-02" },
+      { ref: "MK-42", title: "Fix the login", team: "MK", project: "Auth", state: { name: "Todo", type: "unstarted" }, priority: 2, priorityLabel: "High", labels: ["bug"], labelDetails: [{ name: "bug", color: null }], url: ISSUE_URL, updatedAt: "2026-10-02" },
+      { ref: "MK-43", title: "Fix the login", team: "MK", project: null, state: { name: "Todo", type: "unstarted" }, priority: 2, priorityLabel: "High", labels: ["bug"], labelDetails: [{ name: "bug", color: null }], url: ISSUE_URL, updatedAt: "2026-10-02" },
     ],
     truncated: true,
   });
@@ -544,6 +544,30 @@ test("tracker issues adds the text and label search to the filter only when give
     { or: [{ title: { containsIgnoreCase: "login" } }, { description: { containsIgnoreCase: "login" } }], labels: { some: { name: { eqIgnoreCase: "bug" } } } },
     {},
   ]);
+});
+
+test("tracker issues reads a text that names an issue id as a team key and number, never as a title search", async () => {
+  const fetch = fakeFetch({ issues: { body: { data: { issues: { nodes: [], pageInfo: { hasNextPage: false } } } } } });
+  const http = httpOf(fetch);
+  for (const text of ["DLW-136", "dlw-136", " dlw 136 ", "DLW136"]) await linear.tracker.issues({ state: "all", team: "DLW", text }, { connection: RECORD, http });
+  await linear.tracker.issues({ state: "all", team: "DLW", text: "136" }, { connection: RECORD, http });
+  await linear.tracker.issues({ state: "open", text: "136" }, { connection: RECORD, http });
+  await linear.tracker.issues({ state: "all", text: "OutOfMemory" }, { connection: RECORD, http });
+  const byId = { team: { key: { eq: "DLW" } }, number: { eq: 136 } };
+  assert.deepEqual(fetch.calls.map((call) => call.variables.filter), [
+    byId, byId, byId, byId, byId,
+    { state: { type: { nin: ["completed", "canceled"] } }, number: { eq: 136 } },
+    { or: [{ title: { containsIgnoreCase: "OutOfMemory" } }, { description: { containsIgnoreCase: "OutOfMemory" } }] },
+  ]);
+});
+
+test("tracker issues carries each label with its color, null when the service sent none", async () => {
+  const node = { identifier: "DLW-136", title: "Crash", team: { key: "DLW" }, labels: { nodes: [{ name: "Bug", color: "#eb5757" }, { name: "plain" }] } };
+  const fetch = fakeFetch({ issues: { body: { data: { issues: { nodes: [node], pageInfo: { hasNextPage: false } } } } } });
+  const answer = await linear.tracker.issues({ state: "all" }, { connection: RECORD, http: httpOf(fetch) });
+  assert.deepEqual(answer.items[0].labels, ["Bug", "plain"]);
+  assert.deepEqual(answer.items[0].labelDetails, [{ name: "Bug", color: "#eb5757" }, { name: "plain", color: null }]);
+  assert.match(fetch.calls[0].query, /labels \{ nodes \{ name color \} \}/);
 });
 
 test("tracker issue reads the issue whole with team, project and bounded texts, never through the enrichment query", async () => {

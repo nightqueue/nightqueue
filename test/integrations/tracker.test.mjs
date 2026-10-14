@@ -219,6 +219,44 @@ test("text and label search combine with the other filters, and without them the
   assert.deepEqual(fetch.calls[1].variables, { filter: { team: { key: { eq: "MK" } }, state: { type: { nin: ["completed", "canceled"] } } }, first: 25 });
 });
 
+test("the issues answer keeps labels as names and carries labelDetails with their colors", async (t) => {
+  const env = trackerHome(t, "tracker-label-colors");
+  const labels = { nodes: [{ name: "Bug", color: "#eb5757" }, { name: "plain" }, { name: "odd", color: 7 }] };
+  const issues = { data: { issues: { nodes: [{ ...ISSUE_NODE, labels }], pageInfo: { hasNextPage: false } } } };
+  const answer = await trackerIssues({}, { env, fetchImpl: fakeFetch({ issues }).impl });
+  assert.deepEqual(answer.items[0].labels, ["Bug", "plain", "odd"]);
+  assert.deepEqual(answer.items[0].labelDetails, [
+    { name: "Bug", color: "#eb5757" },
+    { name: "plain", color: null },
+    { name: "odd", color: null },
+  ]);
+});
+
+// A fake fetch holding an old issue outside the recent ones: only a filter on its number reaches it.
+function oldIssueFetch() {
+  const old = { ...ISSUE_NODE, identifier: "DLW-136", title: "Old one" };
+  const calls = [];
+  const impl = async (url, options) => {
+    const body = JSON.parse(options.body);
+    calls.push(body.variables);
+    const { filter } = body.variables;
+    const hit = filter.number?.eq === 136 && (!filter.team || filter.team.key.eq === "DLW");
+    return { status: 200, headers: new Map(), json: async () => ({ data: { issues: { nodes: hit ? [old] : [ISSUE_NODE], pageInfo: { hasNextPage: false } } } }) };
+  };
+  return { impl, calls };
+}
+
+test("a text id search reaches the provider through trackerIssues and returns the old issue", async (t) => {
+  const env = trackerHome(t, "tracker-id-search");
+  for (const args of [{ text: "dlw 136" }, { text: "DLW-136" }, { text: "136" }, { text: "136", team: "dlw" }]) {
+    const fetch = oldIssueFetch();
+    const answer = await trackerIssues(args, { env, fetchImpl: fetch.impl });
+    assert.deepEqual(answer.items.map((item) => item.ref), ["DLW-136"], JSON.stringify(args));
+    assert.equal(fetch.calls[0].filter.number.eq, 136);
+    assert.equal("or" in fetch.calls[0].filter, false);
+  }
+});
+
 const STATES = [
   { id: "s-todo", name: "Todo", type: "unstarted", position: 0 },
   { id: "s-progress", name: "In Progress", type: "started", position: 1 },

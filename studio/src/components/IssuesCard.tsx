@@ -3,6 +3,7 @@ import { ChevronDown, ChevronRight } from "lucide-react";
 import { useRef, useState } from "react";
 import { errorText } from "../lib/actions";
 import { fetchTrackerIssues } from "../lib/mcp";
+import { useDebounced } from "../lib/useDebounced";
 import { useToggles } from "../lib/useToggles";
 import {
   connectCommand,
@@ -13,6 +14,7 @@ import {
   type IssueGroup,
   isOption,
   issueDraft,
+  labelTint,
   parseTrackerPrefs,
   projectOptions,
   serializeTrackerPrefs,
@@ -25,7 +27,7 @@ import type { TrackerAnswer, TrackerFilters, TrackerItem } from "../lib/types";
 import { ConnectTrackerModal } from "./ConnectTrackerModal";
 import { PriorityIcon } from "./PriorityIcon";
 import { ActionIcon } from "./StatusIcon";
-import { Button, FIELD_CLASS, Kbd, Segmented } from "./ui";
+import { Button, FIELD_CLASS, Kbd, Segmented, Tag } from "./ui";
 
 interface IssuesCardProps {
   onQueue: (draft: IssueDraft) => void;
@@ -35,6 +37,8 @@ interface IssuesCardProps {
 const PREFS_KEY = "nightqueue.studio.tracker";
 
 const ISSUE_LIMIT = 50;
+
+const SEARCH_DEBOUNCE_MS = 300;
 
 const SKELETON_ROWS = 4;
 
@@ -74,14 +78,21 @@ function useTrackerPrefs(): [TrackerPrefs, (next: TrackerPrefs) => void] {
 }
 
 // The issue list read on mount, on a filter change, on Refresh and after a queue; the filters only on the first load and on Refresh.
-function useTrackerIssues({ team, project, reloadKey }: { team: string; project: string; reloadKey: number }) {
+function useTrackerIssues({ team, project, text, reloadKey }: { team: string; project: string; text: string; reloadKey: number }) {
   const [refreshTick, setRefreshTick] = useState(0);
   const [filters, setFilters] = useState<TrackerFilters | null>(null);
   const needFilters = useRef(true);
   const query = useQuery({
-    queryKey: ["tracker", team, project, refreshTick, reloadKey],
+    queryKey: ["tracker", team, project, text, refreshTick, reloadKey],
     queryFn: async (): Promise<TrackerAnswer> => {
-      const answer = await fetchTrackerIssues({ state: "all", limit: ISSUE_LIMIT, include_filters: needFilters.current, ...(team ? { team } : {}), ...(project ? { project } : {}) });
+      const answer = await fetchTrackerIssues({
+        state: "all",
+        limit: ISSUE_LIMIT,
+        include_filters: needFilters.current,
+        ...(team ? { team } : {}),
+        ...(project ? { project } : {}),
+        ...(text ? { text } : {}),
+      });
       if (answer.ok && answer.filters) {
         needFilters.current = false;
         setFilters(answer.filters);
@@ -115,7 +126,7 @@ function FilterSelect({ label, options, value, onChange }: { label: string; opti
 }
 
 // The card header: title, team and project filters, the open/all toggle and Refresh.
-function IssuesHeader({ title, filters, prefs, onPrefs, onRefresh }: { title: string; filters: TrackerFilters | null; prefs: TrackerPrefs; onPrefs: (next: TrackerPrefs) => void; onRefresh: () => void }) {
+function IssuesHeader({ title, filters, prefs, search, onPrefs, onSearch, onRefresh }: { title: string; filters: TrackerFilters | null; prefs: TrackerPrefs; search: string; onPrefs: (next: TrackerPrefs) => void; onSearch: (text: string) => void; onRefresh: () => void }) {
   const teams = teamOptions(filters);
   const projects = projectOptions(filters, prefs.team);
   const changeTeam = (team: string) => onPrefs({ ...prefs, team, project: isOption(projectOptions(filters, team), prefs.project) ? prefs.project : "" });
@@ -123,6 +134,7 @@ function IssuesHeader({ title, filters, prefs, onPrefs, onRefresh }: { title: st
     <div className="flex flex-col gap-2 border-b border-line px-3 py-2.5 sm:flex-row sm:flex-wrap sm:items-center">
       <h2 className="m-0 text-base font-semibold">{title}</h2>
       <div className="flex flex-col gap-2 sm:ml-auto sm:flex-row sm:flex-wrap sm:items-center">
+        <input type="search" aria-label="search issues" placeholder="Search or issue id" className={`${FIELD_CLASS} min-h-9 w-full min-w-0 sm:w-48`} value={search} onChange={(event) => onSearch(event.target.value)} />
         <FilterSelect label="team" options={teams} value={prefs.team} onChange={changeTeam} />
         <FilterSelect label="project" options={projects} value={prefs.project} onChange={(project) => onPrefs({ ...prefs, project })} />
         <div className="flex gap-2">
@@ -145,6 +157,21 @@ function IssueRef({ item }: { item: TrackerItem }) {
   );
 }
 
+// The labels of an issue as tags in their Linear color; a label without one is a neutral tag.
+function IssueLabels({ item }: { item: TrackerItem }) {
+  const labels = Array.isArray(item.labelDetails) ? item.labelDetails : item.labels.map((name) => ({ name, color: null }));
+  if (labels.length === 0) return null;
+  return (
+    <span className="flex shrink-0 gap-1">
+      {labels.map((label) => (
+        <Tag key={label.name} style={labelTint(label.color)}>
+          {label.name}
+        </Tag>
+      ))}
+    </span>
+  );
+}
+
 // One issue: priority icon, ref, title, then the project (the team key without one) at the end and the Queue button.
 function IssueRow({ item, onQueue }: { item: TrackerItem; onQueue: (item: TrackerItem) => void }) {
   return (
@@ -152,6 +179,7 @@ function IssueRow({ item, onQueue }: { item: TrackerItem; onQueue: (item: Tracke
       <PriorityIcon priority={item.priority} />
       <IssueRef item={item} />
       <span className="min-w-0 flex-1 truncate">{item.title}</span>
+      <IssueLabels item={item} />
       <span className="max-w-32 shrink-0 truncate text-right text-sm text-muted sm:max-w-48">{item.project ?? item.team}</span>
       <Button size="sm" onClick={() => onQueue(item)}>
         Queue
@@ -254,11 +282,13 @@ function IssuesBody({ query, view, onQueue, onConnected }: { query: ReturnType<t
 // The Issues card: the home tracker's issues filtered by team and project, each one queued as a job through the Add job drawer.
 export function IssuesCard({ onQueue, reloadKey }: IssuesCardProps) {
   const [prefs, setPrefs] = useTrackerPrefs();
-  const { query, filters, refresh } = useTrackerIssues({ team: prefs.team, project: prefs.project, reloadKey });
+  const [search, setSearch] = useState("");
+  const text = useDebounced(search.trim(), SEARCH_DEBOUNCE_MS);
+  const { query, filters, refresh } = useTrackerIssues({ team: prefs.team, project: prefs.project, text, reloadKey });
   const provider = query.data?.provider ?? null;
   return (
     <section aria-label="issues" className="overflow-hidden rounded-lg border border-line bg-surface">
-      <IssuesHeader title={provider ? `${trackerLabel(provider)} issues` : "Issues"} filters={filters} prefs={prefs} onPrefs={setPrefs} onRefresh={refresh} />
+      <IssuesHeader title={provider ? `${trackerLabel(provider)} issues` : "Issues"} filters={filters} prefs={prefs} search={search} onPrefs={setPrefs} onSearch={setSearch} onRefresh={refresh} />
       <IssuesBody query={query} view={prefs.view} onQueue={onQueue} onConnected={refresh} />
     </section>
   );

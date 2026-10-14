@@ -1259,8 +1259,8 @@ function toolDefinitions(env, state) {
         description:
           "Read-only: lists the issues of the home's issue-tracker connection, newest update first, filtered by the service's own `team` key and `project` name - no nightqueue project argument. " +
           "`state` is `open` (default), `closed` or `all`; `limit` 1..50 (default 25), `truncated: true` when more matched; `include_filters: true` adds `filters` (`teams`, `projects`), cached for five minutes. " +
-          "`text` searches the title or the description, case-insensitively; `label` keeps the issues carrying that one label, matched exactly, case-insensitively; both combine with every other filter. " +
-          "Answers `{ok: true, provider, items: [{ref, title, team, state, priority, priorityLabel, labels, url, updatedAt}], truncated}`, or `{ok: false, error: \"no-connection\" | \"provider-unavailable\", hint, provider}` as a normal answer. " +
+          "`text` searches the title or the description, case-insensitively, and a text that is an issue id (`DLW-136`, `dlw 136`, `DLW136`, or a bare `136` for that number in the `team` or in every team) finds that issue instead; `label` keeps the issues carrying that one label, matched exactly, case-insensitively; both combine with every other filter. " +
+          "Answers `{ok: true, provider, items: [{ref, title, team, state, priority, priorityLabel, labels, labelDetails: [{name, color}], url, updatedAt}], truncated}`, or `{ok: false, error: \"no-connection\" | \"provider-unavailable\", hint, provider}` as a normal answer. " +
           "Queueing from an item is `queue_add` with `origin: [{kind: provider, ref}]` and the nightqueue `project`, after the person said yes.",
         inputSchema: {
           team: optionalText.describe("The tracker team key, e.g. `MK`."),

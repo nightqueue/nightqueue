@@ -15,7 +15,7 @@ const ATTACH_MUTATION = "mutation($issueId: String!, $url: String!, $title: Stri
 const COMMENT_MUTATION ="mutation($issueId: String!, $body: String!) { commentCreate(input: { issueId: $issueId, body: $body }) { success } }";
 const ISSUES_QUERY =
   "query($filter: IssueFilter, $first: Int) { issues(filter: $filter, first: $first, orderBy: updatedAt) { " +
-  "nodes { identifier title url priority priorityLabel updatedAt state { name type } team { key } project { name } labels { nodes { name } } } " +
+  "nodes { identifier title url priority priorityLabel updatedAt state { name type } team { key } project { name } labels { nodes { name color } } } " +
   "pageInfo { hasNextPage } } }";
 const TEAMS_QUERY = "query { teams { nodes { key name projects { nodes { name } } } } }";
 const READ_QUERY =
@@ -297,14 +297,23 @@ async function closeLinearIssue({ ref, job, result, slot, http, progress }) {
   return closeAnswer({ ref, state, ...(await attachAndComment({ http, slot, issue, job, result, progress })) });
 }
 
+// The team key (null for a bare number) and number a search text names as an issue id, null when it is not one.
+function issueIdIn(text) {
+  const match = /^(?:([a-z][a-z0-9]*?)[-\s]?)?(\d+)$/i.exec(String(text ?? "").trim());
+  return match ? { key: match[1] ? match[1].toUpperCase() : null, number: Number(match[2]) } : null;
+}
+
 // The issues filter built from the given fields only.
 function issuesFilter({ team, project, state, text, label }) {
   const filter = {};
+  const id = issueIdIn(text);
   if (team) filter.team = { key: { eq: team } };
+  if (id?.key) filter.team = { key: { eq: id.key } };
   if (project) filter.project = { name: { eq: project } };
   if (state === "open") filter.state = { type: { nin: DONE_TYPES } };
   if (state === "closed") filter.state = { type: { in: DONE_TYPES } };
-  if (text) filter.or = [{ title: { containsIgnoreCase: text } }, { description: { containsIgnoreCase: text } }];
+  if (id) filter.number = { eq: id.number };
+  else if (text) filter.or = [{ title: { containsIgnoreCase: text } }, { description: { containsIgnoreCase: text } }];
   if (label) filter.labels = { some: { name: { eqIgnoreCase: label } } };
   return filter;
 }
@@ -319,6 +328,13 @@ function labelNames(node) {
   return nodesOf(node?.labels).map((label) => String(label?.name ?? "")).filter(Boolean);
 }
 
+// The labels of an issue as { name, color }, color null when the service sent none.
+function labelDetails(node) {
+  return nodesOf(node?.labels)
+    .filter((label) => String(label?.name ?? ""))
+    .map((label) => ({ name: String(label.name), color: typeof label.color === "string" && label.color ? label.color : null }));
+}
+
 // One issue of the list as the tracker tool answers it.
 function issueItem(node) {
   return {
@@ -330,6 +346,7 @@ function issueItem(node) {
     priority: Number.isFinite(node?.priority) ? node.priority : 0,
     priorityLabel: node?.priorityLabel ?? null,
     labels: labelNames(node),
+    labelDetails: labelDetails(node),
     url: node?.url ?? null,
     updatedAt: node?.updatedAt ?? null,
   };
