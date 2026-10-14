@@ -108,7 +108,7 @@ const SERVER_INSTRUCTIONS = [
   "One job is one self-contained deliverable, and a large plan is ONE job with numbered stages written in the prompt, never several jobs that depend on each other.",
   "Operate nightqueue through these MCP tools only - never the CLI, the database file, the home directory or the project's files.",
   "Start a single job now, with `queue_run` and its `job_id`, only when the person asks for that one job now; the whole batch starts with `queue_run` without `job_id`.",
-  "Every job ends as an open pull request (`done`) or stopped at a gate with its reason in `notice_md`.",
+  "Every job ends as an open pull request (`done`), as `done` with no pull request when the run concluded on purpose that no code change is needed (its conclusion in `notice_md`), or stopped at a gate with its reason in `notice_md`.",
   "At a gate, read `notice_md` whole with `queue_status`, present it to the person, and answer with `queue_retry` only after the person answers; a done job is closed with `queue_close`.",
   "Call `queue_status` to see what is pending before suggesting a batch.",
   "decisions are the operator's record of the project's standing constraints - recall them before proposing architecture and save one, outside a queue run, when the user settles a design question; inside a queue job they are read-only context and never bind the run",
@@ -1300,6 +1300,7 @@ function toolDefinitions(env, state) {
           "`sections` carries each part of the read with `ok`, `error` and elapsed `ms`, and `pr_state` of each job comes from a cache refreshed outside the answer (`unknown` until gh answered); " +
           "a `running` job carries `live` (agent, lane intent, last action, partial tokens, `source: \"log-tail\"`), every other job `live: null`, and `sections` has a `live` entry; " +
           "a merged pull request on a `done` job is listed in `suggestions`, and closing it is `queue_close`. `closes` groups the closes in flight, failed and stalled. " +
+          "`resolution` is `no-change` on a done or closed job resolved without a code change, else null. " +
           "`tokens_*`, `cache_*`, `cost_usd` and the host/orchestrator counters are totals across every attempt; `attempts_log` lists one row per claim of the job (released, parked and lost ones included, `spawns` counts the runner's inner re-spawns inside that claim, `fresh: true` after a `--fresh` retry); `attempts` stays the retry budget counter, which inner re-spawns also increment; `active_s` is the sum of the rows' durations and `wall_s` the span from the first start.",
         inputSchema: {
           job_id: jobRefInput.nullable().optional().describe("One job by its ref (`J-77`) or its plain id."),
@@ -1373,6 +1374,7 @@ function toolDefinitions(env, state) {
         description:
           "Cancels a pending, gated, done, failed or orphaned job. A job running under a live lease, a done job being closed under a live close lease, and a done job whose close was interrupted (resume that one with queue_close), are refused with the exact reason and no write; `closed` and `cancelled` jobs are refused as already finished. " +
           "Cancelling a `done` or `failed` job also releases its worktree: removed when clean and published, otherwise kept with the reason. The answer carries `worktree` (`{ path, status, reason? }`, or null when nothing was released). " +
+          "A done job resolved without change is cancelled like any done job; nothing is sent to its origins. " +
           "With `stop: true` a job running on a runner of this host is cancelled in one call: the job goes from `running` straight to `cancelled` in one write that only succeeds while that runner still owns it - no other runner can claim it in between - and its attempt is given back; then that runner alone is stopped exactly like `queue_stop` with its pid (SIGTERM, up to 10 s), and `runner` answers `{ outcome, pid, message }`. " +
           "The runner notices the stop only at its next heartbeat, so `alive` is an expected answer when `queue.leaseHeartbeatS` is long: that runner ends by itself and the job stays cancelled.`release_worktree: true` (only with `stop`) then releases the job's worktree by the same rule as a done or failed cancel, once the runner is gone. " +
           "A worker of another host, a pid that is not a live registered runner of this home, and a registration of another user are refused with the reason, with nothing signalled or written. A job that is not running is cancelled by the rules above and `runner` is null.",
@@ -1390,9 +1392,10 @@ function toolDefinitions(env, state) {
       guardsHome: true,
       config: {
         description:
-          "Closes a job: takes its open pull request to merged and the job to `closed`, through the code pipeline preflight, conflict, merge, settle, then the post-close steps origin and log, which never stop a close (a failure is a line in `notice_md`) - run by code, never by an agent; the conflict step may hand a small textual conflict to the bounded merger agent (see the runtime contract). `closed` always means the pull request was merged through this pipeline. " +
+          "Closes a job: takes its open pull request to merged and the job to `closed`, through the code pipeline preflight, conflict, merge, settle, then the post-close steps origin and log, which never stop a close (a failure is a line in `notice_md`) - run by code, never by an agent; the conflict step may hand a small textual conflict to the bounded merger agent (see the runtime contract). " +
+          "A `done` job with no pull request, resolved without change, closes too: preflight, conflict and merge are recorded as skipped, it ends `closed` with `resolution: no-change`, and origin and log tell the origins it was resolved without a code change with the run's conclusion. `closed` means the pull request was merged through this pipeline OR the job was resolved without change through it. " +
           "It starts DETACHED and returns immediately with the pid and the log path; it never waits for the merge. Follow it with `queue_status` and the job id. " +
-          "Only a `done` job with a pull request is closed. `closed`, `running`, `pending`, `gate`, `failed`, `cancelled`, a `done` job with no pull request and a job already being closed under a live lease are refused by name, and nothing is written. Refused inside an unattended run. " +
+          "Only a `done` job is closed. `closed`, `running`, `pending`, `gate`, `failed`, `cancelled`, a job already being closed under a live lease, and `force` on a job with no pull request are refused by name, and nothing is written. Refused inside an unattended run. " +
           "A close that stopped keeps its checklist and its reason on the job (`close`, `close_status: failed`); calling this tool again resumes it at the step that failed. " +
           "`force` skips the pull request checks and the rebase test suite only, and never runs the merger; conflicts, a pull request that is not the job's own and the job's status still stop the close. " +
           "A pull request closed without merge cancels the job and releases its worktree; one merged by hand is recorded as `merged outside a close`.",
@@ -1596,7 +1599,7 @@ function toolDefinitions(env, state) {
       name: "run_outcome",
       config: {
         description:
-          "Records how the run ended: `done` when the pull request exists, `gate` with the `notice` the operator has to answer. " +
+          "Records how the run ended: `done` when the pull request exists, `gate` with the `notice` the operator has to answer, `no_change` with the run's conclusion as `notice` when the run concluded on purpose that no code change is needed (the job ends `done` with no pull request). " +
           "The pull request URL is NOT a parameter: the runtime writes it from what the session really published. " +
           "Inside a job the run is resolved from the job's own row — passing `project` or `slug` there is refused; outside a job both are required.",
         inputSchema: { status: z.enum(RUN_OUTCOME_STATUSES), notice: optionalText, project: optionalText, slug: optionalText },

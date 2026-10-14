@@ -34,11 +34,19 @@ function boundHttp(ctx, deps) {
     requestJson(fetchImpl, url, { timeoutMs: Math.max(1, Math.min(HTTP_TIMEOUT_MS, ctx.remainingMs() - BUDGET_RESERVE_MS)), ...options, signal: ctx.signal });
 }
 
-// What a provider is told about the closed job, the merge that closed it and the origins it came from.
+// What a provider is told about the closed job, how it closed (its pull request merged, or resolved without change with the run's conclusion) and the origins it came from.
 function closeFacts(ctx, origins) {
   return {
     job: { id: ctx.jobId, ref: ctx.jobRef, slug: ctx.slug, title: ctx.title, operatorTitle: ctx.operatorTitle, project: ctx.project, notice_md: ctx.noticeMd },
-    result: { prUrl: ctx.prUrl, prNumber: ctx.prNumber, mergeSha: ctx.mergeSha, mergedAt: ctx.mergedAt },
+    result: {
+      prUrl: ctx.prUrl,
+      prNumber: ctx.prNumber,
+      mergeSha: ctx.mergeSha,
+      mergedAt: ctx.mergedAt,
+      resolution: ctx.resolution ?? "merged",
+      conclusion: ctx.conclusion ?? null,
+      resolvedAt: ctx.resolvedAt ?? null,
+    },
     origins,
   };
 }
@@ -117,7 +125,7 @@ function recordOriginOutcome(key, result, { notified, progress }) {
   }
 }
 
-// Tells one origin its pull request merged unless it already was, marking it notified; a throw becomes a warning.
+// Tells one origin its pull request merged, or it was resolved without change, unless it already was, marking it notified; a throw becomes a warning.
 async function notifyOrigin(origin, { ctx, deps, files, notified, progress, described }) {
   const key = originLabel(origin);
   const named = (result, extra = {}) => ({ status: result.status, note: `${key}: ${result.note}`, notice: result.notice === true, ...extra });
@@ -144,7 +152,7 @@ function foldOriginResults(results, { notified, progress }) {
   return answer(status, note, { notice: results.some((result) => result.notice), data: { originsNotified: notified, originsProgress: progress }, lines: results });
 }
 
-// Tells every service the job came from that its pull request merged, once per origin and in registry order: the origin step of a close.
+// Tells every service the job came from that its pull request merged or it was resolved without change, once per origin and in registry order: the origin step of a close.
 export async function originStep({ ctx, deps }) {
   const origins = byRegistryOrder(ctx.origins ?? []);
   if (!origins.length) return answer("skipped", "no origin");

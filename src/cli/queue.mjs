@@ -64,7 +64,7 @@ export const USAGE = {
   status: "nightqueue queue status [J-<id>|<id>|<PR URL>] [--limit <n>] [--json] [--follow [seconds]] [--until-idle] [--blocked]",
   run: "nightqueue queue run [--job <id> | --watch [seconds] [--from HH:MM] --until HH:MM] [--max <jobs>] [--stop] [--foreground] [--dry] [--json]",
   cancel: "nightqueue queue cancel <id> [--reason <text>] [--json]",
-  close: "nightqueue queue close <id> [--force] [--foreground] [--json], nightqueue queue close <id> --steps origin,log [--again] [--json], or nightqueue queue close --merged [--json]",
+  close: "nightqueue queue close <id> [--force] [--foreground] [--json] (a done job with a pull request, or one resolved without change; --force only with a pull request), nightqueue queue close <id> --steps origin,log [--again] [--json], or nightqueue queue close --merged [--json]",
   retry: "nightqueue queue retry <id> [--note <text>] [--fresh] [--run] [--foreground]",
   repair: "nightqueue queue repair [<id>] [--from-disk] [--json]",
   pause: "nightqueue queue pause",
@@ -1213,9 +1213,10 @@ function prNumberOf(job) {
   return /\/pull\/(\d+)/.exec(String(job?.pr_url ?? ""))?.[1] ?? "?";
 }
 
-// The last line of a foreground close: what it merged and how the job ended, or where it stopped and how to resume.
+// The last line of a foreground close: what it merged, or that it resolved without change, and how the job ended, or where it stopped and how to resume.
 function closeOutcomeLine(id, { outcome, job }) {
   const worktree = outcome.worktree ? `; ${worktreeLine(outcome.worktree)}` : "";
+  if (outcome.status === "closed" && outcome.resolution === "no-change") return `${jobRef(id)} closed: resolved without change (no pull request)${worktree}`;
   if (outcome.status === "closed") return `${jobRef(id)} closed: PR #${prNumberOf(job)} merged as ${String(outcome.mergeSha ?? "").slice(0, 7)}${worktree}`;
   if (outcome.status === "cancelled") return `${jobRef(id)} cancelled: PR #${prNumberOf(job)} was closed without being merged; nothing to close${worktree}`;
   if (outcome.status === "lost") return `${jobRef(id)}: the close lease was taken over by another process; follow it with nightqueue queue status ${jobRef(id)}`;
@@ -1255,8 +1256,9 @@ export function closeStepPrinter(say, tty) {
 
 // Prints how a foreground close ended and answers 0 only when it closed the job.
 function reportCloseOutcome(id, result, values, ctx) {
-  const { status, step = null, reason = null, mergeSha = null } = result.outcome;
-  if (values.json) ctx.out(JSON.stringify({ job: jobView(result.job, { full: true }), outcome: { status, step, reason, mergeSha } }));
+  const { status, step = null, reason = null, mergeSha = null, resolution = null } = result.outcome;
+  const resolved = resolution ? { resolution } : {};
+  if (values.json) ctx.out(JSON.stringify({ job: jobView(result.job, { full: true }), outcome: { status, step, reason, mergeSha, ...resolved } }));
   else ctx.out(closeOutcomeLine(id, result));
   return status === "closed" ? 0 : 1;
 }
@@ -1316,7 +1318,7 @@ async function runCloseSteps(positionals, values, ctx) {
   return result.status !== "refused" && result.status !== "failed" && result.steps.every((step) => step.status !== "warning") ? 0 : 1;
 }
 
-// Runs `queue close`: the closing pipeline on one done job with a pull request, detached unless --foreground, or `--merged` for every done job the pull request state confirms merged.
+// Runs `queue close`: the closing pipeline on one done job with a pull request, or one resolved without change, detached unless --foreground, or `--merged` for every done job the pull request state confirms merged.
 async function runClose(argv, ctx) {
   const { values, positionals } = parseCommand(argv, CLOSE_OPTIONS);
   if (values.again === true && values.steps === undefined) throw new UserError(`\`--again\` is valid only with --steps; usage: ${USAGE.close}`);

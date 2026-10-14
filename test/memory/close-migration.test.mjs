@@ -165,8 +165,9 @@ test("a v15 home opens at the current schema with the close columns, no ship col
   const fresh = makeHome(t, "close-migration-schema-fresh");
   for (const home of [db, migrateTestHome(fresh)]) {
     const sql = home.prepare("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'jobs'").get().sql;
-    assert.match(sql, /close_worker TEXT,(?: \w+ (?:TEXT|INTEGER),)*\s+CHECK \(status <> 'closed' OR \(pr_url IS NOT NULL AND trim\(pr_url\) <> '' AND close_status IS NULL/);
+    assert.match(sql, /close_worker TEXT,(?: \w+ (?:TEXT|INTEGER),)*\s+CHECK \(status <> 'closed' OR \(close_status IS NULL AND \(\(pr_url IS NOT NULL AND trim\(pr_url\) <> ''/);
     assert.match(sql, /json_extract\(close, '\$\.data\.merged'\) END\) IS 1/);
+    assert.match(sql, /json_extract\(close, '\$\.data\.resolvedWithoutChange'\) END\) IS 1/);
   }
 });
 

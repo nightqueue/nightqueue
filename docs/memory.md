@@ -122,6 +122,16 @@ is kept and indexed, that no tracker object is left and that no foreign key brea
 refs and titles are untouched; the tracker rows stay only in the copy. The same live-lease
 refusal applies.
 
+Schema v25 lets a job resolved without change be `closed`: the closed invariant of `jobs`
+accepts, besides a pull request whose checklist records the merge, a row with no pull request
+whose checklist records `data.resolvedWithoutChange: true` (see [Queue](queue.md)). A v24
+database migrates once, in `nightqueue update` (or `setup`) and after the earlier steps when
+they are pending (`src/memory/migration/v25.mjs`): a copy `nightqueue.db.pre-v25` first, then
+one transaction that rebuilds `jobs` under the new invariant - every column kept, the
+per-open ones included, every row in id order, the id sequence kept - recreates its indexes and
+the `jobs_fts` triggers, and checks that every job is kept and indexed, that the new invariant
+is in the schema and that no foreign key breaks. The same live-lease refusal applies.
+
 **A sick database degrades, it does not kill.** The file can break under a live process - a
 home on a network or FUSE mount, a copy taken by hand, a second sqlite opened on the live
 file. Every open and every store call classifies what SQLite throws by its numeric `errcode`
@@ -149,7 +159,7 @@ A database older than the build is the same class with the code `SCHEMA_OUTDATED
 `nightqueue update` and the message `database at v<file>, this nightqueue expects v<code>: run
 \`nightqueue update\``: the MCP tools answer it as `store-unavailable`, the SessionStart hook
 and the MCP server's startup print `nightqueue memory unavailable (SCHEMA_OUTDATED at <home>):
-database at v20, this nightqueue expects v24: run \`nightqueue update\``, and `doctor` names
+database at v20, this nightqueue expects v25: run \`nightqueue update\``, and `doctor` names
 `nightqueue update`. It is never an outage: the runner does not back off on it, it stops with
 the message, since waiting never brings an older schema up to date.
 

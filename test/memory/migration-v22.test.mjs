@@ -32,8 +32,8 @@ const V21_VALUES = Object.freeze({
   integrations: JSON.stringify({ tracker: { onClosed: "resolved" } }),
 });
 const UNTOUCHED = ["decisions", "jobs", "pipeline_runs", "pipeline_phases", "lessons", "memory", "projects", "orgs"];
-const OUTDATED_V20 = /database at v20, this nightqueue expects v24: run `nightqueue update`/;
-const OUTDATED_V21 = /database at v21, this nightqueue expects v24: run `nightqueue update`/;
+const OUTDATED_V20 = /database at v20, this nightqueue expects v25: run `nightqueue update`/;
+const OUTDATED_V21 = /database at v21, this nightqueue expects v25: run `nightqueue update`/;
 const LEASE_REFUSAL = /^the database must migrate to v22, but a runner holds a live lease on J-3: stop the runners \(`nightqueue queue run --stop`\) and run the command again$/;
 
 const AUDIT = Object.freeze({
@@ -242,16 +242,16 @@ test("doctor reads a v21 home as pending, every command refuses it, and once the
   mkdirSync(join(cwd, ".git"), { recursive: true });
   buildV20Home(env, { checkout: realpathSync(cwd), extra: stampV21 });
 
-  assert.match(runCli(env, ["doctor"], cwd).stdout, /warn\s+database\s+schema v21, this nightqueue expects v24/);
+  assert.match(runCli(env, ["doctor"], cwd).stdout, /warn\s+database\s+schema v21, this nightqueue expects v25/);
   const status = runCli(env, ["queue", "status"], cwd);
   assert.equal(status.status, 1, status.stdout);
   assert.match(status.stderr, OUTDATED_V21);
   assert.equal(diskVersion(env), 21);
   migrateTestHome(env);
   closeDb(env);
-  assert.equal(diskVersion(env), 24);
+  assert.equal(diskVersion(env), 25);
   assert.equal(runCli(env, ["queue", "status"], cwd).status, 0);
-  assert.match(runCli(env, ["doctor"], cwd).stdout, /ok\s+database\s+schema v24/);
+  assert.match(runCli(env, ["doctor"], cwd).stdout, /ok\s+database\s+schema v25/);
 });
 
 test("the migrated tables keep every foreign key rule, and their counters never reuse a deleted id", (t) => {
@@ -332,7 +332,7 @@ test("an orphan in a v20 home refuses the v22 migration naming its row, and doct
     await store.close();
   }
   const message = refusalOf(env);
-  assert.ok(message.startsWith("the database must migrate to v24, but 1 row(s) point at a row that does not exist: "), message);
+  assert.ok(message.startsWith("the database must migrate to v25, but 1 row(s) point at a row that does not exist: "), message);
   assert.ok(message.includes(`\`${OLD_WORD}_comments\` row 500 has item_id 999 (no \`${OLD_WORD}_items\` row 999)`), message);
   assert.ok(message.endsWith("nothing was written"), message);
   assert.equal(health.danglingReferences, 1, "doctor does not count the row the migration refuses");
@@ -344,7 +344,7 @@ test("a v19 home reaches v22 in one migration, keeping the pre-v20 and pre-v22 c
   const env = makeHome(t, "v22-from-v19");
   buildV19Home(env);
   const db = migrateTestHome(env);
-  assert.equal(db.prepare("PRAGMA user_version").get().user_version, 24);
+  assert.equal(db.prepare("PRAGMA user_version").get().user_version, 25);
   assert.equal(readRaw(preV20BackupPath(env), (raw) => schemaVersionOn(raw)), 19);
   assert.equal(readRaw(preV22BackupPath(env), (raw) => schemaVersionOn(raw)), 20);
   assert.equal(readRaw(preVersionBackupPath(env, 24), (raw) => foreignKeyOf(raw, "issues", "job_id")), "jobs SET NULL");
@@ -359,7 +359,7 @@ test("a v17 home reaches v22 in one migration, keeping every copy on the way", (
     seed: (db) => db.prepare(`INSERT INTO ${OLD_WORD}_items (scope, project, title, position) VALUES ('project', 'alpha', 'old item', 1)`).run(),
   });
   const db = migrateTestHome(env);
-  assert.equal(db.prepare("PRAGMA user_version").get().user_version, 24);
+  assert.equal(db.prepare("PRAGMA user_version").get().user_version, 25);
   assert.equal(readRaw(preV18BackupPath(env), (raw) => schemaVersionOn(raw)), 17);
   assert.equal(readRaw(preV19BackupPath(env), (raw) => schemaVersionOn(raw)), 18);
   assert.equal(readRaw(preV20BackupPath(env), (raw) => schemaVersionOn(raw)), 19);
@@ -420,7 +420,7 @@ test("a v22 migration killed right after it built issues leaves v20 intact, and 
 
   assert.throws(() => openDb(env), (err) => err.code === "SCHEMA_OUTDATED");
   const db = migrateTestHome(env);
-  assert.equal(db.prepare("PRAGMA user_version").get().user_version, 24);
+  assert.equal(db.prepare("PRAGMA user_version").get().user_version, 25);
   const copied = readRaw(preVersionBackupPath(env, 24), (raw) => Object.fromEntries(RENAMED.map(({ to }) => [to, rowsOf(raw, to)])));
   for (const { to } of RENAMED) assert.deepEqual(copied[to], before.rows[to], `${to} changed a row`);
   assert.deepEqual(db.prepare("PRAGMA foreign_key_check").all(), []);
@@ -437,16 +437,16 @@ test("doctor reads a v20 home as pending, every command refuses it, and once the
   mkdirSync(join(cwd, ".git"), { recursive: true });
   buildV20Home(env, { checkout: realpathSync(cwd) });
 
-  assert.match(runCli(env, ["doctor"], cwd).stdout, /warn\s+database\s+schema v20, this nightqueue expects v24/);
+  assert.match(runCli(env, ["doctor"], cwd).stdout, /warn\s+database\s+schema v20, this nightqueue expects v25/);
   const status = runCli(env, ["queue", "status"], cwd);
   assert.equal(status.status, 1, status.stdout);
   assert.match(status.stderr, OUTDATED_V20);
   assert.equal(diskVersion(env), 20);
   migrateTestHome(env);
   closeDb(env);
-  assert.equal(diskVersion(env), 24);
+  assert.equal(diskVersion(env), 25);
   assert.equal(runCli(env, ["queue", "status"], cwd).status, 0);
   const report = runCli(env, ["doctor"], cwd).stdout;
-  assert.match(report, /ok\s+database\s+schema v24/);
+  assert.match(report, /ok\s+database\s+schema v25/);
   assert.equal(report.includes("issue workflow"), false, report);
 });

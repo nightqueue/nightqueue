@@ -1,5 +1,6 @@
 import { Link } from "@tanstack/react-router";
 import { GitMerge, Play } from "lucide-react";
+import { hasCloseTarget } from "../lib/actions";
 import { activeMs, formatDurationMs, hhmmUtc } from "../lib/format";
 import { jobRef, jobTitle } from "../lib/queue";
 import type { Job } from "../lib/types";
@@ -120,9 +121,9 @@ function closable(job: Job): boolean {
   return job.status === "done" && !job.studio.closing;
 }
 
-// The inline Close of a done row, disabled with a tooltip when the job has no pull request.
+// The inline Close of a done row, disabled with a tooltip when the job has no pull request and was not resolved without change.
 function InlineClose({ job, onClose }: { job: Job; onClose?: (job: Job) => void }) {
-  const noPr = !job.pr_url;
+  const noPr = !hasCloseTarget(job);
   return (
     <span title={noPr ? NO_PR_TOOLTIP : undefined}>
       <Button size="sm" aria-label={`close ${jobRef(job.id)}`} disabled={noPr || !onClose} onClick={() => onClose?.(job)}>

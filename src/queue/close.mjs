@@ -3,7 +3,9 @@ import { parseRunId } from "../host/gh.mjs";
 import { sameBranch } from "./branch-name.mjs";
 import { defaultCloseDeps } from "./close-deps.mjs";
 import { jobTitle } from "./job-title.mjs";
-import { closedLine, parseCloseChecklist, postCloseLine } from "./close-view.mjs";
+import { closedLine, parseCloseChecklist, postCloseLine, resolvedLine } from "./close-view.mjs";
+import { runOwnNotice } from "./run-notice.mjs";
+import { isNoChangeJob } from "../memory/jobs.mjs";
 import { resolveConflictedRebase } from "./merger.mjs";
 import { releaseJobWorktree } from "./worktree.mjs";
 import { checkoutOfJob } from "../memory/registry-access.mjs";
@@ -1059,6 +1061,30 @@ async function settleStep({ ctx }) {
   return { status: "done", note: `closing the job: ${noticeLine}`, data: { noticeLine } };
 }
 
+// The note of a pre step a close resolved without change skips: there is no pull request to check, rebase or merge.
+const NO_PR_NOTE = "no pull request: resolved without a code change";
+
+// A pre step of a close resolved without change: recorded skipped, touching neither gh nor git.
+function noPrSkipStep() {
+  return { status: "skipped", note: NO_PR_NOTE };
+}
+
+// Prepares the close of a job resolved without change: the checklist records the resolution and the notice line is written from it.
+function settleNoChangeStep({ ctx }) {
+  const resolvedAt = new Date(ctx.nowMs()).toISOString();
+  const noticeLine = resolvedLine({ at: resolvedAt });
+  return { status: "done", note: `closing the job: ${noticeLine}`, data: { noticeLine, resolvedWithoutChange: true, resolvedAt } };
+}
+
+// The pre steps of a close resolved without change, by name, in place of the pull request ones.
+const NO_CHANGE_PRE_STEPS = { preflight: noPrSkipStep, conflict: noPrSkipStep, merge: noPrSkipStep, settle: settleNoChangeStep };
+
+// The pre steps a job's close runs: the pull request ones, or, for a job resolved without change, the same names with no gh or git call.
+function preStepsFor(job, pre) {
+  if (!isNoChangeJob(job)) return pre;
+  return pre.map((step) => ({ ...step, run: NO_CHANGE_PRE_STEPS[step.name] ?? step.run }));
+}
+
 export const CLOSE_STEPS = [
   { name: "preflight", run: preflightStep },
   { name: "conflict", run: conflictStep },
@@ -1155,6 +1181,7 @@ function buildContext(run, stepName) {
     force: force === true,
     checkout,
     deadlineMs: deadline.deadlineMs,
+    nowMs: () => now(),
     remainingMs: () => Math.max(0, deadline.deadlineMs - now()),
     signal: deadline.controller.signal,
     warning: checklist.data.fetchWarning ?? null,
@@ -1228,9 +1255,14 @@ function markReopened(checklist, name) {
   if (entry) checklist.steps[name] = { ...entry, status: "reopened" };
 }
 
+// The resolution key of an outcome: `no-change` once the checklist records a resolution without change, none for a merge.
+function resolutionOf(checklist) {
+  return checklist.data.resolvedWithoutChange === true ? { resolution: "no-change" } : {};
+}
+
 // The outcome of an attempt, in the shape every caller reads.
 function outcomeOf(status, { step = null, reason = null, checklist, worktree = null }) {
-  return { status, step, reason, mergeSha: checklist.data.mergeSha ?? null, worktree };
+  return { status, step, reason, mergeSha: checklist.data.mergeSha ?? null, ...resolutionOf(checklist), worktree };
 }
 
 // Stops the close as failed at a step, releasing the lease; a lease that is not this worker's any more answers `lost`.
@@ -1388,6 +1420,9 @@ function postCloseContext(run, stepName) {
     noticeMd: job.notice_md ?? null,
     mergeSha: checklist.data.mergeSha ?? null,
     mergedAt: checklist.data.mergedAt ?? null,
+    resolution: isNoChangeJob(job) ? "no-change" : "merged",
+    conclusion: runOwnNotice(job.notice_md),
+    resolvedAt: checklist.data.resolvedAt ?? null,
   };
 }
 
@@ -1495,7 +1530,7 @@ export async function runClosePipeline({ store, job, worker, env = process.env, 
   const run = { ...base, checklist: startingChecklist(job), deadline };
   let outcome;
   try {
-    outcome = await walkSteps(run, pre);
+    outcome = await walkSteps(run, preStepsFor(job, pre));
   } finally {
     deadline.disarm();
   }

@@ -41,6 +41,7 @@ export interface Job {
   branch: string | null;
   pr_url: string | null;
   pr_state?: string | null;
+  resolution?: "no-change" | null;
   worker: string | null;
   operator_note: string | null;
   blocked_code: string | null;

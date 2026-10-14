@@ -210,12 +210,12 @@ test("the server never migrates a v8 home: a tool answers store-unavailable with
   assert.equal(status.error, "store-unavailable");
   assert.equal(status.code, "SCHEMA_OUTDATED");
   assert.equal(status.hint, "nightqueue update");
-  assert.match(status.message, /database at v8, this nightqueue expects v24: run `nightqueue update`/);
+  assert.match(status.message, /database at v8, this nightqueue expects v25: run `nightqueue update`/);
 
   const db = openDbReadOnly(env, { anySchema: true });
   t.after(() => db.close());
   assert.equal(db.prepare("PRAGMA user_version").get().user_version, 8);
-  assert.equal(DB_USER_VERSION, 24);
+  assert.equal(DB_USER_VERSION, 25);
 });
 
 test("the handshake carries the instructions that teach the backlog model", async (t) => {
@@ -1453,10 +1453,12 @@ test("queue_stop refuses the home of the runner from inside a job, like queue_ca
   assert.ok(textOf(refused).includes(HOME_REFUSAL), textOf(refused));
 });
 
-test("queue_close runs only on a done job with a pull request, refusing every other job by name without writing", async (t) => {
+test("queue_close runs only on a done job, never forced without a pull request, refusing every other job by name without writing", async (t) => {
   const env = makeQueueHome(t, "mcp-queue-close");
   const noPr = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker" }, env).id;
   openDb(env).prepare("UPDATE jobs SET status = 'done' WHERE id = ?").run(noPr);
+  const noChange = addJob({ projectId: ensureProject(env, "alpha"), prompt: "explain the loop" }, env).id;
+  openDb(env).prepare(`UPDATE jobs SET status = 'done', result = '{"resolution":"no-change"}' WHERE id = ?`).run(noChange);
   const failed = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the parser" }, env).id;
   openDb(env).prepare("UPDATE jobs SET status = 'failed', pr_url = ?, finished_at = ? WHERE id = ?").run("https://github.com/acme/api/pull/42", GATED_FINISHED_AT, failed);
   const pending = addJob({ projectId: ensureProject(env, "alpha"), prompt: "wait for a human" }, env).id;
@@ -1466,6 +1468,7 @@ test("queue_close runs only on a done job with a pull request, refusing every ot
 
   const cases = [
     [noPr, /nothing to close: the job has no pull request/],
+    [noChange, /has no pull request: --force only skips pull request checks; close it without --force/],
     [failed, /failed; retry it or cancel it - only a done job is closed/],
     [pending, /is pending; it has not produced a pull request yet/],
     [running, /is running with a live lease on worker/],

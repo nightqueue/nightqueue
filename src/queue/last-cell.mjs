@@ -1,3 +1,5 @@
+import { isNoChangeJob, NO_CHANGE_RESOLUTION } from "../memory/jobs.mjs";
+import { jobRef } from "../memory/refs.mjs";
 import { closeLastCell } from "./close-view.mjs";
 import { parkedJobLabel } from "./hints.mjs";
 import { agentGlyph } from "./routing.mjs";
@@ -58,12 +60,23 @@ export function blockedOf(job) {
   return { code, message: blockedMessage(job, code) };
 }
 
-// Why a job that is not running stands where it does (close note, preflight block, gate notice, parked reset), or null.
+// Tells whether a row or a job view was resolved without change, trusting the view's own resolution over a result it may have truncated.
+function resolvedWithoutChange(job) {
+  return "resolution" in job ? job.resolution === NO_CHANGE_RESOLUTION : isNoChangeJob(job);
+}
+
+// What LAST says of a job resolved without change: how to close it while done, the fact once closed.
+function noChangeReason(job) {
+  return job.status === "done" ? `resolved without change - close it with nightqueue queue close ${jobRef(job.id)}` : "closed without change";
+}
+
+// Why a job that is not running stands where it does (close note, preflight block, resolution without change, gate notice, parked reset), or null.
 export function stoppedReason(job) {
   const close = closeLastCell(job);
   if (close) return close;
   const blocked = blockedOf(job);
   if (blocked) return blocked.message ? `⛔ ${blocked.code}: ${blocked.message}` : `⛔ ${blocked.code}`;
+  if (resolvedWithoutChange(job)) return noChangeReason(job);
   if (job.status === "gate" || job.status === "failed") return firstNoticeLine(job);
   return parkedJobLabel(job);
 }

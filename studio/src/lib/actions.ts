@@ -57,9 +57,14 @@ export function canCancel(job: Pick<Job, "status">): boolean {
   return CANCELLABLE.includes(job.status);
 }
 
-// Tells whether `queue_close` takes the job: done, with a pull request, and no close already running.
+// Tells whether a job has something to close: a pull request, or a resolution without change.
+export function hasCloseTarget(job: Pick<Job, "pr_url" | "resolution">): boolean {
+  return Boolean(job.pr_url) || job.resolution === "no-change";
+}
+
+// Tells whether `queue_close` takes the job: done, with a pull request or resolved without change, and no close already running.
 export function canClose(job: Job): boolean {
-  return job.status === "done" && Boolean(job.pr_url) && !job.studio.closing;
+  return job.status === "done" && hasCloseTarget(job) && !job.studio.closing;
 }
 
 // Tells whether a close needs no confirm: the pull request is already merged, so nothing gets merged.

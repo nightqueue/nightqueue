@@ -1,4 +1,4 @@
-export const DB_USER_VERSION = 24;
+export const DB_USER_VERSION = 25;
 
 export const LEASE_GRACE_S = 60;
 
@@ -11,9 +11,10 @@ export function activeFor(alias) {
 // A job is active while it is running under a lease inside the grace window: the ceiling counts these.
 export const ACTIVE_JOB_PREDICATE = activeFor("slot");
 
-// The invariant of a closed job: it carries a pull request and a close checklist recording the merge, with no close in flight.
-export const CLOSED_REQUIRES_MERGE = `CHECK (status <> 'closed' OR (pr_url IS NOT NULL AND trim(pr_url) <> '' AND close_status IS NULL
-  AND (CASE WHEN json_valid(close) THEN json_extract(close, '$.data.merged') END) IS 1))`;
+// The invariant of a closed job, with no close in flight: a pull request whose checklist records the merge, or no pull request and a checklist recording its resolution without change.
+export const CLOSED_INVARIANT = `CHECK (status <> 'closed' OR (close_status IS NULL AND ((pr_url IS NOT NULL AND trim(pr_url) <> ''
+  AND (CASE WHEN json_valid(close) THEN json_extract(close, '$.data.merged') END) IS 1)
+  OR ((pr_url IS NULL OR trim(pr_url) = '') AND (CASE WHEN json_valid(close) THEN json_extract(close, '$.data.resolvedWithoutChange') END) IS 1))))`;
 
 // The `result` a cancel or a retry grafts its own field onto: the JSON object already there, or a new one keeping what was.
 export const RESULT_OBJECT_BASE = `CASE

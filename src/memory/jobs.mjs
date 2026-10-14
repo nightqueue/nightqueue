@@ -191,6 +191,7 @@ export function jobView(row, { full = false } = {}) {
   }
   view.close = parseCloseColumn(row.close);
   view.origin = parseOriginsColumn(row.origin);
+  view.resolution = isNoChangeJob(row) ? NO_CHANGE_RESOLUTION : null;
   return Object.assign(view, attemptViewKeys(row));
 }
 
@@ -978,7 +979,29 @@ function closeLeaseLooksLive(row, nowMs) {
   return Number.isFinite(until) && Number.isFinite(nowMs) && until >= nowMs;
 }
 
-// The refusal of a job whose status is not `done`, or null for a done one; only a done job with a pull request is closed.
+// The marker a run resolved without a code change leaves in its row's `result`, and the resolution views report.
+export const NO_CHANGE_RESOLUTION = "no-change";
+
+// Tells whether a row carries a pull request URL that is not blank.
+function hasPrUrl(row) {
+  return typeof row?.pr_url === "string" && row.pr_url.trim() !== "";
+}
+
+// The `result` column of a row as an object, whether stored as text or already parsed, or null when it is not a JSON object.
+function resultObject(value) {
+  if (value && typeof value === "object" && !Array.isArray(value)) return value;
+  return parseCloseColumn(value);
+}
+
+// A done job whose finish recorded resolution no-change, or a closed job whose checklist records resolvedWithoutChange; a missing pull request alone is never enough.
+export function isNoChangeJob(row) {
+  if (!row || hasPrUrl(row)) return false;
+  if (row.status === "done") return resultObject(row.result)?.resolution === NO_CHANGE_RESOLUTION;
+  if (row.status === "closed") return resultObject(row.close)?.data?.resolvedWithoutChange === true;
+  return false;
+}
+
+// The refusal of a job whose status is not `done`, or null for a done one; a done job is closed with its pull request or as resolved without change.
 function statusRefusal(id, row) {
   if (row.status === "done") return null;
   if (row.status === "closed") return `job \`${id}\` is already closed`;
@@ -990,12 +1013,15 @@ function statusRefusal(id, row) {
   return `job \`${id}\` cannot be closed from status \`${row.status}\``;
 }
 
-// Explains, from the current row, why a close would be refused, or null when nothing refuses it; the lease itself is decided by `acquireClose`.
-export function closeRefusal(id, row, { nowMs = Date.now() } = {}) {
+// Explains, from the current row, why a close would be refused, or null when nothing refuses it; a done job with no pull request closes as resolved without change, never forced; the lease itself is decided by `acquireClose`.
+export function closeRefusal(id, row, { nowMs = Date.now(), force = false } = {}) {
   if (!row) return `unknown job \`${id}\``;
   const refusal = statusRefusal(id, row);
   if (refusal) return refusal;
-  if (!row.pr_url) return "nothing to close: the job has no pull request";
+  if (!hasPrUrl(row) && !isNoChangeJob(row)) return "nothing to close: the job has no pull request";
+  if (force === true && isNoChangeJob(row)) {
+    return `job \`${id}\` has no pull request: --force only skips pull request checks; close it without --force`;
+  }
   if (closeLeaseLooksLive(row, nowMs)) {
     return `job \`${id}\` is already being closed by \`${row.close_worker}\` until ${sqliteToIso(row.close_lease_until)}; follow it with nightqueue queue status ${jobRef(id)}`;
   }
@@ -1009,7 +1035,7 @@ const CLOSE_REARMED = `json_set(${CLOSE_OBJECT_BASE},
               '$.finishedAt', json('null'),
               '$.failed', json('null'))`;
 
-// Takes the close lease of a done job in one compare-and-swap and re-arms its checklist for a new attempt, marking it `forced` for good once `--force` was passed; null means the WHERE refused and nothing was written.
+// Takes the close lease of a done job, with a pull request or resolved without change, in one compare-and-swap and re-arms its checklist for a new attempt, marking it `forced` for good once `--force` was passed; null means the WHERE refused and nothing was written.
 export function acquireClose(id, { worker, leaseS, force = false } = {}, env = process.env) {
   const statement = openDb(env).prepare(
     `UPDATE jobs
@@ -1018,8 +1044,8 @@ export function acquireClose(id, { worker, leaseS, force = false } = {}, env = p
             close_lease_until = ${CLOSE_LEASE_EXPRESSION},
             close = CASE WHEN ? = 1 THEN json_set(${CLOSE_REARMED}, '$.forced', json('true')) ELSE ${CLOSE_REARMED} END
       WHERE id = ?
-        AND pr_url IS NOT NULL
         AND status = 'done'
+        AND ((pr_url IS NOT NULL AND trim(pr_url) <> '') OR json_extract(${RESULT_OBJECT_BASE}, '$.resolution') = '${NO_CHANGE_RESOLUTION}')
         AND (close_status IS NULL OR close_status = 'failed' OR (close_status = 'closing' AND NOT (${CLOSE_LEASE_LIVE})))
       RETURNING *`,
   );
@@ -1082,7 +1108,7 @@ export function failClose(id, { worker, close } = {}, env = process.env) {
   return writeCloseDurably({ id, statement, values, witness: closeWitness(CLOSE_WITNESS_COLUMNS, owner), env }) !== null;
 }
 
-// Closes a done job whose merge its checklist records, releases the lease, leaving its notice untouched, in one statement; null means the WHERE refused it.
+// Closes a done job whose merge, or resolution without change, its checklist records, releases the lease, leaving its notice untouched, in one statement; null means the WHERE refused it.
 export function settleClose(id, { worker, close } = {}, env = process.env) {
   const db = openDb(env);
   const statement = db.prepare(
@@ -1407,12 +1433,23 @@ export function isJobActive(id, env = process.env, db = openDb(env)) {
 // A retry writes `retriedFrom` in the same statement that flips the row back to pending, so a row carrying it was reopened after its witness was written and no witness speaks for it any more.
 const NEVER_REOPENED_BY_RETRY = `json_extract(${RESULT_OBJECT_BASE}, '$.retriedFrom') IS NULL`;
 
+// The `result` of a row moved to an end status with its no-change marker written or removed explicitly, never inherited from an earlier attempt.
+function withResolutionMarker(resultExpression) {
+  return `CASE WHEN ? = '${NO_CHANGE_RESOLUTION}' THEN json_set(${resultExpression}, '$.resolution', '${NO_CHANGE_RESOLUTION}')
+              ELSE json_remove(${resultExpression}, '$.resolution') END`;
+}
+
+// The marker an end status carries: no-change only for a done outcome with no pull request that recorded it, otherwise null.
+function noChangeMarker({ status, prUrl, resolution }) {
+  return status === "done" && optionalText(prUrl) === null && resolution === NO_CHANGE_RESOLUTION ? NO_CHANGE_RESOLUTION : null;
+}
+
 // Restores a job from the witness its runner left on disk; it writes the row only, never the file, and never touches a job that already ended or that an operator just retried.
 export function repairJobFromWitness(id, terminal, env = process.env) {
   const db = openDb(env);
   const statement = db.prepare(
     `UPDATE jobs
-        SET result = json_set(${RESULT_OBJECT_BASE}, '$.repairedFrom', 'state.json'),
+        SET result = ${withResolutionMarker(`json_set(${RESULT_OBJECT_BASE}, '$.repairedFrom', 'state.json')`)},
             status = ?,
             pr_url = COALESCE(?, pr_url),
             finished_at = COALESCE(?, finished_at),
@@ -1421,31 +1458,30 @@ export function repairJobFromWitness(id, terminal, env = process.env) {
             attempt_started_at = NULL
       WHERE id = ? AND (status = 'running' OR (status = 'pending' AND ${NEVER_REOPENED_BY_RETRY}))`,
   );
-  const values = [
-    requireWritableStatus(terminal?.status),
-    optionalText(terminal?.prUrl),
-    isoToSqlite(terminal?.finishedAt),
-    requireId(id),
-  ];
-  const attemptEnd = { outcome: finishedAttemptEnd(values[0], null).outcome, finishedAt: values[2] };
+  const status = requireWritableStatus(terminal?.status);
+  const finishedAt = isoToSqlite(terminal?.finishedAt);
+  const jobId = requireId(id);
+  const values = [noChangeMarker({ ...terminal, status }), status, optionalText(terminal?.prUrl), finishedAt, jobId];
+  const attemptEnd = { outcome: finishedAttemptEnd(status, null).outcome, finishedAt };
   return inTransaction(db, () => {
     if (statement.run(...values).changes !== 1) return false;
-    closeOpenAttempt(db, values[3], attemptEnd);
+    closeOpenAttempt(db, jobId, attemptEnd);
     return true;
   });
 }
 
 // Rewrites the outcome of a job re-derived from its own log; only a gated or failed row moves, and a refusal writes nothing.
-export function reclassifyJob(id, { status, prUrl, noticeMd } = {}, env = process.env) {
+export function reclassifyJob(id, { status, prUrl, noticeMd, resolution = null } = {}, env = process.env) {
   const statement = openDb(env).prepare(
     `UPDATE jobs
-        SET result = json_set(${RESULT_OBJECT_BASE}, '$.reclassifiedFrom', status),
+        SET result = ${withResolutionMarker(`json_set(${RESULT_OBJECT_BASE}, '$.reclassifiedFrom', status)`)},
             status = ?,
             pr_url = COALESCE(?, pr_url),
             notice_md = COALESCE(?, notice_md)
       WHERE id = ? AND status IN ('gate', 'failed')`,
   );
-  const values = [requireWritableStatus(status), optionalText(prUrl), optionalText(noticeMd), requireId(id)];
+  const writable = requireWritableStatus(status);
+  const values = [noChangeMarker({ status: writable, prUrl, resolution }), writable, optionalText(prUrl), optionalText(noticeMd), requireId(id)];
   return withWriteRetry(() => statement.run(...values)).changes === 1;
 }
 
@@ -1472,18 +1508,20 @@ function recoverRefusal(err) {
 }
 
 // Recreates, under its own id, a job whose row the table lost, from what its run left on disk; it never touches a row that exists.
-export function recoverJob({ id, projectId, slug, branch, status, noticeMd, prUrl, recovered, createdAt, finishedAt } = {}, env = process.env) {
+export function recoverJob({ id, projectId, slug, branch, status, noticeMd, prUrl, recovered, resolution = null, createdAt, finishedAt } = {}, env = process.env) {
   const jobId = requireId(id);
+  const writable = requireWritableStatus(status);
+  const marker = noChangeMarker({ status: writable, prUrl, resolution });
   const values = [
     jobId,
     requireProjectId(projectId),
     RECOVERED_PROMPT,
-    requireWritableStatus(status),
+    writable,
     optionalRunSlug(slug),
     optionalText(branch),
     optionalText(prUrl),
     optionalText(noticeMd),
-    JSON.stringify({ recovered }),
+    JSON.stringify(marker ? { recovered, resolution: marker } : { recovered }),
     isoToSqlite(createdAt),
     isoToSqlite(finishedAt),
     jobId,

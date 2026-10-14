@@ -463,13 +463,16 @@ The runtime waits for every subagent and background task of an unattended run; l
      `worktree` (inside a job the runtime recorded them). Only the fields sent are touched.
    - **Termination on purpose.** When the pipeline terminates by the VERDICT of a phase that
      **was completed and recorded**, call `run_terminate` with that `phase` and the summarized
-     verdict as `reason` — today only **Phase 1** with `NOT-REPRODUCIBLE`/`NEEDS-CLARIFICATION`.
+     verdict as `reason` — today only **Phase 1** with `NO-CHANGE-NEEDED`/`NOT-REPRODUCIBLE`/`NEEDS-CLARIFICATION`.
      **NEVER** call it when the phase stopped halfway and was never recorded (artifact gate,
      `gate_stop`, timeout, gate 2.5, an insufficient brief or `## Requires user confirmation`).
-   - **The outcome of the run.** Call `run_outcome` at exactly TWO points and nowhere else:
-     **Phase 7**, once the pull request exists (`status: "done"`), and the **gate block**,
-     immediately before printing it (`status: "gate"`, `notice` = the body of `## Notice`).
-     `status` accepts ONLY `done` and `gate` — a failure, a cancellation and a timeout are read
+   - **The outcome of the run.** Call `run_outcome` at exactly THREE points and nowhere else:
+     **Phase 7**, once the pull request exists (`status: "done"`); the **gate block**,
+     immediately before printing it (`status: "gate"`, `notice` = the body of `## Notice`); and
+     the **Phase 8 report of a run terminated by `NO-CHANGE-NEEDED`**, before printing its final
+     text (`status: "no_change"`, `notice` = the whole body of its `## Notice`, the conclusion its
+     origins are told when the job is closed).
+     `status` accepts ONLY `done`, `gate` and `no_change` — a failure, a cancellation and a timeout are read
      from how the process ended, never from a record. The pull request URL is not a parameter:
      the runtime writes it from what the session really published.
    - **Tolerant:** a `run_*` call that fails NEVER aborts the pipeline — record it as an open
@@ -500,7 +503,7 @@ The runtime waits for every subagent and background task of an unattended run; l
    The pipeline only **stops to ask the user for input** at these points (each rule lives in
    full in its own phase — this is only the index):
    - **Phase 0 (gate 2.5):** verdict `PROPOSE-ALTERNATIVE` or `ASK`.
-   - **Phase 1 (gate):** verdict `NOT-REPRODUCIBLE` or `NEEDS-CLARIFICATION`.
+   - **Phase 1 (gate):** verdict `NO-CHANGE-NEEDED`, `NOT-REPRODUCIBLE` or `NEEDS-CLARIFICATION`.
    - **Phase 3:** an insufficient brief, `## Requires user confirmation`, or the Type divergence
      valve with no confirmed `feature/refactor`.
    - **Phase 6.5 (native/device-gated capability):** the emulator/CI cannot reproduce it — not a
@@ -528,7 +531,7 @@ The runtime waits for every subagent and background task of an unattended run; l
 2. **Triager — only when `Type = bug/error` and the row gives the triager a `model`** (a
    feature/refactor, and the whole `trivial` tier, goes straight to step 3): run **Phase 1**
    exactly as written. The bug is reproduced before a line is changed;
-   `NOT-REPRODUCIBLE`/`NEEDS-CLARIFICATION` terminates the run there.
+   `NO-CHANGE-NEEDED`/`NOT-REPRODUCIBLE`/`NEEDS-CLARIFICATION` terminates the run there.
 
 3. **Launch 1 coder agent**: `phase_prompt` with `target: "coder"`, then `Agent` with the
    answered `subagent_type` (`nightqueue:coder`), `model` and `prompt` passed verbatim.
@@ -606,10 +609,14 @@ never only the ticket's title/culprit.
 shows the path that produces the reported symptom — without hedging and with no assumed
 payload. A PROCEED that concludes the system behaves correctly, or that rests the cause on a
 guess about data the logged-in emulator would allow confirming, is invalid: reject it and send
-it back to the triager. NOT-REPRODUCIBLE or NEEDS-CLARIFICATION → **terminate the pipeline**
+it back to the triager (a run proven to need no code change is `NO-CHANGE-NEEDED`, never a
+PROCEED). NO-CHANGE-NEEDED, NOT-REPRODUCIBLE or NEEDS-CLARIFICATION → **terminate the pipeline**
 and take `## Open items` to the user. BEFORE terminating, record it (step 5.3):
 `run_phase_done` with `phase: "triage"` **and** `run_terminate` with `phase: "triage"` and the
-verdict as `reason`.
+verdict as `reason`. A `NO-CHANGE-NEEDED` run also records its outcome in the Phase 8 report
+(`run_outcome` with `status: "no_change"`, step 5.3): its job ends `done` with no pull request,
+and closing it tells its origins it was resolved without a code change. NOT-REPRODUCIBLE and
+NEEDS-CLARIFICATION record no outcome: their job ends `cancelled`.
 
 If the triager's return signals that it emitted `## Intent note` or `## Depth note`, the
 architect reads them straight from `01-triage.md` in Phase 3 — neither blocks the advance; the
@@ -1043,7 +1050,7 @@ returned by each phase (not by the icon of the summary table, which may not capt
 nuance) — any deviation, a verdict different from the one listed, or a doubt about any
 of them already makes the run **not happy**:
 
-- Triager: verdict `PROCEED` (not `NOT-REPRODUCIBLE` nor `NEEDS-CLARIFICATION`).
+- Triager: verdict `PROCEED` (not `NO-CHANGE-NEEDED`, `NOT-REPRODUCIBLE` nor `NEEDS-CLARIFICATION`).
 - Architect: no `## Requires user confirmation` in the plan.
 - QA-Guardian: verdict `APPROVED` (not `NEEDS FIX` nor `NEEDS DISCUSSION`).
 - Verifier: verdict `## Verification: PASSED` (not `PASSED-STATIC` nor `FAILED`).
@@ -1135,11 +1142,17 @@ confirmation` block verbatim, followed by the answer line, with NO length cap.
   moment of the notice, `✅ Fixed — goes out in the next release` when it is still going
   out, `✅ Delivered — <what changed>` when the task is not a bug fix. Do not
   let the reader infer the outcome from the support line down in the middle of the text.
+- **A run terminated by `NO-CHANGE-NEEDED`.** Its header is `✅ Resolved — no code change needed`;
+  the body is the conclusion with its evidence, in user language (why nothing in this repository
+  has to change). The runtime appends the line telling the operator to close the job; the notice
+  does NOT write it (it would reach the origins). Record it BEFORE printing the final text: `run_outcome`
+  with `status: "no_change"` and `notice` = the whole body of this `## Notice` (step 5.3) — the
+  job then ends `done` with no pull request, and that body is what its origins are told on close.
 - **What the writing checks (a closed enum).** The writing refuses the notice as a
   whole — the same mechanism as the character cap, nothing is written and the closing
   is stuck until someone rewrites it in the cockpit — when:
-  - the first line does not start with `✅ Fixed`, `✅ Delivered` or
-    `⚠️ Partially fixed`;
+  - the first line does not start with `✅ Fixed`, `✅ Delivered`, `⚠️ Partially fixed`, or
+    (only for a run terminated by `NO-CHANGE-NEEDED`) `✅ Resolved`;
   - some line starts with `Still open` without being exactly
     `Still open — a DIFFERENT problem, does not affect this fix:` or
     `Still open IN THIS FIX:` (the dry label `Still open:` is

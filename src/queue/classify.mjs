@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
-import { truncateByCodePoint } from "../memory/jobs.mjs";
-import { RUN_OUTCOME_STATUSES } from "./run-state.mjs";
+import { NO_CHANGE_RESOLUTION, truncateByCodePoint } from "../memory/jobs.mjs";
+import { NO_CHANGE_OUTCOME, RUN_OUTCOME_STATUSES } from "./run-state.mjs";
 import {
   confirmationSection,
   extractNoticeFromStream,
@@ -29,22 +29,45 @@ const AUTO_BACKGROUNDED_HINT = "the Bash tool had moved this foreground command 
 
 export const SILENT_STOP_NOTICE = "Pipeline stopped without a PR and without explanation (exit 0). See the log.";
 export const NOTHING_TO_CLOSE_LINE = "nothing to close: the run produced no pull request";
+export const NO_CHANGE_NEXT_STEP_LINE = "Next step: close the job so where it came from is told it was resolved without a code change.";
+
+// The run outcomes of an attempt that committed something, which a "no change needed" conclusion can never be.
+const COMMITTED_RUN_OUTCOMES = ["pr_opened", "local_commit"];
 
 // Explicit precedence of the outcome: a stop wins over a timeout, a timeout is never a retryable failure, and a clean exit only
-// waits at the gate when the run itself asked for a decision (the `gate` boolean) AND said why (a `reason`) — either missing is a failure,
-// unless this attempt's own telemetry recorded that it committed nothing, which leaves nothing to close.
-function decideStatus({ exitCode, timedOut, idleTimedOut, stopped, prUrl, gate, reason, runOutcome }) {
+// waits at the gate when the run itself asked for a decision (the `gate` boolean) AND said why (a `reason`) — either missing is a failure;
+// a clean exit that recorded `no_change` with its conclusion and committed nothing ends `done` with no pull request,
+// and one whose own telemetry recorded that it committed nothing, without that record, leaves nothing to close.
+function decideStatus({ exitCode, timedOut, idleTimedOut, stopped, prUrl, gate, noChange, reason, runOutcome }) {
   if (stopped) return "cancelled";
   if (timedOut || idleTimedOut) return "failed";
   if (exitCode !== 0) return "failed";
   if (prUrl && !gate) return "done";
   if (gate && reason) return "gate";
-  return !gate && runOutcome === "no_commit" ? "cancelled" : "failed";
+  if (noChange && reason && !COMMITTED_RUN_OUTCOMES.includes(runOutcome)) return "done";
+  return !gate && !noChange && runOutcome === "no_commit" ? "cancelled" : "failed";
 }
 
 // The notice of a run that committed nothing: its own reason, when it gave one, followed by the nothing-to-close line.
 function nothingToCloseNotice(reason) {
   return reason ? `${reason}\n\n${NOTHING_TO_CLOSE_LINE}` : NOTHING_TO_CLOSE_LINE;
+}
+
+// A notice with every trailing paragraph that starts with one of the prefixes stripped off, trimmed at its end.
+export function trailingStripped(notice, prefixes) {
+  let text = typeof notice === "string" ? notice.trimEnd() : "";
+  for (;;) {
+    const cut = text.lastIndexOf("\n\n");
+    const tail = cut < 0 ? text : text.slice(cut + 2);
+    if (!prefixes.some((prefix) => tail.startsWith(prefix))) return text;
+    text = cut < 0 ? "" : text.slice(0, cut).trimEnd();
+  }
+}
+
+// The notice of a job resolved without change: the run's conclusion followed by exactly one next-step line the runtime owns.
+export function noChangeNotice(reason) {
+  const text = trailingStripped(reason, [NO_CHANGE_NEXT_STEP_LINE]);
+  return text ? `${text}\n\n${NO_CHANGE_NEXT_STEP_LINE}` : NO_CHANGE_NEXT_STEP_LINE;
 }
 
 // Why the run stopped: state.json is the machine record of the outcome and the `## Notice` is the explanation for the operator — the pipeline had been summarizing the second inside the first, so the notice the run wrote wins, the summary the pipeline recorded is the fallback, and the whole final text is the last resort.
@@ -163,12 +186,14 @@ function resolvePrUrl(log, { state, record }) {
 // Classifies the run's own ending, exactly as if a runtime kill never happened: the gate, the pull request and the notice rules.
 function classifyEnding({ record, resultText, log, ending, prUrl, planPath, runOutcome }) {
   const gate = record?.status ? record.status === "gate" : hasGateMarker(resultText) || hasGateMarkerInStream(log);
+  const noChange = record?.status === NO_CHANGE_OUTCOME;
   const reason = gateReason(log, resultText, record?.notice ?? null);
-  const status = decideStatus({ ...ending, prUrl, gate, reason, runOutcome });
+  const status = decideStatus({ ...ending, prUrl, gate, noChange, reason, runOutcome });
   if (status === "gate" && isBrokenGateNotice(reason, planPath)) {
     return { status: "failed", noticeMd: brokenGateNotice(planPath) };
   }
   if (status === "cancelled" && !ending.stopped) return { status, noticeMd: nothingToCloseNotice(reason) };
+  if (status === "done" && noChange && !prUrl) return { status, noticeMd: noChangeNotice(reason), resolution: NO_CHANGE_RESOLUTION };
   const silentStop = status === "failed" && !reason && endedCleanly(ending);
   return { status, noticeMd: silentStop ? SILENT_STOP_NOTICE : reason };
 }

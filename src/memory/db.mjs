@@ -26,6 +26,7 @@ import { migrateJobTitles } from "./migration/job-titles.mjs";
 import { migrateV23 } from "./migration/v23.mjs";
 import { isPendingV22, migrateToV22 } from "./migration/v22.mjs";
 import { isPendingV24, migrateToV24 } from "./migration/v24.mjs";
+import { isPendingV25, migrateToV25 } from "./migration/v25.mjs";
 import { jobRef } from "./refs.mjs";
 import { ensureDefaultOrg } from "./registry.mjs";
 import { DB_USER_VERSION, sqlList } from "./schema.mjs";
@@ -80,6 +81,7 @@ const ONE_SHOT_STEPS = Object.freeze([
   { pending: isPendingV20, run: migrateToV20 },
   { pending: isPendingV22, run: migrateToV22 },
   { pending: isPendingV24, run: migrateToV24 },
+  { pending: isPendingV25, run: migrateToV25 },
 ]);
 
 // Runs every pending one-shot step in order, each gate read after the step before it committed; the orphans the last step
@@ -140,6 +142,7 @@ function migrate(db) {
   if (version === 19) throw new UserError("the v20 migration did not run; nothing was stamped");
   if (version === 20 || version === 21) throw new UserError("the v22 migration did not run; nothing was stamped");
   if (version === 22 || version === 23) throw new UserError("the v24 migration did not run; nothing was stamped");
+  if (version === 24) throw new UserError("the v25 migration did not run; nothing was stamped");
   if (sharedSlugPending(db)) inTransaction(db, () => migrateSharedSlugs(db));
   db.exec(INDEXES);
   db.exec(FTS);

@@ -5,6 +5,7 @@ import { Card, CardEmpty, KeyValues } from "./Card";
 // What the card says while there is no pull request, by how far the job got.
 function noPrSentence(job: JobDetail): string {
   if (job.status === "running" || job.status === "pending") return "Not opened yet (phase 8).";
+  if (job.resolution === "no-change") return "None — resolved without a code change.";
   return "None — the run stopped before phase 8.";
 }
 

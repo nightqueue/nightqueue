@@ -78,19 +78,34 @@ test("an unknown phase is refused with the accepted list and writes nothing", (t
   assert.equal(existsSync(join(runDir(RUN.projectId, RUN.slug, env), "state.json")), false, "a refused record created the file");
 });
 
-test("a status outside done|gate is refused, and the notice of a gate is recorded with the outcome", (t) => {
+test("a status outside done|gate|no_change is refused, and the notice of a gate is recorded with the outcome", (t) => {
   const env = makeHome(t, "run-state-outcome");
-  assert.deepEqual(RUN_OUTCOME_STATUSES, ["done", "gate"]);
+  assert.deepEqual(RUN_OUTCOME_STATUSES, ["done", "gate", "no_change"]);
 
   const refused = recordOutcome({ ...RUN, status: "failed", env });
   assert.equal(refused.status, "kept");
-  assert.match(refused.reason, /unknown status `failed`; accepted: done, gate/);
+  assert.match(refused.reason, /unknown status `failed`; accepted: done, gate, no_change/);
 
   assert.equal(recordOutcome({ ...RUN, status: "gate", notice: "  the migration needs a decision  ", env }).status, "written");
   const state = readState(env);
   assert.equal(state.outcome.status, "gate");
   assert.equal(state.outcome.notice, "the migration needs a decision");
   assert.match(state.outcome.at, UTC_ISO);
+});
+
+test("a no_change outcome is recorded with the run's conclusion as its notice, and refused without one", (t) => {
+  const env = makeHome(t, "run-state-outcome-no-change");
+  for (const notice of [undefined, "", "   "]) {
+    const refused = recordOutcome({ ...RUN, status: "no_change", notice, env });
+    assert.equal(refused.status, "kept");
+    assert.match(refused.reason, /a no_change outcome needs the run's conclusion as its notice/);
+  }
+  assert.equal(existsSync(join(runDir(RUN.projectId, RUN.slug, env), "state.json")), false, "a refused no_change created the file");
+
+  assert.equal(recordOutcome({ ...RUN, status: "no_change", notice: "  the cause is in the CDN config, not in this repo  ", env }).status, "written");
+  const state = readState(env);
+  assert.equal(state.outcome.status, "no_change");
+  assert.equal(state.outcome.notice, "the cause is in the CDN config, not in this repo");
 });
 
 test("the outcome keeps the pull request URL the runtime wrote: the agent never sends one", (t) => {

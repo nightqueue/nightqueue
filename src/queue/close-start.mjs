@@ -8,7 +8,7 @@ import { withLock } from "../config/lock.mjs";
 import { logsDir } from "../config/paths.mjs";
 import { ensureHome, loadConfig } from "../config/store.mjs";
 import { packageRoot, spawnRoot } from "../host/paths.mjs";
-import { closeRefusal } from "../memory/jobs.mjs";
+import { closeRefusal, isNoChangeJob } from "../memory/jobs.mjs";
 import { sqliteToIso } from "../memory/schema.mjs";
 import { prStateKey } from "./pr-state.mjs";
 import { killProcess, ownRunnerRecord, pruneDeadRunners, removeOwnRunnerRecord, writeRunnerRecord } from "./registry.mjs";
@@ -53,13 +53,15 @@ function projectCheckout(job, env) {
   return project.path;
 }
 
-// Checks, before any lease, that a job can be closed: its status, its pull request, its project and its checkout.
+// Checks, before any lease, that a job can be closed: its status, its pull request (none for a job resolved without change), its project and its checkout.
 export async function validateCloseTarget({ store, id, force = false, env = process.env }) {
   const job = await store.jobs.getJob(id);
   const refusal = closeRefusal(id, job, { force });
   if (refusal) throw new UserError(refusal);
   const checkout = projectCheckout(job, env);
-  if (prStateKey(job.pr_url) === null) throw new UserError(`job \`${id}\` carries a pull request that is not a GitHub pull request URL: ${job.pr_url}`);
+  if (!isNoChangeJob(job) && prStateKey(job.pr_url) === null) {
+    throw new UserError(`job \`${id}\` carries a pull request that is not a GitHub pull request URL: ${job.pr_url}`);
+  }
   return { job, checkout, forced: force === true };
 }
 

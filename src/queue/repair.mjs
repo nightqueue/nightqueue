@@ -55,6 +55,7 @@ function refuseRow(id, row, active) {
 // Tells whether the re-derived outcome says anything the witness next to the run does not already say.
 function differsFromWitness(row, outcome) {
   if (outcome.status !== row.status) return true;
+  if ((outcome.resolution ?? null) !== (parseResult(row.result)?.resolution ?? null)) return true;
   return Boolean(outcome.prUrl) && outcome.prUrl !== row.pr_url;
 }
 
@@ -71,6 +72,7 @@ function mirrorWitness(row, outcome, env) {
     terminal: {
       status: outcome.status,
       prUrl: outcome.prUrl ?? null,
+      ...(outcome.resolution ? { resolution: outcome.resolution } : {}),
       finishedAt: sqliteToIso(row.finished_at) ?? new Date().toISOString(),
       writtenBy: packageRoot(),
       pid: process.pid,
@@ -101,7 +103,7 @@ export async function reclassifyFromLog({ id, env = process.env } = {}) {
   const witness = differsFromWitness(row, outcome);
   const notice = noticeDiffers(row, outcome);
   if (!witness && !notice) return { id, from: row.status, to: row.status, prUrl: row.pr_url ?? null, changed: false, noticeOnly: false };
-  const written = await jobs.reclassifyJob(id, { status: outcome.status, prUrl: outcome.prUrl, noticeMd: outcome.noticeMd });
+  const written = await jobs.reclassifyJob(id, { status: outcome.status, prUrl: outcome.prUrl, noticeMd: outcome.noticeMd, resolution: outcome.resolution ?? null });
   if (!written) throw new UserError(`job \`${id}\` changed while it was being re-classified; read it again with \`nightqueue queue status ${jobRef(id)}\``);
   if (witness && !foreign) mirrorWitness(row, outcome, env);
   return { id, from: row.status, to: outcome.status, prUrl: outcome.prUrl ?? row.pr_url ?? null, changed: true, noticeOnly: !witness };

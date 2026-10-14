@@ -385,6 +385,19 @@ test("a close with no pull request url attaches nothing and still comments; one 
   assert.equal(unnumbered.calls[2].variables.title, "Pull request");
 });
 
+test("a close resolved without change moves the issue to its first completed state, attaches nothing and comments with the conclusion", async () => {
+  const conclusion = "The cause is a setting of the payment provider.";
+  const { answer, calls } = await closeWithResult({ prUrl: null, prNumber: null, mergeSha: null, resolution: "no-change", conclusion });
+  assert.deepEqual(answer, { status: "done", note: "issue MK-42 moved to Done" });
+  assert.deepEqual(calls.map((call) => [call.operation, call.variables]), [
+    ["issue", { id: "MK-42" }],
+    ["issueUpdate", { id: "uuid-42", stateId: "s-done" }],
+    ["commentCreate", { issueId: "uuid-42", body: `Resolved without a code change (J-1, nightqueue).\n\n${conclusion}` }],
+  ]);
+  const body = calls.at(-1).variables.body;
+  for (const word of ["Merged", "merged as", "pull request", "/pull/"]) assert.equal(body.includes(word), false, `the no-change comment says ${word}`);
+});
+
 test("closing a job queued from a linear link in a project with no integrations moves the issue and comments once", async (t) => {
   const home = linearHome(t, "linear-close");
   const fetch = fakeFetch(closeRoutes());

@@ -6,7 +6,7 @@ import { requireGitPath } from "../src/config/projects.mjs";
 import { loadConfig } from "../src/config/store.mjs";
 import { hasColumn } from "../src/memory/columns.mjs";
 import { closeDb, openDb } from "../src/memory/db.mjs";
-import { acquireClose, addJob, claimJobById, finishJob, persistRunFacts, settleClose } from "../src/memory/jobs.mjs";
+import { acquireClose, addJob, claimJobById, finishJob, NO_CHANGE_RESOLUTION, persistRunFacts, settleClose } from "../src/memory/jobs.mjs";
 import * as registry from "../src/memory/registry.mjs";
 import { buildLegacyHome } from "./legacy-home.mjs";
 
@@ -176,11 +176,12 @@ export function mergedChecklist(prNumber = 7) {
 }
 
 // Seeds a job that ended `done` with a pull request, through the real store writes, and answers its id.
-export function seedDoneJob(env, { project = "alpha", prompt = "seeded job", prUrl = "https://github.com/acme/api/pull/7", slug = null, noticeMd = null } = {}) {
+export function seedDoneJob(env, { project = "alpha", prompt = "seeded job", prUrl = "https://github.com/acme/api/pull/7", slug = null, noticeMd = null, resolution = prUrl ? null : NO_CHANGE_RESOLUTION } = {}) {
   const { id } = addJob({ projectId: ensureProject(env, project), prompt }, env);
   claimJobById(id, { worker: SEED_WORKER, cap: null }, env);
   if (slug) persistRunFacts(id, { worker: SEED_WORKER, slug }, env);
-  if (!finishJob(id, { worker: SEED_WORKER, status: "done", prUrl, noticeMd }, env)) throw new Error(`seedDoneJob: job #${id} could not be finished`);
+  const result = resolution ? { status: "done", resolution } : undefined;
+  if (!finishJob(id, { worker: SEED_WORKER, status: "done", prUrl, noticeMd, result }, env)) throw new Error(`seedDoneJob: job #${id} could not be finished`);
   return id;
 }
 

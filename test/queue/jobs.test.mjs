@@ -824,9 +824,9 @@ const OTHER_CLOSE_WORKER = "close:host:2:bbbb";
 const PR_URL = "https://github.com/acme/api/pull/7";
 
 // A job in the given status carrying a pull request, the target a close starts from.
-function closableJob(env, { status = "done", prUrl = PR_URL } = {}) {
+function closableJob(env, { status = "done", prUrl = PR_URL, result = null } = {}) {
   const id = enqueue(env);
-  openDb(env).prepare("UPDATE jobs SET status = ?, pr_url = ? WHERE id = ?").run(status, prUrl, id);
+  openDb(env).prepare("UPDATE jobs SET status = ?, pr_url = ?, result = ? WHERE id = ?").run(status, prUrl, result, id);
   return id;
 }
 
@@ -873,7 +873,7 @@ test("acquireClose refuses a live lease and reclaims a dead one", (t) => {
   assert.equal(JSON.parse(reclaimed.close).attempts, 2);
 });
 
-test("acquireClose refuses every status but done, even with force, and a done job without a pull request", (t) => {
+test("acquireClose refuses every status but done, even with force, and takes a done job resolved without change", (t) => {
   const env = makeQueue(t, "jobs-close-status");
   for (const status of ["pending", "running", "cancelled", "failed", "gate"]) {
     const id = closableJob(env, { status });
@@ -886,9 +886,19 @@ test("acquireClose refuses every status but done, even with force, and a done jo
   const before = getJob(closed, env);
   assert.equal(acquireClose(closed, { worker: CLOSE_WORKER, leaseS: 660, force: true }, env), null, "closed");
   assert.deepEqual(getJob(closed, env), before, "closed: a refusal writes nothing");
-  const noPr = closableJob(env, { prUrl: null });
-  assert.equal(acquireClose(noPr, { worker: CLOSE_WORKER, leaseS: 660, force: true }, env), null);
+  const unmarked = closableJob(env, { prUrl: null, result: JSON.stringify({ status: "done" }) });
+  assert.equal(acquireClose(unmarked, { worker: CLOSE_WORKER, leaseS: 660 }, env), null, "a done job with no pull request and no marker");
+  assert.equal(getJob(unmarked, env).close_status, null, "unmarked: a refusal writes nothing");
+  const blank = closableJob(env, { prUrl: "  " });
+  assert.equal(acquireClose(blank, { worker: CLOSE_WORKER, leaseS: 660 }, env), null, "a blank pull request is no pull request");
+  const noPr = closableJob(env, { prUrl: null, result: JSON.stringify({ status: "done", resolution: "no-change" }) });
   assert.throws(() => acquireClose(noPr, { worker: CLOSE_WORKER, leaseS: 5 }, env), /invalid close lease/);
+  const taken = acquireClose(noPr, { worker: CLOSE_WORKER, leaseS: 660 }, env);
+  assert.equal(taken?.close_worker, CLOSE_WORKER, "a done job resolved without change takes the close lease");
+  const prNullResult = closableJob(env);
+  assert.equal(acquireClose(prNullResult, { worker: CLOSE_WORKER, leaseS: 660 }, env)?.close_worker, CLOSE_WORKER, "a pull request job with a NULL result");
+  const prBadResult = closableJob(env, { result: "not json" });
+  assert.equal(acquireClose(prBadResult, { worker: CLOSE_WORKER, leaseS: 660 }, env)?.close_worker, CLOSE_WORKER, "a pull request job with a result that is not JSON");
 });
 
 test("closeRefusal phrases the refusal of every status by name and answers null for a done job with a pull request", (t) => {
@@ -903,10 +913,13 @@ test("closeRefusal phrases the refusal of every status by name and answers null 
     [phrase("failed"), /^job `1` failed; retry it or cancel it - only a done job is closed$/],
     [phrase("cancelled"), /^job `1` is cancelled; retry it before closing$/],
     [phrase("done", { pr_url: null }), /^nothing to close: the job has no pull request$/],
+    [phrase("done", { pr_url: null, result: '{"resolution":"no-change"}' }), /^job `1` has no pull request: --force only skips pull request checks; close it without --force$/],
     [phrase("done", { close_status: "closing", close_worker: "w", close_lease_until: "2999-01-01 00:00:00" }), /^job `1` is already being closed by `w` until 2999-01-01T00:00:00Z; follow it with nightqueue queue status J-1$/],
   ];
   for (const [answer, expected] of cases) assert.match(answer, expected);
   assert.equal(phrase("done"), null);
+  assert.equal(closeRefusal(1, { status: "done", pr_url: null, result: '{"resolution":"no-change"}' }), null, "a done job resolved without change closes without --force");
+  assert.equal(closeRefusal(1, { status: "done", pr_url: null, result: null }), "nothing to close: the job has no pull request", "an unmarked one is refused even without --force");
   assert.equal(phrase("done", { close_status: "closing", close_worker: "w", close_lease_until: "2000-01-01 00:00:00" }), null, "a dead lease refuses nothing");
   assert.equal(closeRefusal(closableJob(env), getJob(1, env)), null);
 });

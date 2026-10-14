@@ -59,10 +59,11 @@ function makeCloseHome(t, name) {
   return { env, checkout };
 }
 
-// A job of `alpha` in the given status, carrying the given pull request.
-function jobIn(env, { status = "done", prUrl = PR_URL, project = "alpha", branch = "fix/worker" } = {}) {
+// A job of `alpha` in the given status, carrying the given pull request and, when given, the run's `result` object.
+function jobIn(env, { status = "done", prUrl = PR_URL, project = "alpha", branch = "fix/worker", result = null } = {}) {
   const id = addJob({ projectId: ensureProject(env, project), prompt: "fix the worker" }, env).id;
-  openDb(env).prepare("UPDATE jobs SET status = ?, pr_url = ?, branch = ?, worker = 'host:1' WHERE id = ?").run(status, prUrl, branch, id);
+  const resultText = result ? JSON.stringify(result) : null;
+  openDb(env).prepare("UPDATE jobs SET status = ?, pr_url = ?, branch = ?, worker = 'host:1', result = ? WHERE id = ?").run(status, prUrl, branch, resultText, id);
   return id;
 }
 
@@ -73,6 +74,7 @@ test("queue close refuses every job it must not close, by name, and writes nothi
     [{ status: "running" }, /is running with a live lease/],
     [{ status: "cancelled" }, /is cancelled; retry it before closing/],
     [{ status: "done", prUrl: null }, /nothing to close: the job has no pull request/],
+    [{ status: "done", prUrl: null, result: { resolution: "no-change" } }, /has no pull request: --force only skips pull request checks; close it without --force/],
     [{ status: "failed" }, /failed; retry it or cancel it - only a done job is closed/],
     [{ status: "gate" }, /is waiting at a gate/],
     [{ status: "done", project: "ghost" }, /belongs to project `ghost`, which is not registered/],

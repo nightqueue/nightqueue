@@ -104,7 +104,7 @@ test("a runner holding a live lease refuses the migration with one line and noth
   };
   const { env, fixture } = v17Home(t, "v18-live-lease", { seed: running("+1 hour") });
   assert.throws(() => migrateTestHome(env), (err) => LEASE_REFUSAL.test(err.message) && err.message.split("\n").length === 1);
-  assert.throws(() => openDb(env), (err) => err.code === "SCHEMA_OUTDATED" && /database at v17, this nightqueue expects v24: run `nightqueue update`/.test(err.message));
+  assert.throws(() => openDb(env), (err) => err.code === "SCHEMA_OUTDATED" && /database at v17, this nightqueue expects v25: run `nightqueue update`/.test(err.message));
   assert.equal(diskVersion(env), 17);
   assert.equal(existsSync(preV18BackupPath(env)), false, "a refused migration published a copy");
   assert.ok(readFileSync(dbPath(env)).equals(fixture), "a refused migration wrote to the database");

@@ -203,7 +203,10 @@ turns the reply off (it is on by default). `set discord.log.connection=team-chat
 close's **log** step post `<job ref> closed - PR #<n> merged as <sha7>: <title>` and the PR link
 to that webhook, once per job, for the events of `discord.log.events` (`discord.log.events=closed`,
 the default and the only event). No message mentions anyone; a rate limit or a server error is
-a warning line, and the webhook URL never appears in a note, a notice or the job log.
+a warning line, and the webhook URL never appears in a note, a notice or the job log. A job
+resolved without change has no pull request: its reply and its log carry `Resolved without a
+code change.` followed by the run's conclusion, with no PR field, no link and the footer
+`resolved without a code change`.
 
 **`--tier` declares the risk of the job.** `queue add --tier trivial|simple|complex`
 (and the `tier` parameter of `queue_add`) records the tier on
@@ -514,8 +517,10 @@ which is what to turn on if the output ever stalls again.
 
 **The seven states.** A job is `pending` while it waits, `running` while a runner
 owns it under a lease, and then one of five final states: `done` (the run
-delivered a pull request URL), `closed` (the job's pull request was merged
-through the closing pipeline - see *Closing a job* below), `gate` (the pipeline stopped asking for a human decision - a recorded
+delivered a pull request URL, or concluded on purpose that no code change is needed - see
+*Resolved without change* below), `closed` (the job's pull request was merged
+through the closing pipeline, or a job resolved without change was closed through it - see
+*Closing a job* below), `gate` (the pipeline stopped asking for a human decision - a recorded
 `outcome.status: "gate"` in `state.json`, or the `## Requires user
 confirmation` marker in the stream), `failed` (a non-zero exit, a timeout, an
 orphan that had already spent its attempts, or a clean exit that ended with
@@ -527,9 +532,11 @@ summary the pipeline recorded in `state.json`, and the whole final text of the
 orchestrator when there is none, and a run that ended saying nothing at all is
 `failed` with a fixed warning instead of a gate nobody can read.
 
-**`closed` means merged, and the schema says so.** A row is `closed` only when it carries a
-`pr_url`, an empty `close_status` and a `close` checklist whose `data.merged` is `true` - a
-`CHECK` of the `jobs` table refuses every other write, whoever makes it. Only the settle step
+**`closed` means merged or resolved without change, and the schema says so.** A row is
+`closed` only with an empty `close_status` and either a `pr_url` with a `close` checklist whose
+`data.merged` is `true`, or no `pr_url` with a `close` checklist whose
+`data.resolvedWithoutChange` is `true` (schema v25) - a `CHECK` of the `jobs` table refuses
+every other write, whoever makes it. Only the settle step
 of the closing pipeline writes `closed`: `nightqueue queue close <id>`, `queue close --merged`
 and the MCP `queue_close`. `queue repair`, the witness reconciliation and every other writer
 refuse it by name (``status `closed` is written only by the closing pipeline; run nightqueue
@@ -542,6 +549,24 @@ ends `cancelled` and its notice gains `nothing to close: the run produced no pul
 as its own paragraph after the run's reason. A run that logged `local_commit`, or that logged
 nothing, stays `failed` as before; the worktree of a `cancelled` finish is kept or named by
 the same rule as a `failed` one.
+
+**Resolved without change is `done` with no pull request.** When the triage proves, with
+direct evidence, that the request needs no code change in the repository (the cause lives
+outside the code it controls, it is already fixed on the base branch, or the behavior is
+correct by design), its verdict is `NO-CHANGE-NEEDED`: the run terminates and records
+`run_outcome` with `status: "no_change"` and its conclusion as `notice`. A clean exit with that
+record, a notice and no commit ends `done` with no `pr_url`, its notice the conclusion and no
+`nothing to close` line; `queue status` shows `resolution: "no-change"` and LAST says
+`resolved without change - close it with nightqueue queue close J-<id>`. The runtime appends
+`Next step: close the job so where it came from is told it was resolved without a code change.`
+to that notice, the same way it appends `nothing to close` to a cancelled one, and that line
+is never sent to the origins. The kind is the row's own marker (`result.resolution:
+"no-change"`, written only from that record), never the missing pull request alone: a PR-less
+`done` written by a repair, a reclassify or a recovery without the record is still refused
+with `nothing to close: the job has no pull request`. The record is the
+only way in: a `NOT-REPRODUCIBLE` or `NEEDS-CLARIFICATION` run, and a `no_commit` exit without
+it, still end `cancelled`; the same record on an exit that failed, timed out or was stopped
+still ends `failed` or `cancelled`, and one without a notice is `failed`.
 
 **Rows closed before the closing pipeline existed.** The schema v16 migration runs once, on
 the first open after an upgrade, in one transaction, and leaves every row satisfying the
@@ -1140,6 +1165,24 @@ agent, never a second job, never queue work:
 The job's status is untouched until settle: a close that stops leaves it `done`, except for a
 pull request closed without merge, which cancels it.
 
+**Closing a job resolved without change.** A `done` job with no pull request (see *Resolved
+without change is `done` with no pull request*) is closed by the same command and the same
+pipeline, with no gh or git call: preflight, conflict and merge are recorded `skipped` with the
+note `no pull request: resolved without a code change`, settle records
+`data.resolvedWithoutChange: true`, `data.resolvedAt` and the line `Closed: resolved without
+change on <YYYY-MM-DD>`, the job ends `closed` and its worktree is released like on every close.
+The detail view shows `resolution      resolved without change (no pull request)`, LAST says
+`closed without change`, and a foreground close prints `J-<id> closed: resolved without change
+(no pull request)` (`--json` adds `outcome.resolution: "no-change"`). The origin and log steps
+then tell every origin it was resolved without a code change, with the run's conclusion (its
+notice, without the lines the runtime appended): Linear moves the issue to its first `completed`
+state and comments `Resolved without a code change (J-<id>, nightqueue).` and the conclusion,
+attaching nothing; Sentry sets the `sentry.onClosed` status with the note `Resolved without a
+code change (J-<id>, nightqueue): <conclusion>`; Discord replies and logs with no PR field and
+no link. None of them names a pull request or a merge. `--force` is refused on such a job
+(`--force only skips pull request checks; close it without --force`), and `queue close
+--merged` never picks it.
+
 **Post-close steps: origin and log.** After settle, two more steps run on the job that is
 now `closed`: **origin** tells each service the job came from (every entry of its recorded
 `origin` list) that the pull request merged, through the provider of each kind, one origin at a
@@ -1287,8 +1330,8 @@ nightqueue queue status J-<id>`; the log is `<home>/logs/close-<id>-<stamp>.log`
 prints `{ started, jobId, pid, logPath }`. The child registers as a runner of mode `close`, so
 `queue status`, doctor and the install guard see it live, but a pending job is never
 promised to it. `--foreground` runs the steps in this process, prints one line per step and
-a final `J-<id> closed: PR #<n> merged as <sha7>` (plus what happened to
-the worktree) or the `⛔ close stopped ...` line, and exits `0` only when the job closed;
+a final `J-<id> closed: PR #<n> merged as <sha7>` (or `J-<id> closed: resolved without
+change (no pull request)`, plus what happened to the worktree) or the `⛔ close stopped ...` line, and exits `0` only when the job closed;
 with `--json` it prints one `{ job, outcome }` object and nothing else on stdout.
 `queue.closeTimeoutS` (default `1800`, accepted range `60..3600` seconds) is the hard
 timeout of the whole close; a close that passes it, or that `queue run --stop` ends, stops
@@ -1314,15 +1357,17 @@ records `forced: true` for good. It never runs the merger, never opens another s
 `pr-not-the-job-branch`, a real conflict, leftover conflict markers, uncommitted files the pull
 would touch, a missing checkout or a closed pull request.
 
-**What it closes.** Only a `done` job with a GitHub pull request URL of a registered project
-whose checkout exists. Everything else is refused by name, and nothing is written:
+**What it closes.** Only a `done` job of a registered project whose checkout exists, with a
+GitHub pull request URL or resolved without change (no pull request). Everything else is
+refused by name, and nothing is written:
 
 - `closed` - ``job `N` is already closed``; running `queue close` again on a closed job is how
   you confirm it, and it never starts a child;
 - `running`, `pending` (it has not produced a pull request yet), `gate` (answer it with
   `nightqueue queue retry N --note "..."`, or cancel it), `failed` (retry it or cancel it) and
   `cancelled` (retry it before closing);
-- a `done` job without a pull request - `nothing to close: the job has no pull request`;
+- `--force` on a `done` job with no pull request - ``job `N` has no pull request: --force only
+  skips pull request checks; close it without --force``;
 - a job another close holds under a live lease, named with its worker and until when.
 
 An unattended run never closes: inside a job the command and the tool are refused (``refusing

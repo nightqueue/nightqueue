@@ -4,7 +4,7 @@ import { test } from "node:test";
 import { jobLogPath, logsDir, runnerRegistryPath, runnersDir } from "../../src/config/paths.mjs";
 import { openDb } from "../../src/memory/db.mjs";
 import { addJob } from "../../src/memory/jobs.mjs";
-import { ABANDONED_COMMAND_PREFIX } from "../../src/queue/classify.mjs";
+import { ABANDONED_COMMAND_PREFIX, NO_CHANGE_NEXT_STEP_LINE } from "../../src/queue/classify.mjs";
 import { createPrStateCache } from "../../src/queue/pr-state.mjs";
 import { pruneDeadRunners, writeRunnerRecord } from "../../src/queue/registry.mjs";
 import { DISABLED_BACKGROUND_ESCAPE_LINE } from "../../src/queue/runner.mjs";
@@ -273,6 +273,16 @@ test("jobDetailView hides run_notice when the row's notice carries every line th
   const detail = await withReadOnlyStore(env, (store) => jobDetailView(store, id));
   assert.equal(detail.notice_md, rowNotice);
   assert.equal("run_notice" in detail, false, "the runtime's own appended lines made the notices look different");
+});
+
+test("jobDetailView hides run_notice when the row's notice differs from the run's only by the next-step line of a job resolved without change", async (t) => {
+  const runNotice = "✅ Resolved — no code change needed\n\nThe cause is a CDN rule.";
+  const rowNotice = `${runNotice}\n\n${NO_CHANGE_NEXT_STEP_LINE}`;
+  const { env, id } = seedJobWithRunLog(t, "view-run-notice-next-step", { runNotice, rowNotice });
+
+  const detail = await withReadOnlyStore(env, (store) => jobDetailView(store, id));
+  assert.equal(detail.notice_md, rowNotice);
+  assert.equal("run_notice" in detail, false, "the next-step line the runtime appended made the notices look different");
 });
 
 test("jobDetailView still shows run_notice when the classifier really replaced the run's notice", async (t) => {

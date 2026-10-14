@@ -1,4 +1,4 @@
-import { Ban, CircleCheck, CircleX, Clock, GitMerge, LoaderCircle, OctagonX, TriangleAlert, type LucideIcon } from "lucide-react";
+import { Ban, CircleCheck, CircleCheckBig, CircleX, Clock, GitMerge, LoaderCircle, OctagonX, TriangleAlert, type LucideIcon } from "lucide-react";
 import type { CloseState, JobStatus } from "../lib/types";
 
 export const ICON_STROKE = 1.75;
@@ -21,18 +21,19 @@ const STATUS_VISUAL: Record<JobStatus, StatusVisual> = {
 
 const CLOSE_FAILED: StatusVisual = { Icon: OctagonX, color: "text-red", spin: false };
 const CLOSING: StatusVisual = { Icon: LoaderCircle, color: "text-pr-merged", spin: true };
+const CLOSED_WITHOUT_CHANGE: StatusVisual = { Icon: CircleCheckBig, color: "text-pr-merged", spin: false };
 
-// The icon, colour and spin of a job: its close state first (failed or stalled, closing, closed), its status otherwise.
-export function statusVisual(status: JobStatus, closeState: CloseState | null, closing: boolean): StatusVisual {
+// The icon, colour and spin of a job: its close state first (failed or stalled, closing, closed, closed without change), its status otherwise.
+export function statusVisual(status: JobStatus, closeState: CloseState | null, closing: boolean, noChange = false): StatusVisual {
   if (closeState === "failed" || closeState === "stalled") return CLOSE_FAILED;
   if (closeState === "closing" || (closeState === null && closing)) return CLOSING;
-  if (closeState === "closed") return STATUS_VISUAL.closed;
+  if (closeState === "closed") return noChange ? CLOSED_WITHOUT_CHANGE : STATUS_VISUAL.closed;
   return STATUS_VISUAL[status] ?? STATUS_VISUAL.pending;
 }
 
 // The status icon of a job, spinning inside its own box while it runs or closes.
-export function StatusIcon({ status, closeState, closing, size = 14 }: { status: JobStatus; closeState: CloseState | null; closing: boolean; size?: number }) {
-  const { Icon, color, spin } = statusVisual(status, closeState, closing);
+export function StatusIcon({ status, closeState, closing, noChange = false, size = 14 }: { status: JobStatus; closeState: CloseState | null; closing: boolean; noChange?: boolean; size?: number }) {
+  const { Icon, color, spin } = statusVisual(status, closeState, closing, noChange);
   return <Icon size={size} strokeWidth={ICON_STROKE} aria-hidden="true" className={`shrink-0 ${color} ${spin ? "animate-spin" : ""}`} />;
 }
 
