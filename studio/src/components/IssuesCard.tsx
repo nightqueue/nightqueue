@@ -1,13 +1,16 @@
 import { useQuery } from "@tanstack/react-query";
+import { ChevronDown, ChevronRight } from "lucide-react";
 import { useRef, useState } from "react";
 import { errorText } from "../lib/actions";
 import { fetchTrackerIssues } from "../lib/mcp";
+import { useToggles } from "../lib/useToggles";
 import {
   connectCommand,
   DEFAULT_TRACKER_PREFS,
   type FilterOption,
   groupIssues,
   type IssueDraft,
+  type IssueGroup,
   isOption,
   issueDraft,
   parseTrackerPrefs,
@@ -20,6 +23,8 @@ import {
 } from "../lib/tracker";
 import type { TrackerAnswer, TrackerFilters, TrackerItem } from "../lib/types";
 import { ConnectTrackerModal } from "./ConnectTrackerModal";
+import { PriorityIcon } from "./PriorityIcon";
+import { ActionIcon } from "./StatusIcon";
 import { Button, FIELD_CLASS, Kbd, Segmented } from "./ui";
 
 interface IssuesCardProps {
@@ -39,12 +44,6 @@ const VIEW_OPTIONS: { value: TrackerView; label: string }[] = [
   { value: "open", label: "Open" },
   { value: "all", label: "All" },
 ];
-
-const STATE_CLASSES: Record<string, string> = {
-  started: "border-run-line text-accent",
-  completed: "border-line text-green",
-  canceled: "border-line text-dim",
-};
 
 // The card preferences saved by an earlier visit; unreadable storage gives the defaults.
 function readPrefs(): TrackerPrefs {
@@ -135,66 +134,64 @@ function IssuesHeader({ title, filters, prefs, onPrefs, onRefresh }: { title: st
   );
 }
 
-// The state of an issue as a badge coloured by its state type.
-function StateBadge({ item }: { item: TrackerItem }) {
-  const tone = STATE_CLASSES[item.state?.type ?? ""] ?? "border-line text-muted";
-  return <span className={`rounded-full border px-2 py-0.5 text-xs whitespace-nowrap ${tone}`}>{item.state?.name ?? "unknown"}</span>;
+// The issue ref, a link when the issue has a URL.
+function IssueRef({ item }: { item: TrackerItem }) {
+  const className = "font-mono text-sm whitespace-nowrap";
+  if (!item.url) return <span className={className}>{item.ref}</span>;
+  return (
+    <a href={item.url} target="_blank" rel="noreferrer" className={className}>
+      {item.ref}
+    </a>
+  );
 }
 
-// One issue: ref link, title, state, priority, labels and the Queue button; stacked on narrow screens.
+// One issue: priority icon, ref, title, then the project (the team key without one) at the end and the Queue button.
 function IssueRow({ item, onQueue }: { item: TrackerItem; onQueue: (item: TrackerItem) => void }) {
   return (
-    <li className="flex min-w-0 flex-col gap-1.5 border-b border-row-line px-3 py-2.5 sm:flex-row sm:items-center sm:gap-3">
-      <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 sm:contents">
-        {item.url ? (
-          <a href={item.url} target="_blank" rel="noreferrer" className="font-mono text-sm whitespace-nowrap">
-            {item.ref}
-          </a>
-        ) : (
-          <span className="font-mono text-sm whitespace-nowrap">{item.ref}</span>
-        )}
-        <StateBadge item={item} />
-      </div>
-      <span className="min-w-0 break-words sm:flex-1 sm:truncate">{item.title}</span>
-      <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-sm text-muted">
-        {item.priorityLabel && <span className="whitespace-nowrap">{item.priorityLabel}</span>}
-        {item.labels.map((label) => (
-          <span key={label} className="rounded border border-button-line px-1.5 text-xs">
-            {label}
-          </span>
-        ))}
-        <Button size="sm" className="ml-auto" onClick={() => onQueue(item)}>
-          Queue
-        </Button>
-      </div>
+    <li className="flex min-w-0 items-center gap-2 border-b border-row-line px-3 py-2.5 sm:gap-3">
+      <PriorityIcon priority={item.priority} />
+      <IssueRef item={item} />
+      <span className="min-w-0 flex-1 truncate">{item.title}</span>
+      <span className="max-w-32 shrink-0 truncate text-right text-sm text-muted sm:max-w-48">{item.project ?? item.team}</span>
+      <Button size="sm" onClick={() => onQueue(item)}>
+        Queue
+      </Button>
     </li>
   );
 }
 
-// A list of issue rows.
-function IssueList({ items, onQueue }: { items: TrackerItem[]; onQueue: (item: TrackerItem) => void }) {
+// A status group: a header with its name and count that collapses the rows on click.
+function IssueGroupSection({ group, open, onToggle, onQueue }: { group: IssueGroup; open: boolean; onToggle: () => void; onQueue: (item: TrackerItem) => void }) {
   return (
-    <ul className="m-0 list-none p-0">
-      {items.map((item) => (
-        <IssueRow key={item.ref} item={item} onQueue={onQueue} />
-      ))}
-    </ul>
+    <section aria-label={group.label}>
+      <button type="button" aria-expanded={open} onClick={onToggle} className="flex w-full cursor-pointer items-center gap-2 border-b border-row-line bg-transparent px-3 py-2 text-left text-sm font-semibold text-fg">
+        <ActionIcon icon={open ? ChevronDown : ChevronRight} />
+        {group.label}
+        <span className="font-normal text-muted">{group.items.length}</span>
+      </button>
+      {open && (
+        <ul className="m-0 list-none p-0">
+          {group.items.map((item) => (
+            <IssueRow key={item.ref} item={item} onQueue={onQueue} />
+          ))}
+        </ul>
+      )}
+    </section>
   );
 }
 
-// The open issues first, then the done and canceled ones folded away when the toggle shows all.
+// The issues grouped by status in the fixed order, every group expanded until the user collapses it.
 function IssueGroups({ answer, view, onQueue }: { answer: Extract<TrackerAnswer, { ok: true }>; view: TrackerView; onQueue: (draft: IssueDraft) => void }) {
-  const { open, closed } = groupIssues(answer.items);
+  const groups = groupIssues(answer.items, view);
+  const toggles = useToggles();
   const queue = (item: TrackerItem) => onQueue(issueDraft(item, answer.provider));
   return (
     <>
-      {open.length === 0 ? <p className="m-0 px-3 py-4 text-center text-muted">no open issues</p> : <IssueList items={open} onQueue={queue} />}
-      {view === "all" && closed.length > 0 && (
-        <details>
-          <summary className="cursor-pointer px-3 py-2 text-sm text-muted">Done/canceled ({closed.length})</summary>
-          <IssueList items={closed} onQueue={queue} />
-        </details>
-      )}
+      {groups.length === 0 && <p className="m-0 px-3 py-4 text-center text-muted">no open issues</p>}
+      {groups.map((group) => {
+        const open = toggles.isOpen(group.key, true);
+        return <IssueGroupSection key={group.key} group={group} open={open} onToggle={() => toggles.set(group.key, !open)} onQueue={queue} />;
+      })}
       {answer.truncated && <p className="m-0 px-3 py-2 text-sm text-dim">Showing the {ISSUE_LIMIT} most recently updated issues; narrow by team or project.</p>}
     </>
   );
@@ -234,11 +231,12 @@ function IssuesSkeleton() {
   return (
     <div aria-busy="true" aria-label="loading issues">
       {Array.from({ length: SKELETON_ROWS }, (_, index) => (
-        <div key={index} className="flex flex-col gap-1.5 border-b border-row-line px-3 py-3 sm:flex-row sm:items-center sm:gap-3">
+        <div key={index} className="flex items-center gap-2 border-b border-row-line px-3 py-3 sm:gap-3">
+          <span className="block h-4 w-3.5 animate-pulse rounded bg-row-line" />
           <span className="block h-3 w-14 animate-pulse rounded bg-row-line" />
-          <span className="block h-4 w-16 animate-pulse rounded-full bg-row-line" />
-          <span className="block h-3 w-3/5 animate-pulse rounded bg-row-line sm:flex-1" />
-          <span className="block h-7 w-16 animate-pulse rounded-md bg-row-line sm:ml-auto" />
+          <span className="block h-3 w-3/5 flex-1 animate-pulse rounded bg-row-line" />
+          <span className="block h-3 w-20 animate-pulse rounded bg-row-line" />
+          <span className="block h-7 w-16 animate-pulse rounded-md bg-row-line" />
         </div>
       ))}
     </div>

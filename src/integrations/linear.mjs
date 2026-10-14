@@ -15,7 +15,7 @@ const ATTACH_MUTATION = "mutation($issueId: String!, $url: String!, $title: Stri
 const COMMENT_MUTATION ="mutation($issueId: String!, $body: String!) { commentCreate(input: { issueId: $issueId, body: $body }) { success } }";
 const ISSUES_QUERY =
   "query($filter: IssueFilter, $first: Int) { issues(filter: $filter, first: $first, orderBy: updatedAt) { " +
-  "nodes { identifier title url priority priorityLabel updatedAt state { name type } team { key } labels { nodes { name } } } " +
+  "nodes { identifier title url priority priorityLabel updatedAt state { name type } team { key } project { name } labels { nodes { name } } } " +
   "pageInfo { hasNextPage } } }";
 const TEAMS_QUERY = "query { teams { nodes { key name projects { nodes { name } } } } }";
 const READ_QUERY =
@@ -325,6 +325,7 @@ function issueItem(node) {
     ref: String(node?.identifier ?? ""),
     title: String(node?.title ?? ""),
     team: node?.team?.key ?? null,
+    project: node?.project?.name ?? null,
     state: stateOf(node),
     priority: Number.isFinite(node?.priority) ? node.priority : 0,
     priorityLabel: node?.priorityLabel ?? null,

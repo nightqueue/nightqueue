@@ -30,23 +30,46 @@ const FILTERS = {
   ],
 };
 
-test("groupIssues puts open issues first by priority 1-4 then no priority, newest update first within a priority", () => {
+const MIXED = [
+  item("MK-1", { state: { name: "Backlog", type: "backlog" } }),
+  item("MK-2", { state: { name: "Triage", type: "triage" } }),
+  item("MK-3", { state: { name: "Todo", type: "unstarted" } }),
+  item("MK-4", { state: { name: "In Progress", type: "started" } }),
+  item("MK-5", { state: { name: "In Code REVIEW", type: "started" } }),
+  item("MK-6", { state: { name: "Canceled", type: "canceled" } }),
+  item("MK-7", { state: { name: "Done", type: "completed" } }),
+];
+
+test("groupIssues maps the states to groups: a started state named review is In Review, triage is Backlog", () => {
+  const groups = groupIssues(MIXED, "all");
+  const refs = Object.fromEntries(groups.map((group) => [group.label, group.items.map((issue) => issue.ref)]));
+  assert.deepEqual(refs, { "In Review": ["MK-5"], "In Progress": ["MK-4"], Todo: ["MK-3"], Backlog: ["MK-1", "MK-2"], Done: ["MK-7"], Canceled: ["MK-6"] });
+});
+
+test("groupIssues keeps the fixed group order and hides the empty groups", () => {
+  assert.deepEqual(groupIssues(MIXED, "open").map((group) => group.label), ["In Review", "In Progress", "Todo", "Backlog"]);
+  assert.deepEqual(groupIssues(MIXED.slice(2, 4), "open").map((group) => group.label), ["In Progress", "Todo"]);
+});
+
+test("groupIssues shows Done then Canceled last under all and never under open", () => {
+  assert.deepEqual(groupIssues(MIXED, "all").map((group) => group.label).slice(-2), ["Done", "Canceled"]);
+  assert.equal(groupIssues(MIXED, "open").some((group) => group.label === "Done" || group.label === "Canceled"), false);
+});
+
+test("groupIssues orders a group by priority urgent to low then no priority, newest update first on a tie", () => {
   const items = [
     item("MK-1", { priority: 0, updatedAt: "2026-10-05T00:00:00.000Z" }),
     item("MK-2", { priority: 3 }),
     item("MK-3", { priority: 1, updatedAt: "2026-10-01T00:00:00.000Z" }),
     item("MK-4", { priority: 1, updatedAt: "2026-10-03T00:00:00.000Z" }),
-    item("MK-5", { state: { name: "Done", type: "completed" }, updatedAt: "2026-10-02T00:00:00.000Z" }),
-    item("MK-6", { state: { name: "Canceled", type: "canceled" }, updatedAt: "2026-10-04T00:00:00.000Z" }),
-    item("MK-7", { state: { name: "In Progress", type: "started" }, priority: 2 }),
+    item("MK-5", { priority: 4 }),
+    item("MK-6", { priority: 2 }),
   ];
-  const { open, closed } = groupIssues(items);
-  assert.deepEqual(open.map((issue) => issue.ref), ["MK-4", "MK-3", "MK-7", "MK-2", "MK-1"]);
-  assert.deepEqual(closed.map((issue) => issue.ref), ["MK-6", "MK-5"]);
+  assert.deepEqual(groupIssues(items, "open")[0].items.map((issue) => issue.ref), ["MK-4", "MK-3", "MK-6", "MK-2", "MK-5", "MK-1"]);
 });
 
-test("groupIssues of a non-list answers two empty groups", () => {
-  assert.deepEqual(groupIssues(null), { open: [], closed: [] });
+test("groupIssues of a non-list answers no groups", () => {
+  assert.deepEqual(groupIssues(null, "all"), []);
 });
 
 test("teamOptions and projectOptions list every choice with the all option first, projects narrowed by team", () => {
