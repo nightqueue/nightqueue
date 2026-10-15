@@ -1,5 +1,5 @@
 import { UserError } from "../config/errors.mjs";
-import { parseRunId } from "../host/gh.mjs";
+import { parseRunId, parseRunRepo } from "../host/gh.mjs";
 import { sameBranch } from "./branch-name.mjs";
 import { defaultCloseDeps } from "./close-deps.mjs";
 import { jobTitle } from "./job-title.mjs";
@@ -159,19 +159,49 @@ function abortedStop(note) {
   return { problem: failed("checks-aborted", note) };
 }
 
+// The repository a check's workflow run belongs to, as `--repo` takes it: from its details URL, else from the pull request's URL.
+function checkRepo(ctx, check) {
+  return parseRunRepo(check?.detailsUrl) ?? parseRunRepo(ctx.prUrl);
+}
+
+// The workflow runs a list of checks points to, one per repository and run id, each with its checks.
+function rerunGroups(ctx, checks) {
+  const groups = new Map();
+  for (const check of checks) {
+    const runId = parseRunId(check.detailsUrl);
+    if (!runId) continue;
+    const repo = checkRepo(ctx, check);
+    const key = `${repo} ${runId}`;
+    if (!groups.has(key)) groups.set(key, { runId, repo, checks: [] });
+    groups.get(key).checks.push(check);
+  }
+  return [...groups.values()];
+}
+
+// The gh command that re-runs the failed jobs of one run, naming its repository, with placeholders for what is unknown.
+function rerunHint(runId, repo) {
+  return `gh run rerun ${runId ?? "<runId>"} --repo ${repo ?? "<owner>/<repo>"} --failed`;
+}
+
+// Asks gh to re-run the failed jobs of one run group of its repository.
+async function rerunGroup(ctx, deps, group) {
+  return await deps.gh.runRerun(group.runId, { repo: group.repo, failed: true, ...bounded(ctx, GH_TIMEOUT_MS) });
+}
+
 // Re-runs the failed jobs of the aborted checks once per head; answers the note of the re-run or the stop that forbids it.
 async function rerunAborted(ctx, deps, checks, head) {
   const sha = checks.headSha ?? head;
   const aborted = checks.checks.filter((check) => check.bucket === "aborted");
   const names = namesNote(abortedOf(checks));
-  const runIds = [...new Set(aborted.map((check) => parseRunId(check.detailsUrl)).filter(Boolean))];
+  const groups = rerunGroups(ctx, aborted);
+  const runIds = [...new Set(groups.map((group) => group.runId))];
   if (ctx.data.rerun?.head === sha) {
-    return abortedStop(`check ${names} was cancelled by GitHub twice on ${sha7(sha)}; re-run it by hand: gh run rerun ${runIds[0] ?? "<runId>"} --failed`);
+    return abortedStop(`check ${names} was cancelled by GitHub twice on ${sha7(sha)}; re-run it by hand: ${rerunHint(groups[0]?.runId, groups[0]?.repo ?? parseRunRepo(ctx.prUrl))}`);
   }
-  if (!runIds.length) return abortedStop(`check ${names} was cancelled by GitHub and its details URL names no workflow run to re-run`);
-  for (const runId of runIds) {
-    const result = await deps.gh.runRerun(runId, { failed: true, ...bounded(ctx, GH_TIMEOUT_MS) });
-    if (!result?.ok) return abortedStop(`gh run rerun ${runId} --failed failed for ${names} (${result?.error ?? "no answer"})`);
+  if (!groups.length) return abortedStop(`check ${names} was cancelled by GitHub and its details URL names no workflow run to re-run`);
+  for (const group of groups) {
+    const result = await rerunGroup(ctx, deps, group);
+    if (!result?.ok) return abortedStop(`${rerunHint(group.runId, group.repo)} failed for ${names} (${result?.error ?? "no answer"})`);
   }
   const urls = aborted.map((check) => check.detailsUrl).filter(Boolean);
   ctx.data.rerun = { head: sha, runIds, urls, at: new Date().toISOString() };
@@ -207,8 +237,9 @@ function failedRerunClass(ctx, checks, head) {
 
 // The note of failed Actions checks that failed again after the one re-run of their run on this head, naming the checks still running.
 function failedTwiceNote(ctx, checks, head) {
-  const runId = parseRunId(failedAgain(ctx, checks, head)[0]?.detailsUrl) ?? "<runId>";
-  const note = `check ${namesNote(checks.failing)} failed twice on ${sha7(checks.headSha ?? head)}; re-run it by hand: gh run rerun ${runId} --failed`;
+  const again = failedAgain(ctx, checks, head)[0];
+  const hint = rerunHint(parseRunId(again?.detailsUrl), checkRepo(ctx, again));
+  const note = `check ${namesNote(checks.failing)} failed twice on ${sha7(checks.headSha ?? head)}; re-run it by hand: ${hint}`;
   return checks.pending.length ? `${note}; still running: ${namesNote(checks.pending)}` : note;
 }
 
@@ -225,12 +256,10 @@ async function rerunFailed(ctx, deps, checks, head) {
   const spent = spentRunIds(ctx, sha);
   const targets = checks.checks.filter((check) => (check.bucket === "fail" || check.bucket === "aborted") && !spent.includes(parseRunId(check.detailsUrl)));
   const names = namesNote(targets.map((check) => check.name));
-  const runIds = [...new Set(targets.map((check) => parseRunId(check.detailsUrl)).filter(Boolean))];
-  for (const runId of runIds) {
-    const result = await deps.gh.runRerun(runId, { failed: true, ...bounded(ctx, GH_TIMEOUT_MS) });
-    if (!result?.ok) return { problem: failed("checks-red", `gh run rerun ${runId} --failed failed for ${names} (${result?.error ?? "no answer"})`) };
-    const urls = targets.filter((check) => parseRunId(check.detailsUrl) === runId).map((check) => check.detailsUrl);
-    recordFailedRerun(ctx, sha, { runId, urls });
+  for (const group of rerunGroups(ctx, targets)) {
+    const result = await rerunGroup(ctx, deps, group);
+    if (!result?.ok) return { problem: failed("checks-red", `${rerunHint(group.runId, group.repo)} failed for ${names} (${result?.error ?? "no answer"})`) };
+    recordFailedRerun(ctx, sha, { runId: group.runId, urls: group.checks.map((check) => check.detailsUrl) });
   }
   const workflows = [...new Set(targets.map((check) => check.workflowName).filter(Boolean))].join(", ") || "the workflow";
   return { note: `re-ran ${workflows} (${names}) — failed on ${sha7(sha)}` };
@@ -249,7 +278,23 @@ function checksReading(ctx, checks) {
   if (checks.failing.length) return { problem: failed("checks-red", `failing checks: ${namesNote(checks.failing)}`) };
   if (checks.pending.length) return { problem: failed("checks-pending", `checks still running: ${namesNote(checks.pending)}; run again once they finish`) };
   if (abortedOf(checks).length) return { problem: failed("checks-aborted", `aborted checks: ${namesNote(abortedOf(checks))}`) };
-  return { note: checks.checks.length ? `${checks.checks.length} checks green` : "no checks reported" };
+  return { note: withOptionalNote(checks.checks.length ? `${checks.checks.length} checks green` : "no checks reported", checks) };
+}
+
+// The names of the non-required checks a required-only read left red, or none.
+function nonRequiredFailingOf(checks) {
+  return Array.isArray(checks?.nonRequiredFailing) ? checks.nonRequiredFailing : [];
+}
+
+// The warning of the non-required checks left red, or null when there is none.
+function optionalNote(names) {
+  return names.length ? `non-required checks failing: ${namesNote(names)}` : null;
+}
+
+// A note with the warning of the non-required checks a read left red appended, when there are some.
+function withOptionalNote(note, checks) {
+  const warning = optionalNote(nonRequiredFailingOf(checks));
+  return warning ? `${note}; ${warning}` : note;
 }
 
 // The note of checks `--force` let the close go past, naming what they said.
@@ -260,7 +305,7 @@ function ignoredChecksNote(checks) {
     checks.pending.length ? `pending: ${namesNote(checks.pending)}` : null,
     abortedOf(checks).length ? `aborted: ${namesNote(abortedOf(checks))}` : null,
   ].filter(Boolean);
-  return `checks ignored with --force: ${said.join("; ")}`;
+  return withOptionalNote(`checks ignored with --force: ${said.join("; ")}`, checks);
 }
 
 // Reads the aborted checks the re-run of this head already replaced (same details URL) as pending: GitHub still shows the old job for a while.
@@ -310,17 +355,53 @@ function staleRerunAsPending(ctx, checks, head) {
   return staleFailedAsPending(ctx, staleAbortedAsPending(ctx, checks, head), head);
 }
 
-// Reads the checks of the pull request; a read gh attributes to another head than the one judged is unreadable.
+// Tells whether one rollup check is a required entry: the same name, and the same link unless one of the two has none.
+function matchesRequired(check, entry) {
+  return check.name === entry.name && (!check.detailsUrl || !entry.link || check.detailsUrl === entry.link);
+}
+
+// The names of the checks of a list in one bucket.
+function namesIn(checks, bucket) {
+  return checks.filter((check) => check.bucket === bucket).map((check) => check.name);
+}
+
+// The checks read narrowed to the required ones when the base declares some and each matches the read; otherwise the read itself, every check gating.
+function gatingView(raw, required) {
+  const declared = raw?.ok && required?.ok === true && required.declared === true && Array.isArray(required.checks) && required.checks.length > 0;
+  if (!declared) return raw;
+  const isRequired = (check) => required.checks.some((entry) => matchesRequired(check, entry));
+  if (!required.checks.every((entry) => raw.checks.some((check) => matchesRequired(check, entry)))) return raw;
+  const kept = raw.checks.filter(isRequired);
+  const optional = raw.checks.filter((check) => !isRequired(check));
+  return {
+    ...raw,
+    checks: kept,
+    failing: namesIn(kept, "fail"),
+    pending: namesIn(kept, "pending"),
+    aborted: namesIn(kept, "aborted"),
+    nonRequiredFailing: [...namesIn(optional, "fail"), ...namesIn(optional, "aborted")],
+    gate: "required",
+  };
+}
+
+// The checks that gate the close: the required ones when the base declares them, every one when it does not or nobody can tell.
+async function gatingChecks(ctx, deps, raw) {
+  if (!raw?.ok || raw.checks.every((check) => check.bucket === "pass")) return raw;
+  const required = await deps.gh.prRequiredChecks(ctx.prUrl, bounded(ctx, GH_TIMEOUT_MS));
+  return gatingView(raw, required);
+}
+
+// Reads the checks of the pull request that gate the close; a read gh attributes to another head than the one judged is unreadable.
 async function readHeadChecks(ctx, deps, head) {
   const checks = await deps.gh.prChecks(ctx.prUrl, bounded(ctx, GH_TIMEOUT_MS));
-  if (!checks?.ok || !checks.headSha || !head || checks.headSha === head) return staleRerunAsPending(ctx, checks, head);
+  if (!checks?.ok || !checks.headSha || !head || checks.headSha === head) return staleRerunAsPending(ctx, await gatingChecks(ctx, deps, checks), head);
   return { ok: false, checks: [], failing: [], pending: [], aborted: [], otherHead: checks.headSha, error: `the checks gh read belong to ${sha7(checks.headSha)}, not ${sha7(head)}` };
 }
 
-// The durable record of a head CI verified: only a non-empty all-green rollup, never under --force.
+// The durable record of a head CI verified: only a non-empty all-green rollup, never under --force; it names the non-required checks left red.
 function ciGreenData(ctx, checks, head) {
   const green = checks?.ok && checks.checks.length > 0 && !checks.failing.length && !checks.pending.length && !abortedOf(checks).length;
-  return green && head && !ctx.force ? { ciGreenSha: head, checksOnHead: checks.checks.length } : {};
+  return green && head && !ctx.force ? { ciGreenSha: head, checksOnHead: checks.checks.length, nonRequiredFailing: nonRequiredFailingOf(checks) } : {};
 }
 
 // The verdict of a re-run: its stop, or a pending stop carrying the re-run note so the caller waits for the re-run checks.
@@ -587,7 +668,7 @@ async function updateBehindHead(ctx, deps, branches) {
 
 // The success note of a checks wait: how many checks went green on the head, or that none was reported.
 function checksGreenNote(checks, sha) {
-  return checks.checks.length ? `${checks.checks.length} checks green on ${sha7(sha)}` : `no checks reported on ${sha7(sha)}`;
+  return withOptionalNote(checks.checks.length ? `${checks.checks.length} checks green on ${sha7(sha)}` : `no checks reported on ${sha7(sha)}`, checks);
 }
 
 // The stop of a checks wait out of time: checks-unreadable when its last read failed, checks-pending otherwise.
@@ -1054,10 +1135,18 @@ async function mergeStep({ ctx, deps }) {
   }
 }
 
+// The warning of the non-required checks left red on the last head the close judged, or null when CI's green read was of another head.
+function lastHeadWarning(data) {
+  const onLastHead = Boolean(data.ciGreenSha) && data.ciGreenSha === data.headSha;
+  return onLastHead ? optionalNote(nonRequiredFailingOf(data)) : null;
+}
+
 // Prepares the close: the merge must be recorded with its commit, and the notice line is written from it.
 async function settleStep({ ctx }) {
   if (!ctx.data.merged || !ctx.data.mergeSha) return failed("not-merged", "the merge of the pull request is not recorded with its merge commit");
-  const noticeLine = closedLine({ number: ctx.prNumber, sha: ctx.data.mergeSha, at: ctx.data.mergedAt });
+  const warning = lastHeadWarning(ctx.data);
+  const closed = closedLine({ number: ctx.prNumber, sha: ctx.data.mergeSha, at: ctx.data.mergedAt });
+  const noticeLine = warning ? `${closed}; ${warning}` : closed;
   return { status: "done", note: `closing the job: ${noticeLine}`, data: { noticeLine } };
 }
 

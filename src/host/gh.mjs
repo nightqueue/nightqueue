@@ -205,6 +205,14 @@ export function parseRunId(detailsUrl) {
   return match ? match[1] : null;
 }
 
+// The `[HOST/]OWNER/REPO` a workflow run or pull request URL belongs to, as gh's `--repo` takes it, or null when it names none.
+export function parseRunRepo(url) {
+  const match = /^https?:\/\/([^/]+)\/([^/]+)\/([^/]+)\/(?:actions\/runs\/\d+|pull\/\d+)(?:[/?#]|$)/.exec(String(url ?? "").trim());
+  if (!match) return null;
+  const [, host, owner, repo] = match;
+  return host.toLowerCase() === "github.com" ? `${owner}/${repo}` : `${host}/${owner}/${repo}`;
+}
+
 // Parses the status check rollup of a pull request; an empty rollup is no check at all, which is green.
 function parsePrChecks(text) {
   const payload = parseJson(text);
@@ -229,9 +237,30 @@ export async function ghPrChecks(url, { env = process.env, execFileImpl = execFi
   return parsed ?? { ok: false, checks: [], failing: [], pending: [], aborted: [], error: firstLine(result.stderr) };
 }
 
-// Re-runs the failed jobs of one workflow run, never rejecting: `ok: false` carries gh's first error line.
-export async function ghRunRerun(runId, { failed = true, env = process.env, execFileImpl = execFile, timeoutMs = CALL_TIMEOUT_MS, signal } = {}) {
-  const args = ["run", "rerun", String(runId ?? ""), ...(failed ? ["--failed"] : [])];
+// Parses the json of `gh pr checks --required`: the required checks named, or null when the text is no array.
+function parseRequiredChecks(text) {
+  const payload = parseJson(text);
+  if (!Array.isArray(payload)) return null;
+  return payload
+    .map((item) => ({ name: textOrNull(item?.name), link: textOrNull(item?.link) }))
+    .filter((item) => item.name);
+}
+
+// The checks the base branch of one pull request requires, never rejecting: `declared: false` when gh reports none.
+export async function ghPrRequiredChecks(url, { env = process.env, execFileImpl = execFile, timeoutMs = CALL_TIMEOUT_MS, signal } = {}) {
+  const args = ["pr", "checks", String(url ?? ""), "--required", "--json", "name,link,workflow"];
+  const result = await runGhAsync(args, { env, execFileImpl, timeoutMs, signal });
+  const required = result.unfinished ? null : parseRequiredChecks(result.stdout);
+  if (required) return required.length ? { ok: true, declared: true, checks: required } : { ok: true, declared: false };
+  if (!result.unfinished && /no required checks reported/i.test(result.stderr)) return { ok: true, declared: false };
+  return { ok: false, error: firstLine(result.stderr) };
+}
+
+// Re-runs the failed jobs of one workflow run of a named repository, never rejecting; a run without a repository is refused without calling gh.
+export async function ghRunRerun(runId, { repo = null, failed = true, env = process.env, execFileImpl = execFile, timeoutMs = CALL_TIMEOUT_MS, signal } = {}) {
+  const target = textOrNull(repo);
+  if (!target) return { ok: false, error: "refused: no repository to name with --repo" };
+  const args = ["run", "rerun", String(runId ?? ""), "--repo", target, ...(failed ? ["--failed"] : [])];
   const result = await runGhAsync(args, { env, execFileImpl, timeoutMs, signal });
   return result.ok ? { ok: true, error: null } : { ok: false, error: firstLine(result.stderr) };
 }

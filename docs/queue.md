@@ -1092,6 +1092,18 @@ agent, never a second job, never queue work:
    red check still stops it, and `--force` is unchanged. A pull request with no checks reported goes on
    to the merge step, which verifies its head (see *The close merges only a head it or CI
    verified* below).
+   Which checks gate: when a read shows a check that is not green, the close asks
+   `gh pr checks <url> --required` which ones the base branch requires (branch protection or
+   rulesets). When it declares some, only those gate - red (`checks-red`), pending, cancelled
+   and the re-runs - and a red non-required check never stops, waits or re-runs: it is
+   named as a warning, `non-required checks failing: <names>`, on the checks note and at the
+   end of the `Closed:` notice line. When the base declares none, when gh cannot answer, or
+   when a required check is missing from the read, every check gates exactly as before. Every
+   re-run names the pull request's repository - `gh run rerun <id> --repo <owner>/<repo>
+   --failed`, the repository taken from the check's details URL, else from the pull request
+   URL - so it never depends on the directory the close runs in; a re-run with no repository
+   to name is refused without calling gh, and the hand-run hints of `checks-red` and
+   `checks-aborted` carry the same `--repo`.
    Uncommitted files in the checkout only stop it when the pull that follows the merge
    would touch them (`checkout-dirty` names up to ten): nightqueue never stashes, so they are
    yours to commit or stash.
@@ -1134,7 +1146,7 @@ agent, never a second job, never queue work:
    `gh pr checks` is polled with a growing gap (10 s up to 60 s), the checklist and a
    foreground close show `waiting for checks on <sha>: 2/3 done`, and the close lease is
    renewed at each poll. All green goes on to merge; a red check stops with `checks-red`
-   naming it; when `queue.closeTimeoutS` is nearly out it stops with `checks-pending` -
+   naming it (only the required ones gate when the base declares some, as in preflight); when `queue.closeTimeoutS` is nearly out it stops with `checks-pending` -
    `branch updated to <sha>, checks still running - run queue close J-N again` - and the next
    run starts at preflight on that head. This is the close's only CI wait for a pull request
    preflight found `BEHIND` with its checks still running. `UNSTABLE` is not updated; `BLOCKED` is never read
