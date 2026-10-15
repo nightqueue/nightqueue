@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { ghPrChecks, ghPrDetail, ghPrDiffNames, ghPrMerge, ghRunRerun, parseRunId } from "../../src/host/gh.mjs";
+import { ghPrChecks, ghPrDetail, ghPrDiffNames, ghPrMerge, ghPrRequiredChecks, ghRunRerun, parseRunId, parseRunRepo } from "../../src/host/gh.mjs";
 
 const URL = "https://github.com/acme/api/pull/7";
 
@@ -126,12 +126,42 @@ test("parseRunId reads the workflow run id of a check details URL, and null when
   assert.equal(parseRunId(null), null);
 });
 
-test("ghRunRerun re-runs the failed jobs of a run and never rejects", async () => {
+test("ghRunRerun re-runs the failed jobs of a run of the named repository and never rejects", async () => {
   const ok = fakeExecFile();
-  assert.deepEqual(await ghRunRerun("555", { failed: true, env: {}, execFileImpl: ok }), { ok: true, error: null });
-  assert.deepEqual(ok.calls[0].args, ["run", "rerun", "555", "--failed"]);
-  const refused = await ghRunRerun("555", { failed: true, env: {}, execFileImpl: fakeExecFile({ err: exitError(1), stderr: "run 555 cannot be rerun\nmore" }) });
+  assert.deepEqual(await ghRunRerun("555", { repo: "acme/api", failed: true, env: {}, execFileImpl: ok }), { ok: true, error: null });
+  assert.deepEqual(ok.calls[0].args, ["run", "rerun", "555", "--repo", "acme/api", "--failed"]);
+  const refused = await ghRunRerun("555", { repo: "acme/api", failed: true, env: {}, execFileImpl: fakeExecFile({ err: exitError(1), stderr: "run 555 cannot be rerun\nmore" }) });
   assert.deepEqual(refused, { ok: false, error: "run 555 cannot be rerun" });
+});
+
+test("ghRunRerun refuses a run without a repository to name, never spawning gh", async () => {
+  for (const repo of [null, "", "  ", undefined]) {
+    const execFileImpl = fakeExecFile();
+    const refused = await ghRunRerun("555", { repo, failed: true, env: {}, execFileImpl });
+    assert.equal(refused.ok, false, JSON.stringify(repo));
+    assert.match(refused.error, /no repository to name with --repo/);
+    assert.equal(execFileImpl.calls.length, 0, "gh run rerun ran without --repo");
+  }
+});
+
+test("parseRunRepo reads the repository of a run or pull request URL as gh's --repo takes it, and null otherwise", () => {
+  assert.equal(parseRunRepo("https://github.com/maykonVinicius/clareza-gestao-app/actions/runs/38789810171/job/1"), "maykonVinicius/clareza-gestao-app");
+  assert.equal(parseRunRepo("https://github.com/acme/api/pull/7"), "acme/api");
+  assert.equal(parseRunRepo("https://ghe.acme.io/a/b/actions/runs/1/job/2"), "ghe.acme.io/a/b");
+  assert.equal(parseRunRepo("https://ci.example.com/build/9"), null);
+  assert.equal(parseRunRepo(null), null);
+});
+
+test("ghPrRequiredChecks asks gh for the required checks and reads a set, none reported, an error and unreadable output", async () => {
+  const set = fakeExecFile({ err: exitError(1), stdout: JSON.stringify([{ name: "test", link: "https://github.com/acme/api/actions/runs/1/job/2", workflow: "CI" }, { link: "x" }]) });
+  assert.deepEqual(await ghPrRequiredChecks(URL, { env: {}, execFileImpl: set }), { ok: true, declared: true, checks: [{ name: "test", link: "https://github.com/acme/api/actions/runs/1/job/2" }] });
+  assert.deepEqual(set.calls[0].args, ["pr", "checks", URL, "--required", "--json", "name,link,workflow"]);
+  const none = fakeExecFile({ err: exitError(1), stderr: "no required checks reported on the 'fix/worker' branch\n" });
+  assert.deepEqual(await ghPrRequiredChecks(URL, { env: {}, execFileImpl: none }), { ok: true, declared: false });
+  assert.deepEqual(await ghPrRequiredChecks(URL, { env: {}, execFileImpl: fakeExecFile({ stdout: "[]" }) }), { ok: true, declared: false });
+  assert.equal((await ghPrRequiredChecks(URL, { env: {}, execFileImpl: fakeExecFile({ err: timeoutError() }) })).ok, false);
+  assert.deepEqual(await ghPrRequiredChecks(URL, { env: {}, execFileImpl: fakeExecFile({ err: exitError(1), stderr: "HTTP 502\nmore" }) }), { ok: false, error: "HTTP 502" });
+  assert.equal((await ghPrRequiredChecks(URL, { env: {}, execFileImpl: fakeExecFile({ stdout: "not json" }) })).ok, false);
 });
 
 test("ghPrChecks reads an empty rollup as green, parses stdout of a non-zero exit, and answers ok:false on a timeout", async () => {

@@ -1,3 +1,5 @@
+import { parseRunRepo } from "../src/host/gh.mjs";
+
 export const CLOSE_PR_URL = "https://github.com/acme/api/pull/7";
 export const HEAD_SHA = "1111111aaaaaaaaa";
 export const PUSHED_SHA = "2222222bbbbbbbbb";
@@ -61,6 +63,8 @@ export function fakeCloseDeps(changes = {}) {
     reads: [],
     checkReads: [],
     checks: { ok: true, checks: [{ name: "test", bucket: "pass" }], failing: [], pending: [] },
+    requiredReads: [],
+    requiredChecks: { ok: true, declared: false },
     diffNames: { ok: true, files: ["src/a.mjs"] },
     git: {},
     merge: (current) => {
@@ -75,28 +79,41 @@ export function fakeCloseDeps(changes = {}) {
     merger: async () => NO_MERGER_ANSWER,
     ...changes,
   };
-  const log = { git: [], prReads: 0, checkReads: 0, merges: [], reruns: [], tests: [], tempDirs: [], removedDirs: [], sleeps: [], linked: [], mergers: [] };
+  const log = { git: [], ghCalls: [], prReads: 0, checkReads: 0, requiredReads: 0, merges: [], reruns: [], tests: [], tempDirs: [], removedDirs: [], sleeps: [], linked: [], mergers: [] };
+  const recordPrCall = (call, url, options) => log.ghCalls.push({ call, repo: parseRunRepo(url), cwd: options?.cwd ?? null });
   const deps = {
     git: async (args, options = {}) => {
       log.git.push({ args, cwd: options.cwd });
       return gitAnswer(world.git, args);
     },
     gh: {
-      prDetail: async () => {
+      prDetail: async (url, options = {}) => {
+        recordPrCall("prDetail", url, options);
         log.prReads += 1;
         return world.reads.length ? world.reads.shift() : world.pr;
       },
-      prChecks: async () => {
+      prChecks: async (url, options = {}) => {
+        recordPrCall("prChecks", url, options);
         log.checkReads += 1;
         return world.checkReads.length ? world.checkReads.shift() : world.checks;
       },
+      prRequiredChecks: async (url, options = {}) => {
+        recordPrCall("prRequiredChecks", url, options);
+        log.requiredReads += 1;
+        return world.requiredReads.length ? world.requiredReads.shift() : world.requiredChecks;
+      },
       prMerge: async (url, options = {}) => {
+        recordPrCall("prMerge", url, options);
         log.merges.push({ url, matchHeadCommit: options.matchHeadCommit ?? null });
         return world.merge(world);
       },
-      prDiffNames: async () => world.diffNames,
+      prDiffNames: async (url, options = {}) => {
+        recordPrCall("prDiffNames", url, options);
+        return world.diffNames;
+      },
       runRerun: async (runId, options = {}) => {
-        log.reruns.push({ runId, failed: options.failed ?? null });
+        log.ghCalls.push({ call: "runRerun", repo: options.repo ?? null, cwd: options.cwd ?? null });
+        log.reruns.push({ runId, repo: options.repo ?? null, failed: options.failed ?? null });
         return world.rerun(world, runId);
       },
     },

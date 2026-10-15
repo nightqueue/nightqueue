@@ -767,7 +767,7 @@ test("an aborted check is re-run once on its head, the checks are waited on and 
   const { fake, now } = behindWorld({ pr: openPr(), checkReads: [ABORTED, GREEN] });
   const { outcome, checklist } = await close(home, fake, { now });
   assert.equal(outcome.status, "closed", JSON.stringify(outcome));
-  assert.deepEqual(fake.log.reruns, [{ runId: "555", failed: true }]);
+  assert.deepEqual(fake.log.reruns, [{ runId: "555", repo: "acme/api", failed: true }]);
   assert.equal(checklist.data.rerun.head, HEAD_SHA);
   assert.deepEqual(checklist.data.rerun.runIds, ["555"]);
   assert.match(checklist.steps.preflight.note, /re-ran CI \(test \(24\)\) — cancelled before it ran/);
@@ -779,7 +779,7 @@ test("a head aborted again after its one re-run stops at checks-aborted naming t
   const { fake, now } = behindWorld({ pr: openPr(), checkReads: [ABORTED, ABORTED_AGAIN], checks: ABORTED_AGAIN });
   const { outcome, checklist } = await close(home, fake, { now });
   assert.equal(outcome.reason, "checks-aborted");
-  assert.match(checklist.steps.preflight.note, /check test \(24\) was cancelled by GitHub twice on 1111111; re-run it by hand: gh run rerun 555 --failed/);
+  assert.match(checklist.steps.preflight.note, /check test \(24\) was cancelled by GitHub twice on 1111111; re-run it by hand: gh run rerun 555 --repo acme\/api --failed/);
   assert.equal(fake.log.reruns.length, 1);
   assert.equal(fake.log.merges.length, 0);
 });
@@ -825,7 +825,7 @@ test("a failed Actions check is re-run once on its head, the checks are waited o
   const { fake, now } = behindWorld({ pr: openPr(), checkReads: [FAILED_ACTIONS, GREEN] });
   const { outcome, checklist } = await close(home, fake, { now });
   assert.equal(outcome.status, "closed", JSON.stringify(outcome));
-  assert.deepEqual(fake.log.reruns, [{ runId: "555", failed: true }]);
+  assert.deepEqual(fake.log.reruns, [{ runId: "555", repo: "acme/api", failed: true }]);
   assert.equal(checklist.data.rerunFailed.head, HEAD_SHA);
   assert.deepEqual(checklist.data.rerunFailed.runIds, ["555"]);
   assert.equal(checklist.data.rerun, undefined, "the failed re-run spent the aborted budget");
@@ -847,7 +847,7 @@ test("a head whose Actions check fails again after its one re-run stops at check
   const { fake, now } = behindWorld({ pr: openPr(), checkReads: [FAILED_ACTIONS, FAILED_AGAIN], checks: FAILED_AGAIN });
   const { outcome, checklist } = await close(home, fake, { now });
   assert.equal(outcome.reason, "checks-red");
-  assert.match(checklist.steps.preflight.note, /check test \(22\) failed twice on 1111111; re-run it by hand: gh run rerun 555 --failed/);
+  assert.match(checklist.steps.preflight.note, /check test \(22\) failed twice on 1111111; re-run it by hand: gh run rerun 555 --repo acme\/api --failed/);
   assert.equal(fake.log.reruns.length, 1);
   assert.equal(fake.log.merges.length, 0);
 });
@@ -877,7 +877,7 @@ test("a failed-check re-run gh refuses stops at checks-red naming the error and 
   const { fake, now } = behindWorld({ pr: openPr(), checks: FAILED_ACTIONS, rerun: () => ({ ok: false, error: "run 555 cannot be rerun" }) });
   const { outcome, checklist } = await close(home, fake, { now });
   assert.equal(outcome.reason, "checks-red");
-  assert.match(checklist.steps.preflight.note, /gh run rerun 555 --failed failed for test \(22\) \(run 555 cannot be rerun\)/);
+  assert.match(checklist.steps.preflight.note, /gh run rerun 555 --repo acme\/api --failed failed for test \(22\) \(run 555 cannot be rerun\)/);
   assert.equal(checklist.data.rerunFailed, undefined);
   assert.equal(fake.log.merges.length, 0);
 });
@@ -894,7 +894,7 @@ test("a re-run gh refuses for one run keeps its sibling run's re-run spent, so t
   };
   const first = await close(home, fake, { now });
   assert.equal(first.outcome.reason, "checks-red");
-  assert.match(first.checklist.steps.preflight.note, /gh run rerun 556 --failed failed/);
+  assert.match(first.checklist.steps.preflight.note, /gh run rerun 556 --repo acme\/api --failed failed/);
   assert.deepEqual(first.checklist.data.rerunFailed.runIds, ["555"]);
   assert.deepEqual(first.checklist.data.rerunFailed.urls, [RUN_URL]);
   await close(reacquire(home, "close:test:2:bbbb"), fake, { now });
@@ -908,7 +908,7 @@ test("a check failing twice while other checks still run stops checks-red naming
   const { fake, now } = behindWorld({ pr: openPr(), checkReads: [FAILED_ACTIONS, againPending], checks: againPending });
   const { outcome, checklist } = await close(home, fake, { now });
   assert.equal(outcome.reason, "checks-red");
-  assert.match(checklist.steps.preflight.note, /check test \(22\) failed twice on 1111111; re-run it by hand: gh run rerun 555 --failed; still running: b$/);
+  assert.match(checklist.steps.preflight.note, /check test \(22\) failed twice on 1111111; re-run it by hand: gh run rerun 555 --repo acme\/api --failed; still running: b$/);
   assert.equal(fake.log.reruns.length, 1);
   assert.equal(fake.log.merges.length, 0);
 });
@@ -934,7 +934,7 @@ test("a failed and an aborted check of one run are re-run once under the failed 
   const { fake, now } = behindWorld({ pr: openPr(), checkReads: [mixed, mixed, GREEN] });
   const { outcome, checklist } = await close(home, fake, { now });
   assert.equal(outcome.status, "closed", JSON.stringify(outcome));
-  assert.deepEqual(fake.log.reruns, [{ runId: "555", failed: true }]);
+  assert.deepEqual(fake.log.reruns, [{ runId: "555", repo: "acme/api", failed: true }]);
   assert.equal(checklist.data.rerun, undefined, "the mixed re-run spent the aborted budget");
   assert.deepEqual(checklist.data.rerunFailed.urls, [RUN_URL, abortedUrl]);
 });
