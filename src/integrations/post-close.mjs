@@ -2,11 +2,18 @@ import { connectionRecord, orgUsesConnection, resolveForClose } from "./connecti
 import { connectionPlace, quietFiles } from "./coverage.mjs";
 import { requestJson } from "./http.mjs";
 import { originLabel } from "./origin.mjs";
-import { actsOnOrigin, byRegistryOrder, providerOf, providers } from "./registry.mjs";
+import { cutText, oneLine, outputTail, shortGroupId } from "./ota.mjs";
+import { actsOnOrigin, byRegistryOrder, otaProvider, providerOf, providers } from "./registry.mjs";
 import { getSetting } from "./settings.mjs";
+import { addDetachedWorktree, removeDetachedWorktree } from "../queue/throwaway-worktree.mjs";
 
 const HTTP_TIMEOUT_MS = 15000;
+const OTA_WHOAMI_TIMEOUT_MS = 15000;
+const OTA_GIT_TIMEOUT_MS = 120000;
+const OTA_LS_FILES_TIMEOUT_MS = 10000;
+const OTA_MESSAGE_MAX = 200;
 const BUDGET_RESERVE_MS = 3000;
+const OTA_WORKTREE_FAILED = "could not create the OTA worktree";
 const ANSWER_STATUSES = new Set(["done", "skipped", "warning"]);
 const SEVERITY = { skipped: 0, done: 1, warning: 2 };
 const CLOSE_EVENT = "closed";
@@ -46,6 +53,7 @@ function closeFacts(ctx, origins) {
       resolution: ctx.resolution ?? "merged",
       conclusion: ctx.conclusion ?? null,
       resolvedAt: ctx.resolvedAt ?? null,
+      ota: isPlainObject(ctx.data?.ota) ? { ...ctx.data.ota } : null,
     },
     origins,
   };
@@ -222,4 +230,176 @@ export async function logStep({ ctx, deps }) {
   const results = [];
   for (const provider of targets) results.push(await logTo(provider, { ctx, deps, files, logged, described }));
   return foldLogResults(results, logged);
+}
+
+// An OTA step result that also stores the outcome as `data.ota`; a warning is always told, a skip only when asked.
+function otaResult(status, note, { branch, groupId = null, url = null, notice = false }) {
+  const ota = { status, branch, groupId, url, note: status === "done" ? null : note };
+  return answer(status, note, { notice: notice || status === "warning", data: { ota } });
+}
+
+// The extra seconds the OTA step adds to the post-close budget: the provider's own budget when the project turned OTA on, else none.
+export function otaBudgetS(facts) {
+  const provider = otaProvider();
+  if (!provider) return 0;
+  return getSetting(facts?.integrations ?? null, provider.kind, "ota") === true ? provider.ota.budgetS : 0;
+}
+
+// Clears the stored OTA outcome, so the OTA step publishes again.
+export function forgetOta(data) {
+  delete data.ota;
+}
+
+// The timeout and signal of an OTA child call: its own cap, never past the step's own end nor the post-close deadline.
+function otaTiming(ctx, ownEnd, capMs) {
+  return { timeoutMs: Math.max(1, Math.min(capMs, ownEnd - ctx.nowMs(), ctx.remainingMs())), signal: ctx.signal };
+}
+
+// Tells whether the stored branch still matches the provider's own branch pattern, so a hand-edited value never reaches eas.
+function isValidOtaBranch(provider, branch) {
+  if (typeof branch !== "string" || !branch) return false;
+  const pattern = provider.settings?.branch?.pattern;
+  return pattern instanceof RegExp ? pattern.test(branch) : true;
+}
+
+// The skip or warning that ends the OTA step before any call, or null when it may go on.
+function otaPrecheck(ctx, deps, { provider, branch }) {
+  const stored = ctx.data?.ota;
+  if (ctx.resolution === "no-change") return otaResult("skipped", "the job closed without a code change", { branch });
+  if (getSetting(ctx.integrations, provider.kind, "ota") !== true) return otaResult("skipped", `${provider.kind}.ota is off`, { branch });
+  if (stored?.status === "done") return answer("done", `already published ${shortGroupId(stored.groupId)} to ${stored.branch ?? branch}`);
+  if (!isValidOtaBranch(provider, branch)) return otaResult("warning", `${provider.kind}.branch is not a valid branch name`, { branch: null });
+  if (!ctx.data?.mergeSha) return otaResult("warning", "no merge commit recorded", { branch });
+  if (!deps?.eas || typeof deps?.git !== "function" || !deps?.fs) return otaResult("warning", "the close has no eas, git or filesystem to publish with", { branch });
+  if (typeof ctx.checkout !== "string" || !ctx.checkout || deps.fs.exists?.(ctx.checkout) === false) {
+    return otaResult("warning", "the project's checkout is not on this machine", { branch });
+  }
+  return null;
+}
+
+// The skip or warning of a machine whose eas cannot publish, or null when it is installed and logged in.
+async function otaLoginCheck(ctx, deps, branch) {
+  let status = null;
+  try {
+    status = await deps.eas.whoami({ timeoutMs: Math.max(1, Math.min(OTA_WHOAMI_TIMEOUT_MS, ctx.remainingMs())), signal: ctx.signal });
+  } catch {
+    status = null;
+  }
+  if (status?.installed === false) return otaResult("skipped", "eas is not installed", { branch, notice: true });
+  if (status?.authenticated === false) return otaResult("skipped", "eas is not logged in; run `eas login`", { branch, notice: true });
+  if (status?.authenticated !== true) return otaResult("warning", "eas whoami did not answer", { branch });
+  return null;
+}
+
+// Creates the throwaway worktree of the merge commit, fetching the base branch once when the commit is not local yet.
+async function addOtaWorktree(ctx, deps, timing) {
+  const options = { deps, checkout: ctx.checkout, ref: ctx.data.mergeSha, prefix: `nightqueue-ota-${ctx.jobId}-` };
+  const first = await addDetachedWorktree({ ...options, ...timing(OTA_GIT_TIMEOUT_MS) });
+  if (first.dir || !ctx.data.baseBranch || ctx.signal.aborted) return first;
+  const fetched = await fetchBase(ctx, deps, timing);
+  return fetched ? await addDetachedWorktree({ ...options, ...timing(OTA_GIT_TIMEOUT_MS) }) : first;
+}
+
+// Fetches the job's base branch into the checkout, answering whether it worked.
+async function fetchBase(ctx, deps, timing) {
+  try {
+    const fetched = await deps.git(["fetch", "origin", ctx.data.baseBranch], { cwd: ctx.checkout, ...timing(OTA_GIT_TIMEOUT_MS) });
+    return fetched?.ok === true;
+  } catch {
+    return false;
+  }
+}
+
+// The root `.env*` files of the checkout git does not track, or the problem that kept them from being told apart.
+async function untrackedEnvFiles(ctx, deps, timing) {
+  try {
+    const names = deps.fs.envFileNames(ctx.checkout);
+    if (!Array.isArray(names) || !names.length) return { names: [] };
+    const listed = await deps.git(["--literal-pathspecs", "ls-files", "-z", "--", ...names], { cwd: ctx.checkout, ...timing(OTA_LS_FILES_TIMEOUT_MS) });
+    if (!listed?.ok) return { problem: "could not tell which .env files are untracked (git ls-files failed)" };
+    const tracked = new Set(String(listed.stdout ?? "").split("\0").filter(Boolean));
+    return { names: names.filter((name) => !tracked.has(name)) };
+  } catch (err) {
+    return { problem: `could not list the .env files of the checkout (${err?.code ?? "error"})` };
+  }
+}
+
+// Copies the untracked root `.env*` files into the throwaway worktree, answering the count or the one file that failed, never its content.
+async function copyEnvFiles(ctx, deps, { dir, timing }) {
+  const found = await untrackedEnvFiles(ctx, deps, timing);
+  if (found.problem) return found;
+  for (const name of found.names) {
+    try {
+      deps.fs.copyEnvFile(ctx.checkout, dir, name);
+    } catch (err) {
+      return { problem: `could not copy ${name} into the OTA worktree (${err?.code ?? "error"})` };
+    }
+  }
+  return { count: found.names.length };
+}
+
+// Prepares the throwaway worktree for a publish: node_modules linked and the env files copied, or the problem that stops it.
+async function prepareOtaWorktree(ctx, deps, { dir, timing }) {
+  try {
+    deps.fs.linkNodeModules(ctx.checkout, dir);
+  } catch (err) {
+    return { problem: `could not link node_modules into the OTA worktree (${err?.code ?? "error"})` };
+  }
+  const copied = await copyEnvFiles(ctx, deps, { dir, timing });
+  if (copied.problem) return copied;
+  if (copied.count) await ctx.progress?.(`copied ${copied.count} env file${copied.count === 1 ? "" : "s"}`);
+  return {};
+}
+
+// Runs the provider's publish, turning a throw into a failed answer that carries no error message.
+async function runPublish(provider, request) {
+  try {
+    return await provider.ota.publish(request);
+  } catch {
+    return { ok: false, reason: "the OTA publish failed", output: "" };
+  }
+}
+
+// The OTA step result of a publish answer: done with its group and url, or a warning with the reason and the output's last lines.
+function publishedResult(published, branch) {
+  if (published?.ok === true && typeof published.groupId === "string" && published.groupId) {
+    const url = typeof published.url === "string" && published.url ? published.url : null;
+    return otaResult("done", `published ${shortGroupId(published.groupId)} to ${branch}`, { branch, groupId: published.groupId, url });
+  }
+  const note = [String(published?.reason ?? "the OTA publish answered nothing"), ...outputTail(published?.output)].join("\n");
+  return otaResult("warning", note, { branch });
+}
+
+// Publishes from a prepared throwaway worktree, unless preparing it failed or the close was interrupted.
+async function publishFrom(ctx, deps, { provider, branch, dir, timing }) {
+  const prepared = await prepareOtaWorktree(ctx, deps, { dir, timing });
+  if (prepared.problem) return otaResult("warning", prepared.problem, { branch });
+  if (ctx.signal.aborted) return otaResult("warning", "interrupted before the OTA publish", { branch });
+  await ctx.progress?.(`publishing an OTA update to ${branch}`);
+  const message = cutText(oneLine(`${ctx.jobRef}: ${ctx.title}`), OTA_MESSAGE_MAX);
+  const published = await runPublish(provider, { dir, branch, message, eas: deps.eas, ...timing(Number.POSITIVE_INFINITY) });
+  return publishedResult(published, branch);
+}
+
+// Publishes the merge commit in a throwaway worktree removed whatever happens, under the step's own budget.
+async function publishInThrowaway(ctx, deps, { provider, branch }) {
+  const ownEnd = ctx.nowMs() + provider.ota.budgetS * 1000;
+  const timing = (capMs) => otaTiming(ctx, ownEnd, capMs);
+  const added = await addOtaWorktree(ctx, deps, timing);
+  if (!added.dir) return otaResult("warning", [OTA_WORKTREE_FAILED, added.error].filter(Boolean).join("\n"), { branch });
+  try {
+    return await publishFrom(ctx, deps, { provider, branch, dir: added.dir, timing });
+  } finally {
+    await removeDetachedWorktree({ deps, checkout: ctx.checkout, dir: added.dir });
+  }
+}
+
+// Publishes an over-the-air update of the merged job when its project turned it on: the OTA step of a close, never failing it.
+export async function otaStep({ ctx, deps }) {
+  const provider = otaProvider();
+  if (!provider) return answer("skipped", "no OTA provider");
+  const branch = getSetting(ctx.integrations, provider.kind, "branch");
+  const stop = otaPrecheck(ctx, deps, { provider, branch }) ?? (await otaLoginCheck(ctx, deps, branch));
+  if (stop) return stop;
+  return await publishInThrowaway(ctx, deps, { provider, branch });
 }

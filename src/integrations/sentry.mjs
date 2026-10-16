@@ -1,5 +1,6 @@
 import { refsInTextOrder } from "./find-refs.mjs";
 import { requestJson } from "./http.mjs";
+import { withOtaLine } from "./ota.mjs";
 
 const DEFAULT_URL = "https://sentry.io";
 const CLOSE_STATUSES = Object.freeze(["resolved", "resolvedInNextRelease"]);
@@ -186,7 +187,7 @@ function noChangeNote(result, job) {
 function closeNote(result, job) {
   if (result?.resolution === "no-change") return noChangeNote(result, job);
   const sha = typeof result?.mergeSha === "string" ? result.mergeSha.slice(0, 7) : "unknown";
-  return `Fixed by ${result?.prUrl ?? "the merged pull request"}, merged as ${sha}`;
+  return withOtaLine(`Fixed by ${result?.prUrl ?? "the merged pull request"}, merged as ${sha}`, result);
 }
 
 // Resolves the issue the job came from and leaves a best-effort note naming the merge or the resolution without change.
@@ -207,7 +208,7 @@ export const sentry = {
   kind: "sentry",
   label: "Sentry",
   description: "Reads the issues jobs come from and resolves them as the jobs close, per org.",
-  card: { order: 3, icon: "sentry" },
+  card: { order: 4, icon: "sentry" },
   connection: {
     cardinality: "one",
     secretFields: ["token"],

@@ -33,7 +33,7 @@ test("setup removes stored github slots and records once, keeps the sentry data 
 
   const first = await setup(host.env);
   assert.equal(first.code, 0, first.out.join("\n"));
-  assert.ok(first.out.some((line) => line.startsWith("stored github connection: removed")), first.out.join("\n"));
+  assert.ok(first.out.some((line) => line.startsWith("stored github, expo connection: removed")), first.out.join("\n"));
   const configText = readFileSync(join(host.home, "config.json"), "utf8");
   const secretsText = readFileSync(join(host.home, "secrets.json"), "utf8");
   assert.equal(configText.includes("github"), false, configText);
@@ -50,7 +50,7 @@ test("setup removes stored github slots and records once, keeps the sentry data 
   const mtimes = ["config.json", "secrets.json"].map((name) => statSync(join(host.home, name)).mtimeMs);
   const second = await setup(host.env);
   assert.equal(second.code, 0);
-  assert.equal(second.out.some((line) => line.includes("stored github connection")), false, second.out.join("\n"));
+  assert.equal(second.out.some((line) => line.includes("stored github")), false, second.out.join("\n"));
   assert.deepEqual(["config.json", "secrets.json"].map((name) => statSync(join(host.home, name)).mtimeMs), mtimes);
 });
 
@@ -59,7 +59,7 @@ test("the setup line counts the retired records and org slots, so a slot-only ho
   assert.equal((await setup(legacy.env)).code, 0);
   writeLegacyFiles(legacy.home);
   const counted = await setup(legacy.env);
-  assert.ok(counted.out.includes("stored github connection: removed (1 record(s), 3 org slot(s))"), counted.out.join("\n"));
+  assert.ok(counted.out.includes("stored github, expo connection: removed (1 record(s), 3 org slot(s))"), counted.out.join("\n"));
 
   const slotOnly = makeHostEnv(t, "setup-retire-slot-only");
   assert.equal((await setup(slotOnly.env)).code, 0);
@@ -69,6 +69,6 @@ test("the setup line counts the retired records and org slots, so a slot-only ho
   writeFileSync(join(slotOnly.home, "config.json"), `${JSON.stringify(config, null, 2)}\n`);
   const first = await setup(slotOnly.env);
   assert.equal(first.code, 0, first.out.join("\n"));
-  assert.ok(first.out.includes("stored github connection: removed (0 record(s), 2 org slot(s))"), first.out.join("\n"));
+  assert.ok(first.out.includes("stored github, expo connection: removed (0 record(s), 2 org slot(s))"), first.out.join("\n"));
   assert.equal(readFileSync(join(slotOnly.home, "config.json"), "utf8").includes("github"), false);
 });

@@ -12,10 +12,13 @@ import {
   ambientProviders,
   connectionProviders,
   connectionTypes,
+  detectingProviders,
+  detectsCheckout,
   isHomeScoped,
   manyTypes,
   moduleCards,
   originProviders,
+  otaProvider,
   providerOf,
   providers,
   retiredConnectionKinds,
@@ -28,13 +31,23 @@ import { requestJson } from "../../src/integrations/http.mjs";
 const INTEGRATIONS_DIR = fileURLToPath(new URL("../../src/integrations/", import.meta.url));
 const SECRET = "ghp_registrytestsecret0000000000000000";
 
-test("the registry lists github first, then sentry, then linear, then discord, in this build", () => {
-  assert.deepEqual(providers().map((provider) => provider.kind), ["github", "sentry", "linear", "discord"]);
+test("the registry lists github first, then sentry, then linear, then discord, then expo, in this build", () => {
+  assert.deepEqual(providers().map((provider) => provider.kind), ["github", "sentry", "linear", "discord", "expo"]);
   assert.equal(providerOf("github").kind, "github");
   assert.equal(providerOf("nope"), null);
   assert.deepEqual(slotTypes(), ["sentry"]);
   assert.deepEqual(manyTypes(), ["discord"]);
   assert.deepEqual(originProviders().map((provider) => provider.kind), ["sentry", "linear", "discord"]);
+  assert.deepEqual(detectingProviders().map((provider) => provider.kind), ["expo"]);
+  assert.equal(otaProvider()?.kind, "expo");
+});
+
+test("detectsCheckout answers true only for a detector that says true on a named checkout", () => {
+  assert.equal(detectsCheckout({ detect: () => true }, "/x"), true);
+  assert.equal(detectsCheckout({ detect: () => "yes" }, "/x"), false);
+  assert.equal(detectsCheckout({ detect: () => { throw new Error("boom"); } }, "/x"), false);
+  assert.equal(detectsCheckout({ detect: () => true }, null), false);
+  assert.equal(detectsCheckout({}, "/x"), false);
 });
 
 test("emptySlots is derived from the one-cardinality connection providers", () => {
@@ -42,27 +55,30 @@ test("emptySlots is derived from the one-cardinality connection providers", () =
   assert.equal(Object.getPrototypeOf(emptySlots()), null);
 });
 
-test("CONNECTION_TYPES holds only the stored kinds; github is read from the machine's gh", () => {
+test("CONNECTION_TYPES holds only the stored kinds; github and expo are read from the machine", () => {
   assert.ok(CONNECTION_TYPES instanceof Map);
   assert.deepEqual([...CONNECTION_TYPES.keys()], ["sentry", "linear", "discord"]);
   assert.deepEqual(connectionProviders().map((provider) => provider.kind), ["sentry", "linear", "discord"]);
-  assert.deepEqual(ambientProviders().map((provider) => provider.kind), ["github"]);
-  assert.deepEqual(retiredConnectionKinds(), ["github"]);
+  assert.deepEqual(ambientProviders().map((provider) => provider.kind), ["github", "expo"]);
+  assert.deepEqual(retiredConnectionKinds(), ["github", "expo"]);
   assert.equal(requireType("sentry"), connectionTypes().get("sentry"));
   assert.throws(() => requireType("github"), /github is not a stored connection: nightqueue uses the machine's authenticated gh; run `gh auth login`/);
+  assert.throws(() => requireType("expo"), /expo is not a stored connection: nightqueue uses the machine's eas login; run `eas login`/);
   assert.throws(() => requireType("jira"), /unknown connection type `jira`; supported: sentry, linear, discord/);
 });
 
-test("moduleCards lists GitHub, Linear, Sentry, Discord as plain data that survives JSON", () => {
+test("moduleCards lists GitHub, Expo, Linear, Sentry, Discord as plain data that survives JSON", () => {
   const cards = moduleCards();
-  assert.deepEqual(cards.map((card) => card.kind), ["github", "linear", "sentry", "discord"]);
+  assert.deepEqual(cards.map((card) => card.kind), ["github", "expo", "linear", "sentry", "discord"]);
   assert.deepEqual(JSON.parse(JSON.stringify(cards)), cards);
   const byKind = Object.fromEntries(cards.map((card) => [card.kind, card]));
-  assert.deepEqual(cards.map((card) => card.icon), ["github", "linear", "sentry", "discord"]);
-  assert.deepEqual(cards.map((card) => card.destinations), [false, false, false, true]);
-  assert.deepEqual([byKind.discord.place, byKind.linear.place, byKind.github.place, byKind.sentry.place], ["org", "home", "machine", "org"]);
+  assert.deepEqual(cards.map((card) => card.icon), ["github", "expo", "linear", "sentry", "discord"]);
+  assert.deepEqual(cards.map((card) => card.destinations), [false, false, false, false, true]);
+  assert.deepEqual([byKind.discord.place, byKind.linear.place, byKind.github.place, byKind.sentry.place, byKind.expo.place], ["org", "home", "machine", "org", "machine"]);
   assert.equal(byKind.github.add, null);
+  assert.equal(byKind.expo.add, null);
   assert.deepEqual(byKind.github.ambient, { statusPath: "/api/integrations/github/status", command: "gh auth login --web" });
+  assert.deepEqual(byKind.expo.ambient, { statusPath: "/api/integrations/expo/status", command: "eas login" });
   assert.equal(byKind.discord.add.nameRequired, true);
   assert.equal(byKind.linear.add.orgRequired, false);
   assert.equal(byKind.sentry.add.secretField, "token");
@@ -73,7 +89,7 @@ test("origin coverage and the settings view run on the real registry, github inc
   const empty = { orgConnections: {} };
   const covered = originCoverage({ origin: { kind: "github", ref: "x" }, orgId: "o", integrations: { github: {} }, config: empty, secrets: { connections: {} } });
   assert.equal(covered.connection, "none");
-  assert.deepEqual(providerSettingsView().map((view) => view.kind), ["github", "sentry", "linear", "discord"]);
+  assert.deepEqual(providerSettingsView().map((view) => view.kind), ["github", "sentry", "linear", "discord", "expo"]);
 });
 
 test("withProviders swaps the list for the callback and restores it after a throw", async () => {
@@ -83,7 +99,7 @@ test("withProviders swaps the list for the callback and restores it after a thro
     assert.deepEqual({ ...emptySlots() }, {});
   });
   await assert.rejects(() => withProviders([fake], () => Promise.reject(new Error("boom"))), /boom/);
-  assert.deepEqual(providers().map((provider) => provider.kind), ["github", "sentry", "linear", "discord"]);
+  assert.deepEqual(providers().map((provider) => provider.kind), ["github", "sentry", "linear", "discord", "expo"]);
   await assert.rejects(() => withProviders("fake", () => null), TypeError);
 });
 

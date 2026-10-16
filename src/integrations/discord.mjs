@@ -1,6 +1,7 @@
 import { UserError } from "../config/errors.mjs";
 import { refsInTextOrder } from "./find-refs.mjs";
 import { requestJson } from "./http.mjs";
+import { otaFieldValue, otaOf } from "./ota.mjs";
 
 const WEBHOOK_URL = /^https:\/\/(?:(?:ptb|canary)\.)?discord(?:app)?\.com\/api(?:\/v\d+)?\/webhooks\/(\d+)\/([\w-]+)$/;
 const MESSAGE_LINK = /https:\/\/(?:(?:ptb|canary)\.)?discord(?:app)?\.com\/channels\/(\d+)\/(\d+)(?:\/(\d+))?/i;
@@ -293,6 +294,13 @@ function mergeFields(result) {
   return [{ name: "PR", value: cut(pullRequestLink(result), EMBED_FIELD_MAX), inline: true }];
 }
 
+// The OTA field both messages carry when the close published or failed to publish an update.
+function otaFields(result) {
+  const ota = isNoChange(result) ? null : otaOf(result);
+  if (!ota) return [];
+  return [{ name: "OTA", value: cut(otaFieldValue(ota), EMBED_FIELD_MAX), inline: true }];
+}
+
 // One field per origin of the given kinds, in Linear, Sentry, Thread order; a missing link leaves the plain ref.
 function originFields(origins, kinds) {
   return ORIGIN_ORDER.filter((kind) => kinds.includes(kind)).flatMap((kind) =>
@@ -311,7 +319,7 @@ function replyContent(result, job, origins) {
   return {
     ...closingEmbed(result),
     description: replyDescription(job, result),
-    fields: [...mergeFields(result), ...originFields(known, ["linear", "sentry"])].slice(0, MAX_FIELDS),
+    fields: [...mergeFields(result), ...otaFields(result), ...originFields(known, ["linear", "sentry"])].slice(0, MAX_FIELDS),
   };
 }
 
@@ -350,6 +358,7 @@ function closedLogContent(job, result, origins) {
     fields: [
       ...mergeFields(result),
       { name: "Project", value: cut(job?.project ?? "unknown", EMBED_FIELD_MAX), inline: true },
+      ...otaFields(result),
       ...originFields(originsOf(origins), ORIGIN_ORDER),
     ].slice(0, MAX_FIELDS),
   };
@@ -368,7 +377,7 @@ export const discord = {
   kind: "discord",
   label: "Discord",
   description: "Posts the “job closed” notice of each project to the channel its webhook points to.",
-  card: { order: 4, icon: "discord", destinations: true },
+  card: { order: 5, icon: "discord", destinations: true },
   connection: {
     cardinality: "many",
     secretFields: ["url"],

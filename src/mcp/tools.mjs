@@ -1326,7 +1326,7 @@ function toolDefinitions(env, state) {
       guardsHome: true,
       config: {
         description:
-          "Closes a job: takes its open pull request to merged and the job to `closed`, through the code pipeline preflight, conflict, merge, settle, then the post-close steps origin and log, which never stop a close (a failure is a line in `notice_md`) - run by code, never by an agent; the conflict step may hand a small textual conflict to the bounded merger agent (see the runtime contract). " +
+          "Closes a job: takes its open pull request to merged and the job to `closed`, through the code pipeline preflight, conflict, merge, settle, then the post-close steps ota, origin and log, which never stop a close (a failure is a line in `notice_md`) - run by code, never by an agent; the conflict step may hand a small textual conflict to the bounded merger agent (see the runtime contract). " +
           "A `done` job with no pull request, resolved without change, closes too: preflight, conflict and merge are recorded as skipped, it ends `closed` with `resolution: no-change`, and origin and log tell the origins it was resolved without a code change with the run's conclusion. `closed` means the pull request was merged through this pipeline OR the job was resolved without change through it. " +
           "It starts DETACHED and returns immediately with the pid and the log path; it never waits for the merge. Follow it with `queue_status` and the job id. " +
           "Only a `done` job is closed. `closed`, `running`, `pending`, `gate`, `failed`, `cancelled`, a job already being closed under a live lease, and `force` on a job with no pull request are refused by name, and nothing is written. Refused inside an unattended run. " +

@@ -5,6 +5,8 @@ import { test } from "node:test";
 import { lockPath } from "../../src/config/lock.mjs";
 import { configPath, secretsPath } from "../../src/config/paths.mjs";
 import { loadConfig, loadSecrets, saveSecrets } from "../../src/config/store.mjs";
+import { openDb } from "../../src/memory/db.mjs";
+import * as registry from "../../src/memory/registry.mjs";
 import { openStore } from "../../src/store/open.mjs";
 import { isolatedHostVars } from "../../test-support/host.mjs";
 import { ensureProject, makeDir, makeHome, orgIdOf } from "../../test-support/memory.mjs";
@@ -407,13 +409,14 @@ function filesOf(env) {
   return [configPath(env), secretsPath(env)].map((path) => (existsSync(path) ? readFileSync(path, "utf8") : null));
 }
 
-test("with zero connections the view answers the four module cards in GitHub, Linear, Sentry, Discord order", async (t) => {
+test("with zero connections the view answers the five module cards in GitHub, Expo, Linear, Sentry, Discord order", async (t) => {
   const home = await integrationsHome(t, "integrations-modules");
   const view = await home.call("GET", "/api/integrations");
   assert.equal(view.status, 200);
   assert.deepEqual(view.body.connections, []);
-  assert.deepEqual(view.body.modules.map((module) => [module.kind, module.place]), [["github", "machine"], ["linear", "home"], ["sentry", "org"], ["discord", "org"]]);
+  assert.deepEqual(view.body.modules.map((module) => [module.kind, module.place]), [["github", "machine"], ["expo", "machine"], ["linear", "home"], ["sentry", "org"], ["discord", "org"]]);
   assert.deepEqual(view.body.modules[0].ambient, { statusPath: "/api/integrations/github/status", command: "gh auth login --web" });
+  assert.deepEqual(view.body.modules[1].ambient, { statusPath: "/api/integrations/expo/status", command: "eas login" });
 });
 
 test("an add of a kind read from the machine is a 409, an unknown kind a 404, and neither writes", async (t) => {
@@ -421,6 +424,9 @@ test("an add of a kind read from the machine is a 409, an unknown kind a 404, an
   const github = await home.call("POST", "/api/integrations/github", { token: "ghp_x" });
   assert.deepEqual([github.status, github.body.code], [409, "ambient"]);
   assert.match(github.body.error, /gh auth login/);
+  const expo = await home.call("POST", "/api/integrations/expo", { token: "x" });
+  assert.deepEqual([expo.status, expo.body.code], [409, "ambient"]);
+  assert.match(expo.body.error, /eas login/);
   assert.equal((await home.call("POST", "/api/integrations/jira", { token: "x" })).status, 404);
   assert.deepEqual(filesOf(home.env), [null, null]);
 });
@@ -489,4 +495,31 @@ test("the GitHub status reads the machine's gh: the account when logged in, inst
   const missing = await integrationsHome(t, "integrations-gh-missing", { env: { ...host, NIGHTQUEUE_GH_BIN: join(makeDir(t, "integrations-gh-none"), "gh") } });
   const absent = await missing.call("GET", "/api/integrations/github/status");
   assert.deepEqual([absent.status, absent.body.installed, absent.body.authenticated, absent.body.login], [200, false, false, null]);
+});
+
+test("the Expo status reads the machine's eas and answers installed false when it is missing", async (t) => {
+  const host = isolatedHostVars(makeDir(t, "integrations-eas-host"));
+  const home = await integrationsHome(t, "integrations-eas-status", { env: host });
+  const answer = await home.call("GET", "/api/integrations/expo/status");
+  assert.equal(answer.status, 200, JSON.stringify(answer.body));
+  const { checkedAt, ...status } = answer.body;
+  assert.deepEqual(status, { kind: "expo", installed: false, authenticated: false, login: null, host: null, detected: [] });
+  assert.equal(typeof checkedAt, "string");
+});
+
+test("the Expo status names the registered projects whose checkout has an eas.json, and the GitHub status carries no detected", async (t) => {
+  const host = isolatedHostVars(makeDir(t, "integrations-eas-detect-host"));
+  const home = await integrationsHome(t, "integrations-eas-detect", { env: host });
+  const app = makeDir(t, "integrations-eas-app");
+  writeFileSync(join(app, "eas.json"), "{}\n");
+  const web = makeDir(t, "integrations-eas-web");
+  const orgId = orgIdOf(home.env, "dlw");
+  registry.insertProject(openDb(home.env), { name: "app", path: app, orgId });
+  registry.insertProject(openDb(home.env), { name: "web", path: web, orgId });
+  const answer = await home.call("GET", "/api/integrations/expo/status");
+  assert.equal(answer.status, 200, JSON.stringify(answer.body));
+  assert.deepEqual(answer.body.detected, ["app"]);
+  assert.equal(existsSync(join(web, "eas.json")), false);
+  const github = await home.call("GET", "/api/integrations/github/status");
+  assert.equal(Object.hasOwn(github.body, "detected"), false);
 });

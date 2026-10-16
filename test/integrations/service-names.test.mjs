@@ -20,9 +20,9 @@ const GENERIC_FILES = [
   "src/studio/integrations.mjs",
 ];
 
-// The text of a repository file.
+// The lowercase text of a repository file, without the `export` words that would read as the expo kind.
 function sourceOf(path) {
-  return readFileSync(new URL(`../../${path}`, import.meta.url), "utf8").toLowerCase();
+  return readFileSync(new URL(`../../${path}`, import.meta.url), "utf8").toLowerCase().replace(/\bexport\w*/g, "");
 }
 
 test("the generic close, queue, MCP and integration files name no provider of the registry but github", () => {

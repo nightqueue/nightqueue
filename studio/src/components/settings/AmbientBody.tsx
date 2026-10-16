@@ -1,6 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ambientLine, ambientTool } from "../../lib/integrations";
+import { ambientDetectedLine, ambientLine, ambientTool } from "../../lib/integrations";
 import { onTerminalSocketClosed } from "../../lib/terminalController";
 import { terminalEnded, useTerminals } from "../../lib/terminals";
 import type { AmbientStatus, ModuleCard } from "../../lib/types";
@@ -50,10 +50,12 @@ export function AmbientBody({ module }: { module: ModuleCard }) {
   useRefreshOnTerminalEnd(module.kind, launched, clear);
   const tool = ambientTool(module);
   const data = status.data;
+  const detectedLine = ambientDetectedLine(data);
   return (
     <div className="flex flex-wrap items-center gap-3 px-4 py-3.5">
       <AmbientPill status={data} failed={status.isError} tool={tool} />
       {module.ambient?.command && <span className="font-mono text-sm text-dim max-sm:hidden">{module.ambient.command}</span>}
+      {detectedLine && <span className="text-sm text-muted">{detectedLine}</span>}
       <TerminalLaunchButton
         size="sm"
         className="ml-auto max-lg:min-h-10"
