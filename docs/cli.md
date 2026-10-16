@@ -1056,7 +1056,9 @@ checkout is gone still opens), else the one registered for the current directory
 The preselection reaches the session as `NIGHTQUEUE_PROJECT=<project id>` and nothing else; the
 SessionStart hook then opens its context block with `Current project (preselected by nightqueue
 open): <name>`, even when the project has no memory yet, and the memory hooks and `/nightqueue:reflect`
-read that project. With no project the operator lists the registered ones and asks which.
+read that project. The block also carries a `Registered projects` section (`name · key · <n>
+pending`, pending jobs only, the preselected project first, at most 30 lines), so with no project
+the operator lists the registered ones from it and asks which, in an opening message with no tool call.
 `NIGHTQUEUE_OPERATOR_PID` carries the pid of the `nightqueue open` process, which owns the qa
 worktrees the session creates. A `NIGHTQUEUE_PROJECT`, `NIGHTQUEUE_MODE` or
 `NIGHTQUEUE_OPERATOR_PID` inherited from the caller is never passed on, and a job a runner
@@ -1109,7 +1111,7 @@ A registry that cannot be read refuses `git -C` (the reason names `nightqueue do
 guard fails closed, unlike a job's.
 
 A fresh session opens with the operator's greeting: who it is (the nightqueue operator), the
-preselected project or the list of registered ones, what it does, what it never does, and
+preselected project or the list of registered ones (from the session block, no tool call), what it does, what it never does, and
 where to start. A resumed session is not greeted again. The `nightqueue` MCP tools are
 pre-approved for the session (`permissions.allow: ["mcp__nightqueue__*"]` in the settings it
 is started with), so the operator never asks before reading the queue or the

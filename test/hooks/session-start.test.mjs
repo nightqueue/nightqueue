@@ -4,9 +4,11 @@ import { test } from "node:test";
 import { stateDir } from "../../src/config/paths.mjs";
 import { runSessionStart } from "../../src/hooks/session-start.mjs";
 import { sessionStatePath } from "../../src/hooks/state.mjs";
+import { addJob } from "../../src/memory/jobs.mjs";
 import { getLesson, saveLesson } from "../../src/memory/lessons.mjs";
 import { saveMemory } from "../../src/memory/memory.mjs";
-import { makeDir, makeHome, makeProject, projectIdOf } from "../../test-support/memory.mjs";
+import { writeRunnerRecord } from "../../src/queue/registry.mjs";
+import { ensureProject, makeDir, makeHome, makeProject, projectIdOf, seedDoneJob } from "../../test-support/memory.mjs";
 
 // Stores one lesson of the project, returning its id.
 function addLesson(env, { project = "alpha", title, prevention = "always close the descriptor in a finally block" }) {
@@ -60,7 +62,7 @@ test("a session outside any checkout names the project nightqueue open preselect
   const elsewhere = makeDir(t, "hook-start-home-cwd");
 
   const empty = await runSessionStart({ input: { session_id: "s1", cwd: elsewhere }, env: session });
-  assert.equal(empty, "# Nightqueue context\n\nCurrent project (preselected by nightqueue open): alpha");
+  assert.equal(empty, "# Nightqueue context\n\nCurrent project (preselected by nightqueue open): alpha\n\n## Registered projects\nalpha · AP · 0 pending\nRunners online: 0");
 
   const id = addLesson(env, { title: "the worker leaks a file descriptor on failure" });
   const block = await runSessionStart({ input: { session_id: "s2", cwd: elsewhere }, env: session });
@@ -134,4 +136,66 @@ test("a hostile session id cannot write outside the state directory", async (t) 
   await runSessionStart({ input: { session_id: "../../evil", cwd: repo }, env });
   assert.deepEqual(readdirSync(stateDir(env)), [".._.._evil.json"]);
   assert.equal(readState("../../evil", env).session_id, ".._.._evil");
+});
+
+// The session environment of `nightqueue open`, outside any checkout.
+function operatorEnv(env, preselect = null) {
+  return { ...env, NIGHTQUEUE_MODE: "operator", ...(preselect ? { NIGHTQUEUE_PROJECT: projectIdOf(env, preselect) } : {}) };
+}
+
+test("the operator block lists every project with its pending jobs only, the preselected one first", async (t) => {
+  const env = makeHome(t, "hook-start-registered");
+  makeProject(t, env, "alpha");
+  makeProject(t, env, "beta");
+  addJob({ projectId: projectIdOf(env, "beta"), prompt: "first pending job" }, env);
+  addJob({ projectId: projectIdOf(env, "beta"), prompt: "second pending job" }, env);
+  seedDoneJob(env, { project: "alpha" });
+  const elsewhere = makeDir(t, "hook-start-registered-cwd");
+
+  const lines = async (preselect) => {
+    const block = await runSessionStart({ input: { session_id: "s1", cwd: elsewhere }, env: operatorEnv(env, preselect) });
+    return block.split("## Registered projects\n")[1].split("\n");
+  };
+  assert.match((await lines(null))[0], /^alpha · \S+ · 0 pending$/);
+  assert.match((await lines(null))[1], /^beta · \S+ · 2 pending$/);
+  assert.match((await lines("beta"))[0], /^beta · \S+ · 2 pending$/);
+  assert.match((await lines("beta"))[1], /^alpha · \S+ · 0 pending$/);
+});
+
+test("the operator block without a preselected project still carries the registered projects", async (t) => {
+  const env = makeHome(t, "hook-start-registered-bare");
+  makeProject(t, env, "alpha");
+  const block = await runSessionStart({ input: { session_id: "s1", cwd: makeDir(t, "hook-start-bare-cwd") }, env: operatorEnv(env) });
+  assert.match(block, /^# Nightqueue context\n\n## Registered projects\nalpha · \S+ · 0 pending\nRunners online: 0$/);
+});
+
+test("the operator block counts the live runners of the registry", async (t) => {
+  const env = makeHome(t, "hook-start-runners");
+  makeProject(t, env, "alpha");
+  writeRunnerRecord({ pid: process.pid, startedAt: new Date().toISOString(), mode: "once" }, env);
+  const block = await runSessionStart({ input: { session_id: "s1", cwd: makeDir(t, "hook-start-runners-cwd") }, env: operatorEnv(env) });
+  assert.match(block, /\nRunners online: 1$/);
+});
+
+test("outside operator mode, in a job or a plain session, the block has no registered projects", async (t) => {
+  const env = makeHome(t, "hook-start-registered-off");
+  const repo = makeProject(t, env, "alpha");
+  addLesson(env, { title: "the worker leaks a file descriptor on failure" });
+  const plain = await runSessionStart({ input: { session_id: "s1", cwd: repo }, env });
+  const job = await runSessionStart({ input: { session_id: "s2", cwd: repo }, env: { ...operatorEnv(env), NIGHTQUEUE_JOB_ID: "7" } });
+  assert.doesNotMatch(plain, /Registered projects/);
+  assert.doesNotMatch(job, /Registered projects/);
+});
+
+test("past thirty projects the operator block lists the first thirty by name and counts the rest, under the output limit", async (t) => {
+  const env = makeHome(t, "hook-start-registered-cap");
+  const names = Array.from({ length: 33 }, (_, i) => `${String.fromCharCode(97 + Math.floor(i / 26))}${String.fromCharCode(97 + (i % 26))}${String.fromCharCode(113 + (i % 7))}x`);
+  for (const name of names) ensureProject(env, name);
+  const block = await runSessionStart({ input: { session_id: "s1", cwd: makeDir(t, "hook-start-cap-cwd") }, env: operatorEnv(env, names[32]) });
+  const lines = block.split("## Registered projects\n")[1].split("\n");
+  assert.equal(lines.length, 32);
+  assert.ok(lines[0].startsWith(`${names[32]} · `));
+  assert.ok(lines[1].startsWith(`${names[0]} · `));
+  assert.equal(lines[30], "… and 3 more (nightqueue project list)");
+  assert.ok(block.length <= 9000);
 });
