@@ -393,7 +393,14 @@ terminal through them) starts `claude` with `NIGHTQUEUE_MODE=operator`,
 the runner strips all three from every job it spawns. `nightqueue open` runs in the home, never
 in a checkout; a hook resolves the session's project from its directory, else from
 `NIGHTQUEUE_PROJECT` (never inside a job, and only for a well-formed id), and SessionStart then
-leads its block with `Current project (preselected by nightqueue open): <name>`. The session's
+leads its block with `Current project (preselected by nightqueue open): <name>`. In operator mode only (never in a
+job or a plain session) the block also carries `## Registered projects`: one line per project,
+`name · key · <n> pending`, the pending count read from `jobs` in one SQL query (no runner tail,
+no gh), the preselected project first, the rest by name, capped at 30 lines plus
+`… and <n> more (nightqueue project list)`; it is present even with no preselected project, so the
+operator's opening message needs no tool call. The section ends with `Runners online: <n>`, the
+live queue workers of the runner registry (a readdir of the runners directory and a signal-0 pid
+probe each; no log tail, no gh), omitted when the registry cannot be listed. The session's
 `--settings` are the jobs' settings with two changes, neither of which reaches the host's
 `settings.json` (`desiredHooks` and the doctor hook check are unchanged, so an edit in any other
 Claude session never spawns a hook): the PreToolUse matcher becomes
