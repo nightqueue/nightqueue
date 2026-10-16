@@ -219,6 +219,38 @@ no `Closed:` line. The PR, the merge and the status are shown from the job's fie
 a warning or skip is appended. The Discord thread reply is the whole notice, cut at the
 embed limit with `…`.
 
+The post-close steps of a close run in the order `ota` → `origin` → `log`, so what the
+origin and the log tell carries the OTA outcome of the same run. `ota` is the only step that
+runs a command, and its facts are fixed:
+- it publishes only when the project's `expo.ota` is `true`; otherwise, and for a close without
+  a code change, it is `skipped` and adds nothing to the budget;
+- its own budget is 600 s, added to the 60 s post-close budget (and to the lease) only when
+  `expo.ota` is `true`; every eas and git call of the step ends before that budget and before
+  the post-close deadline, so origin and log keep their 60 s;
+- `eas` (`NIGHTQUEUE_EAS_BIN`, else `eas` on the PATH) runs with an argv, never a shell, with
+  an env stripped of every `NIGHTQUEUE_*` variable, in its own process group: a timeout or an
+  interrupt kills the whole group, so no process it started outlives it;
+- `expo.branch` is checked against the provider's branch pattern again at publish time; a
+  value that fails it is a warning and nothing runs;
+- it runs in a throwaway detached worktree at `close.data.mergeSha`, never in the checkout,
+  with the checkout's `node_modules` symlinked in;
+- the checkout root's untracked `.env*` files (listed by `git --literal-pathspecs ls-files`,
+  gitignored ones included; not those of subdirectories) are copied into the worktree root,
+  mode 0600, for the `EXPO_PUBLIC_*` values `expo export` inlines at bundle time; a tracked
+  `.env*` keeps the merge commit's version; their content is never read into a note, a progress
+  line or a log - a failed copy names only the file and the error code - and when the
+  untracked files cannot be listed or one cannot be copied, nothing is published;
+- the worktree, with the copies, is removed in a `finally` with no signal; an interrupted or
+  overdue close waits for that removal (at most 35 s) before it ends; a process killed
+  mid-publish can leave it under the OS temp dir for `git worktree prune`; a worktree that
+  cannot be created posts the fixed reason `could not create the OTA worktree`, its detail kept
+  in the local note only;
+- it stores `close.data.ota = { status, branch, groupId, url, note }`: `status` is `done`,
+  `warning` or `skipped`, `url` is the expo.dev update-group page or `null`, `note` is `null`
+  on `done` and the reason plus the last 20 output lines on a `warning`;
+- it never fails, stops or reverts a close: a throw, a timeout or a non-zero exit is a
+  `warning`. A crash between the publish and the checklist write publishes again on resume.
+
 These names are a machine contract, not prose: the pipeline files are the
 source of truth for them, and any runtime that reads them must match them
 exactly.

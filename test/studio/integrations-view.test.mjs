@@ -4,6 +4,7 @@ import {
   addConnectionErrorView,
   addErrorView,
   agoLabel,
+  ambientDetectedLine,
   ambientLine,
   ambientTool,
   canAddConnection,
@@ -118,6 +119,15 @@ test("the ambient line reads the account, not authenticated, or the tool missing
   assert.equal(ambientLine(status({ installed: false, authenticated: false }), tool), "gh not installed");
   assert.equal(ambientLine(null, tool), "checking…");
   assert.equal(ambientTool({ ...github, ambient: null }), "GitHub");
+});
+
+test("the detected line names the projects an ambient module recognized, and is null without any", () => {
+  const status = (fields) => ({ kind: "expo", installed: true, authenticated: true, login: "alice", host: null, checkedAt: null, ...fields });
+  assert.equal(ambientDetectedLine(status({ detected: ["app", "web"] })), "detected in app, web");
+  assert.equal(ambientDetectedLine(status({ detected: [] })), null);
+  assert.equal(ambientDetectedLine(status({})), null);
+  assert.equal(ambientDetectedLine(status({ detected: "app" })), null);
+  assert.equal(ambientDetectedLine(null), null);
 });
 
 test("a generic add failure maps each refusal code to its title and field, without the repeated nothing-saved line", () => {

@@ -292,7 +292,10 @@ nightqueue connection remove sn                    # unbinds from every org, the
 GitHub is not a stored connection: every job uses the machine's authenticated `gh`, so
 `connection add <name> --type github` is refused with `github is not a stored connection:
 nightqueue uses the machine's authenticated gh; run \`gh auth login\``, and a GitHub record an
-older build stored is dropped on the next load.
+older build stored is dropped on the next load. Expo is not a stored connection either: the
+OTA publish uses the machine's `eas` login, so `connection add <name> --type expo` is refused
+with `expo is not a stored connection: nightqueue uses the machine's eas login; run \`eas
+login\``, and no Expo token is ever kept in `secrets.json`.
 
 The secret is read from stdin when stdin is not a terminal, and asked for in a
 hidden prompt otherwise. It is never accepted as a command-line argument, and
@@ -335,6 +338,12 @@ connection value must name a stored connection of that provider bound to the pro
 org slot. Several `set`/`unset` arguments are applied together: one invalid one changes nothing.
 Unsetting the last key leaves the project without integrations, behaving exactly as before.
 `set` and `unset` are refused from inside a job; the MCP tool `project_integrations` does the same.
+Expo has two keys: `expo.ota` (boolean, default `false`) turns on the OTA publish of each
+merged job (see the post-close steps under [Queue](#queue)), and `expo.branch` (default
+`production`) is the EAS Update branch it publishes to - a branch name that starts with a letter
+or digit (`set expo.branch=-x` and an empty value are refused). When the checkout has an
+`eas.json` at its root, `show` adds `expo: detected` after the settings (also after `no
+integrations`); detection only reports, it never sets `expo.ota`.
 
 A path that starts with `-` has to come after `--` (`nightqueue init -- -weird-dir`),
 otherwise it is parsed as an unknown option and rejected.
@@ -372,6 +381,7 @@ nightqueue queue close --merged                       # close every done job gh 
 nightqueue queue close 42 --force                     # skip the pull request checks and the rebase suite, nothing else
 nightqueue queue close 42 --steps origin,log          # re-run only the post-close steps of a closed job, in this process
 nightqueue queue close 42 --steps log --again         # clear the named steps' done marks first, so they post again (only with --steps)
+nightqueue queue close 42 --steps ota --again         # publish the Expo OTA update of a closed job once more
 nightqueue queue cancel 42 --reason "abandoned"       # cancel a done or failed job and release its worktree
 
 nightqueue queue run --watch --from 22:00 --until 04:00   # watch only inside that window, local wall clock, then exit
@@ -487,13 +497,22 @@ without change, closes with no gh or git call (preflight, conflict and merge `sk
 prints `J-<id> closed: resolved without change (no pull request)`; `--force` is refused on it.
 `queue.closeTimeoutS` (default `1800`, range
 `60..3600`) bounds the whole close, the merger included. For a project with integrations, the
-post-close steps origin and log run after settle on the closed job and never stop it: a failure
-is an `After close: <step> warning - <note>` line in the notice (the origin step writes one per
-origin of the job, each origin acted on in registry order and on its own); `queue close <id>
+post-close steps ota, origin and log run in that order after settle on the closed job and never
+stop it: a failure is an `After close: <step> warning - <note>` line in the notice (the origin
+step writes one per origin of the job, each origin acted on in registry order and on its own).
+The ota step publishes an Expo OTA update of the merge commit (`eas update --branch
+<expo.branch> --non-interactive --json`, in a throwaway worktree) only when the project set
+`expo.ota=true`; otherwise it is a quiet `skipped - expo.ota is off`, as it is for a close
+without a code change. A missing or logged-out `eas` is a noticed skip, a failed publish a
+warning with the last lines of eas's output; the job stays closed either way. The origin and
+log steps then carry its outcome: an `OTA` field in the Discord reply and log, and an `OTA
+published to <branch> (<url>)` or `OTA failed: <reason>` line at the end of the Linear and
+Sentry comments (nothing when the step was skipped). `queue close <id>
 --steps origin,log` re-runs only those steps (each skips what it already did, origin by origin)
 and exits `1` on a
 warning; `--again` (only with `--steps`, never with `--merged` or `--force`) clears those steps'
-done marks first so they post again, and the summary says `(again)` after each. The MCP tool `queue_close` (`job_id`, `force?`) starts the
+done marks first so they post again, and the summary says `(again)` after each; `--steps ota
+--again` publishes the OTA update once more. The MCP tool `queue_close` (`job_id`, `force?`) starts the
 same detached close. See [Queue](queue.md#closing-a-job) for the steps, the lease and what a
 close never does.
 
@@ -552,7 +571,7 @@ was written for another version than the runtime.
 `nightqueue doctor` reads the host and the home and writes nothing, except `git worktree
 repair`, the drop of the stale qa worktrees, the removal of the `db shm` orphans and the database actions with `--fix` (below): it never creates
 the database, never touches `settings.json` and never asks `claude` about
-anything but its version. It checks the Node version, the `claude` and `gh`
+anything but its version. It checks the Node version, the `claude`, `gh` and `eas`
 CLIs, `config.json`, the mode of `secrets.json`, each of the three shims (a
 missing shortcut only warns), a shim left over from a previous command name (`shift`,
 `nightshift`, `nsft`, `nshift`: a `legacy shim <name>` warning, removed by `nightqueue setup` or
@@ -578,6 +597,14 @@ outside its run or ran a Bash command outside its closed list - see
 [the queue](queue.md)) and every registered
 project. It exits `1` when any check fails, `0` otherwise - a `warn` never fails
 the run.
+
+The `eas` line runs `eas whoami` without the `NIGHTQUEUE_*` variables: `ok logged in as
+<name>`, `warn not logged in` with the hint `run \`eas login\``, or `warn eas whoami did not
+answer` (a timeout or a kill, never read as logged out). A missing `eas` is `ok not
+installed (needed only to publish Expo OTA updates)` when no registered project has
+`expo.ota=true`, and `warn not installed - needed to publish Expo OTA for <project>, ...` when
+some do, with the hint to install eas-cli and run `eas login`; only a missing `eas` makes
+doctor read the projects, from a read-only store.
 
 The `studio terminal` line says whether the studio can embed a terminal. `ok` reads
 `node-pty <version>: the studio can embed a terminal`. Otherwise it is a `warn`, `node-pty

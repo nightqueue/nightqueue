@@ -30,7 +30,7 @@ nightqueue queue cancel 7 --reason "not needed"                # cancel a pendin
 nightqueue queue retry 7 --note "rename the column" [--fresh]  # answer the gate and send the job back to the queue (a preflight gate needs no --note)
 nightqueue queue repair 7 [--json]                             # re-classify a gated or failed job from its own log
 nightqueue queue close 7 [--force] [--foreground] [--json]      # merge a done job's pull request and close the job, detached
-nightqueue queue close 7 --steps origin,log [--json]             # re-run only the post-close steps of a closed job
+nightqueue queue close 7 --steps origin,log [--json]             # re-run only the post-close steps of a closed job (ota, origin, log)
 nightqueue queue close --merged [--json]                         # close every done job whose pull request is already merged
 nightqueue queue pause | nightqueue queue resume                    # stop claiming new jobs, or claim again
 ```
@@ -1195,8 +1195,9 @@ no link. None of them names a pull request or a merge. `--force` is refused on s
 (`--force only skips pull request checks; close it without --force`), and `queue close
 --merged` never picks it.
 
-**Post-close steps: origin and log.** After settle, two more steps run on the job that is
-now `closed`: **origin** tells each service the job came from (every entry of its recorded
+**Post-close steps: ota, origin and log.** After settle, three more steps run, in that order,
+on the job that is now `closed`: **ota** publishes an Expo OTA update of the merge commit when
+the project set `expo.ota=true` (below), **origin** tells each service the job came from (every entry of its recorded
 `origin` list) that the pull request merged, through the provider of each kind, one origin at a
 time in registry order (Sentry, then Linear, then Discord) whatever the stored order, and
 **log** posts the close to every
@@ -1207,7 +1208,7 @@ skips the log step): a project without them closes exactly as before, with no ex
 write. They never stop, fail or reopen a close and never change the job's status: each records
 `done`, `skipped` or `warning` (a failure, an exception or the budget is a `warning`) under a
 post-close lease held in `close_worker` (a closed row never carries a `close_status`), with a
-budget of its own of 60 s. A warning, and a skip worth telling (an origin with no connection in
+budget of its own of 60 s (660 s when `expo.ota` is on, the lease growing with it). A warning, and a skip worth telling (an origin with no connection in
 the org, or in the home for a home-scoped kind), appends `After close: <step> <status> - <note>` to the notice; a later success of the
 same step appends its own line. The origin step acts on each origin independently: one that
 fails, throws or has no connection never keeps the next from running; the step records the
@@ -1226,6 +1227,25 @@ named post-close steps of a closed job in this process (a pre-close step name, `
 process is running); it prints each step and `J-<id> post-close: origin done, log skipped`,
 and exits `1` when a step ended `warning`. No note, notice line or log carries a secret: the
 providers' HTTP never returns an error message, a URL or a header.
+
+**The ota step.** It is a quiet `skipped` when `expo.ota` is not `true` and for a close without
+a code change, a noticed `skipped` when `eas` is missing or logged out (`eas whoami`). Otherwise
+it runs `eas update --branch <expo.branch> --message "J-<id>: <title>" --non-interactive --json`
+in a throwaway detached worktree at the merge commit (fetching the base branch once when the
+commit is not local), with the checkout's `node_modules` symlinked and the checkout root's
+untracked `.env*` files copied in - copied, mode 0600, never their content in a note or log -
+so the `EXPO_PUBLIC_*` values `expo export` inlines are there; a tracked `.env*` keeps the merge
+commit's version, and when the untracked ones cannot be told apart or copied, nothing is
+published. The worktree and the copies are removed whatever happens. The child env carries no
+`NIGHTQUEUE_*` variable. The step has a budget of its own of 600 s, added to the post-close
+budget only when `expo.ota` is on, so origin and log keep their 60 s. It records
+`close.data.ota = { status, branch, groupId, url, note }`: `done` with the update group and its
+expo.dev URL (read from `eas project:info`, `null` when that fails), or a `warning` whose note is
+the reason and the last 20 lines of eas's output. It never fails a close. The origin and log
+steps then show it: an `OTA` field in the Discord reply and log (after PR, and Project in the log), and an
+`OTA published to <branch> (<url>)` or `OTA failed: <reason>` line at the end of the Linear and
+Sentry comments; a skipped ota adds neither. A done ota answers `already published` on a re-run;
+`--steps ota --again` publishes once more.
 
 **The close merges only a head it or CI verified.** Every step reads the pull request
 again and works on the head GitHub reports now; the recorded `data.headSha` is the head the
