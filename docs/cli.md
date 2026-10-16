@@ -311,6 +311,8 @@ the connection's name: the runtime injects the secret and never shows it, the ho
 the connection's type, a GET reads, and a POST, PATCH or PUT is sent only after the person's
 explicit ok and is refused inside a queue job. There is no CLI command for it, and `secrets.json`
 stays unreadable to the session (see [the runtime contract](runtime-contract.md)).
+A discord connection takes no path except `messages/<id>`, a GET or PATCH of a message the
+webhook posted; PATCH or PUT on the bare webhook URL is refused.
 A `discord` connection is a channel webhook: its secret is the webhook URL
 (`https://discord.com/api/webhooks/<id>/<token>`), checked for that shape and read once at
 `add` to store the webhook's `channelId` and `guildId`; a URL of another shape or one the

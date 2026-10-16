@@ -788,7 +788,7 @@ function connectionCallTool(env) {
     config: {
       description:
         "Calls the API behind a stored connection by its name; the runtime injects the secret and never shows it, and the host is fixed by the connection's kind. " +
-        "`method` is GET (the default), POST, PATCH or PUT; any other is refused. `path` is relative to the connection's API root (empty for a kind that takes none): no scheme, no leading `//`, no `.` or `..` segment, no `\\`, `?` or `#`; query parameters only come through `query`. `body` is JSON, at most 50,000 characters serialized, never on a GET. " +
+        "`method` is GET (the default), POST, PATCH or PUT; any other is refused. `path` is relative to the connection's API root (empty for a kind that takes none; a webhook connection takes empty or `messages/<id>` to GET or PATCH a posted message): no scheme, no leading `//`, no `.` or `..` segment, no `\\`, `?` or `#`; query parameters only come through `query`. `body` is JSON, at most 50,000 characters serialized, never on a GET. " +
         "Call any method other than GET only after showing the person exactly what will be sent (connection, method, path, body) and getting an explicit ok, never on your own initiative. Refused inside a queue job, and nothing is sent; a GET is allowed inside a job. " +
         "Answers `{ok: true, status, body, body_truncated?}` with the body redacted and cut at 50,000 characters, or `{ok: false, error: \"no-connection\" | \"invalid-input\" | \"provider-unavailable\", status, detail}` as a normal answer; a detail saying the call may still have been applied means check before trying again.",
       inputSchema: {
