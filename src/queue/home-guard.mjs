@@ -32,6 +32,15 @@ export function refuseTrackerWriteInsideJob(env, action) {
   );
 }
 
+// Refuses a call that is not a GET to a stored connection's API from inside a queue run: such a call is the operator's.
+export function refuseConnectionWriteInsideJob(env, method) {
+  const own = callerJobId(env);
+  if (own === null) return;
+  throw new UserError(
+    `refused: \`connection_call\` ${method} inside ${jobRef(own)}: a call that is not a GET is the operator's call, made only outside a queue run after the person's explicit ok; a run may only GET. Nothing was sent`,
+  );
+}
+
 // Refuses a command that would change the home - or, with `host`, the Claude settings - the unattended runner itself uses; a temporary home is always allowed.
 export function refuseHomeWriteInsideJob(env, { host = false } = {}) {
   const own = callerJobId(env);

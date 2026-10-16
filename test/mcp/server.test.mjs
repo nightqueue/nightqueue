@@ -25,6 +25,7 @@ const HOME_REFUSAL =
   "refused: this command would change the operator's nightqueue home from inside J-9; verify against a temporary home (NIGHTQUEUE_HOME=$(mktemp -d)) instead";
 
 const CONTRACT_TOOLS = [
+  "connection_call",
   "context_for_phase",
   "index_recall",
   "index_save",
@@ -92,13 +93,53 @@ function textOf(result) {
   return result.content.map((block) => block.text).join("\n");
 }
 
-test("the server exposes exactly the thirty-one tools of the contract, none of them a decision tool", async (t) => {
+test("the server exposes exactly the thirty-two tools of the contract, none of them a decision tool", async (t) => {
   const env = makeHome(t, "mcp-tools");
   const client = await connect(t, env);
   const names = (await client.listTools()).tools.map((tool) => tool.name).sort();
   assert.deepEqual(names, CONTRACT_TOOLS);
   assert.equal(names.some((name) => name.startsWith("decision_")), false);
-  assert.equal(names.length, 31, "the contract list and the server disagree on how many tools there are");
+  assert.equal(names.length, 32, "the contract list and the server disagree on how many tools there are");
+});
+
+const CONNECTION_REFUSAL = "connection_call: refused: `connection_call` POST inside J-7: a call that is not a GET is the operator's call, made only outside a queue run after the person's explicit ok; a run may only GET. Nothing was sent";
+
+test("connection_call with an unknown connection name is a normal no-connection answer with the contract", async (t) => {
+  const env = makeHome(t, "mcp-connection-call-none");
+  const client = await connect(t, env);
+  const answer = payloadOf(await client.callTool({ name: "connection_call", arguments: { connection: "nowhere" } }));
+  assert.deepEqual(answer, {
+    ok: false,
+    error: "no-connection",
+    status: null,
+    detail: "no stored connection named that way; the person lists them with `nightqueue connection list`",
+    contract: 9,
+  });
+});
+
+test("connection_call DELETE is a normal invalid-input answer, not a schema error", async (t) => {
+  const env = makeHome(t, "mcp-connection-call-delete");
+  const client = await connect(t, env);
+  const answer = payloadOf(await client.callTool({ name: "connection_call", arguments: { connection: "nowhere", method: "DELETE" } }));
+  assert.equal(answer.error, "invalid-input");
+});
+
+test("inside a queue job a connection_call POST is refused and a GET still answers", async (t) => {
+  const env = makeHome(t, "mcp-connection-call-in-job");
+  const inJob = await connect(t, { ...env, NIGHTQUEUE_JOB_ID: "7" });
+  const refused = await inJob.callTool({ name: "connection_call", arguments: { connection: "nowhere", method: "POST", body: { a: 1 } } });
+  assert.equal(refused.isError, true);
+  assert.equal(textOf(refused), CONNECTION_REFUSAL);
+  assert.equal(payloadOf(await inJob.callTool({ name: "connection_call", arguments: { connection: "nowhere" } })).error, "no-connection");
+});
+
+test("the connection_call description states the explicit-ok rule and names no service", async (t) => {
+  const env = makeHome(t, "mcp-connection-call-description");
+  const client = await connect(t, env);
+  const description = (await client.listTools()).tools.find((tool) => tool.name === "connection_call").description;
+  assert.ok(description.includes("explicit ok"));
+  assert.ok(description.includes("Refused inside a queue job"));
+  assert.doesNotMatch(description, /sentry|linear|discord/i);
 });
 
 test("tracker_issues with no tracker connection is a normal answer carrying the refusal and the contract", async (t) => {
@@ -110,7 +151,7 @@ test("tracker_issues with no tracker connection is a normal answer carrying the 
     error: "no-connection",
     provider: "linear",
     hint: 'connect it: echo "$LINEAR_API_KEY" | nightqueue connection add linear --type linear',
-    contract: 8,
+    contract: 9,
   });
 });
 
@@ -138,7 +179,7 @@ test("every new tracker tool with no tracker connection answers the no-connectio
       error: "no-connection",
       provider: "linear",
       hint: 'connect it: echo "$LINEAR_API_KEY" | nightqueue connection add linear --type linear',
-      contract: 8,
+      contract: 9,
     }, name);
   }
 });
@@ -469,7 +510,7 @@ test("the index round trip reports the freshness of the checkout", async (t) => 
       },
     }),
   );
-  assert.deepEqual(saved, { ok: true, files: 1, libs: 0, contract: 8 });
+  assert.deepEqual(saved, { ok: true, files: 1, libs: 0, contract: 9 });
 
   const fresh = payloadOf(
     await client.callTool({ name: "index_recall", arguments: { project: "alpha", repo_root: repo } }),
@@ -630,7 +671,7 @@ test("queue_add enqueues by project NAME and refuses a path or a project nobody 
     timeoutS: 600,
     origin: [],
     hint: "queued J-1 for `alpha` (1 pending). 0 runners online - pending jobs will wait until `nightqueue queue run` starts one.",
-    contract: 8,
+    contract: 9,
   });
   assert.equal(getJob(1, env).prompt, "fix the worker");
 
@@ -1460,7 +1501,7 @@ test("queue_stop answers the CLI line per runner, and refuses an unknown pid", a
   const client = await connect(t, env);
 
   const empty = payloadOf(await client.callTool({ name: "queue_stop", arguments: {} }));
-  assert.deepEqual(empty, { ok: true, runners: [{ outcome: "absent", pid: null, message: "runner is not running" }], contract: 8 });
+  assert.deepEqual(empty, { ok: true, runners: [{ outcome: "absent", pid: null, message: "runner is not running" }], contract: 9 });
 
   const unknown = await client.callTool({ name: "queue_stop", arguments: { pid: 999999 } });
   assert.equal(unknown.isError, true, textOf(unknown));

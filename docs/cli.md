@@ -302,6 +302,12 @@ against the fields the type declares before the secret is read: a `sentry` conne
 needs `org` (its organization slug) and takes an optional `url` (an https origin, default
 `https://sentry.io`, for a self-hosted Sentry); a missing required field, an unknown one or
 a malformed value is refused and nothing is stored. These fields are not secret.
+
+A session reaches a stored connection's API only through the MCP tool `connection_call`, by
+the connection's name: the runtime injects the secret and never shows it, the host is fixed by
+the connection's type, a GET reads, and a POST, PATCH or PUT is sent only after the person's
+explicit ok and is refused inside a queue job. There is no CLI command for it, and `secrets.json`
+stays unreadable to the session (see [the runtime contract](runtime-contract.md)).
 A `discord` connection is a channel webhook: its secret is the webhook URL
 (`https://discord.com/api/webhooks/<id>/<token>`), checked for that shape and read once at
 `add` to store the webhook's `channelId` and `guildId`; a URL of another shape or one the

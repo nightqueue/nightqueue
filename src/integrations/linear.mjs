@@ -626,4 +626,7 @@ export const linear = {
   origin: { parse: parseLinear, find: findLinear, enrich: enrichLinear, describe: describeLinear },
   onClosed: closeLinearIssue,
   tracker: { issues: listIssues, filters: listFilters, issue: readIssue, create: createIssue, comment: commentIssue, update: updateIssue },
+  apiRoot: () => API,
+  authHeaders,
+  call: { path: false, query: null },
 };

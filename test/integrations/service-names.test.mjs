@@ -16,6 +16,7 @@ const GENERIC_FILES = [
   "src/integrations/origin.mjs",
   "src/integrations/settings.mjs",
   "src/integrations/connections.mjs",
+  "src/integrations/connection-call.mjs",
   "src/studio/integrations.mjs",
 ];
 
