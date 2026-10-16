@@ -1,15 +1,16 @@
 import assert from "node:assert/strict";
-import { existsSync, realpathSync } from "node:fs";
+import { existsSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
-import { jobWorktreePath } from "../../src/config/paths.mjs";
+import { jobWorktreePath, startPointsLockPath } from "../../src/config/paths.mjs";
+import { runGitAsync } from "../../src/host/git.mjs";
 import { prepareJobWorktree, WORKTREE_FAILED } from "../../src/queue/job-worktree.mjs";
 import { readRunState } from "../../src/queue/resume.mjs";
 import { recordRunFields } from "../../src/queue/run-state.mjs";
-import { openJobHolds } from "../../src/queue/worktree.mjs";
+import { ADOPTED_WORKTREE_REASON, openJobHolds, releaseJobWorktree } from "../../src/queue/worktree.mjs";
 import { initGitRepo } from "../../test-support/git.mjs";
 import { FIXED_PROJECT_ID, makeDir, makeHome } from "../../test-support/memory.mjs";
-import { git, gitVars, localBranches, lockWorktree, publishedCheckout } from "../../test-support/worktrees.mjs";
+import { git, gitVars, localBranches, lockWorktree, makeDirty, publishedCheckout } from "../../test-support/worktrees.mjs";
 
 const SLUG = "start-the-work";
 const OTHER_JOB = 9;
@@ -259,4 +260,208 @@ test("a job whose run was cleared, as by a --fresh retry, is placed again on its
   assert.equal(fresh.branch, "feat/x");
   assert.equal(sha(fresh.path), work);
   assert.deepEqual(recordedPlace(env, "start-the-work-2"), { branch: "feat/x", worktree: jobWorktreePath(FIXED_PROJECT_ID, "start-the-work-2", env) });
+});
+
+const RIVALS = [
+  { id: 7, slug: "rival-seven" },
+  { id: 8, slug: "rival-eight" },
+];
+
+// The holds of the rival jobs read from their real run states, the way `openJobHolds` reads every open job.
+function rivalHolds(env) {
+  return async () =>
+    RIVALS.flatMap(({ id, slug }) => {
+      const { branch, worktree } = recordedPlace(env, slug);
+      return branch || worktree ? [{ jobId: id, projectId: FIXED_PROJECT_ID, slug, type: null, branch, worktree }] : [];
+    });
+}
+
+// Prepares one rival job queued on the given start branch, with the git runner the test chose.
+function startRival(env, checkout, { rival, branch, gitImpl = runGitAsync }) {
+  const job = { id: rival.id, project_id: FIXED_PROJECT_ID, slug: rival.slug, start_branch: branch, start_worktree: null };
+  return prepareJobWorktree({ job, checkout, baseBranch: "main", env, gitImpl, openHolds: rivalHolds(env) });
+}
+
+// The rival that won a race and the rival that lost it, with their results; asserts there is exactly one of each.
+function raceOutcome(results) {
+  assert.equal(results.filter((result) => result.ok === true).length, 1, `not exactly one winner: ${JSON.stringify(results)}`);
+  const winner = results.findIndex((result) => result.ok === true);
+  return { winner: RIVALS[winner], loser: RIVALS[1 - winner], lost: results[1 - winner] };
+}
+
+test("two jobs started at once on the branch a linked worktree holds: exactly one takes it, the other gates naming it", async (t) => {
+  const env = homeEnv(t, "race-held");
+  const checkout = initGitRepo(makeDir(t, "race-held-repo"));
+  linkedWorktree(t, checkout, { name: "race-held", branch: "feat/held" });
+
+  const results = await Promise.all(RIVALS.map((rival) => startRival(env, checkout, { rival, branch: "feat/held" })));
+
+  const { winner, loser, lost } = raceOutcome(results);
+  assert.equal(lost.code, WORKTREE_FAILED);
+  assert.match(lost.message, new RegExp(`belongs to J-${winner.id}, which is not closed`));
+  assert.deepEqual(recordedPlace(env, loser.slug), { branch: null, worktree: null });
+});
+
+test("two jobs started at once on a local start branch: one worktree is created, and the loser gates before any git worktree add", async (t) => {
+  const env = homeEnv(t, "race-create");
+  const checkout = initGitRepo(makeDir(t, "race-create-repo"));
+  const work = branchWithCommit(checkout, "feat/x");
+  const adds = new Map();
+  const counting = (rival) => async (options) => {
+    if (options.args[0] === "worktree" && options.args[1] === "add") adds.set(rival.id, (adds.get(rival.id) ?? 0) + 1);
+    return await runGitAsync(options);
+  };
+
+  const results = await Promise.all(RIVALS.map((rival) => startRival(env, checkout, { rival, branch: "feat/x", gitImpl: counting(rival) })));
+
+  const { winner, loser, lost } = raceOutcome(results);
+  assert.match(lost.message, new RegExp(`belongs to J-${winner.id}, which is not closed`));
+  assert.equal(adds.has(loser.id), false, "the loser ran git worktree add");
+  assert.deepEqual(recordedPlace(env, loser.slug), { branch: null, worktree: null });
+  assert.equal(existsSync(jobWorktreePath(FIXED_PROJECT_ID, loser.slug, env)), false);
+  assert.equal(sha(jobWorktreePath(FIXED_PROJECT_ID, winner.slug, env)), work);
+});
+
+test("a second job started after the first took the start branch gates naming the first", async (t) => {
+  const env = homeEnv(t, "race-sequential");
+  const checkout = initGitRepo(makeDir(t, "race-sequential-repo"));
+  linkedWorktree(t, checkout, { name: "race-sequential", branch: "feat/held" });
+
+  const first = await startRival(env, checkout, { rival: RIVALS[0], branch: "feat/held" });
+  const second = await startRival(env, checkout, { rival: RIVALS[1], branch: "feat/held" });
+
+  assert.equal(first.ok, true, first.message);
+  assert.match(second.message ?? "", /belongs to J-7, which is not closed/);
+});
+
+test("a start point whose claim lock another live process holds gates asking for a retry, and records nothing", async (t) => {
+  const env = homeEnv(t, "claim-busy");
+  const checkout = initGitRepo(makeDir(t, "claim-busy-repo"));
+  linkedWorktree(t, checkout, { name: "claim-busy", branch: "feat/held" });
+  const lock = startPointsLockPath(FIXED_PROJECT_ID, env);
+  mkdirSync(lock, { recursive: true });
+  writeFileSync(join(lock, "owner"), String(process.pid));
+
+  const gated = await prepareJobWorktree({ job: jobOf({ branch: "feat/held" }), checkout, baseBranch: "main", env, openHolds: async () => [], claimTimeoutMs: 100 });
+
+  assert.equal(gated.code, WORKTREE_FAILED);
+  assert.match(gated.message, /another job of this project is taking its starting point right now - retry/);
+  assert.deepEqual(recordedPlace(env), { branch: null, worktree: null });
+});
+
+test("a dirty start worktree is taken with a job-log line naming its uncommitted paths, and a clean one logs nothing", async (t) => {
+  const env = homeEnv(t, "start-dirty");
+  const checkout = initGitRepo(makeDir(t, "start-dirty-repo"));
+  const dirty = linkedWorktree(t, checkout, { name: "start-dirty", branch: "feat/dirty" });
+  writeFileSync(join(dirty, "tracked.txt"), "first\n");
+  git(["-C", dirty, "add", "tracked.txt"]);
+  git(["-C", dirty, "-c", "commit.gpgsign=false", "commit", "-q", "-m", "tracked"]);
+  writeFileSync(join(dirty, "tracked.txt"), "changed\n");
+  makeDirty(dirty);
+
+  const prepared = await prepare(env, checkout, { job: jobOf({ worktree: dirty }) });
+
+  assert.deepEqual({ ok: prepared.ok, reused: prepared.reused }, { ok: true, reused: true }, prepared.message);
+  const line = prepared.logged.find((entry) => entry.includes("has uncommitted changes"));
+  assert.match(line ?? "", /tracked\.txt/);
+  assert.match(line ?? "", /uncommitted\.txt/);
+  assert.match(line ?? "", /nightqueue never removes this worktree/);
+
+  const clean = linkedWorktree(t, checkout, { name: "start-clean", branch: "feat/clean" });
+  const quiet = await prepare(env, checkout, { job: jobOf({ worktree: clean }, "clean-run") });
+  assert.equal(quiet.ok, true, quiet.message);
+  assert.equal(quiet.logged.some((entry) => entry.includes("uncommitted")), false);
+});
+
+test("a start branch is never read through the slug's aliases: the retry after a failed add takes the queued branch", async (t) => {
+  const env = homeEnv(t, "start-no-alias");
+  const checkout = initGitRepo(makeDir(t, "start-no-alias-repo"));
+  git(["-C", checkout, "branch", "worktree-bar"]);
+  git(["-C", checkout, "branch", "fix/baz"]);
+  const job = jobOf({ branch: "worktree-bar" }, "baz");
+  let failedOnce = false;
+  const flaky = async (options) => {
+    if (!failedOnce && options.args[0] === "worktree" && options.args[1] === "add") {
+      failedOnce = true;
+      return { ok: false, stdout: "", stderr: "fatal: injected failure" };
+    }
+    return await runGitAsync(options);
+  };
+
+  const first = await prepareJobWorktree({ job, checkout, baseBranch: "main", env, gitImpl: flaky, openHolds: async () => [] });
+  const retry = await prepareJobWorktree({ job, checkout, baseBranch: "main", env, openHolds: async () => [] });
+
+  assert.equal(first.ok, false);
+  assert.equal(retry.ok, true, retry.message);
+  assert.equal(retry.branch, "worktree-bar");
+  assert.equal(headBranch(jobWorktreePath(FIXED_PROJECT_ID, "baz", env)), "worktree-bar");
+});
+
+test("a worktree the job entered is marked adopted in its state, and one the runtime created for a start branch is not", async (t) => {
+  const env = homeEnv(t, "start-adopted-mark");
+  const checkout = initGitRepo(makeDir(t, "start-adopted-mark-repo"));
+  const held = linkedWorktree(t, checkout, { name: "start-adopted-mark", branch: "feat/held" });
+  branchWithCommit(checkout, "feat/x");
+
+  await prepare(env, checkout, { job: jobOf({ worktree: held }) });
+  await prepare(env, checkout, { job: jobOf({ branch: "feat/x" }, "created-run") });
+
+  const adopted = readRunState({ projectId: FIXED_PROJECT_ID, slug: SLUG, env });
+  assert.equal(adopted.adoptedWorktree, adopted.worktree);
+  assert.ok(samePath(adopted.worktree, held));
+  assert.equal("adoptedWorktree" in readRunState({ projectId: FIXED_PROJECT_ID, slug: "created-run", env }), false);
+});
+
+// The closed job a release reads: the start job with its checkout and a recorded pull request.
+function closedJob(job, checkout) {
+  return { ...job, project: "alpha", project_path: checkout, pr_url: "https://github.com/o/r/pull/1" };
+}
+
+// A published checkout with a pushed linked worktree outside the home, and the job queued to start in it, already placed.
+async function adoptedRun(t, name) {
+  const env = homeEnv(t, name);
+  const { checkout } = publishedCheckout(t, name);
+  const path = linkedWorktree(t, checkout, { name, branch: "feat/mine" });
+  git(["-C", path, "push", "-q", "-u", "origin", "feat/mine"]);
+  const job = jobOf({ worktree: path });
+  const placed = await prepare(env, checkout, { job });
+  assert.equal(placed.ok, true, placed.message);
+  return { env, checkout, path, job };
+}
+
+test("a release never removes the worktree the job adopted, clean, pushed and with a pull request, even forced", async (t) => {
+  const { env, checkout, path, job } = await adoptedRun(t, "release-adopted");
+
+  const plain = await releaseJobWorktree({ job: closedJob(job, checkout), env });
+  assert.deepEqual({ ...plain, path: undefined }, { path: undefined, status: "kept", reason: ADOPTED_WORKTREE_REASON });
+  assert.ok(samePath(plain.path, path));
+
+  makeDirty(path);
+  const forced = await releaseJobWorktree({ job: closedJob(job, checkout), env, force: true });
+  assert.equal(forced.status, "kept");
+  assert.equal(existsSync(join(path, "uncommitted.txt")), true, "a forced release dropped the adopted worktree's files");
+});
+
+test("a worktree the runtime created stays under D-27: a start branch's own, and an adopted one recreated at the home target", async (t) => {
+  const { env, checkout, path, job } = await adoptedRun(t, "release-created");
+  git(["-C", checkout, "worktree", "remove", path]);
+  const recreated = await prepare(env, checkout, { job });
+  assert.equal(recreated.ok, true, recreated.message);
+  assert.equal(recreated.path, jobWorktreePath(FIXED_PROJECT_ID, SLUG, env));
+  const released = await releaseJobWorktree({ job: closedJob(job, checkout), env });
+  assert.equal(released.status, "removed", JSON.stringify(released));
+
+  git(["-C", checkout, "branch", "feat/own", "main"]);
+  const own = jobOf({ branch: "feat/own" }, "own-run");
+  const created = await prepare(env, checkout, { job: own });
+  assert.equal(created.ok, true, created.message);
+  const ownReleased = await releaseJobWorktree({ job: closedJob(own, checkout), env });
+  assert.equal(ownReleased.status, "removed", JSON.stringify(ownReleased));
+});
+
+test("an agent can never set the adopted mark through the run fields", (t) => {
+  const env = homeEnv(t, "adopted-refused");
+  const refused = recordRunFields({ projectId: FIXED_PROJECT_ID, slug: SLUG, fields: { adoptedWorktree: "/x" }, env });
+  assert.equal(refused.status, "kept");
+  assert.match(refused.reason, /unknown field `adoptedWorktree`/);
 });

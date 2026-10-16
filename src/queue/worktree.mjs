@@ -10,6 +10,7 @@ import { checkoutOfJob } from "../memory/registry-access.mjs";
 export const WORKTREE_READ_TIMEOUT_MS = 5000;
 export const WORKTREE_REMOVE_TIMEOUT_MS = 60000;
 export const KEPT_PREFIX = "Worktree kept: ";
+export const ADOPTED_WORKTREE_REASON = "it is the worktree this job was queued to start in; nightqueue removes only the worktrees it creates";
 const DROPPED_NAMES_MAX = 10;
 const LOCK_PID_RE = /\(pid (\d+)\b/;
 const WORKTREE_FIELD = "worktree ";
@@ -108,6 +109,13 @@ export function canonicalPath(path) {
 // Tells whether two paths name the same directory once every component is resolved.
 export function sameDir(a, b) {
   return canonicalPath(a) === canonicalPath(b);
+}
+
+// Tells whether the run's worktree is the one the job was queued to start in, which the runtime never removes.
+export function isAdoptedWorktree(state) {
+  const adopted = typeof state?.adoptedWorktree === "string" ? state.adoptedWorktree.trim() : "";
+  const worktree = typeof state?.worktree === "string" ? state.worktree.trim() : "";
+  return adopted !== "" && worktree !== "" && sameDir(adopted, worktree);
 }
 
 // First line of a git message, short enough for a notice or a report line.
@@ -293,6 +301,7 @@ export async function releaseJobWorktree({ job, env = process.env, killImpl = ki
     const state = readRunState({ projectId: job.project_id, slug: job.slug, env });
     path = typeof state?.worktree === "string" && state.worktree.trim() ? state.worktree.trim() : null;
     if (!path) return null;
+    if (isAdoptedWorktree(state)) return { path, status: "kept", reason: ADOPTED_WORKTREE_REASON };
     const checkout = checkoutOfJob(job, env);
     if (!checkout) return { path, status: "kept", reason: `the project \`${job.project}\` is not registered` };
     const prRecorded = isPrUrl(job.pr_url) || isPrUrl(state?.outcome?.prUrl);

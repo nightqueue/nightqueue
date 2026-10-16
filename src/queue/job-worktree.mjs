@@ -1,11 +1,12 @@
 import { existsSync } from "node:fs";
 import { isAbsolute, relative, resolve } from "node:path";
-import { jobWorktreePath, worktreesDir } from "../config/paths.mjs";
+import { withPathLock } from "../config/lock.mjs";
+import { jobWorktreePath, startPointsLockPath, worktreesDir } from "../config/paths.mjs";
 import { runGitAsync } from "../host/git.mjs";
 import { branchAliases, sameBranch } from "./branch-name.mjs";
 import { isRunPath, ownRunState } from "./resume.mjs";
-import { recordHeldWorktree, recordRunFields } from "./run-state.mjs";
-import { canonicalPath, lockPid, lockState, parseWorktreeList, sameDir } from "./worktree.mjs";
+import { recordAdoptedWorktree, recordHeldWorktree, recordRunFields } from "./run-state.mjs";
+import { canonicalPath, droppedNames, lockPid, lockState, parseWorktreeList, sameDir } from "./worktree.mjs";
 import { jobRef } from "../memory/refs.mjs";
 
 export const JOB_BRANCH_PREFIX = "worktree-";
@@ -14,6 +15,7 @@ const HEADS = "refs/heads/";
 const READ_TIMEOUT_MS = 5000;
 const WRITE_TIMEOUT_MS = 60000;
 const FETCH_TIMEOUT_MS = 60000;
+const START_CLAIM_TIMEOUT_MS = 5000;
 const BATCH_SSH = "ssh -o BatchMode=yes";
 
 // A preparation that stopped, in the shape the runner gates a job with.
@@ -185,11 +187,17 @@ async function recordWhatGitHolds(ctx, { branch, prior }) {
   if (written.status !== "written") ctx.log(`the state of the run could not be set back to what git holds after the failed add (${written.reason})`);
 }
 
-// Creates the job's worktree with its ownership recorded first: a refused record creates nothing, and a failed add leaves a state naming only what git holds.
-async function createRecorded(ctx, { branch, prior, make }) {
+// The gate of a place the state of the run could not record, or null when it was recorded.
+function recordRefusal(written, what) {
+  return written.status === "written" ? null : failed(`${what}: the state of the run could not record it (${written.reason})`);
+}
+
+// Creates the job's worktree with its ownership recorded first, through the claim when one is given: a refused record creates nothing, and a failed add leaves a state naming only what git holds.
+async function createRecorded(ctx, { branch, prior, make, claim = null }) {
   const { job, env, target } = ctx;
-  const written = recordRunFields({ projectId: job.project_id, slug: job.slug, fields: { branch, worktree: target }, env });
-  if (written.status !== "written") return failed(`the worktree ${target} was not created: the state of the run could not record it (${written.reason})`);
+  const write = () => recordRunFields({ projectId: job.project_id, slug: job.slug, fields: { branch, worktree: target }, env });
+  const refused = claim ? await claim(write) : recordRefusal(write(), `the worktree ${target} was not created`);
+  if (refused) return refused;
   const error = await make();
   if (!error) return { ok: true, path: target, branch, reused: false, legacy: false };
   await recordWhatGitHolds(ctx, { branch, prior });
@@ -230,9 +238,9 @@ async function createFromRecorded(ctx, prior) {
 }
 
 // Creates the job's worktree on a local branch made from origin's copy of that branch, never tracking it.
-async function createFromOrigin(ctx, { branch, prior }) {
+async function createFromOrigin(ctx, { branch, prior, claim = null }) {
   const make = () => addWorktree(ctx.git, ["--no-track", "-b", branch, ctx.target, `refs/remotes/origin/${branch}`]);
-  return await createRecorded(ctx, { branch, prior, make });
+  return await createRecorded(ctx, { branch, prior, make, claim });
 }
 
 // Creates the worktree of a job that has none to reuse: recreated from its recorded branch, or fresh on its own branch, never on a branch the state does not name.
@@ -291,7 +299,42 @@ function lockRefusal(entry) {
   return lockState(entry) === "live" ? `\`${entry.path}\` is locked by a live session (pid ${lockPid(entry.locked)})` : null;
 }
 
-// Starts the job in a linked worktree on its branch, once no rule refuses it, recorded as the run's own.
+// The holds of the open jobs of this job's project other than the job itself.
+function otherHolds(holds, job) {
+  return holds.filter((hold) => hold.jobId !== job.id && (hold.projectId ?? job.project_id) === job.project_id);
+}
+
+// Under the claim lock: refuses a start point another open job holds, else records it as this job's; null when recorded.
+async function claimUnderLock(place, { path, branch }, write) {
+  const holds = await place.openHolds();
+  if (!Array.isArray(holds)) return failed(`the queue could not be read to check who owns \`${path ?? branch}\`; retry`);
+  const refusal = ownerRefusal({ others: otherHolds(holds, place.job) }, { path, branch });
+  if (refusal) return failed(refusal);
+  return recordRefusal(write(), `\`${path ?? branch}\` was not taken`);
+}
+
+// Takes a start point as one step per project, so two jobs started at once never both take it; null when this job took it, never throws.
+async function claimStart(place, hold, write) {
+  const lock = startPointsLockPath(place.job.project_id, place.env);
+  try {
+    return await withPathLock(lock, () => claimUnderLock(place, hold, write), { timeoutMs: place.claimTimeoutMs });
+  } catch (err) {
+    return failed(`\`${hold.path ?? hold.branch}\` could not be claimed (${firstLine(err?.message ?? String(err))}); another job of this project is taking its starting point right now - retry`);
+  }
+}
+
+// Writes to the job log the uncommitted changes of the start worktree the job works on top of; never a gate.
+async function noteUncommitted(place, path) {
+  const status = await place.git(["status", "--porcelain", "--untracked-files=all"], { cwd: path });
+  if (!status.ok) {
+    place.log(`the start worktree ${path} could not be read for uncommitted changes (${firstLine(status.stderr)})`);
+    return;
+  }
+  if (String(status.stdout ?? "").trim() === "") return;
+  place.log(`the start worktree ${path} has uncommitted changes (${droppedNames(status.stdout)}); the job works on top of them, and nightqueue never removes this worktree`);
+}
+
+// Starts the job in a linked worktree on its branch, once no rule refuses it, claimed and recorded as the worktree the job adopted.
 async function startInEntry(place, entry) {
   const branch = shortBranch(entry.branch);
   if (branch === null) return failed(`the worktree ${entry.path} is detached; a job starts only on a branch`);
@@ -300,8 +343,10 @@ async function startInEntry(place, entry) {
   const reused = await reuse(place, entry.path, branch);
   if (!reused.ok) return reused;
   const { job, env } = place;
-  const written = recordRunFields({ projectId: job.project_id, slug: job.slug, fields: { branch, worktree: entry.path }, env });
-  if (written.status !== "written") return failed(`the worktree ${entry.path} was not taken: the state of the run could not record it (${written.reason})`);
+  const adopt = () => recordAdoptedWorktree({ projectId: job.project_id, slug: job.slug, branch, worktree: entry.path, env });
+  const refused = await claimStart(place, { path: entry.path, branch }, adopt);
+  if (refused) return refused;
+  await noteUncommitted(place, entry.path);
   return reused;
 }
 
@@ -322,8 +367,9 @@ async function startOnBranch(place, name) {
   if (owner) return failed(owner);
   if (existsSync(place.target)) return failed(`${place.target} exists and is not this job's registered worktree; \`nightqueue doctor\` lists it`);
   const prior = { branch: null, worktree: null };
-  if (await branchExists(place.git, name)) return await createRecorded(place, { branch: name, prior, make: () => recreate(place, name) });
-  if ((await onOrigin(place, [name])).length === 1) return await createFromOrigin(place, { branch: name, prior });
+  const claim = (write) => claimStart(place, { path: place.target, branch: name }, write);
+  if (await branchExists(place.git, name)) return await createRecorded(place, { branch: name, prior, make: () => recreate(place, name), claim });
+  if ((await onOrigin(place, [name])).length === 1) return await createFromOrigin(place, { branch: name, prior, claim });
   return failed(`the branch \`${name}\` does not exist in ${place.checkout} nor on origin`);
 }
 
@@ -334,19 +380,19 @@ async function placeStart(ctx, start) {
   const [main, ...linked] = parseWorktreeList(listed.stdout);
   const holds = await ctx.openHolds();
   if (!Array.isArray(holds)) return failed(`the queue could not be read to check who owns \`${start.worktree ?? start.branch}\`; retry`);
-  const others = holds.filter((hold) => hold.jobId !== ctx.job.id && (hold.projectId ?? ctx.job.project_id) === ctx.job.project_id);
-  const place = { ...ctx, main, linked, others };
+  const place = { ...ctx, main, linked, others: otherHolds(holds, ctx.job) };
   return start.worktree !== null ? await startInWorktree(place, start.worktree) : await startOnBranch(place, start.branch);
 }
 
 // Places the git worktree of a job before its session starts: the recorded one reused, its queued starting point, recreated from its branch, or created fresh under the home.
-export async function prepareJobWorktree({ job, checkout, baseBranch, env = process.env, gitImpl = runGitAsync, log = () => {}, openHolds = async () => [] } = {}) {
+export async function prepareJobWorktree({ job, checkout, baseBranch, env = process.env, gitImpl = runGitAsync, log = () => {}, openHolds = async () => [], claimTimeoutMs = START_CLAIM_TIMEOUT_MS } = {}) {
   if (!isRunPath(job?.project_id, job?.slug)) return failed("the run has no slug, so the runtime cannot place its worktree");
   try {
     const target = jobWorktreePath(job.project_id, job.slug, env);
     const state = ownRunState({ projectId: job.project_id, slug: job.slug, jobId: job.id, env });
-    const hints = { slug: job.slug, type: recordedText(state?.type) };
-    const ctx = { job, checkout, baseBranch, env, log, target, hints, openHolds, git: gitIn({ gitImpl, checkout, env }) };
+    const start = queuedStart(job);
+    const hints = { slug: start ? null : job.slug, type: recordedText(state?.type) };
+    const ctx = { job, checkout, baseBranch, env, log, target, hints, openHolds, claimTimeoutMs, git: gitIn({ gitImpl, checkout, env }) };
     const prior = { worktree: recordedText(state?.worktree), branch: recordedText(state?.branch) };
     const entry = await reusableEntry(ctx.git, { prior, hints });
     if (entry) {
@@ -354,7 +400,6 @@ export async function prepareJobWorktree({ job, checkout, baseBranch, env = proc
       followHeldBranch(ctx, { prior, held });
       return await reuse(ctx, prior.worktree, held);
     }
-    const start = queuedStart(job);
     if (start && prior.branch === null && prior.worktree === null) return await placeStart(ctx, start);
     if (existsSync(target)) return failed(`${target} exists and is not this job's registered worktree; \`nightqueue doctor\` lists it`);
     return await create(ctx, prior);

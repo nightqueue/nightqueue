@@ -60,7 +60,7 @@ import {
 } from "./stream.mjs";
 import { phaseTelemetry, runDurationS } from "./telemetry.mjs";
 import { resolveWindow, windowPhase } from "./window.mjs";
-import { finishNotice, inspectRunWorktree, keptWorktreeLine, openJobHolds, openJobWorktrees, removeRunWorktree } from "./worktree.mjs";
+import { ADOPTED_WORKTREE_REASON, finishNotice, inspectRunWorktree, isAdoptedWorktree, keptWorktreeLine, openJobHolds, openJobWorktrees, removeRunWorktree } from "./worktree.mjs";
 import { jobRef } from "../memory/refs.mjs";
 import { enrichJobOrigins } from "../integrations/enrich.mjs";
 import { parseOriginsColumn } from "../integrations/origin.mjs";
@@ -621,6 +621,7 @@ async function persistTelemetry(job, run, { store, env }) {
 
 // Inspects the worktree the run recorded, read-only, before the finish, so a kept one can be named in the single notice write.
 async function inspectJobWorktree(run, state, ctx) {
+  if (isAdoptedWorktree(state)) return { path: state.worktree.trim(), removable: false, reason: ADOPTED_WORKTREE_REASON };
   return await inspectRunWorktree({
     checkout: ctx.checkout,
     path: state?.worktree,
