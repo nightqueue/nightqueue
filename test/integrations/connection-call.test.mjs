@@ -86,6 +86,52 @@ test("a discord call goes to the webhook url with only its allowed query and no 
   assert.equal(other.calls.length, 0);
 });
 
+test("a discord call reads and edits a posted message, and nothing else widens", async (t) => {
+  const env = callHome(t, "cc-discord-message");
+  const read = fakeFetch({ text: '{"id":"42"}' });
+  assert.equal((await call(env, { connection: "team-chat", path: "messages/42" }, read)).ok, true);
+  assert.equal(read.calls[0].url, `${WEBHOOK_URL}/messages/42`);
+  const edit = fakeFetch({ text: '{"id":"42"}' });
+  await call(env, { connection: "team-chat", method: "PATCH", path: "/messages/42", body: { content: "fixed" } }, edit);
+  assert.equal(edit.calls[0].url, `${WEBHOOK_URL}/messages/42`);
+  assert.equal(edit.calls[0].options.method, "PATCH");
+  const refusals = [
+    { path: "messages" },
+    { path: "messages/abc" },
+    { path: "messages/42/x" },
+    { path: "other/42" },
+    { path: "messages/42", method: "POST" },
+    { path: "", method: "PATCH" },
+    { method: "PUT" },
+  ];
+  for (const args of refusals) {
+    const other = fakeFetch();
+    const answer = await call(env, { connection: "team-chat", body: { content: "x" }, ...args }, other);
+    assert.equal(answer.error, "invalid-input", JSON.stringify(args));
+    assert.equal(other.calls.length, 0, JSON.stringify(args));
+    assert.ok(!JSON.stringify(answer).includes(WEBHOOK_TOKEN));
+  }
+});
+
+test("a webhook message path keeps thread_id, refuses traversal and @original, and a bare GET hits the exact url", async (t) => {
+  const env = callHome(t, "cc-discord-gaps");
+  for (const method of ["GET", "PATCH"]) {
+    const sent = fakeFetch({ text: '{"id":"42"}' });
+    await call(env, { connection: "team-chat", method, path: "messages/42", query: { thread_id: "7" }, ...(method === "PATCH" ? { body: { content: "x" } } : {}) }, sent);
+    assert.equal(sent.calls[0].url, `${WEBHOOK_URL}/messages/42?thread_id=7`, method);
+  }
+  const bare = fakeFetch({ text: '{"id":"1"}' });
+  await call(env, { connection: "team-chat" }, bare);
+  assert.equal(bare.calls[0].url, WEBHOOK_URL);
+  for (const path of ["../", "messages/@original", "messages/../x", "messages/42/.."]) {
+    const other = fakeFetch();
+    const answer = await call(env, { connection: "team-chat", path }, other);
+    assert.equal(answer.error, "invalid-input", path);
+    assert.equal(other.calls.length, 0, path);
+    assert.ok(!JSON.stringify(answer).includes(WEBHOOK_TOKEN), path);
+  }
+});
+
 test("a path that could leave the api root is refused and nothing is sent", async (t) => {
   const env = callHome(t, "cc-paths");
   const paths = ["https://evil.example/x", "//evil.example/x", "organizations/../../x", "a/%2e%2e/b", "a/%2E%2E/b", "a%2fb", "a\\b", "a?x=1", "a#b", "javascript:alert(1)", "./a", "a b", `https://x/${SENTRY_TOKEN}`];

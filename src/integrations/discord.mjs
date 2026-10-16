@@ -404,5 +404,5 @@ export const discord = {
   log: logToDiscord,
   apiRoot: (record) => record.url,
   authHeaders: () => ({}),
-  call: { path: false, query: ["thread_id", "wait"], secretParts: webhookSecretParts },
+  call: { path: /^messages\/\d{1,25}$/, methodsAt: (path) => (path ? ["GET", "PATCH"] : ["GET", "POST"]), query: ["thread_id", "wait"], secretParts: webhookSecretParts },
 };

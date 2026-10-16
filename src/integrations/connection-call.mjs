@@ -77,7 +77,16 @@ function relativePath(path, call) {
   if (typeof given !== "string") return { refusal: invalid(PATH_RULE) };
   if (call?.path === false) return given === "" || given === "/" ? { path: "" } : { refusal: invalid("this connection's kind takes no path") };
   if (isUnsafePath(given)) return { refusal: invalid(PATH_RULE) };
-  return { path: given.replace(/^\//, "") };
+  const relative = given.replace(/^\//, "");
+  if (call?.path instanceof RegExp && relative !== "" && !call.path.test(relative)) return { refusal: invalid("this connection's kind takes only the path its API documents") };
+  return { path: relative };
+}
+
+// The refusal of a method this connection's kind does not take at this path, or null.
+function methodProblem(method, path, call) {
+  const allowed = typeof call?.methodsAt === "function" ? call.methodsAt(path) : null;
+  if (!Array.isArray(allowed) || allowed.includes(method)) return null;
+  return invalid(`this path takes only ${allowed.join(", ")}`);
 }
 
 // The parsed API root of a connection, or null when the stored address is not a URL.
@@ -92,13 +101,14 @@ function parsedRoot(provider, record) {
 // The URL of the call pinned under the API root, or null when it would land anywhere else.
 function pinnedUrl(root, path) {
   if (!path) return new URL(root.href);
+  const base = root.href.endsWith("/") ? root : new URL(`${root.href}/`);
   let url;
   try {
-    url = new URL(path, root);
+    url = new URL(path, base);
   } catch {
     return null;
   }
-  return url.origin === root.origin && url.href.startsWith(root.href) ? url : null;
+  return url.origin === base.origin && url.href.startsWith(base.href) ? url : null;
 }
 
 // Tells whether one query value is a text, a finite number, a boolean or a list of texts.
@@ -176,6 +186,8 @@ function preparedCall(args, method, env) {
   if (target.refusal) return target;
   const relative = relativePath(args?.path, target.provider.call);
   if (relative.refusal) return relative;
+  const wrongMethod = methodProblem(method, relative.path, target.provider.call);
+  if (wrongMethod) return { refusal: wrongMethod };
   const root = parsedRoot(target.provider, target.record);
   if (!root) return { refusal: refused("provider-unavailable", BAD_ROOT) };
   const url = pinnedUrl(root, relative.path);
