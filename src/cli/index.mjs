@@ -109,7 +109,7 @@ commands:
   memory stats [--json]                     count lessons, memories, index entries and runs per project
   memory delete <id> [--project <name>]     delete one memory (M446 or 446) and its search entry; refused inside a queue job
   lesson delete <id> [--project <name>]     delete one lesson (L344 or 344) and its search entry; refused inside a queue job
-  queue add [project] <prompt...> [--run]   enqueue an unattended /nightqueue:resolve run; --run starts it detached
+  queue add [project] <prompt...> [--run]   enqueue an unattended /nightqueue:resolve run; --run starts it detached; --branch <name> or --worktree <path> starts it on existing work
   queue status [J-<id>|<PR URL>] [--json]  show one job or the table of the queue plus the counts per status
   queue status --follow [s] [--until-idle]  keep the table on screen, redrawn every s seconds (default 2)
   queue run [--job | --watch] [--max]       start the runner detached, one job at a time; --max <n> exits after n jobs, --foreground runs it here, --stop ends a watcher

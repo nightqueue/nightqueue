@@ -60,7 +60,7 @@ import {
 } from "./stream.mjs";
 import { phaseTelemetry, runDurationS } from "./telemetry.mjs";
 import { resolveWindow, windowPhase } from "./window.mjs";
-import { finishNotice, inspectRunWorktree, keptWorktreeLine, openJobWorktrees, removeRunWorktree } from "./worktree.mjs";
+import { finishNotice, inspectRunWorktree, keptWorktreeLine, openJobHolds, openJobWorktrees, removeRunWorktree } from "./worktree.mjs";
 import { jobRef } from "../memory/refs.mjs";
 import { enrichJobOrigins } from "../integrations/enrich.mjs";
 import { parseOriginsColumn } from "../integrations/origin.mjs";
@@ -975,7 +975,8 @@ async function prepareJob(claimed, ctx) {
   ensureRunDir(job, env);
   if ((await recordJob(job, ctx)) === OUTAGE_STOPPED) return { report: stoppedInOutage(job, env) };
   if ((await enrichOrigin(job, ctx)) === OUTAGE_STOPPED) return { report: stoppedInOutage(job, env) };
-  const prepared = await deps.worktreeImpl({ job, checkout: check.cwd, baseBranch: check.branch, env, log: (line) => appendJobLog(job.id, line, env) });
+  const openHolds = () => openJobHolds({ store: ctx.store, env });
+  const prepared = await deps.worktreeImpl({ job, checkout: check.cwd, baseBranch: check.branch, env, log: (line) => appendJobLog(job.id, line, env), openHolds });
   if (!prepared.ok) return { report: await gateJob(job, prepared, ctx) };
   await persistBranch(job, job.slug, ctx);
   return { job, check, prepared, openPrs };

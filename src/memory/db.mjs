@@ -161,6 +161,8 @@ function migrate(db) {
   migrateV23(db);
   migrateJobTitles(db);
   addColumnIfMissing(db, "pipeline_phases", "reason", "TEXT");
+  addColumnIfMissing(db, "jobs", "start_branch", "TEXT");
+  addColumnIfMissing(db, "jobs", "start_worktree", "TEXT");
   ensureDefaultOrg(db);
   if (version < DB_USER_VERSION) db.exec(`PRAGMA user_version = ${DB_USER_VERSION}`);
 }

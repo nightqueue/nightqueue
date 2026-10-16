@@ -5,7 +5,8 @@ import { runGitAsync } from "../host/git.mjs";
 import { branchAliases, sameBranch } from "./branch-name.mjs";
 import { isRunPath, ownRunState } from "./resume.mjs";
 import { recordHeldWorktree, recordRunFields } from "./run-state.mjs";
-import { canonicalPath, parseWorktreeList, sameDir } from "./worktree.mjs";
+import { canonicalPath, lockPid, lockState, parseWorktreeList, sameDir } from "./worktree.mjs";
+import { jobRef } from "../memory/refs.mjs";
 
 export const JOB_BRANCH_PREFIX = "worktree-";
 export const WORKTREE_FAILED = "worktree-failed";
@@ -106,14 +107,18 @@ async function fetchPublished(ctx, names) {
   }
 }
 
-// The names of a run's branch that exist on origin, read after a best-effort fetch; none when the checkout has no origin.
-async function remoteAliases(ctx, name) {
+// The given branch names that exist on origin, read after a best-effort fetch; none when the checkout has no origin.
+async function onOrigin(ctx, names) {
   if (!(await ctx.git(["remote", "get-url", "origin"])).ok) return [];
-  const aliases = branchAliases(name, ctx.hints);
-  await fetchPublished(ctx, aliases);
+  await fetchPublished(ctx, names);
   const found = [];
-  for (const alias of aliases) if (await refExists(ctx.git, `refs/remotes/origin/${alias}`)) found.push(alias);
+  for (const name of names) if (await refExists(ctx.git, `refs/remotes/origin/${name}`)) found.push(name);
   return found;
+}
+
+// The names of a run's branch that exist on origin.
+async function remoteAliases(ctx, name) {
+  return await onOrigin(ctx, branchAliases(name, ctx.hints));
 }
 
 // The canonical git common directory seen from a directory, or the reason git could not answer there.
@@ -221,7 +226,11 @@ async function createFromRecorded(ctx, prior) {
   const remote = await remoteAliases(ctx, prior.branch);
   if (remote.length > 1) return ambiguousBranch(remote);
   if (remote.length === 0) return await createFreshRecorded(ctx, prior);
-  const [branch] = remote;
+  return await createFromOrigin(ctx, { branch: remote[0], prior });
+}
+
+// Creates the job's worktree on a local branch made from origin's copy of that branch, never tracking it.
+async function createFromOrigin(ctx, { branch, prior }) {
   const make = () => addWorktree(ctx.git, ["--no-track", "-b", branch, ctx.target, `refs/remotes/origin/${branch}`]);
   return await createRecorded(ctx, { branch, prior, make });
 }
@@ -251,14 +260,93 @@ function followHeldBranch(ctx, { prior, held }) {
   if (written.status !== "written") ctx.log(`the state of the run could not follow the branch git holds (${written.reason})`);
 }
 
-// Places the git worktree of a job before its session starts: the recorded one reused, recreated from its branch, or created fresh under the home.
-export async function prepareJobWorktree({ job, checkout, baseBranch, env = process.env, gitImpl = runGitAsync, log = () => {} } = {}) {
+// The starting point a job was queued with, as `{ branch, worktree }`, or null when it has none.
+function queuedStart(job) {
+  const branch = recordedText(job?.start_branch);
+  const worktree = recordedText(job?.start_worktree);
+  return branch === null && worktree === null ? null : { branch, worktree };
+}
+
+// Why a job may not work on a branch: it is the default branch or the main checkout's; null when it may.
+function mainBranchRefusal(place, branch) {
+  if (branch === place.baseBranch) return `\`${branch}\` is the default branch; a job never works on it`;
+  if (branch === shortBranch(place.main?.branch)) return `\`${branch}\` is the main checkout's branch; a job never works on it`;
+  return null;
+}
+
+// Tells whether an open job's hold covers the given worktree path or branch.
+function holdCovers(hold, { path, branch }) {
+  if (path !== null && hold.worktree !== null && sameDir(hold.worktree, path)) return true;
+  return branch !== null && hold.branch !== null && sameBranch(hold.branch, branch, { slug: hold.slug, type: hold.type });
+}
+
+// Why another open job keeps this one off a start point, naming that job; null when no other open job holds it.
+function ownerRefusal(place, { path, branch }) {
+  const owner = place.others.find((hold) => holdCovers(hold, { path, branch }));
+  return owner ? `\`${path ?? branch}\` belongs to ${jobRef(owner.jobId)}, which is not closed; two open jobs never share a branch` : null;
+}
+
+// Why a live session keeps a job out of a worktree; null when no live session locked it.
+function lockRefusal(entry) {
+  return lockState(entry) === "live" ? `\`${entry.path}\` is locked by a live session (pid ${lockPid(entry.locked)})` : null;
+}
+
+// Starts the job in a linked worktree on its branch, once no rule refuses it, recorded as the run's own.
+async function startInEntry(place, entry) {
+  const branch = shortBranch(entry.branch);
+  if (branch === null) return failed(`the worktree ${entry.path} is detached; a job starts only on a branch`);
+  const refusal = mainBranchRefusal(place, branch) ?? ownerRefusal(place, { path: entry.path, branch }) ?? lockRefusal(entry);
+  if (refusal) return failed(refusal);
+  const reused = await reuse(place, entry.path, branch);
+  if (!reused.ok) return reused;
+  const { job, env } = place;
+  const written = recordRunFields({ projectId: job.project_id, slug: job.slug, fields: { branch, worktree: entry.path }, env });
+  if (written.status !== "written") return failed(`the worktree ${entry.path} was not taken: the state of the run could not record it (${written.reason})`);
+  return reused;
+}
+
+// Starts the job in the linked worktree it was queued with.
+async function startInWorktree(place, path) {
+  const entry = place.linked.find((candidate) => sameDir(candidate.path, path));
+  if (!entry) return failed(`${path} is not a linked worktree of ${place.checkout}; a job never works in the main checkout or an unregistered directory`);
+  return await startInEntry(place, entry);
+}
+
+// Starts the job on the branch it was queued with: in the linked worktree holding it, else in a new worktree on it, local or else from origin.
+async function startOnBranch(place, name) {
+  const refusal = mainBranchRefusal(place, name);
+  if (refusal) return failed(refusal);
+  const entry = place.linked.find((candidate) => candidate.branch === `${HEADS}${name}` && candidate.prunable === null);
+  if (entry) return await startInEntry(place, entry);
+  const owner = ownerRefusal(place, { path: null, branch: name });
+  if (owner) return failed(owner);
+  if (existsSync(place.target)) return failed(`${place.target} exists and is not this job's registered worktree; \`nightqueue doctor\` lists it`);
+  const prior = { branch: null, worktree: null };
+  if (await branchExists(place.git, name)) return await createRecorded(place, { branch: name, prior, make: () => recreate(place, name) });
+  if ((await onOrigin(place, [name])).length === 1) return await createFromOrigin(place, { branch: name, prior });
+  return failed(`the branch \`${name}\` does not exist in ${place.checkout} nor on origin`);
+}
+
+// Places a job on the starting point it was queued with, checked against the main checkout, live locks and every other open job.
+async function placeStart(ctx, start) {
+  const listed = await ctx.git(["worktree", "list", "--porcelain"]);
+  if (!listed.ok) return failed(`git cannot list the worktrees of ${ctx.checkout} (${firstLine(listed.stderr)}); retry`);
+  const [main, ...linked] = parseWorktreeList(listed.stdout);
+  const holds = await ctx.openHolds();
+  if (!Array.isArray(holds)) return failed(`the queue could not be read to check who owns \`${start.worktree ?? start.branch}\`; retry`);
+  const others = holds.filter((hold) => hold.jobId !== ctx.job.id && (hold.projectId ?? ctx.job.project_id) === ctx.job.project_id);
+  const place = { ...ctx, main, linked, others };
+  return start.worktree !== null ? await startInWorktree(place, start.worktree) : await startOnBranch(place, start.branch);
+}
+
+// Places the git worktree of a job before its session starts: the recorded one reused, its queued starting point, recreated from its branch, or created fresh under the home.
+export async function prepareJobWorktree({ job, checkout, baseBranch, env = process.env, gitImpl = runGitAsync, log = () => {}, openHolds = async () => [] } = {}) {
   if (!isRunPath(job?.project_id, job?.slug)) return failed("the run has no slug, so the runtime cannot place its worktree");
   try {
     const target = jobWorktreePath(job.project_id, job.slug, env);
     const state = ownRunState({ projectId: job.project_id, slug: job.slug, jobId: job.id, env });
     const hints = { slug: job.slug, type: recordedText(state?.type) };
-    const ctx = { job, checkout, baseBranch, env, log, target, hints, git: gitIn({ gitImpl, checkout, env }) };
+    const ctx = { job, checkout, baseBranch, env, log, target, hints, openHolds, git: gitIn({ gitImpl, checkout, env }) };
     const prior = { worktree: recordedText(state?.worktree), branch: recordedText(state?.branch) };
     const entry = await reusableEntry(ctx.git, { prior, hints });
     if (entry) {
@@ -266,6 +354,8 @@ export async function prepareJobWorktree({ job, checkout, baseBranch, env = proc
       followHeldBranch(ctx, { prior, held });
       return await reuse(ctx, prior.worktree, held);
     }
+    const start = queuedStart(job);
+    if (start && prior.branch === null && prior.worktree === null) return await placeStart(ctx, start);
     if (existsSync(target)) return failed(`${target} exists and is not this job's registered worktree; \`nightqueue doctor\` lists it`);
     return await create(ctx, prior);
   } catch (err) {

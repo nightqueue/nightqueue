@@ -60,6 +60,26 @@ export async function openJobWorktrees({ store, env = process.env } = {}) {
   }
 }
 
+// The branch and worktree one job's run state holds, as `{ jobId, projectId, slug, type, branch, worktree }`, or null when it holds neither.
+function jobHold(job, env) {
+  const state = readRunState({ projectId: job.project_id, slug: job.slug, env });
+  const text = (value) => (typeof value === "string" && value.trim() !== "" ? value.trim() : null);
+  const branch = text(state?.branch);
+  const worktree = text(state?.worktree);
+  if (branch === null && worktree === null) return null;
+  return { jobId: job.id, projectId: job.project_id, slug: job.slug, type: text(state?.type), branch, worktree: worktree === null ? null : canonicalPath(worktree) };
+}
+
+// What every job that is not closed holds; null when the queue cannot be read, so the caller gates instead of assuming nobody owns anything.
+export async function openJobHolds({ store, env = process.env } = {}) {
+  try {
+    const jobs = await store.jobs.listOpenJobs();
+    return (Array.isArray(jobs) ? jobs : []).map((job) => jobHold(job, env)).filter(Boolean);
+  } catch {
+    return null;
+  }
+}
+
 // The pid a lock reason names as its owner, or null when the reason names none.
 export function lockPid(reason) {
   const match = LOCK_PID_RE.exec(String(reason ?? ""));
