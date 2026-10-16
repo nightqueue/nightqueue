@@ -34,10 +34,15 @@ function findSentry(text) {
   ]);
 }
 
-// The API root of a connection: its url without a trailing slash, sentry.io when none is stored.
+// The API root of a connection, ending in a slash: its url without a trailing slash, sentry.io when none is stored.
 function apiRoot(record) {
   const base = typeof record?.url === "string" && record.url ? record.url.replace(/\/$/, "") : DEFAULT_URL;
-  return `${base}/api/0/organizations/${encodeURIComponent(record?.org ?? "")}`;
+  return `${base}/api/0/`;
+}
+
+// The root of the connection's organization in the API, with no trailing slash.
+function orgRoot(record) {
+  return `${apiRoot(record)}organizations/${encodeURIComponent(record?.org ?? "")}`;
 }
 
 // The headers every Sentry request carries.
@@ -47,7 +52,7 @@ function authHeaders(record) {
 
 // Validates the auth token and org of a Sentry connection, without exposing the token in the result.
 async function testSentry(record, { fetchImpl = fetch, timeoutMs = 5000 } = {}) {
-  const answer = await requestJson(fetchImpl, `${apiRoot(record)}/`, { headers: authHeaders(record), timeoutMs });
+  const answer = await requestJson(fetchImpl, `${orgRoot(record)}/`, { headers: authHeaders(record), timeoutMs });
   if (!answer.ok) return { ok: false, status: answer.status, org: null, detail: answer.detail };
   return { ok: true, status: answer.status, org: answer.body?.slug ?? null, detail: "ok" };
 }
@@ -60,7 +65,7 @@ function summarizeSentry(result) {
 // The numeric issue id of a reference, resolving a short id through the API; answers { id } or { detail }.
 async function issueIdOf(ref, { record, http }) {
   if (/^\d+$/.test(ref)) return { id: ref };
-  const answer = await http(`${apiRoot(record)}/shortids/${encodeURIComponent(ref)}/`, { headers: authHeaders(record) });
+  const answer = await http(`${orgRoot(record)}/shortids/${encodeURIComponent(ref)}/`, { headers: authHeaders(record) });
   const id = answer.ok ? String(answer.body?.groupId ?? "") : "";
   if (/^\d+$/.test(id)) return { id };
   return { detail: `short id ${ref} not resolved (${answer.ok ? "no issue id" : answer.detail})` };
@@ -145,7 +150,7 @@ function recentEventLines(answer) {
 async function enrichSentry(ref, { connection, http }) {
   const resolved = await issueIdOf(ref, { record: connection, http });
   if (!resolved.id) return { detail: resolved.detail };
-  const issueUrl = `${apiRoot(connection)}/issues/${resolved.id}/`;
+  const issueUrl = `${orgRoot(connection)}/issues/${resolved.id}/`;
   const issue = await http(issueUrl, { headers: authHeaders(connection) });
   if (!issue.ok) return { detail: `issue ${resolved.id} not read (${issue.detail})` };
   const recent = await http(`${issueUrl}events/?per_page=${MAX_RECENT_EVENTS}`, { headers: authHeaders(connection) });
@@ -159,7 +164,7 @@ async function describeSentry(ref, { slot, http }) {
   if (!slot) return { detail: "no sentry connection in the org" };
   const resolved = await issueIdOf(ref, { record: slot, http });
   if (!resolved.id) return { detail: resolved.detail };
-  const issue = await http(`${apiRoot(slot)}/issues/${resolved.id}/`, { headers: authHeaders(slot) });
+  const issue = await http(`${orgRoot(slot)}/issues/${resolved.id}/`, { headers: authHeaders(slot) });
   if (!issue.ok) return { detail: `issue ${resolved.id} not read (${issue.detail})` };
   const { shortId, permalink, title } = issue.body ?? {};
   if (typeof shortId !== "string" || typeof permalink !== "string") return { detail: `issue ${resolved.id} answered no link` };
@@ -190,7 +195,7 @@ async function closeSentryIssue({ ref, job, result, settings, slot, http }) {
   const resolved = await issueIdOf(ref, { record: slot, http });
   if (!resolved.id) return { status: "warning", note: resolved.detail };
   const status = closeStatusOf(settings);
-  const issueUrl = `${apiRoot(slot)}/issues/${resolved.id}/`;
+  const issueUrl = `${orgRoot(slot)}/issues/${resolved.id}/`;
   const update = await http(issueUrl, { method: "PUT", headers: authHeaders(slot), body: { status } });
   if (!update.ok) return { status: "warning", note: `issue ${resolved.id} not marked ${status} (${update.detail})` };
   const comment = await http(`${issueUrl}comments/`, { method: "POST", headers: authHeaders(slot), body: { text: closeNote(result, job) } });
@@ -218,4 +223,7 @@ export const sentry = {
   origin: { parse: parseSentry, find: findSentry, enrich: enrichSentry, describe: describeSentry },
   settings: { onClosed: { type: "enum", values: CLOSE_STATUSES, default: "resolved" } },
   onClosed: closeSentryIssue,
+  apiRoot,
+  authHeaders,
+  call: { path: true, query: null },
 };

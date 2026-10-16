@@ -73,6 +73,12 @@ export function isWebhookUrl(text) {
   return WEBHOOK_URL.test(String(text ?? ""));
 }
 
+// The token part of a connection's webhook URL, which a webhook answer may echo on its own; empty when the URL does not match.
+function webhookSecretParts(record) {
+  const token = WEBHOOK_URL.exec(String(record?.url ?? ""))?.[2];
+  return token ? [token] : [];
+}
+
 // The refusal text of a secret that is not a Discord webhook URL, or null when it is one.
 function validateWebhookUrl(secret) {
   return isWebhookUrl(secret) ? null : INVALID_URL_TEXT;
@@ -387,4 +393,7 @@ export const discord = {
   covers: coversDiscord,
   onClosed: replyToOrigin,
   log: logToDiscord,
+  apiRoot: (record) => record.url,
+  authHeaders: () => ({}),
+  call: { path: false, query: ["thread_id", "wait"], secretParts: webhookSecretParts },
 };
