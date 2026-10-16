@@ -977,7 +977,7 @@ async function prepareJob(claimed, ctx) {
   if ((await enrichOrigin(job, ctx)) === OUTAGE_STOPPED) return { report: stoppedInOutage(job, env) };
   const prepared = await deps.worktreeImpl({ job, checkout: check.cwd, baseBranch: check.branch, env, log: (line) => appendJobLog(job.id, line, env) });
   if (!prepared.ok) return { report: await gateJob(job, prepared, ctx) };
-  if (!prepared.reused) await persistBranch(job, job.slug, ctx);
+  await persistBranch(job, job.slug, ctx);
   return { job, check, prepared, openPrs };
 }
 

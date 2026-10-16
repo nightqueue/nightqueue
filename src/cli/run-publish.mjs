@@ -239,7 +239,13 @@ function renameBranch({ cwd, current, final, env }) {
   return final;
 }
 
-// Publishes the branch and opens the pull request, then records the run as done with the URL gh answered and the branch it pushed: the record is written
+// Records on the run the branch the worktree now holds, before anything external can fail; a refused record is reported, never fatal.
+function recordPublishedBranch({ run, branch, ctx }) {
+  const recorded = recordRunFields({ projectId: run.projectId, slug: run.slug, fields: { branch }, env: ctx.env });
+  if (recorded.status !== "written") ctx.err(`nightqueue: the published branch was not recorded on the run: ${recorded.reason}`);
+}
+
+// Publishes the branch and opens the pull request, then records the run as done with the URL gh answered: the record is written
 // here, at the point of publication, so a run driven outside the queue runner (a resumed session, another program) ends up
 // with the same state.json as one the runner watched. A value the record refuses is reported, never fatal.
 function publishBranch({ run, cwd, branch, title, bodyFile, env }) {
@@ -250,8 +256,7 @@ function publishBranch({ run, cwd, branch, title, bodyFile, env }) {
   if (!created.ok) throw new UserError(`\`${branch}\` is pushed, but gh could not open the pull request: ${failureLine(created)}`);
   const recorded = recordOutcome({ projectId: run.projectId, slug: run.slug, status: "done", env });
   const prRecorded = recordPrUrl({ projectId: run.projectId, slug: run.slug, prUrl: created.url, prTitle: title, env });
-  const branchRecorded = recordRunFields({ projectId: run.projectId, slug: run.slug, fields: { branch }, env });
-  return { url: created.url, recorded, prRecorded, branchRecorded };
+  return { url: created.url, recorded, prRecorded };
 }
 
 // Removes the worktree of the run from the checkout that owns it; the pull request is already open, so a refusal is reported, never fatal.
@@ -267,12 +272,12 @@ export async function openPullRequest({ run, cwd, bodyFile, body, title, removeW
   const current = currentBranch(cwd, ctx.env);
   const final = publishedBranchName(current, { type: state?.type, slug: run.slug, commitType: headCommitType(cwd, ctx.env) });
   const branch = renameBranch({ cwd, current, final, env: ctx.env });
-  const { url, recorded, prRecorded, branchRecorded } = publishBranch({ run, cwd, branch, title: prTitle(title, body), bodyFile: published, env: ctx.env });
+  recordPublishedBranch({ run, branch, ctx });
+  const { url, recorded, prRecorded } = publishBranch({ run, cwd, branch, title: prTitle(title, body), bodyFile: published, env: ctx.env });
   ctx.out(`BRANCH: ${branch}${branch === current ? "" : ` (renamed from ${current})`}`);
   ctx.out(`PR: ${url ?? "opened"}`);
   if (recorded.status !== "written") ctx.err(`nightqueue: the run was not recorded as done: ${recorded.reason}`);
   if (prRecorded.status !== "written") ctx.err(`nightqueue: the pull request was not recorded on the run: ${prRecorded.reason}`);
-  if (branchRecorded.status !== "written") ctx.err(`nightqueue: the published branch was not recorded on the run: ${branchRecorded.reason}`);
   ctx.out(`WORKTREE: ${cwd}`);
   if (removeWorktree) ctx.out(worktreeRemoval(run, cwd, ctx.env));
   return 0;

@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import { isAbsolute, relative, resolve } from "node:path";
 import { jobWorktreePath, worktreesDir } from "../config/paths.mjs";
 import { runGitAsync } from "../host/git.mjs";
+import { branchAliases, sameBranch } from "./branch-name.mjs";
 import { isRunPath, ownRunState } from "./resume.mjs";
 import { recordHeldWorktree, recordRunFields } from "./run-state.mjs";
 import { canonicalPath, parseWorktreeList, sameDir } from "./worktree.mjs";
@@ -59,17 +60,60 @@ async function linkedWorktrees(git) {
   return linked;
 }
 
-// The entry git registers for the recorded worktree on the recorded branch, or null when there is none this job may reuse.
-async function reusableEntry(git, prior) {
+// The entry git registers for the recorded worktree on the recorded branch (or one of its names), or null when there is none this job may reuse.
+async function reusableEntry(git, { prior, hints }) {
   if (!prior.worktree || !isAbsolute(prior.worktree) || !existsSync(prior.worktree)) return null;
   const entry = (await linkedWorktrees(git)).find((candidate) => sameDir(candidate.path, prior.worktree)) ?? null;
-  if (!entry || (prior.branch !== null && shortBranch(entry.branch) !== prior.branch)) return null;
+  if (!entry || (prior.branch !== null && !sameBranch(shortBranch(entry.branch), prior.branch, hints))) return null;
   return entry;
+}
+
+// Tells whether a ref exists in the checkout.
+async function refExists(git, ref) {
+  return (await git(["rev-parse", "--verify", "--quiet", ref])).ok;
 }
 
 // Tells whether a local branch exists in the checkout.
 async function branchExists(git, branch) {
-  return (await git(["rev-parse", "--verify", "--quiet", `${HEADS}${branch}`])).ok;
+  return await refExists(git, `${HEADS}${branch}`);
+}
+
+// The names of a run's branch that exist as local branches of the checkout.
+async function localAliases(ctx, name) {
+  const found = [];
+  for (const alias of branchAliases(name, ctx.hints)) if (await branchExists(ctx.git, alias)) found.push(alias);
+  return found;
+}
+
+// The branch names origin publishes among the given ones, or null when origin could not be asked.
+async function publishedOnOrigin(ctx, names) {
+  const listed = await ctx.git(["ls-remote", "--heads", "origin", ...names], { timeoutMs: FETCH_TIMEOUT_MS, extraEnv: fetchEnv(ctx.env) });
+  if (!listed.ok) {
+    ctx.log(`git ls-remote origin failed (${firstLine(listed.stderr)}); only the remote branches the checkout already knows are looked at`);
+    return null;
+  }
+  const refs = String(listed.stdout ?? "").split("\n").map((line) => shortBranch(line.split("\t")[1]?.trim()));
+  return names.filter((name) => refs.includes(name));
+}
+
+// Refreshes the remote-tracking refs of the names origin publishes, best effort: a failure is logged and what the checkout knows stays.
+async function fetchPublished(ctx, names) {
+  const published = (await publishedOnOrigin(ctx, names)) ?? [];
+  for (const name of published) {
+    const refspec = `+${HEADS}${name}:refs/remotes/origin/${name}`;
+    const fetched = await ctx.git(["fetch", "--quiet", "origin", refspec], { timeoutMs: FETCH_TIMEOUT_MS, extraEnv: fetchEnv(ctx.env) });
+    if (!fetched.ok) ctx.log(`git fetch origin ${name} failed (${firstLine(fetched.stderr)}); the checkout's own copy of it is used`);
+  }
+}
+
+// The names of a run's branch that exist on origin, read after a best-effort fetch; none when the checkout has no origin.
+async function remoteAliases(ctx, name) {
+  if (!(await ctx.git(["remote", "get-url", "origin"])).ok) return [];
+  const aliases = branchAliases(name, ctx.hints);
+  await fetchPublished(ctx, aliases);
+  const found = [];
+  for (const alias of aliases) if (await refExists(ctx.git, `refs/remotes/origin/${alias}`)) found.push(alias);
+  return found;
 }
 
 // The canonical git common directory seen from a directory, or the reason git could not answer there.
@@ -130,7 +174,7 @@ async function createFresh(ctx, branch) {
 async function recordWhatGitHolds(ctx, { branch, prior }) {
   const heldBranch = (await branchExists(ctx.git, branch)) ? branch : prior.branch;
   const linked = await linkedWorktrees(ctx.git);
-  const holdsTarget = linked.some((entry) => sameDir(entry.path, ctx.target) && shortBranch(entry.branch) === branch);
+  const holdsTarget = linked.some((entry) => sameDir(entry.path, ctx.target) && sameBranch(shortBranch(entry.branch), branch, ctx.hints));
   const { job, env } = ctx;
   const written = recordHeldWorktree({ projectId: job.project_id, slug: job.slug, branch: heldBranch, worktree: holdsTarget ? ctx.target : prior.worktree, env });
   if (written.status !== "written") ctx.log(`the state of the run could not be set back to what git holds after the failed add (${written.reason})`);
@@ -154,25 +198,57 @@ async function reuse(ctx, path, branch) {
   return { ok: true, path, branch, reused: true, legacy: !isUnder(worktreesDir(ctx.env), path) };
 }
 
-// Creates the worktree of a job that has none to reuse: recreated from its recorded branch, or fresh on its own branch, never on a branch the state does not name.
-async function create(ctx, prior) {
-  const recreating = prior.branch !== null && (await branchExists(ctx.git, prior.branch));
-  const branch = recreating ? prior.branch : jobBranchName(ctx.job.slug);
-  if (!recreating && (await branchExists(ctx.git, branch))) {
-    return failed(`the branch \`${branch}\` already exists in ${ctx.checkout} and the state of this run does not name it; nightqueue never takes over or forces a branch - rename or delete it, then retry`);
+// The gate of a run whose branch exists under several names at once, none of which nightqueue may pick.
+function ambiguousBranch(names) {
+  return failed(`the branches ${names.map((name) => `\`${name}\``).join(", ")} are all names of this run's branch; nightqueue will not pick one - delete the stale one, then retry`);
+}
+
+// Creates a fresh branch of the job from the base, refused when any name of it already exists locally, since the state of the run does not name it.
+async function createFreshRecorded(ctx, prior) {
+  const branch = jobBranchName(ctx.job.slug);
+  const [taken] = await localAliases(ctx, branch);
+  if (taken) {
+    return failed(`the branch \`${taken}\` already exists in ${ctx.checkout} and the state of this run does not name it; nightqueue never takes over or forces a branch - rename or delete it, then retry`);
   }
-  const make = () => (recreating ? recreate(ctx, branch) : createFresh(ctx, branch));
+  return await createRecorded(ctx, { branch, prior, make: () => createFresh(ctx, branch) });
+}
+
+// Recreates the worktree of a run on the branch it recorded, under whichever of its names exists locally, else on origin, else fresh.
+async function createFromRecorded(ctx, prior) {
+  const local = await localAliases(ctx, prior.branch);
+  if (local.length > 1) return ambiguousBranch(local);
+  if (local.length === 1) return await createRecorded(ctx, { branch: local[0], prior, make: () => recreate(ctx, local[0]) });
+  const remote = await remoteAliases(ctx, prior.branch);
+  if (remote.length > 1) return ambiguousBranch(remote);
+  if (remote.length === 0) return await createFreshRecorded(ctx, prior);
+  const [branch] = remote;
+  const make = () => addWorktree(ctx.git, ["--no-track", "-b", branch, ctx.target, `refs/remotes/origin/${branch}`]);
   return await createRecorded(ctx, { branch, prior, make });
 }
 
-// Tells whether the worktree slot of a slug is free: neither its path under the home nor its branch exists; advisory, since `git worktree add` refuses an occupied path anyway.
+// Creates the worktree of a job that has none to reuse: recreated from its recorded branch, or fresh on its own branch, never on a branch the state does not name.
+async function create(ctx, prior) {
+  return prior.branch !== null ? await createFromRecorded(ctx, prior) : await createFreshRecorded(ctx, prior);
+}
+
+// Tells whether the worktree slot of a slug is free: neither its path under the home nor any name of its branch exists; advisory, since `git worktree add` refuses an occupied path anyway.
 export async function worktreeSlotFree({ projectId, slug, checkout, env = process.env, gitImpl = runGitAsync } = {}) {
   try {
     if (existsSync(jobWorktreePath(projectId, slug, env))) return false;
-    return !(await branchExists(gitIn({ gitImpl, checkout, env }), jobBranchName(slug)));
+    const ctx = { git: gitIn({ gitImpl, checkout, env }), hints: { slug } };
+    return (await localAliases(ctx, jobBranchName(slug))).length === 0;
   } catch {
     return true;
   }
+}
+
+// Points the state of the run at the branch its reused worktree really holds, when `run pr` renamed it after the state was written; never fatal.
+function followHeldBranch(ctx, { prior, held }) {
+  if (held === null || held === prior.branch) return;
+  const { job, env } = ctx;
+  ctx.log(`the run's branch is \`${held}\` (state named \`${prior.branch ?? "none"}\`); the state now follows git`);
+  const written = recordHeldWorktree({ projectId: job.project_id, slug: job.slug, branch: held, worktree: prior.worktree, env });
+  if (written.status !== "written") ctx.log(`the state of the run could not follow the branch git holds (${written.reason})`);
 }
 
 // Places the git worktree of a job before its session starts: the recorded one reused, recreated from its branch, or created fresh under the home.
@@ -180,11 +256,16 @@ export async function prepareJobWorktree({ job, checkout, baseBranch, env = proc
   if (!isRunPath(job?.project_id, job?.slug)) return failed("the run has no slug, so the runtime cannot place its worktree");
   try {
     const target = jobWorktreePath(job.project_id, job.slug, env);
-    const ctx = { job, checkout, baseBranch, env, log, target, git: gitIn({ gitImpl, checkout, env }) };
     const state = ownRunState({ projectId: job.project_id, slug: job.slug, jobId: job.id, env });
+    const hints = { slug: job.slug, type: recordedText(state?.type) };
+    const ctx = { job, checkout, baseBranch, env, log, target, hints, git: gitIn({ gitImpl, checkout, env }) };
     const prior = { worktree: recordedText(state?.worktree), branch: recordedText(state?.branch) };
-    const entry = await reusableEntry(ctx.git, prior);
-    if (entry) return await reuse(ctx, prior.worktree, shortBranch(entry.branch) ?? prior.branch);
+    const entry = await reusableEntry(ctx.git, { prior, hints });
+    if (entry) {
+      const held = shortBranch(entry.branch) ?? prior.branch;
+      followHeldBranch(ctx, { prior, held });
+      return await reuse(ctx, prior.worktree, held);
+    }
     if (existsSync(target)) return failed(`${target} exists and is not this job's registered worktree; \`nightqueue doctor\` lists it`);
     return await create(ctx, prior);
   } catch (err) {

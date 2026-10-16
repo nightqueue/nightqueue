@@ -38,14 +38,15 @@ export function parseWorktreeList(porcelain) {
   return entries;
 }
 
-// The worktrees the given jobs name in the state of their run, canonical and mapped to `{ jobId, branch }`.
+// The worktrees the given jobs name in the state of their run, canonical and mapped to `{ jobId, branch, slug, type }`.
 export function jobWorktreeOwners(jobs, env = process.env) {
   const owners = new Map();
   for (const job of Array.isArray(jobs) ? jobs : []) {
     const state = readRunState({ projectId: job.project_id, slug: job.slug, env });
     const path = typeof state?.worktree === "string" ? state.worktree.trim() : "";
     const branch = typeof state?.branch === "string" ? state.branch.trim() : "";
-    if (path) owners.set(canonicalPath(path), { jobId: job.id, branch: branch || null });
+    const type = typeof state?.type === "string" ? state.type.trim() : "";
+    if (path) owners.set(canonicalPath(path), { jobId: job.id, branch: branch || null, slug: job.slug, type: type || null });
   }
   return owners;
 }
