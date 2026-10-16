@@ -122,6 +122,8 @@ const JOB_COLUMNS = [
   "next_attempt_fresh",
   "title",
   "pr_title",
+  "start_branch",
+  "start_worktree",
 ];
 
 // Everything a database written by the schema version before the merge sweep does NOT have yet.

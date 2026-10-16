@@ -16,6 +16,7 @@ import { refuseMissingJob } from "./job-row.mjs";
 import { jobRef } from "./refs.mjs";
 import * as registry from "./registry.mjs";
 import { ACTIVE_JOB_PREDICATE, LEASE_GRACE_S, RESULT_OBJECT_BASE } from "./schema.mjs";
+import { startPoint } from "./start-point.mjs";
 import { isSafeSegment } from "../queue/resume.mjs";
 import { jobTitle, storableTitle } from "../queue/job-title.mjs";
 import { PIPELINE_TIERS } from "./runs.mjs";
@@ -49,6 +50,8 @@ const JOB_VIEW_COLUMNS = [
   "session_id",
   "slug",
   "branch",
+  "start_branch",
+  "start_worktree",
   "pr_url",
   "pr_title",
   "worker",
@@ -219,7 +222,7 @@ function optionalRunSlug(value) {
 }
 
 const INSERT_JOB =
-  "INSERT INTO jobs (project_id, prompt, priority, max_attempts, timeout_s, tier, slug, operator_note, origin, title) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+  "INSERT INTO jobs (project_id, prompt, priority, max_attempts, timeout_s, tier, slug, operator_note, origin, title, start_branch, start_worktree) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
 
 // Requires the id of the project a job is queued for; a name never reaches the jobs table.
 function requireProjectId(projectId) {
@@ -262,8 +265,9 @@ function insertRunJob(db, { values, project }, env) {
 }
 
 // Enqueues a job for a project id, validating every range before the write; a run slug is refused while an open job is bound to it.
-export function addJob({ projectId, prompt, priority, maxAttempts, timeoutS, tier, slug, operatorNote, origin, title } = {}, env = process.env) {
+export function addJob({ projectId, prompt, priority, maxAttempts, timeoutS, tier, slug, operatorNote, origin, title, startBranch, startWorktree } = {}, env = process.env) {
   const origins = resolveOrigins({ origin, prompt });
+  const start = startPoint({ startBranch, startWorktree });
   const values = [
     requireProjectId(projectId),
     requireText("prompt", prompt),
@@ -275,6 +279,8 @@ export function addJob({ projectId, prompt, priority, maxAttempts, timeoutS, tie
     optionalNote(operatorNote),
     origins.length ? JSON.stringify(origins) : null,
     storableTitle(title),
+    start.startBranch,
+    start.startWorktree,
   ];
   const db = openDb(env);
   const project = requireJobProject(db, values[0]);
@@ -288,6 +294,8 @@ export function addJob({ projectId, prompt, priority, maxAttempts, timeoutS, tie
     timeoutS: values[4],
     tier: values[5],
     origin: origins,
+    startBranch: start.startBranch,
+    startWorktree: start.startWorktree,
   };
 }
 

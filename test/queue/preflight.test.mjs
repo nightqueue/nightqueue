@@ -175,6 +175,15 @@ test("the registered worktree an open job names on its branch is not dirt, even 
   assert.equal(result.ok, true, result.message);
 });
 
+test("an owned worktree whose branch `run pr` renamed to a published name of the recorded one is still not dirt", (t) => {
+  const { env, checkout } = realCheckout(t, "preflight-owned-renamed", []);
+  const legacy = nestedWorktree(checkout, "legacy");
+  git(["-C", legacy.path, "branch", "-m", legacy.branch, "fix/legacy"]);
+  const owners = new Map([[canonicalPath(legacy.path), { jobId: 9, branch: legacy.branch, slug: "legacy", type: null }]]);
+  const result = realCheck(env, owners);
+  assert.equal(result.ok, true, result.message);
+});
+
 test("an owned worktree path that is on another branch than its job recorded still blocks", (t) => {
   const { env, checkout } = realCheckout(t, "preflight-owned-other-branch", []);
   const legacy = nestedWorktree(checkout, "legacy");

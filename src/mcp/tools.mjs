@@ -482,6 +482,8 @@ async function queuedAnswer({ job, registered = null }, env) {
     priority: job.priority,
     timeoutS: job.timeoutS,
     ...(job.tier ? { tier: job.tier } : {}),
+    ...(job.startBranch ? { start_branch: job.startBranch } : {}),
+    ...(job.startWorktree ? { start_worktree: job.startWorktree } : {}),
     origin: coverages.map(coverageField),
     hint: `${done}queued ${jobRef(job.id)} for \`${job.project}\` (${pending} pending).${origin} ${queuedRunnerLine(env, job.id)}${stale ? ` ${stale}` : ""}`,
   };
@@ -1098,6 +1100,12 @@ function toolDefinitions(env, state) {
             .describe(
               "The services the job came from, as a list of `{kind, ref}`; omitted or null, the runtime detects every recognised link of the prompt (outside `<comment-thread>` blocks) with the registered providers; `[]` queues the job with no origin and skips detection. The answer carries `origin` as a list, one entry per origin with the connection that covers it, or `none`.",
             ),
+          start_branch: optionalText.describe(
+            "An existing branch of the project the job starts on, with its commits. Exclusive with `start_worktree`; only the name is checked now, its existence when the job starts. Omitted means a fresh isolated worktree from the base branch.",
+          ),
+          start_worktree: optionalText.describe(
+            "The absolute path of an existing linked worktree of the project the job works in. Exclusive with `start_branch`; checked when the job starts. Omitted means a fresh isolated worktree from the base branch.",
+          ),
         },
       },
       handler: async (args) => {
@@ -1115,6 +1123,8 @@ function toolDefinitions(env, state) {
           tier: args.tier,
           origin: args.origin,
           title: args.title,
+          startBranch: args.start_branch,
+          startWorktree: args.start_worktree,
         });
         return await queuedAnswer({ job, registered }, env);
       },

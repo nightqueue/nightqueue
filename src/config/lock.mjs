@@ -121,8 +121,12 @@ function release(path) {
 }
 
 // Runs the action with exclusion between processes over the same NIGHTQUEUE_HOME.
-export async function withLock(env, action, { timeoutMs = ACQUIRE_TIMEOUT_MS, staleAfterMs = STALE_AFTER_MS } = {}) {
-  const path = lockPath(env);
+export async function withLock(env, action, options = {}) {
+  return await withPathLock(lockPath(env), action, options);
+}
+
+// Runs an async action with exclusion over one lock path, between processes and between async holders of this one.
+export async function withPathLock(path, action, { timeoutMs = ACQUIRE_TIMEOUT_MS, staleAfterMs = STALE_AFTER_MS } = {}) {
   await acquire(path, { timeoutMs, staleAfterMs });
   heldByThisProcess.add(path);
   try {

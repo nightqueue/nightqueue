@@ -526,3 +526,24 @@ test("`run pr` refuses a body it cannot read, a body with no title to take and a
   assert.deepEqual(remoteBranches(remote), ["feat/login-google", "main"]);
   assert.equal(readRunState({ projectId: ensureProject(env, "alpha"), slug: SLUG, env }).outcome, undefined);
 });
+
+test("a gh failure after the rename leaves the published branch on the run, and the retry only opens the pull request", async (t) => {
+  const { env, id, remote, worktree } = makeRun(t, "run-pr-retry");
+  const body = writeBody(t, "run-pr-retry-body", BODY);
+  const state = () => readRunState({ projectId: ensureProject(env, "alpha"), slug: SLUG, env });
+
+  const failed = await runCli({ ...env, NIGHTQUEUE_FAKE_GH_PR_URL: "" }, ["run", "pr", "--body-file", body, "--title", "feat: x"], { jobId: id });
+
+  assert.equal(failed.code, 1);
+  assert.equal(state().branch, "feat/login-google", "the run still names the branch `run pr` renamed away");
+  const pushed = git(["-C", remote, "rev-parse", "feat/login-google"]).trim();
+
+  const retried = await runCli(env, ["run", "pr", "--body-file", body, "--title", "feat: x"], { jobId: id });
+
+  assert.equal(retried.code, 0, `${retried.text}\n${retried.errText}`);
+  assert.ok(retried.out.includes("BRANCH: feat/login-google"), retried.text);
+  assert.equal(git(["-C", worktree, "rev-parse", "--abbrev-ref", "HEAD"]).trim(), "feat/login-google");
+  assert.deepEqual(remoteBranches(remote), ["feat/login-google", "main"]);
+  assert.equal(git(["-C", remote, "rev-parse", "feat/login-google"]).trim(), pushed);
+  assert.deepEqual({ branch: state().branch, prUrl: state().outcome.prUrl }, { branch: "feat/login-google", prUrl: FAKE_GH_PR_URL });
+});

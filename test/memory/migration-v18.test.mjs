@@ -362,12 +362,24 @@ function seedProjectRows(db) {
   for (const [runId, seq, name] of [[1, 1, "triage"], [1, 2, "coder"], [2, 1, "triage"]]) phase.run(runId, seq, name);
 }
 
-// Every row of a table in id order, keyed by column, from a raw connection, without the v21 `origin`, v23 attempt and per-open phase `reason` columns a v17 row never had.
+// Every row of a table in id order, keyed by column, from a raw connection, without the v21 `origin`, v23 attempt and per-open phase `reason` and job starting point columns a v17 row never had.
 function rowsOf(db, table) {
   return db
     .prepare(`SELECT * FROM ${table} ORDER BY id`)
     .all()
-    .map(({ origin: _origin, attempt_started_at: _attemptStartedAt, next_attempt_fresh: _nextAttemptFresh, title: _title, pr_title: _prTitle, reason: _reason, ...row }) => ({ ...row }));
+    .map(
+      ({
+        origin: _origin,
+        attempt_started_at: _attemptStartedAt,
+        next_attempt_fresh: _nextAttemptFresh,
+        title: _title,
+        pr_title: _prTitle,
+        reason: _reason,
+        start_branch: _startBranch,
+        start_worktree: _startWorktree,
+        ...row
+      }) => ({ ...row }),
+    );
 }
 
 // The rows of a v18 table with their owner id swapped for the name it resolves to, the shape a v17 table had.

@@ -638,7 +638,21 @@ test("queue_add enqueues by project NAME and refuses a path or a project nobody 
   assert.equal(second.hint, "queued J-2 for `alpha` (2 pending). 0 runners online - pending jobs will wait until `nightqueue queue run` starts one.");
 
   const add = (await client.listTools()).tools.find((tool) => tool.name === "queue_add");
-  assert.deepEqual(Object.keys(add.inputSchema.properties).sort(), ["cwd", "key", "max_attempts", "origin", "priority", "project", "prompt", "register", "tier", "timeout_s", "title"]);
+  assert.deepEqual(Object.keys(add.inputSchema.properties).sort(), [
+    "cwd",
+    "key",
+    "max_attempts",
+    "origin",
+    "priority",
+    "project",
+    "prompt",
+    "register",
+    "start_branch",
+    "start_worktree",
+    "tier",
+    "timeout_s",
+    "title",
+  ]);
   assert.ok(add.description.includes("start the whole batch later with `queue_run`"), add.description);
 
   const byPath = await client.callTool({ name: "queue_add", arguments: { project: "/tmp/alpha", prompt: "fix the worker" } });
@@ -672,6 +686,29 @@ test("queue_add carries the operator's tier, echoes it only when there is one, a
   assert.equal(unknown.isError, true);
   assert.doesNotMatch(textOf(unknown), /\.mjs:\d+/);
   assert.equal(getJob(3, env), null, "the refused tier still queued a job");
+});
+
+test("queue_add carries a starting point, echoes it, and refuses both at once without queueing", async (t) => {
+  const env = makeQueueHome(t, "mcp-queue-add-start");
+  const client = await connect(t, env);
+
+  const onBranch = payloadOf(await client.callTool({ name: "queue_add", arguments: { project: "alpha", prompt: "finish it", start_branch: " feat/x " } }));
+  assert.equal(onBranch.start_branch, "feat/x");
+  assert.equal("start_worktree" in onBranch, false);
+  assert.equal(getJob(onBranch.id, env).start_branch, "feat/x");
+
+  const inWorktree = payloadOf(await client.callTool({ name: "queue_add", arguments: { project: "alpha", prompt: "finish it", start_worktree: "/tmp/wt" } }));
+  assert.equal(inWorktree.start_worktree, "/tmp/wt");
+  assert.equal(getJob(inWorktree.id, env).start_worktree, "/tmp/wt");
+
+  const plain = payloadOf(await client.callTool({ name: "queue_add", arguments: { project: "alpha", prompt: "fix the parser" } }));
+  assert.equal("start_branch" in plain, false);
+  assert.equal(getJob(plain.id, env).start_branch, null);
+
+  const both = await client.callTool({ name: "queue_add", arguments: { project: "alpha", prompt: "x", start_branch: "feat/x", start_worktree: "/tmp/wt" } });
+  assert.equal(both.isError, true);
+  assert.match(textOf(both), /either a start branch or a start worktree, not both/);
+  assert.equal(getJob(4, env), null, "the refused starting point still queued a job");
 });
 
 test("queue_add resolves the project of the caller `cwd`, and answers needs_registration for a repository nobody registered", async (t) => {

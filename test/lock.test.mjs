@@ -7,7 +7,7 @@ import { after, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { run } from "../src/cli/index.mjs";
 import { UserError } from "../src/config/errors.mjs";
-import { lockPath, withLock } from "../src/config/lock.mjs";
+import { lockPath, withLock, withPathLock } from "../src/config/lock.mjs";
 import { assertIsolatedEnv, isolatedHostVars } from "../test-support/host.mjs";
 import { openDb } from "../src/memory/db.mjs";
 import { orgByName } from "../src/memory/registry.mjs";
@@ -78,6 +78,24 @@ test("withLock excludes a second holder and releases the lock even when the acti
     /action failed/,
   );
   assert.equal(existsSync(lockPath(env)), false);
+});
+
+test("withPathLock lets only one of two concurrent holders of this process in at a time", async (t) => {
+  const path = join(makeEnv(t).NIGHTQUEUE_HOME, "runs", "p", ".claim.lock");
+  const inside = [];
+  let overlapped = false;
+  const hold = (name) =>
+    withPathLock(path, async () => {
+      overlapped ||= inside.length > 0;
+      inside.push(name);
+      await new Promise((resolve) => setTimeout(resolve, 30));
+      inside.pop();
+      return name;
+    });
+
+  assert.deepEqual(await Promise.all([hold("a"), hold("b")]), ["a", "b"]);
+  assert.equal(overlapped, false, "two holders of the same path ran their actions at once");
+  assert.equal(existsSync(path), false);
 });
 
 test("a lock abandoned by a dead process is taken over after the age limit", async (t) => {
