@@ -63,6 +63,7 @@ import { ensureStoreExists, openStore, withReadOnlyStore } from "../store/open.m
 import { coverageField, coverageLabel, jobOriginCoverage } from "../integrations/coverage.mjs";
 import { changeProjectIntegrations, INTEGRATION_ACTIONS, integrationsView } from "../integrations/settings.mjs";
 import { redactSecrets, redactValue } from "../integrations/redact.mjs";
+import { CONNECTION_CALL_BOUNDS, connectionCall } from "../integrations/connection-call.mjs";
 import {
   TRACKER_BOUNDS,
   TRACKER_LIMIT,
@@ -103,6 +104,7 @@ const SERVER_INSTRUCTIONS = [
   "`lesson_save` and `memory_save` record what a session learned - a lesson for an error or correction, a memory (`key`/`value`) for a fact of the project's code; both are allowed inside a queue job.",
   "At the end of a session that changed or learned something, offer `/nightqueue:reflect` once: it proposes lessons and memories and saves only the ones the person confirms.",
   ...trackerInstructionLines(),
+  "`connection_call` calls the API behind a stored connection by its name, with the secret injected by the runtime and never shown; a GET reads, any other method only after the person said yes to the exact request (connection, method, path, body), and it is refused inside a queue job",
 ].join("\n");
 const PROMPT_SOURCE_MISSING = "queue_add needs `prompt`, the whole request as prose";
 const RECALL_LIMIT = 8;
@@ -482,6 +484,8 @@ async function queuedAnswer({ job, registered = null }, env) {
     priority: job.priority,
     timeoutS: job.timeoutS,
     ...(job.tier ? { tier: job.tier } : {}),
+    ...(job.startBranch ? { start_branch: job.startBranch } : {}),
+    ...(job.startWorktree ? { start_worktree: job.startWorktree } : {}),
     origin: coverages.map(coverageField),
     hint: `${done}queued ${jobRef(job.id)} for \`${job.project}\` (${pending} pending).${origin} ${queuedRunnerLine(env, job.id)}${stale ? ` ${stale}` : ""}`,
   };
@@ -777,7 +781,29 @@ function trackerWriteTools(env) {
   ].map((tool) => trackerWriteTool(tool, env));
 }
 
-// The thirty-one tools of the plugin contract, with the parameter names the plugin actually sends.
+// The tool that calls the API behind a stored connection, with the home's secrets redacted from its input and its whole answer.
+function connectionCallTool(env) {
+  return {
+    name: "connection_call",
+    config: {
+      description:
+        "Calls the API behind a stored connection by its name; the runtime injects the secret and never shows it, and the host is fixed by the connection's kind. " +
+        "`method` is GET (the default), POST, PATCH or PUT; any other is refused. `path` is relative to the connection's API root (empty for a kind that takes none; a webhook connection takes empty or `messages/<id>` to GET or PATCH a posted message): no scheme, no leading `//`, no `.` or `..` segment, no `\\`, `?` or `#`; query parameters only come through `query`. `body` is JSON, at most 50,000 characters serialized, never on a GET. " +
+        "Call any method other than GET only after showing the person exactly what will be sent (connection, method, path, body) and getting an explicit ok, never on your own initiative. Refused inside a queue job, and nothing is sent; a GET is allowed inside a job. " +
+        "Answers `{ok: true, status, body, body_truncated?}` with the body redacted and cut at 50,000 characters, or `{ok: false, error: \"no-connection\" | \"invalid-input\" | \"provider-unavailable\", status, detail}` as a normal answer; a detail saying the call may still have been applied means check before trying again.",
+      inputSchema: {
+        connection: z.string().describe("A stored connection's name."),
+        method: optionalText.describe("GET (default), POST, PATCH or PUT."),
+        path: z.string().max(CONNECTION_CALL_BOUNDS.path).nullable().optional().describe("The path under the connection's API root."),
+        query: z.record(z.string(), z.union([z.string(), z.number(), z.boolean(), z.array(z.string())])).nullable().optional().describe("Query parameters."),
+        body: z.unknown().optional().describe("The JSON body of a POST, PATCH or PUT."),
+      },
+    },
+    handler: async (args) => redactValue(await connectionCall(redactValue(args, env), { env }), env),
+  };
+}
+
+// The thirty-two tools of the plugin contract, with the parameter names the plugin actually sends.
 function toolDefinitions(env, state) {
   return [
     {
@@ -1098,6 +1124,12 @@ function toolDefinitions(env, state) {
             .describe(
               "The services the job came from, as a list of `{kind, ref}`; omitted or null, the runtime detects every recognised link of the prompt (outside `<comment-thread>` blocks) with the registered providers; `[]` queues the job with no origin and skips detection. The answer carries `origin` as a list, one entry per origin with the connection that covers it, or `none`.",
             ),
+          start_branch: optionalText.describe(
+            "An existing branch of the project the job starts on, with its commits. Exclusive with `start_worktree`; only the name is checked now, its existence when the job starts. Omitted means a fresh isolated worktree from the base branch.",
+          ),
+          start_worktree: optionalText.describe(
+            "The absolute path of an existing linked worktree of the project the job works in. Exclusive with `start_branch`; checked when the job starts. Omitted means a fresh isolated worktree from the base branch.",
+          ),
         },
       },
       handler: async (args) => {
@@ -1115,6 +1147,8 @@ function toolDefinitions(env, state) {
           tier: args.tier,
           origin: args.origin,
           title: args.title,
+          startBranch: args.start_branch,
+          startWorktree: args.start_worktree,
         });
         return await queuedAnswer({ job, registered }, env);
       },
@@ -1188,6 +1222,7 @@ function toolDefinitions(env, state) {
       handler: (args) => trackerAnswer(trackerRead, args, env),
     },
     ...trackerWriteTools(env),
+    connectionCallTool(env),
     {
       name: "queue_status",
       config: {
@@ -1291,7 +1326,7 @@ function toolDefinitions(env, state) {
       guardsHome: true,
       config: {
         description:
-          "Closes a job: takes its open pull request to merged and the job to `closed`, through the code pipeline preflight, conflict, merge, settle, then the post-close steps origin and log, which never stop a close (a failure is a line in `notice_md`) - run by code, never by an agent; the conflict step may hand a small textual conflict to the bounded merger agent (see the runtime contract). " +
+          "Closes a job: takes its open pull request to merged and the job to `closed`, through the code pipeline preflight, conflict, merge, settle, then the post-close steps ota, origin and log, which never stop a close (a failure is a line in `notice_md`) - run by code, never by an agent; the conflict step may hand a small textual conflict to the bounded merger agent (see the runtime contract). " +
           "A `done` job with no pull request, resolved without change, closes too: preflight, conflict and merge are recorded as skipped, it ends `closed` with `resolution: no-change`, and origin and log tell the origins it was resolved without a code change with the run's conclusion. `closed` means the pull request was merged through this pipeline OR the job was resolved without change through it. " +
           "It starts DETACHED and returns immediately with the pid and the log path; it never waits for the merge. Follow it with `queue_status` and the job id. " +
           "Only a `done` job is closed. `closed`, `running`, `pending`, `gate`, `failed`, `cancelled`, a job already being closed under a live lease, and `force` on a job with no pull request are refused by name, and nothing is written. Refused inside an unattended run. " +
@@ -1442,7 +1477,7 @@ function refuseRemovedToolCalls(server, state) {
   });
 }
 
-// Builds the MCP server with the thirty-one tools of the plugin contract.
+// Builds the MCP server with the thirty-two tools of the plugin contract.
 export function createServer(env = process.env) {
   const server = new McpServer(
     {

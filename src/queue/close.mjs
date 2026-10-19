@@ -1,5 +1,5 @@
 import { UserError } from "../config/errors.mjs";
-import { parseRunId } from "../host/gh.mjs";
+import { parseRunId, parseRunRepo } from "../host/gh.mjs";
 import { sameBranch } from "./branch-name.mjs";
 import { defaultCloseDeps } from "./close-deps.mjs";
 import { jobTitle } from "./job-title.mjs";
@@ -11,8 +11,9 @@ import { releaseJobWorktree } from "./worktree.mjs";
 import { checkoutOfJob } from "../memory/registry-access.mjs";
 import { jobRef } from "../memory/refs.mjs";
 import { parseOriginsColumn, validOrigins } from "../integrations/origin.mjs";
-import { forgetLogged, forgetOrigin, logStep, originStep } from "../integrations/post-close.mjs";
+import { forgetLogged, forgetOrigin, forgetOta, logStep, originStep, otaBudgetS, otaStep } from "../integrations/post-close.mjs";
 import { isHomeScoped } from "../integrations/registry.mjs";
+import { addDetachedWorktree, removeDetachedWorktree, WORKTREE_REMOVAL_MAX_MS } from "./throwaway-worktree.mjs";
 
 export const CLOSE_LEASE_SLACK_S = 60;
 export const POST_CLOSE_TIMEOUT_S = 60;
@@ -159,19 +160,49 @@ function abortedStop(note) {
   return { problem: failed("checks-aborted", note) };
 }
 
+// The repository a check's workflow run belongs to, as `--repo` takes it: from its details URL, else from the pull request's URL.
+function checkRepo(ctx, check) {
+  return parseRunRepo(check?.detailsUrl) ?? parseRunRepo(ctx.prUrl);
+}
+
+// The workflow runs a list of checks points to, one per repository and run id, each with its checks.
+function rerunGroups(ctx, checks) {
+  const groups = new Map();
+  for (const check of checks) {
+    const runId = parseRunId(check.detailsUrl);
+    if (!runId) continue;
+    const repo = checkRepo(ctx, check);
+    const key = `${repo} ${runId}`;
+    if (!groups.has(key)) groups.set(key, { runId, repo, checks: [] });
+    groups.get(key).checks.push(check);
+  }
+  return [...groups.values()];
+}
+
+// The gh command that re-runs the failed jobs of one run, naming its repository, with placeholders for what is unknown.
+function rerunHint(runId, repo) {
+  return `gh run rerun ${runId ?? "<runId>"} --repo ${repo ?? "<owner>/<repo>"} --failed`;
+}
+
+// Asks gh to re-run the failed jobs of one run group of its repository.
+async function rerunGroup(ctx, deps, group) {
+  return await deps.gh.runRerun(group.runId, { repo: group.repo, failed: true, ...bounded(ctx, GH_TIMEOUT_MS) });
+}
+
 // Re-runs the failed jobs of the aborted checks once per head; answers the note of the re-run or the stop that forbids it.
 async function rerunAborted(ctx, deps, checks, head) {
   const sha = checks.headSha ?? head;
   const aborted = checks.checks.filter((check) => check.bucket === "aborted");
   const names = namesNote(abortedOf(checks));
-  const runIds = [...new Set(aborted.map((check) => parseRunId(check.detailsUrl)).filter(Boolean))];
+  const groups = rerunGroups(ctx, aborted);
+  const runIds = [...new Set(groups.map((group) => group.runId))];
   if (ctx.data.rerun?.head === sha) {
-    return abortedStop(`check ${names} was cancelled by GitHub twice on ${sha7(sha)}; re-run it by hand: gh run rerun ${runIds[0] ?? "<runId>"} --failed`);
+    return abortedStop(`check ${names} was cancelled by GitHub twice on ${sha7(sha)}; re-run it by hand: ${rerunHint(groups[0]?.runId, groups[0]?.repo ?? parseRunRepo(ctx.prUrl))}`);
   }
-  if (!runIds.length) return abortedStop(`check ${names} was cancelled by GitHub and its details URL names no workflow run to re-run`);
-  for (const runId of runIds) {
-    const result = await deps.gh.runRerun(runId, { failed: true, ...bounded(ctx, GH_TIMEOUT_MS) });
-    if (!result?.ok) return abortedStop(`gh run rerun ${runId} --failed failed for ${names} (${result?.error ?? "no answer"})`);
+  if (!groups.length) return abortedStop(`check ${names} was cancelled by GitHub and its details URL names no workflow run to re-run`);
+  for (const group of groups) {
+    const result = await rerunGroup(ctx, deps, group);
+    if (!result?.ok) return abortedStop(`${rerunHint(group.runId, group.repo)} failed for ${names} (${result?.error ?? "no answer"})`);
   }
   const urls = aborted.map((check) => check.detailsUrl).filter(Boolean);
   ctx.data.rerun = { head: sha, runIds, urls, at: new Date().toISOString() };
@@ -207,8 +238,9 @@ function failedRerunClass(ctx, checks, head) {
 
 // The note of failed Actions checks that failed again after the one re-run of their run on this head, naming the checks still running.
 function failedTwiceNote(ctx, checks, head) {
-  const runId = parseRunId(failedAgain(ctx, checks, head)[0]?.detailsUrl) ?? "<runId>";
-  const note = `check ${namesNote(checks.failing)} failed twice on ${sha7(checks.headSha ?? head)}; re-run it by hand: gh run rerun ${runId} --failed`;
+  const again = failedAgain(ctx, checks, head)[0];
+  const hint = rerunHint(parseRunId(again?.detailsUrl), checkRepo(ctx, again));
+  const note = `check ${namesNote(checks.failing)} failed twice on ${sha7(checks.headSha ?? head)}; re-run it by hand: ${hint}`;
   return checks.pending.length ? `${note}; still running: ${namesNote(checks.pending)}` : note;
 }
 
@@ -225,12 +257,10 @@ async function rerunFailed(ctx, deps, checks, head) {
   const spent = spentRunIds(ctx, sha);
   const targets = checks.checks.filter((check) => (check.bucket === "fail" || check.bucket === "aborted") && !spent.includes(parseRunId(check.detailsUrl)));
   const names = namesNote(targets.map((check) => check.name));
-  const runIds = [...new Set(targets.map((check) => parseRunId(check.detailsUrl)).filter(Boolean))];
-  for (const runId of runIds) {
-    const result = await deps.gh.runRerun(runId, { failed: true, ...bounded(ctx, GH_TIMEOUT_MS) });
-    if (!result?.ok) return { problem: failed("checks-red", `gh run rerun ${runId} --failed failed for ${names} (${result?.error ?? "no answer"})`) };
-    const urls = targets.filter((check) => parseRunId(check.detailsUrl) === runId).map((check) => check.detailsUrl);
-    recordFailedRerun(ctx, sha, { runId, urls });
+  for (const group of rerunGroups(ctx, targets)) {
+    const result = await rerunGroup(ctx, deps, group);
+    if (!result?.ok) return { problem: failed("checks-red", `${rerunHint(group.runId, group.repo)} failed for ${names} (${result?.error ?? "no answer"})`) };
+    recordFailedRerun(ctx, sha, { runId: group.runId, urls: group.checks.map((check) => check.detailsUrl) });
   }
   const workflows = [...new Set(targets.map((check) => check.workflowName).filter(Boolean))].join(", ") || "the workflow";
   return { note: `re-ran ${workflows} (${names}) — failed on ${sha7(sha)}` };
@@ -249,7 +279,23 @@ function checksReading(ctx, checks) {
   if (checks.failing.length) return { problem: failed("checks-red", `failing checks: ${namesNote(checks.failing)}`) };
   if (checks.pending.length) return { problem: failed("checks-pending", `checks still running: ${namesNote(checks.pending)}; run again once they finish`) };
   if (abortedOf(checks).length) return { problem: failed("checks-aborted", `aborted checks: ${namesNote(abortedOf(checks))}`) };
-  return { note: checks.checks.length ? `${checks.checks.length} checks green` : "no checks reported" };
+  return { note: withOptionalNote(checks.checks.length ? `${checks.checks.length} checks green` : "no checks reported", checks) };
+}
+
+// The names of the non-required checks a required-only read left red, or none.
+function nonRequiredFailingOf(checks) {
+  return Array.isArray(checks?.nonRequiredFailing) ? checks.nonRequiredFailing : [];
+}
+
+// The warning of the non-required checks left red, or null when there is none.
+function optionalNote(names) {
+  return names.length ? `non-required checks failing: ${namesNote(names)}` : null;
+}
+
+// A note with the warning of the non-required checks a read left red appended, when there are some.
+function withOptionalNote(note, checks) {
+  const warning = optionalNote(nonRequiredFailingOf(checks));
+  return warning ? `${note}; ${warning}` : note;
 }
 
 // The note of checks `--force` let the close go past, naming what they said.
@@ -260,7 +306,7 @@ function ignoredChecksNote(checks) {
     checks.pending.length ? `pending: ${namesNote(checks.pending)}` : null,
     abortedOf(checks).length ? `aborted: ${namesNote(abortedOf(checks))}` : null,
   ].filter(Boolean);
-  return `checks ignored with --force: ${said.join("; ")}`;
+  return withOptionalNote(`checks ignored with --force: ${said.join("; ")}`, checks);
 }
 
 // Reads the aborted checks the re-run of this head already replaced (same details URL) as pending: GitHub still shows the old job for a while.
@@ -310,17 +356,53 @@ function staleRerunAsPending(ctx, checks, head) {
   return staleFailedAsPending(ctx, staleAbortedAsPending(ctx, checks, head), head);
 }
 
-// Reads the checks of the pull request; a read gh attributes to another head than the one judged is unreadable.
+// Tells whether one rollup check is a required entry: the same name, and the same link unless one of the two has none.
+function matchesRequired(check, entry) {
+  return check.name === entry.name && (!check.detailsUrl || !entry.link || check.detailsUrl === entry.link);
+}
+
+// The names of the checks of a list in one bucket.
+function namesIn(checks, bucket) {
+  return checks.filter((check) => check.bucket === bucket).map((check) => check.name);
+}
+
+// The checks read narrowed to the required ones when the base declares some and each matches the read; otherwise the read itself, every check gating.
+function gatingView(raw, required) {
+  const declared = raw?.ok && required?.ok === true && required.declared === true && Array.isArray(required.checks) && required.checks.length > 0;
+  if (!declared) return raw;
+  const isRequired = (check) => required.checks.some((entry) => matchesRequired(check, entry));
+  if (!required.checks.every((entry) => raw.checks.some((check) => matchesRequired(check, entry)))) return raw;
+  const kept = raw.checks.filter(isRequired);
+  const optional = raw.checks.filter((check) => !isRequired(check));
+  return {
+    ...raw,
+    checks: kept,
+    failing: namesIn(kept, "fail"),
+    pending: namesIn(kept, "pending"),
+    aborted: namesIn(kept, "aborted"),
+    nonRequiredFailing: [...namesIn(optional, "fail"), ...namesIn(optional, "aborted")],
+    gate: "required",
+  };
+}
+
+// The checks that gate the close: the required ones when the base declares them, every one when it does not or nobody can tell.
+async function gatingChecks(ctx, deps, raw) {
+  if (!raw?.ok || raw.checks.every((check) => check.bucket === "pass")) return raw;
+  const required = await deps.gh.prRequiredChecks(ctx.prUrl, bounded(ctx, GH_TIMEOUT_MS));
+  return gatingView(raw, required);
+}
+
+// Reads the checks of the pull request that gate the close; a read gh attributes to another head than the one judged is unreadable.
 async function readHeadChecks(ctx, deps, head) {
   const checks = await deps.gh.prChecks(ctx.prUrl, bounded(ctx, GH_TIMEOUT_MS));
-  if (!checks?.ok || !checks.headSha || !head || checks.headSha === head) return staleRerunAsPending(ctx, checks, head);
+  if (!checks?.ok || !checks.headSha || !head || checks.headSha === head) return staleRerunAsPending(ctx, await gatingChecks(ctx, deps, checks), head);
   return { ok: false, checks: [], failing: [], pending: [], aborted: [], otherHead: checks.headSha, error: `the checks gh read belong to ${sha7(checks.headSha)}, not ${sha7(head)}` };
 }
 
-// The durable record of a head CI verified: only a non-empty all-green rollup, never under --force.
+// The durable record of a head CI verified: only a non-empty all-green rollup, never under --force; it names the non-required checks left red.
 function ciGreenData(ctx, checks, head) {
   const green = checks?.ok && checks.checks.length > 0 && !checks.failing.length && !checks.pending.length && !abortedOf(checks).length;
-  return green && head && !ctx.force ? { ciGreenSha: head, checksOnHead: checks.checks.length } : {};
+  return green && head && !ctx.force ? { ciGreenSha: head, checksOnHead: checks.checks.length, nonRequiredFailing: nonRequiredFailingOf(checks) } : {};
 }
 
 // The verdict of a re-run: its stop, or a pending stop carrying the re-run note so the caller waits for the re-run checks.
@@ -587,7 +669,7 @@ async function updateBehindHead(ctx, deps, branches) {
 
 // The success note of a checks wait: how many checks went green on the head, or that none was reported.
 function checksGreenNote(checks, sha) {
-  return checks.checks.length ? `${checks.checks.length} checks green on ${sha7(sha)}` : `no checks reported on ${sha7(sha)}`;
+  return withOptionalNote(checks.checks.length ? `${checks.checks.length} checks green on ${sha7(sha)}` : `no checks reported on ${sha7(sha)}`, checks);
 }
 
 // The stop of a checks wait out of time: checks-unreadable when its last read failed, checks-pending otherwise.
@@ -662,32 +744,14 @@ async function waitForChecks(ctx, deps, waitStart, stillRunning, { emptySettles 
 
 // Creates the throwaway detached worktree of the pull request's head, or answers why it could not.
 async function addThrowaway(ctx, deps, head) {
-  let dir = null;
-  try {
-    dir = deps.fs.makeTempDir(`nightqueue-close-${ctx.jobId}-`);
-  } catch (err) {
-    return { problem: failed("worktree-failed", `could not create a temporary directory: ${err?.message ?? String(err)}`) };
-  }
-  const added = await git(ctx, deps, ["worktree", "add", "--detach", dir, `origin/${head}`]);
-  if (added.ok) return { dir };
-  await removeThrowaway(ctx, deps, dir);
-  return { problem: failed("worktree-failed", `git worktree add failed (${firstLine(added.stderr)})`) };
+  const prefix = `nightqueue-close-${ctx.jobId}-`;
+  const added = await addDetachedWorktree({ deps, checkout: ctx.checkout, ref: `origin/${head}`, prefix, ...bounded(ctx, GIT_TIMEOUT_MS) });
+  return added.dir ? { dir: added.dir } : { problem: failed("worktree-failed", added.error) };
 }
 
 // Removes the throwaway worktree and its directory, each part best-effort.
 async function removeThrowaway(ctx, deps, dir) {
-  await cleanupGit(deps, ["worktree", "remove", "--force", dir], ctx.checkout);
-  removeDirQuietly(deps, dir);
-  await cleanupGit(deps, ["worktree", "prune"], ctx.checkout);
-}
-
-// Removes a temporary directory; one left behind never fails the close.
-function removeDirQuietly(deps, dir) {
-  try {
-    deps.fs.removeDir(dir);
-  } catch {
-    return;
-  }
+  await removeDetachedWorktree({ deps, checkout: ctx.checkout, dir });
 }
 
 // Fetches both branches and rebases the head onto the base in a throwaway worktree, removed whatever happens.
@@ -1054,10 +1118,18 @@ async function mergeStep({ ctx, deps }) {
   }
 }
 
+// The warning of the non-required checks left red on the last head the close judged, or null when CI's green read was of another head.
+function lastHeadWarning(data) {
+  const onLastHead = Boolean(data.ciGreenSha) && data.ciGreenSha === data.headSha;
+  return onLastHead ? optionalNote(nonRequiredFailingOf(data)) : null;
+}
+
 // Prepares the close: the merge must be recorded with its commit, and the notice line is written from it.
 async function settleStep({ ctx }) {
   if (!ctx.data.merged || !ctx.data.mergeSha) return failed("not-merged", "the merge of the pull request is not recorded with its merge commit");
-  const noticeLine = closedLine({ number: ctx.prNumber, sha: ctx.data.mergeSha, at: ctx.data.mergedAt });
+  const warning = lastHeadWarning(ctx.data);
+  const closed = closedLine({ number: ctx.prNumber, sha: ctx.data.mergeSha, at: ctx.data.mergedAt });
+  const noticeLine = warning ? `${closed}; ${warning}` : closed;
   return { status: "done", note: `closing the job: ${noticeLine}`, data: { noticeLine } };
 }
 
@@ -1090,6 +1162,7 @@ export const CLOSE_STEPS = [
   { name: "conflict", run: conflictStep },
   { name: "merge", run: mergeStep },
   { name: "settle", run: settleStep },
+  { name: "ota", run: otaStep, forget: forgetOta, required: false, budgetS: otaBudgetS, settleMs: WORKTREE_REMOVAL_MAX_MS },
   { name: "origin", run: originStep, forget: forgetOrigin, required: false },
   { name: "log", run: logStep, forget: forgetLogged, required: false },
 ];
@@ -1214,8 +1287,12 @@ async function runStepRaced(step, { ctx, deps, deadline, statuses = STEP_STATUSE
     deadline.controller.signal.addEventListener("abort", onAbort, { once: true });
   });
   try {
-    const result = await Promise.race([Promise.resolve().then(() => step.run({ ctx, deps })), aborted]);
-    if (result === ABORTED) return abortedResult(deadline.state.reason);
+    const running = Promise.resolve().then(() => step.run({ ctx, deps }));
+    const result = await Promise.race([running, aborted]);
+    if (result === ABORTED) {
+      await settleAbortedStep(running, step.settleMs);
+      return abortedResult(deadline.state.reason);
+    }
     if (!isStepResult(result, statuses)) return { status: "failed", reason: "step-crashed", note: `the ${step.name} step answered an invalid result` };
     return reopenProblem(step.name, result) ?? result;
   } catch (err) {
@@ -1223,6 +1300,20 @@ async function runStepRaced(step, { ctx, deps, deadline, statuses = STEP_STATUSE
     return { status: "failed", reason: "step-crashed", note: err?.message ?? String(err) };
   } finally {
     deadline.controller.signal.removeEventListener("abort", onAbort);
+  }
+}
+
+// Waits, at most the step's own settle time, for an aborted step to finish its cleanup before the close goes on.
+async function settleAbortedStep(running, settleMs) {
+  if (!Number.isFinite(settleMs) || settleMs <= 0) return;
+  let timer = null;
+  const bound = new Promise((resolve) => {
+    timer = setTimeout(resolve, settleMs);
+  });
+  try {
+    await Promise.race([running.catch(() => null), bound]);
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -1429,12 +1520,12 @@ function postCloseContext(run, stepName) {
 const POST_RESULT_STATUSES = new Set(["done", "skipped", "warning", "failed"]);
 
 // A post-close step result as recorded: `done`, `skipped` or `warning`; a failure, a throw or the budget becomes a warning.
-function postCloseResult(name, result) {
+function postCloseResult(name, result, budgetS) {
   if (result.status !== "failed") {
     const lines = Array.isArray(result.lines) ? { lines: result.lines } : {};
     return { status: result.status, note: String(result.note ?? ""), data: result.data, notice: result.notice === true, ...lines };
   }
-  if (result.reason === "timeout") return { status: "warning", note: `passed the post-close budget of ${POST_CLOSE_TIMEOUT_S}s` };
+  if (result.reason === "timeout") return { status: "warning", note: `passed the post-close budget of ${budgetS}s` };
   if (result.reason === "interrupted") return { status: "warning", note: "interrupted" };
   if (result.reason === "step-crashed") return { status: "warning", note: `the ${name} step failed` };
   return { status: "warning", note: String(result.note ?? result.reason ?? "failed"), data: result.data };
@@ -1457,7 +1548,8 @@ async function runPostStep(run, step) {
   if (run.again) step.forget?.(run.checklist.data, run.facts.integrations);
   const previous = run.checklist.steps[step.name];
   const ctx = postCloseContext(run, step.name);
-  const result = postCloseResult(step.name, await runStepRaced(step, { ctx, deps: run.deps, deadline: run.deadline, statuses: POST_RESULT_STATUSES }));
+  const raced = await runStepRaced(step, { ctx, deps: run.deps, deadline: run.deadline, statuses: POST_RESULT_STATUSES });
+  const result = postCloseResult(step.name, raced, run.budgetS);
   if (result.data && typeof result.data === "object") Object.assign(run.checklist.data, result.data);
   const noticeLine = postNoticeLine(step.name, result, previous);
   const noticed = noticeLine !== null && result.status !== "done";
@@ -1504,18 +1596,28 @@ async function runPostClose(base, steps, signal) {
   }
 }
 
+// The post-close budget of a run: the phase's own seconds plus the extra seconds each step of this run asks for the project.
+function postCloseBudgetS(steps, facts) {
+  const extra = steps.reduce((sum, step) => {
+    const asked = typeof step.budgetS === "function" ? step.budgetS(facts) : 0;
+    return sum + (Number.isFinite(asked) && asked > 0 ? asked : 0);
+  }, 0);
+  return POST_CLOSE_TIMEOUT_S + extra;
+}
+
 // Runs the post-close steps of a closed job under their own lease and budget; nothing here ever changes the job's status.
 async function runPostClosePhase(base, steps, signal) {
   const facts = await postCloseFacts(base.store, base.job);
   if (!facts) return { status: "nothing", note: "the project has no integrations", steps: [] };
-  const job = await base.store.jobs.acquirePostClose(base.job.id, { worker: base.worker, leaseS: POST_CLOSE_TIMEOUT_S + CLOSE_LEASE_SLACK_S });
+  const budgetS = postCloseBudgetS(steps, facts);
+  const job = await base.store.jobs.acquirePostClose(base.job.id, { worker: base.worker, leaseS: budgetS + CLOSE_LEASE_SLACK_S });
   if (!job) {
     const note = "post-close steps skipped: held by another process";
     base.onStep?.({ name: "post-close", status: "skipped", note, earlier: false });
     return { status: "refused", note, steps: [] };
   }
-  const deadline = armDeadline({ timeoutS: POST_CLOSE_TIMEOUT_S, signal, now: base.now });
-  const run = { ...base, job, facts, deadline, checklist: startingChecklist(job), results: [] };
+  const deadline = armDeadline({ timeoutS: budgetS, signal, now: base.now });
+  const run = { ...base, job, facts, deadline, budgetS, checklist: startingChecklist(job), results: [] };
   try {
     let leaseHeld = true;
     for (const step of steps) if (!(leaseHeld = await runPostStep(run, step))) break;

@@ -394,6 +394,61 @@ test("the log carries PR, Project, then Linear, Sentry and Thread, titled by the
   assert.equal(fetch.calls[4].body.embeds[0].title, "J-1 closed · the-crash");
 });
 
+const OTA_URL = "https://expo.dev/accounts/acme/projects/app/updates/0123456789abcdef";
+const OTA_DONE = { status: "done", branch: "production", groupId: "0123456789abcdef", url: OTA_URL, note: null };
+const OTA_WARNING = { status: "warning", branch: "production", groupId: null, url: null, note: "eas update exited 1\nsecond line" };
+const OTA_SKIPPED = { status: "skipped", branch: "production", groupId: null, url: null, note: "eas is not logged in" };
+
+// Posts the reply and the log of one close result, answering both embeds.
+async function replyAndLog(result, origins = ORIGINS) {
+  const fetch = fakeFetch({ [`POST ${CHAT_URL}?wait=true`]: {}, [`POST ${OPS_URL}?wait=true`]: {} });
+  await discord.onClosed({ ref: `${GUILD}/${CHAT_CHANNEL}/${MESSAGE}`, job: JOB, result, origins, settings: {}, slot: null, connections: [CHAT], http: httpOf(fetch) });
+  await discord.log({ event: "closed", job: JOB, result, origins, settings: {}, connection: OPS, http: httpOf(fetch) });
+  return fetch.calls.map((call) => call.body.embeds[0]);
+}
+
+test("the reply and the log carry an OTA field after PR (and Project) on done and warning, and none on skipped", async () => {
+  const [doneReply, doneLog] = await replyAndLog({ ...RESULT, ota: OTA_DONE });
+  assert.deepEqual(doneReply.fields.map((field) => [field.name, field.value]), [
+    ["PR", `[#7](${RESULT.prUrl})`],
+    ["OTA", `[production · 01234567](${OTA_URL})`],
+    ["Linear", `[MK-47](${ORIGINS[0].url})`],
+    ["Sentry", `[REACT-T-N82](${ORIGINS[1].url})`],
+  ]);
+  assert.deepEqual(doneLog.fields.map((field) => field.name), ["PR", "Project", "OTA", "Linear", "Sentry", "Thread"]);
+  assert.equal(doneLog.fields[2].value, `[production · 01234567](${OTA_URL})`);
+
+  const [noUrlReply] = await replyAndLog({ ...RESULT, ota: { ...OTA_DONE, url: null } });
+  assert.equal(noUrlReply.fields[1].value, "production · 01234567");
+
+  const [warnReply, warnLog] = await replyAndLog({ ...RESULT, ota: OTA_WARNING });
+  assert.deepEqual(warnReply.fields.map((field) => field.name), ["PR", "OTA", "Linear", "Sentry"]);
+  assert.equal(warnReply.fields[1].value, "failed (eas update exited 1)");
+  assert.deepEqual(warnLog.fields.map((field) => field.name), ["PR", "Project", "OTA", "Linear", "Sentry", "Thread"]);
+  assert.equal(warnLog.fields[2].value, "failed (eas update exited 1)");
+
+  for (const ota of [OTA_SKIPPED, null, "done", { status: "pending" }]) {
+    const [reply, log] = await replyAndLog({ ...RESULT, ota });
+    assert.deepEqual(reply.fields.map((field) => field.name), ["PR", "Linear", "Sentry"]);
+    assert.deepEqual(log.fields.map((field) => field.name), ["PR", "Project", "Linear", "Sentry", "Thread"]);
+  }
+  const noChange = { prUrl: null, prNumber: null, mergeSha: null, resolution: "no-change", conclusion: "Not a defect.", ota: OTA_DONE };
+  const [noChangeReply, noChangeLog] = await replyAndLog(noChange);
+  assert.deepEqual(noChangeReply.fields.map((field) => field.name), ["Linear", "Sentry"]);
+  assert.deepEqual(noChangeLog.fields.map((field) => field.name), ["Project", "Linear", "Sentry", "Thread"]);
+});
+
+test("with an OTA field and 30 origins both embeds stop at 25 fields, keeping PR, Project and OTA and cutting origins", async () => {
+  const many = Array.from({ length: 30 }, (_, index) => ({ kind: "linear", ref: `MK-${index}`, label: `MK-${index}`, url: null, title: null }));
+  const [reply, log] = await replyAndLog({ ...RESULT, ota: OTA_DONE }, many);
+  assert.equal(reply.fields.length, 25);
+  assert.deepEqual(reply.fields.slice(0, 3).map((field) => field.name), ["PR", "OTA", "Linear"]);
+  assert.equal(reply.fields[24].value, "MK-22");
+  assert.equal(log.fields.length, 25);
+  assert.deepEqual(log.fields.slice(0, 4).map((field) => field.name), ["PR", "Project", "OTA", "Linear"]);
+  assert.equal(log.fields[24].value, "MK-21");
+});
+
 test("a job with no Sentry origin keeps today's title and description, with a pull request and without one", async () => {
   const noChange = { prUrl: null, prNumber: null, mergeSha: null, resolution: "no-change", conclusion: "Not a defect." };
   const notice = "✅ Fixed — the crash is gone\n\nWhat was done: a guard was added. Nothing else changed.";
@@ -515,6 +570,7 @@ test("closing a job queued from a discord link replies and logs once; a --steps 
   const { id, outcome, row } = await closeDiscordJob(home, fetch);
   assert.equal(outcome.status, "closed");
   assert.deepEqual(outcome.postClose.steps, [
+    { name: "ota", status: "skipped", note: "expo.ota is off" },
     { name: "origin", status: "done", note: `discord ${GUILD}/${CHAT_CHANNEL}/${MESSAGE}: replied in channel ${CHAT_CHANNEL} through chat` },
     { name: "log", status: "done", note: "discord: logged through ops" },
   ]);
@@ -546,6 +602,7 @@ test("discord.replyToOrigin=false sends no reply, and an unset replyToOrigin rep
   const silent = fakeFetch();
   const off = await closeDiscordJob(home, silent);
   assert.deepEqual(off.outcome.postClose.steps, [
+    { name: "ota", status: "skipped", note: "expo.ota is off" },
     { name: "origin", status: "skipped", note: `discord ${GUILD}/${CHAT_CHANNEL}/${MESSAGE}: replyToOrigin is false` },
     { name: "log", status: "skipped", note: "no log destination" },
   ]);
@@ -557,7 +614,7 @@ test("discord.replyToOrigin=false sends no reply, and an unset replyToOrigin rep
   setIntegrations(home.env, home.projectId, { discord: { log: { events: ["closed"] } } });
   const replying = fakeFetch({ [`POST ${CHAT_URL}?wait=true`]: {} });
   const on = await closeDiscordJob(home, replying);
-  assert.equal(on.outcome.postClose.steps[0].status, "done");
+  assert.equal(on.outcome.postClose.steps[1].status, "done");
   assert.deepEqual(replying.calls.map((call) => call.url), [`${CHAT_URL}?wait=true`]);
 });
 
@@ -581,7 +638,7 @@ test("closing a job queued from a guild/thread link replies inside the thread wi
   });
   assert.equal(outcome.status, "closed");
   assert.deepEqual(fetch.calls.map((call) => call.url), [`${CHAT_URL}?wait=true&thread_id=${THREAD}`]);
-  assert.equal(outcome.postClose.steps[0].note, `discord ${GUILD}/${THREAD}: replied in thread ${THREAD} through chat`);
+  assert.equal(outcome.postClose.steps[1].note, `discord ${GUILD}/${THREAD}: replied in thread ${THREAD} through chat`);
   assert.ok(!fetch.calls[0].body.embeds[0].fields.some((field) => field.name === "Reported"));
   assertNoSecret([outcome, getJob(id, home.env)]);
 });

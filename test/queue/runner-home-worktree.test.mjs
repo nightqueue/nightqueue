@@ -213,3 +213,21 @@ test("a closed job whose recorded legacy worktree is gone releases nothing and n
   assert.deepEqual(await releaseJobWorktree({ job, env: run.env }), { path: live.path, status: "removed" });
   assert.equal(registeredWorktrees(run.checkout).some((path) => path.endsWith("fix+live")), false);
 });
+
+test("a done job that started in a worktree the operator handed in keeps it, and its notice says why", async (t) => {
+  const { checkout } = publishedCheckout(t, "home-wt-adopted");
+  const env = { ...makeHome(t, "home-wt-adopted"), ...gitVars() };
+  registerCheckout(env, { path: checkout, name: "alpha" });
+  const planPath = useFakeClaude(env, makeDir(t, "home-wt-adopted-plan"), [{ stdout: doneStream(), exitCode: 0 }]);
+  const adopted = join(makeDir(t, "home-wt-adopted-linked"), "wt");
+  git(["-C", checkout, "worktree", "add", "-q", "-b", "feat/mine", adopted, "main"]);
+  git(["-C", adopted, "push", "-q", "-u", "origin", "feat/mine"]);
+  const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: PROMPT, startWorktree: adopted }, env).id;
+
+  const cycle = await runCycle({ jobId: id, env });
+
+  assert.equal(cycle.processed[0]?.status, "done", JSON.stringify(cycle.processed));
+  assert.equal(fakeCalls(planPath)[0].cwd, realpathSync(adopted), "the child did not run in the adopted worktree");
+  assert.equal(existsSync(adopted), true, "the runtime removed the worktree the job adopted");
+  assert.match(getJob(id, env).notice_md ?? "", /Worktree kept: .* - it is the worktree this job was queued to start in; nightqueue removes only the worktrees it creates\.$/);
+});

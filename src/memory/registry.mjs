@@ -158,6 +158,16 @@ export function listProjects(db) {
   return db.prepare(`${PROJECT_VIEW} ORDER BY p.rowid`).all();
 }
 
+// Every project by name with its count of `pending` jobs, in one read.
+export function projectsWithPending(db) {
+  return db
+    .prepare(
+      `SELECT p.id, p.name, p.key, (SELECT COUNT(*) FROM jobs AS j WHERE j.project_id = p.id AND j.status = 'pending') AS pending
+         FROM projects AS p ORDER BY p.name`,
+    )
+    .all();
+}
+
 // The projects of one org, in the order they were registered.
 export function projectsOfOrg(db, orgId) {
   return db.prepare(`${PROJECT_VIEW} WHERE p.org_id = ? ORDER BY p.rowid`).all(String(orgId ?? ""));

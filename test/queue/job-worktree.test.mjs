@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { jobWorktreePath, runDir } from "../../src/config/paths.mjs";
 import { runGitAsync } from "../../src/host/git.mjs";
-import { jobBranchName, prepareJobWorktree, WORKTREE_FAILED } from "../../src/queue/job-worktree.mjs";
+import { jobBranchName, prepareJobWorktree, WORKTREE_FAILED, worktreeSlotFree } from "../../src/queue/job-worktree.mjs";
 import { readRunState } from "../../src/queue/resume.mjs";
 import { recordRunFields } from "../../src/queue/run-state.mjs";
 import { initGitRepo } from "../../test-support/git.mjs";
@@ -274,6 +274,124 @@ test("recreating from a recorded branch no worktree holds never prunes the check
 
   assert.deepEqual({ ok: prepared.ok, branch: prepared.branch }, { ok: true, branch: "worktree-kept" });
   assert.equal(calls.some(({ args }) => args[0] === "worktree" && args[1] === "prune"), false);
+});
+
+const FIX_BRANCH = `fix/${SLUG}`;
+
+// Prepares a job's worktree, commits in it and renames its branch the way `run pr` does, leaving the state on the old name.
+async function renamedRun(env, checkout) {
+  const first = await prepare(env, checkout);
+  git(["-C", first.path, "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-q", "-m", "fix: the job's work"]);
+  git(["-C", first.path, "branch", "-m", first.branch, FIX_BRANCH]);
+  return { path: first.path, work: sha(first.path) };
+}
+
+// The branch and worktree the state of the test run names.
+function recordedPlace(env) {
+  const state = readRunState({ projectId: FIXED_PROJECT_ID, slug: SLUG, env });
+  return { branch: state.branch, worktree: state.worktree };
+}
+
+test("a worktree whose branch `run pr` renamed after the state was written is reused in place, and the state follows git", async (t) => {
+  const env = homeEnv(t, "job-worktree-renamed");
+  const checkout = initGitRepo(makeDir(t, "job-worktree-renamed-repo"));
+  const run = await renamedRun(env, checkout);
+
+  const again = await prepare(env, checkout);
+
+  assert.deepEqual({ ok: again.ok, path: again.path, branch: again.branch, reused: again.reused }, { ok: true, path: run.path, branch: FIX_BRANCH, reused: true }, again.message);
+  assert.deepEqual(recordedPlace(env), { branch: FIX_BRANCH, worktree: run.path });
+  assert.ok(again.logged.some((line) => line.includes("the state now follows git")), again.logged.join("\n"));
+});
+
+test("a renamed run whose worktree was deleted is recreated on the renamed branch with its commit, never from the base", async (t) => {
+  const env = homeEnv(t, "job-worktree-renamed-gone");
+  const { checkout } = publishedCheckout(t, "job-worktree-renamed-gone");
+  const run = await renamedRun(env, checkout);
+  git(["-C", checkout, "worktree", "remove", run.path]);
+
+  const prepared = await prepare(env, checkout);
+
+  assert.deepEqual({ ok: prepared.ok, path: prepared.path, branch: prepared.branch, reused: prepared.reused }, { ok: true, path: run.path, branch: FIX_BRANCH, reused: false }, prepared.message);
+  assert.equal(sha(prepared.path), run.work, "the recreated worktree lost the job's commit");
+  assert.equal(localBranches(checkout).includes(`worktree-${SLUG}`), false, "a fresh branch was created beside the published one");
+  assert.deepEqual(recordedPlace(env), { branch: FIX_BRANCH, worktree: run.path });
+});
+
+test("a renamed run whose worktree and local branch are gone is recreated from the branch on origin, never from the base", async (t) => {
+  const env = homeEnv(t, "job-worktree-renamed-origin");
+  const { checkout } = publishedCheckout(t, "job-worktree-renamed-origin");
+  const run = await renamedRun(env, checkout);
+  git(["-C", run.path, "push", "-q", "origin", FIX_BRANCH]);
+  git(["-C", checkout, "worktree", "remove", run.path]);
+  git(["-C", checkout, "branch", "-D", "-q", FIX_BRANCH]);
+  git(["-C", checkout, "update-ref", "-d", `refs/remotes/origin/${FIX_BRANCH}`]);
+
+  const prepared = await prepare(env, checkout);
+
+  assert.deepEqual({ ok: prepared.ok, branch: prepared.branch, reused: prepared.reused }, { ok: true, branch: FIX_BRANCH, reused: false }, prepared.message);
+  assert.equal(sha(prepared.path), run.work, "the worktree did not start from the published branch");
+  assert.equal(localBranches(checkout).includes(`worktree-${SLUG}`), false);
+  const upstream = spawnSync("git", ["-C", prepared.path, "rev-parse", "--abbrev-ref", "@{u}"], { env, encoding: "utf8" });
+  assert.notEqual(upstream.status, 0, `the recreated branch tracks ${upstream.stdout}`);
+});
+
+test("a recorded branch that exists under two of its names gates naming both, and creates nothing", async (t) => {
+  const env = homeEnv(t, "job-worktree-ambiguous");
+  const checkout = initGitRepo(makeDir(t, "job-worktree-ambiguous-repo"));
+  git(["-C", checkout, "branch", FIX_BRANCH]);
+  git(["-C", checkout, "branch", `feat/${SLUG}`]);
+  recordRunFields({ projectId: FIXED_PROJECT_ID, slug: SLUG, fields: { branch: `worktree-${SLUG}` }, env });
+
+  const prepared = await prepare(env, checkout);
+
+  assert.equal(prepared.code, WORKTREE_FAILED);
+  assert.ok(prepared.message.includes(`\`${FIX_BRANCH}\``) && prepared.message.includes(`\`feat/${SLUG}\``), prepared.message);
+  assert.equal(existsSync(jobWorktreePath(FIXED_PROJECT_ID, SLUG, env)), false);
+});
+
+test("a failed add on the renamed branch records only what git holds", async (t) => {
+  const env = homeEnv(t, "job-worktree-renamed-add-failed");
+  const checkout = initGitRepo(makeDir(t, "job-worktree-renamed-add-failed-repo"));
+  const run = await renamedRun(env, checkout);
+  git(["-C", checkout, "worktree", "remove", run.path]);
+  const { gitImpl } = recordingGit(async (call) => {
+    if (call.args[0] !== "worktree" || call.args[1] !== "add") return null;
+    await runGitAsync(call);
+    return { ok: false, stdout: "", stderr: "fatal: injected failure" };
+  });
+
+  const failedAdd = await prepareJobWorktree({ job: jobOf(), checkout, baseBranch: "main", env, gitImpl });
+
+  assert.match(failedAdd.message, /injected failure/);
+  assert.deepEqual(recordedPlace(env), { branch: FIX_BRANCH, worktree: run.path });
+  assert.equal(localBranches(checkout).includes(`worktree-${SLUG}`), false);
+});
+
+test("a job with no recorded branch whose published name exists locally gates, and its slot is not free", async (t) => {
+  const env = homeEnv(t, "job-worktree-unrecorded-alias");
+  const checkout = initGitRepo(makeDir(t, "job-worktree-unrecorded-alias-repo"));
+  git(["-C", checkout, "branch", FIX_BRANCH]);
+
+  const prepared = await prepare(env, checkout);
+
+  assert.equal(prepared.code, WORKTREE_FAILED);
+  assert.match(prepared.message, new RegExp(`\`${FIX_BRANCH}\` already exists .*does not name it`));
+  assert.equal(localBranches(checkout).includes(`worktree-${SLUG}`), false);
+  assert.equal(await worktreeSlotFree({ projectId: FIXED_PROJECT_ID, slug: SLUG, checkout, env }), false);
+  assert.equal(await worktreeSlotFree({ projectId: FIXED_PROJECT_ID, slug: "another-run", checkout, env }), true);
+});
+
+test("a registered worktree at the recorded path on another run's published branch is not reused", async (t) => {
+  const env = homeEnv(t, "job-worktree-foreign-published");
+  const checkout = initGitRepo(makeDir(t, "job-worktree-foreign-published-repo"));
+  const first = await prepare(env, checkout);
+  git(["-C", first.path, "checkout", "-q", "-b", "feat/other-slug"]);
+
+  const again = await prepare(env, checkout);
+
+  assert.equal(again.code, WORKTREE_FAILED);
+  assert.ok(again.message.includes(first.path), again.message);
 });
 
 test("the job branch of a slug holding `+` never carries it", () => {

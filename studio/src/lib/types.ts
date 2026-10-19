@@ -475,6 +475,7 @@ export interface AmbientStatus {
   authenticated: boolean | null;
   login: string | null;
   host: string | null;
+  detected?: string[];
   checkedAt: string | null;
 }
 

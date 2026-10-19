@@ -409,13 +409,27 @@ test("the comment of a no-change close carries the headline once and no instruct
   assert.ok(body.includes("The loop comes from the CDN cache rule."));
 });
 
+test("the merge comment ends with the OTA line on done and on warning, and has none on skipped or a no-change close", async () => {
+  const merged = { prUrl: "https://github.com/acme/api/pull/7", prNumber: 7, mergeSha: "abc1234def" };
+  const head = "Merged https://github.com/acme/api/pull/7 (J-1, nightqueue)";
+  const url = "https://expo.dev/accounts/acme/projects/app/updates/0f3c9a12-aaaa";
+  const bodyOf = async (result) => (await closeWithResult(result)).calls.at(-1).variables.body;
+  assert.equal(await bodyOf({ ...merged, ota: { status: "done", branch: "production", groupId: "0f3c9a12-aaaa", url, note: null } }), `${head}\n\nOTA published to production (${url})`);
+  assert.equal(await bodyOf({ ...merged, ota: { status: "done", branch: "staging", groupId: "0f3c9a12", url: null, note: null } }), `${head}\n\nOTA published to staging`);
+  assert.equal(await bodyOf({ ...merged, ota: { status: "warning", branch: "production", groupId: null, url: null, note: "eas update exited 1\nError: bundling failed" } }), `${head}\n\nOTA failed: eas update exited 1`);
+  assert.equal(await bodyOf({ ...merged, ota: { status: "skipped", branch: "production", groupId: null, url: null, note: "expo.ota is off" } }), head);
+  assert.equal(await bodyOf({ ...merged, ota: null }), head);
+  const noChange = await bodyOf({ prUrl: null, prNumber: null, mergeSha: null, resolution: "no-change", conclusion: "Nothing to change.", ota: { status: "done", branch: "production", groupId: "g", url, note: null } });
+  assert.equal(noChange.includes("OTA"), false, `the no-change comment carries an OTA line: ${noChange}`);
+});
+
 test("closing a job queued from a linear link in a project with no integrations moves the issue and comments once", async (t) => {
   const home = linearHome(t, "linear-close");
   const fetch = fakeFetch(closeRoutes());
   const id = seedDoneJob(home.env, { prompt: `the login breaks, see ${ISSUE_URL}` });
   const { outcome, row } = await closeLinearJob(home, id, fetch);
   assert.equal(outcome.status, "closed");
-  assert.deepEqual(outcome.postClose.steps[0], { name: "origin", status: "done", note: "linear MK-42: issue MK-42 moved to Done" });
+  assert.deepEqual(outcome.postClose.steps[1], { name: "origin", status: "done", note: "linear MK-42: issue MK-42 moved to Done" });
   assert.deepEqual(fetch.calls.map((call) => call.operation), ["issue", "issue", "issueUpdate", "attachmentCreate", "commentCreate"]);
   assert.deepEqual(JSON.parse(row.close).data.originsNotified, { "linear MK-42": true });
   assert.ok(!JSON.stringify(row).includes(API_KEY));
@@ -434,7 +448,7 @@ test("smoke: connection add, queue add --origin and close move the issue and com
 
   const fetch = fakeFetch(closeRoutes());
   const { outcome } = await closeLinearJob(home, id, fetch);
-  assert.deepEqual(outcome.postClose.steps[0], { name: "origin", status: "done", note: "linear MK-42: issue MK-42 moved to Done" });
+  assert.deepEqual(outcome.postClose.steps[1], { name: "origin", status: "done", note: "linear MK-42: issue MK-42 moved to Done" });
   assert.deepEqual(fetch.calls.map((call) => call.operation), ["issue", "issue", "issueUpdate", "attachmentCreate", "commentCreate"]);
 
   const again = fakeFetch(closeRoutes());
@@ -508,7 +522,7 @@ test("closing a job whose issue is already completed makes no state move, and --
   const id = seedDoneJob(home.env, { prompt: `the login breaks, see ${ISSUE_URL}` });
   const fetch = fakeFetch(closeRoutes({ current: { name: "Released", type: "completed" } }));
   const { outcome, row } = await closeLinearJob(home, id, fetch);
-  assert.deepEqual(outcome.postClose.steps[0], { name: "origin", status: "done", note: "linear MK-42: issue MK-42 already Released; comment posted" });
+  assert.deepEqual(outcome.postClose.steps[1], { name: "origin", status: "done", note: "linear MK-42: issue MK-42 already Released; comment posted" });
   assert.deepEqual(JSON.parse(row.close).data.originsNotified, { "linear MK-42": true });
 
   const again = fakeFetch(closeRoutes({ current: { name: "Released", type: "completed" } }));

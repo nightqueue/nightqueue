@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { join } from "node:path";
 import { CLAUDE_MISSING_MESSAGE, resolveClaudeBin } from "./spawn.mjs";
 import { checkoutOfJob } from "../memory/registry-access.mjs";
+import { sameBranch } from "./branch-name.mjs";
 import { canonicalPath, parseWorktreeList, sameDir } from "./worktree.mjs";
 
 // Every reason a job cannot start; the code is what the operator interface maps, never the message text.
@@ -126,7 +127,8 @@ function untrackedDirKind({ path, cwd, linked, openWorktrees }) {
   if (!registered) return "other";
   const owner = openWorktrees.get(abs);
   if (owner === undefined) return "linked";
-  return owner.branch === null || shortBranchOf(registered.branch) === owner.branch ? "owned" : "other";
+  const hints = { slug: owner.slug, type: owner.type };
+  return owner.branch === null || sameBranch(shortBranchOf(registered.branch), owner.branch, hints) ? "owned" : "other";
 }
 
 // The kind of each untracked directory among the entries, git's worktree list read once and only when there is one.

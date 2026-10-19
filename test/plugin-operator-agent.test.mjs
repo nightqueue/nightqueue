@@ -65,7 +65,9 @@ test("the nightqueue commands operator.md names are exactly the guard's allowed 
 test("the operator opens naming itself and the projects, and asks for project and memory before queueing", () => {
   for (const named of [
     "**the nightqueue operator**",
-    "`name · key · <n> pending",
+    "`name · key · <n> pending`",
+    "`Registered projects`",
+    "no `nightqueue project list`, no `queue_status`, no `lesson_recall`",
     "Current project (preselected by nightqueue open)",
     "`lesson_recall` once, with that `project`",
     "1. Queue from the brief.",

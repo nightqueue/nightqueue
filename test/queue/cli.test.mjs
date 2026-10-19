@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, isAbsolute, join, sep } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { jobLogPath, queuePausedPath, queueResumePath, runDir } from "../../src/config/paths.mjs";
@@ -394,6 +394,24 @@ test("`queue add --title` lists the pending job by that title in the table and i
   assert.match(runCli(env, ["queue", "status"]).stdout, /Job titles show the brief label/);
   runCli(env, ["queue", "add", "--title", "   ", "fix the parser"], { cwd: repo });
   assert.equal(getJob(2, env).title, null);
+});
+
+test("`queue add --branch` or `--worktree` stores the starting point, a relative worktree made absolute, and both at once is refused", (t) => {
+  const env = makeCliHome(t, "cli-add-start");
+  const repo = projectPath(env);
+  const onBranch = runCli(env, ["queue", "add", "--branch", "feat/login", "finish the login"], { cwd: repo });
+  assert.equal(onBranch.status, 0, onBranch.stderr);
+  assert.equal(getJob(1, env).start_branch, "feat/login");
+
+  const inWorktree = runCli(env, ["queue", "add", "--worktree", "rel/path", "finish the login"], { cwd: repo });
+  assert.equal(inWorktree.status, 0, inWorktree.stderr);
+  const stored = getJob(2, env).start_worktree;
+  assert.ok(isAbsolute(stored) && stored.endsWith(`${sep}rel${sep}path`), stored);
+
+  const both = runCli(env, ["queue", "add", "--branch", "feat/x", "--worktree", "/tmp/y", "finish it"], { cwd: repo });
+  assert.equal(both.status, 1);
+  assert.match(both.stderr, /either a start branch or a start worktree, not both/);
+  assert.equal(getJob(3, env), null, "the refused starting point still queued a job");
 });
 
 // The last line the CLI printed, the place the backlog nudge belongs to.

@@ -1,5 +1,6 @@
 import { refsInTextOrder } from "./find-refs.mjs";
 import { requestJson } from "./http.mjs";
+import { withOtaLine } from "./ota.mjs";
 
 const API = "https://api.linear.app/graphql";
 const VIEWER_QUERY = "query { viewer { id name } }";
@@ -230,7 +231,7 @@ function noChangeComment({ job, result }) {
 // The comment left on the issue once its pull request merged, or once the job was resolved without change.
 function closeComment({ job, result }) {
   if (isNoChange(result)) return noChangeComment({ job, result });
-  return `Merged ${result?.prUrl ?? "the merged pull request"} (${job?.ref ?? "unknown job"}, nightqueue)`;
+  return withOtaLine(`Merged ${result?.prUrl ?? "the merged pull request"} (${job?.ref ?? "unknown job"}, nightqueue)`, result);
 }
 
 // The notes of the PR attachment and the comment that did not succeed.
@@ -612,7 +613,7 @@ export const linear = {
   kind: "linear",
   label: "Linear",
   description: "Reads the issues jobs come from and moves them along as the jobs close, for the whole home.",
-  card: { order: 2, icon: "linear" },
+  card: { order: 3, icon: "linear" },
   connection: {
     scope: "home",
     cardinality: "one",
@@ -626,4 +627,7 @@ export const linear = {
   origin: { parse: parseLinear, find: findLinear, enrich: enrichLinear, describe: describeLinear },
   onClosed: closeLinearIssue,
   tracker: { issues: listIssues, filters: listFilters, issue: readIssue, create: createIssue, comment: commentIssue, update: updateIssue },
+  apiRoot: () => API,
+  authHeaders,
+  call: { path: false, query: null },
 };

@@ -80,6 +80,12 @@ export function sessionProject(cwd, env = process.env) {
   return projectFromCwd(cwd, env) ?? preselectedProject(env);
 }
 
+// Every project as `{ id, name, key, pending }`, by name; empty on a home without a database.
+export function projectsWithPending(env = process.env) {
+  const rows = withRegistry(env, (db) => (db ? registry.projectsWithPending(db) : []));
+  return Array.isArray(rows) ? rows : [];
+}
+
 // The project `nightqueue open` preselected through NIGHTQUEUE_PROJECT, or null (always null inside a job).
 export function preselectedProject(env = process.env) {
   if (env?.NIGHTQUEUE_JOB_ID) return null;

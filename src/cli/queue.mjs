@@ -1,4 +1,5 @@
 import { closeSync, existsSync, openSync, readSync, statSync } from "node:fs";
+import path from "node:path";
 import { UserError } from "../config/errors.mjs";
 import { withLock } from "../config/lock.mjs";
 import { jobLogPath } from "../config/paths.mjs";
@@ -60,7 +61,7 @@ import { coverageLabel, jobOriginCoverage } from "../integrations/coverage.mjs";
 import { originsLabel } from "../integrations/origin.mjs";
 
 export const USAGE = {
-  add: "nightqueue queue add [project] <prompt...> [--project <name>] [--run] [--foreground] [--priority <n>] [--max-attempts <n>] [--timeout <s>] [--yes] [--key <KEY>] [--tier <trivial|simple|complex>] [--title <text>] [--origin <kind>:<ref>]...",
+  add: "nightqueue queue add [project] <prompt...> [--project <name>] [--run] [--foreground] [--priority <n>] [--max-attempts <n>] [--timeout <s>] [--yes] [--key <KEY>] [--tier <trivial|simple|complex>] [--title <text>] [--origin <kind>:<ref>]... [--branch <name> | --worktree <path>]",
   status: "nightqueue queue status [J-<id>|<id>|<PR URL>] [--limit <n>] [--json] [--follow [seconds]] [--until-idle] [--blocked]",
   run: "nightqueue queue run [--job <id> | --watch [seconds] [--from HH:MM] --until HH:MM] [--max <jobs>] [--stop] [--foreground] [--dry] [--json]",
   cancel: "nightqueue queue cancel <id> [--reason <text>] [--json]",
@@ -315,6 +316,12 @@ function addLimits(values) {
   };
 }
 
+// The starting point of a `queue add`: the `--branch` name, or the `--worktree` path made absolute against the caller's directory.
+function startOptions(values, ctx) {
+  const worktree = typeof values.worktree === "string" && values.worktree.trim() !== "" ? path.resolve(ctx.cwd ?? process.cwd(), values.worktree.trim()) : values.worktree;
+  return { startBranch: values.branch, startWorktree: worktree };
+}
+
 // The lines naming where a queued job came from, one per origin with the connection covering it; none when it has no origin.
 async function originLines(job, ctx) {
   const coverages = await jobOriginCoverage({ origins: job.origin, projectId: job.projectId, store: openStore(ctx.env), env: ctx.env });
@@ -328,7 +335,7 @@ async function addFromPrompt(positionals, values, ctx) {
   const prompt = target.words.join(" ").trim();
   if (!prompt) throw new UserError(`missing argument; usage: ${USAGE.add}`);
   if (target.fromCwd) ctx.out(`project \`${target.project.name}\` resolved from the current directory`);
-  return await openStore(ctx.env).jobs.addJob({ projectId: target.project.id, prompt, ...addLimits(values) });
+  return await openStore(ctx.env).jobs.addJob({ projectId: target.project.id, prompt, ...addLimits(values), ...startOptions(values, ctx) });
 }
 
 // Runs `queue add`, with the job built from the words of the command line.
@@ -361,6 +368,8 @@ const ADD_OPTIONS = {
   title: { type: "string" },
   key: { type: "string" },
   origin: { type: "string", multiple: true },
+  branch: { type: "string" },
+  worktree: { type: "string" },
 };
 
 // Tells whether a token is written as an option, the only shape the edges of `queue add` read as one.

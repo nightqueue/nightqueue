@@ -283,6 +283,13 @@ export function recordHeldWorktree({ projectId, slug, branch = null, worktree = 
   });
 }
 
+// Records the linked worktree a job was queued to start in as where its code lives, marked as adopted so the runtime never removes it; one write.
+export function recordAdoptedWorktree({ projectId, slug, branch, worktree, env = process.env } = {}) {
+  const held = { branch: trimmedText(branch), worktree: trimmedText(worktree) };
+  if (held.branch === null || held.worktree === null) return kept("an adopted worktree needs its branch and its path");
+  return record({ projectId, slug, env, change: () => ({ ...held, adoptedWorktree: held.worktree }) });
+}
+
 // The resume count over the state already on disk: a run the pipeline never recorded anything into is not created by a resume.
 function saveResumeCount({ projectId, slug, resumeCount, env }) {
   const state = readRunState({ projectId, slug, env });

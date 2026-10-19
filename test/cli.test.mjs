@@ -227,6 +227,17 @@ test("connection add --type github is refused with the gh auth login hint and wr
   assert.deepEqual([readFileSync(join(home, "config.json"), "utf8"), readFileSync(join(home, "secrets.json"), "utf8")], before);
 });
 
+test("connection add --type expo is refused with the eas login hint and writes nothing", (t) => {
+  const home = makeDir(t, "expo-refused");
+  runCli(home, ["setup"]);
+  const before = [readFileSync(join(home, "config.json"), "utf8"), readFileSync(join(home, "secrets.json"), "utf8")];
+  const refused = runCli(home, ["connection", "add", "x", "--type", "expo"], { input: `${SENTINEL}\n` });
+  assert.notEqual(refused.status, 0);
+  assert.match(refused.stderr, /expo is not a stored connection: nightqueue uses the machine's eas login; run `eas login`/);
+  assert.equal(`${refused.stdout}${refused.stderr}`.includes(SENTINEL), false);
+  assert.deepEqual([readFileSync(join(home, "config.json"), "utf8"), readFileSync(join(home, "secrets.json"), "utf8")], before);
+});
+
 test("connection add of a home-wide type stores the secret, binds nothing and refuses --org, bind and a second one", (t) => {
   const home = makeDir(t, "home-scope");
   runCli(home, ["setup"]);

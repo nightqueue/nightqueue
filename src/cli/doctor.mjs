@@ -24,6 +24,8 @@ import {
 import { CONNECTION_TYPES, testConnection } from "../config/connections.mjs";
 import { loadConfig, loadRawConfig, loadSecrets, moveHomeFilesInto, removeHomeFiles } from "../config/store.mjs";
 import { claudeBin } from "../host/claude.mjs";
+import { easBin, easEnv, parseEasWhoami } from "../host/eas.mjs";
+import { getSetting } from "../integrations/settings.mjs";
 import { DESKTOP_LABEL, desktopState } from "../host/desktop.mjs";
 import { MCP_SERVER_NAME, readRegisteredServer, serverIsCurrent } from "../host/mcp.mjs";
 import { RISKY_FS_TYPES, isRiskyFsType, mountOfPath } from "../host/mounts.mjs";
@@ -131,6 +133,23 @@ function checkGh(ctx) {
   return result.ok
     ? check("gh", "ok", "authenticated")
     : check("gh", "warn", result.missing ? "not installed" : "not authenticated", "run `gh auth login`");
+}
+
+// Checks the Expo CLI, which only the projects that publish Expo OTA updates need.
+async function checkEas(ctx) {
+  const result = runCommand(ctx, easBin(ctx.env), ["whoami"], { env: easEnv(ctx.env) });
+  const login = result.ok ? parseEasWhoami(result.stdout) : null;
+  if (login) return check("eas", "ok", `logged in as ${login}`);
+  if (!result.missing && result.status === null) return check("eas", "warn", "eas whoami did not answer", "run `eas whoami` to see why");
+  if (!result.missing) return check("eas", "warn", "not logged in", "run `eas login`");
+  const needing = await otaProjectsOrNone(ctx);
+  if (!needing.length) return check("eas", "ok", "not installed (needed only to publish Expo OTA updates)");
+  return check(
+    "eas",
+    "warn",
+    `not installed - needed to publish Expo OTA for ${needing.join(", ")}`,
+    "install eas-cli (`npm install -g eas-cli`), then run `eas login`",
+  );
 }
 
 // Checks that config.json is there and readable.
@@ -1096,6 +1115,23 @@ async function checkoutsOrNone(ctx) {
   }
 }
 
+// The names of the registered projects that turned Expo OTA publishing on, or an empty list when they cannot be read.
+async function otaProjectsOrNone(ctx) {
+  if (!existsSync(dbPath(ctx.env))) return [];
+  try {
+    return await withReadOnlyStore(ctx.env, async (store) => {
+      const names = [];
+      for (const project of await store.projects.list()) {
+        const integrations = await store.projects.integrations(project.id);
+        if (getSetting(integrations, "expo", "ota") === true) names.push(project.name);
+      }
+      return names.sort();
+    });
+  } catch {
+    return [];
+  }
+}
+
 // Checks every registered project, or reports that none is registered or that the registry is not readable yet.
 async function checkProjects(ctx) {
   let found = null;
@@ -1469,6 +1505,7 @@ async function collect(ctx, values) {
     checkOperator(ctx),
     await checkStudioTerminal(ctx),
     checkGh(ctx),
+    await checkEas(ctx),
     checkConfig(ctx),
     checkSecrets(ctx),
     ...(await checkConnections(ctx)),

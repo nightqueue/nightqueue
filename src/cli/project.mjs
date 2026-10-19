@@ -203,7 +203,7 @@ function printIntegrations(ctx, { project, integrations, json }) {
     ctx.out(JSON.stringify(integrationsView(project, integrations)));
     return;
   }
-  for (const line of integrationLines(integrations, { orgId: project.org_id, env: ctx.env })) ctx.out(line);
+  for (const line of integrationLines(integrations, { orgId: project.org_id, env: ctx.env, checkout: project.path })) ctx.out(line);
 }
 
 // Runs `project integrations <project> show`: reads only, a home without a database knowing no project.

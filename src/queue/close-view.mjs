@@ -3,7 +3,7 @@ import { sqliteToIso } from "../memory/schema.mjs";
 import { jobRef } from "../memory/refs.mjs";
 
 export const CLOSE_STEP_NAMES = ["preflight", "conflict", "merge", "settle"];
-export const POST_CLOSE_STEP_NAMES = ["origin", "log"];
+export const POST_CLOSE_STEP_NAMES = ["ota", "origin", "log"];
 export const CLOSED_PREFIX = "Closed: ";
 export const POST_CLOSE_PREFIX = "After close: ";
 
