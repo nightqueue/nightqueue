@@ -150,7 +150,7 @@ test("queue_add with origin [] stores no origin; omitted or null detects it; an 
   for (const origin of [false, true, { kind: "linear", ref: "MK-9" }]) {
     const refused = await client.callTool({ name: "queue_add", arguments: { project: "alpha", prompt, origin } });
     assert.equal(refused.isError, true, JSON.stringify(origin));
-    assert.match(refused.content[0].text, /your client has the tool definitions of an older nightqueue \(contract 7, this server is 8\)/);
+    assert.match(refused.content[0].text, /your client has the tool definitions of an older nightqueue \(contract 8, this server is 9\)/);
   }
   assert.equal(openDb(env).prepare("SELECT COUNT(*) AS n FROM jobs").get().n, 3);
 });

@@ -133,8 +133,8 @@ test("a close with sentry, linear and discord origins acts on Sentry, then Linea
   const { outcome, row } = await closeJob(home, id, fetch);
   assert.equal(outcome.status, "closed");
   assert.deepEqual(fetch.calls, [...LOOKUP_CALLS, ...SENTRY_CALLS, ...LINEAR_CALLS, "discord POST"]);
-  assert.equal(outcome.postClose.steps[0].name, "origin");
-  assert.equal(outcome.postClose.steps[0].status, "done", outcome.postClose.steps[0].note);
+  assert.equal(outcome.postClose.steps[1].name, "origin");
+  assert.equal(outcome.postClose.steps[1].status, "done", outcome.postClose.steps[1].note);
   assert.deepEqual(JSON.parse(row.close).data.originsNotified, { "sentry 4507": true, "linear MK-42": true, "discord 111/222/555": true });
   assert.ok(!row.notice_md, "settle appends no Closed line to the notice");
   const [embed] = fetch.posts[0].embeds;
@@ -171,7 +171,7 @@ test("a refused or throwing discord post is a warning line of its own; the job s
     assert.equal(outcome.status, "closed", String(discord));
     assert.equal(row.status, "closed", String(discord));
     assert.deepEqual(fetch.calls, [...LOOKUP_CALLS, ...SENTRY_CALLS, ...LINEAR_CALLS, "discord POST"], String(discord));
-    assert.equal(outcome.postClose.steps[0].status, "warning", String(discord));
+    assert.equal(outcome.postClose.steps[1].status, "warning", String(discord));
     assert.deepEqual(JSON.parse(row.close).data.originsNotified, { "sentry 4507": true, "linear MK-42": true }, String(discord));
     assert.match(row.notice_md, /After close: origin warning - discord 111\/222\/555: /, String(discord));
     assertNoSecret(row);

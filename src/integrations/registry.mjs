@@ -1,9 +1,10 @@
 import { discord } from "./discord.mjs";
+import { expo } from "./expo.mjs";
 import { github } from "./github.mjs";
 import { linear } from "./linear.mjs";
 import { sentry } from "./sentry.mjs";
 
-const BUILT_IN = Object.freeze([github, sentry, linear, discord]);
+const BUILT_IN = Object.freeze([github, sentry, linear, discord, expo]);
 
 let active = BUILT_IN;
 
@@ -125,6 +126,26 @@ export function byRegistryOrder(origins) {
   return origins.map((origin, position) => ({ origin, position, rank: rank(origin) }))
     .sort((a, b) => a.rank - b.rank || a.position - b.position)
     .map((entry) => entry.origin);
+}
+
+// Lists the providers able to recognize a checkout as theirs.
+export function detectingProviders() {
+  return active.filter((provider) => typeof provider.detect === "function");
+}
+
+// Tells whether a provider recognizes a checkout as its own, a missing or throwing detector counting as no.
+export function detectsCheckout(provider, checkout) {
+  if (typeof provider?.detect !== "function" || typeof checkout !== "string" || !checkout) return false;
+  try {
+    return provider.detect(checkout) === true;
+  } catch {
+    return false;
+  }
+}
+
+// The provider that publishes an over-the-air update of a merged job, or null when this build has none.
+export function otaProvider() {
+  return active.find((provider) => typeof provider.ota?.publish === "function") ?? null;
 }
 
 // Lists the providers able to list the issues of their service.

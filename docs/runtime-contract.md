@@ -219,6 +219,38 @@ no `Closed:` line. The PR, the merge and the status are shown from the job's fie
 a warning or skip is appended. The Discord thread reply is the whole notice, cut at the
 embed limit with `…`.
 
+The post-close steps of a close run in the order `ota` → `origin` → `log`, so what the
+origin and the log tell carries the OTA outcome of the same run. `ota` is the only step that
+runs a command, and its facts are fixed:
+- it publishes only when the project's `expo.ota` is `true`; otherwise, and for a close without
+  a code change, it is `skipped` and adds nothing to the budget;
+- its own budget is 600 s, added to the 60 s post-close budget (and to the lease) only when
+  `expo.ota` is `true`; every eas and git call of the step ends before that budget and before
+  the post-close deadline, so origin and log keep their 60 s;
+- `eas` (`NIGHTQUEUE_EAS_BIN`, else `eas` on the PATH) runs with an argv, never a shell, with
+  an env stripped of every `NIGHTQUEUE_*` variable, in its own process group: a timeout or an
+  interrupt kills the whole group, so no process it started outlives it;
+- `expo.branch` is checked against the provider's branch pattern again at publish time; a
+  value that fails it is a warning and nothing runs;
+- it runs in a throwaway detached worktree at `close.data.mergeSha`, never in the checkout,
+  with the checkout's `node_modules` symlinked in;
+- the checkout root's untracked `.env*` files (listed by `git --literal-pathspecs ls-files`,
+  gitignored ones included; not those of subdirectories) are copied into the worktree root,
+  mode 0600, for the `EXPO_PUBLIC_*` values `expo export` inlines at bundle time; a tracked
+  `.env*` keeps the merge commit's version; their content is never read into a note, a progress
+  line or a log - a failed copy names only the file and the error code - and when the
+  untracked files cannot be listed or one cannot be copied, nothing is published;
+- the worktree, with the copies, is removed in a `finally` with no signal; an interrupted or
+  overdue close waits for that removal (at most 35 s) before it ends; a process killed
+  mid-publish can leave it under the OS temp dir for `git worktree prune`; a worktree that
+  cannot be created posts the fixed reason `could not create the OTA worktree`, its detail kept
+  in the local note only;
+- it stores `close.data.ota = { status, branch, groupId, url, note }`: `status` is `done`,
+  `warning` or `skipped`, `url` is the expo.dev update-group page or `null`, `note` is `null`
+  on `done` and the reason plus the last 20 output lines on a `warning`;
+- it never fails, stops or reverts a close: a throw, a timeout or a non-zero exit is a
+  `warning`. A crash between the publish and the checklist write publishes again on resume.
+
 These names are a machine contract, not prose: the pipeline files are the
 source of truth for them, and any runtime that reads them must match them
 exactly.
@@ -361,7 +393,14 @@ terminal through them) starts `claude` with `NIGHTQUEUE_MODE=operator`,
 the runner strips all three from every job it spawns. `nightqueue open` runs in the home, never
 in a checkout; a hook resolves the session's project from its directory, else from
 `NIGHTQUEUE_PROJECT` (never inside a job, and only for a well-formed id), and SessionStart then
-leads its block with `Current project (preselected by nightqueue open): <name>`. The session's
+leads its block with `Current project (preselected by nightqueue open): <name>`. In operator mode only (never in a
+job or a plain session) the block also carries `## Registered projects`: one line per project,
+`name · key · <n> pending`, the pending count read from `jobs` in one SQL query (no runner tail,
+no gh), the preselected project first, the rest by name, capped at 30 lines plus
+`… and <n> more (nightqueue project list)`; it is present even with no preselected project, so the
+operator's opening message needs no tool call. The section ends with `Runners online: <n>`, the
+live queue workers of the runner registry (a readdir of the runners directory and a signal-0 pid
+probe each; no log tail, no gh), omitted when the registry cannot be listed. The session's
 `--settings` are the jobs' settings with two changes, neither of which reaches the host's
 `settings.json` (`desiredHooks` and the doctor hook check are unchanged, so an edit in any other
 Claude session never spawns a hook): the PreToolUse matcher becomes
@@ -417,8 +456,8 @@ a worktree another live session holds is never dropped. It always answers nothin
 fails the session. What it misses, `nightqueue open` and `nightqueue doctor --fix` drop once the
 worktree is stale (see [the CLI](cli.md#sandbox)).
 
-The thirty-one MCP tools of tool contract 8, with the parameters `nightqueue mcp` actually
-accepts (every answer carries `contract: 8`; a call to a tool an older contract had and this one
+The thirty-two MCP tools of tool contract 9, with the parameters `nightqueue mcp` actually
+accepts (every answer carries `contract: 9`; a call to a tool an older contract had and this one
 dropped is answered with the older-definitions line):
 
 | tool | parameters |
@@ -442,6 +481,7 @@ dropped is answered with the older-definitions line):
 | `tracker_create` | `team`, `title` (at most 255), `description?` (at most 50,000), `priority?` (0-4), `state?`, `labels?`, `assignee?` (a name, display name, email or `me`) (writes only after the person's explicit ok; refused inside a job before anything is sent; answers `{ok: true, provider, issue: {ref, title, url}}`; an unknown or ambiguous name is `invalid-input` with the valid names and nothing is sent) |
 | `tracker_comment` | `ref`, `body` (at most 50,000) (writes only after the person's explicit ok; refused inside a job; answers `{ok: true, provider, ref, comment: {url}}`) |
 | `tracker_update` | `ref`, `title?`, `description?` (replaces the whole text), `priority?`, `state?`, `assignee?` (`none` unassigns), `labels_add?`, `labels_remove?` (writes only after the person's explicit ok; refused inside a job; answers `{ok: true, provider, issue, changed}`; a write that timed out or was not confirmed answers `provider-unavailable` with a hint to read the issue before trying again; no tracker tool deletes or archives) |
+| `connection_call` | `connection` (a stored connection's name), `method?` (`GET` default, `POST`, `PATCH`, `PUT`; any other, `DELETE` included, is `invalid-input`), `path?` (at most 2,000; relative to the root: a scheme, a leading `//`, a `.` or `..` segment, `\`, `?`, `#`, whitespace or an encoded `.`, `/` or `\` is `invalid-input`), `query?` (an object of text, number, boolean or list of texts), `body?` (JSON, at most 50,000 characters serialized, never on a GET) (the runtime injects the secret and the host is fixed by the kind: Sentry `<url>/api/0/`, Linear `https://api.linear.app/graphql` with an empty path and the GraphQL in `body`, Discord the webhook URL itself with an empty path (GET or POST) or exactly `messages/<id>` (GET or PATCH, to read or edit a posted message), and only `thread_id` and `wait` in `query`; a redirect is never followed; 10 s timeout; answers `{ok: true, status, body, body_truncated?}` with the body redacted then cut at 50,000 characters, or the normal answer `{ok: false, error: "no-connection" \| "invalid-input" \| "provider-unavailable", status, detail}` with a fixed detail, never the provider's message, the URL or a header; a GET reads, any other method only after the person's explicit ok to the exact connection, method, path and body; a non-GET is refused inside a job before anything is sent, a GET is allowed) |
 | `queue_status` | `job_id?`, `pr_url?` (never with `job_id`), `limit?` (1-50) |
 | `queue_run` | `job_id?` |
 | `queue_stop` | `pid?` |

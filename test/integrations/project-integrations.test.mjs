@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { test } from "node:test";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
@@ -6,7 +8,7 @@ import { defaultContext, run } from "../../src/cli/index.mjs";
 import { homeDir } from "../../src/config/paths.mjs";
 import { loadSecrets, saveSecrets } from "../../src/config/store.mjs";
 import { withProviders } from "../../src/integrations/registry.mjs";
-import { getSetting } from "../../src/integrations/settings.mjs";
+import { detectionLines, getSetting } from "../../src/integrations/settings.mjs";
 import { openDb } from "../../src/memory/db.mjs";
 import { createServer } from "../../src/mcp/tools.mjs";
 import { makeHome, makeProject, projectIdOf } from "../../test-support/memory.mjs";
@@ -96,7 +98,7 @@ test("a build whose providers declare no settings shows no integrations and refu
 
     const client = await connectInProcess(t, env);
     const answer = payloadOf(await client.callTool({ name: "project_integrations", arguments: { project: "alpha", action: "show" } }));
-    assert.deepEqual(answer, { project: "alpha", integrations: null, providers: [{ kind: "github", keys: [] }], contract: 8 });
+    assert.deepEqual(answer, { project: "alpha", integrations: null, providers: [{ kind: "github", keys: [] }], contract: 9 });
     const mcpRefused = await client.callTool({ name: "project_integrations", arguments: { project: "alpha", action: "set", key: "github.x", value: "y" } });
     assert.equal(mcpRefused.isError, true);
     assert.ok(textOf(mcpRefused).includes(NO_SETTINGS), textOf(mcpRefused));
@@ -194,6 +196,52 @@ test("the CLI refuses a change from inside a job", async (t) => {
     assert.equal(refused.code, 1);
     assert.ok(refused.err.join("\n").includes("from inside J-9"), refused.err.join("\n"));
     assert.equal(storedColumn(env, projectId), null);
+  });
+});
+
+test("expo.ota and expo.branch are validated and stored, and show prints `expo: detected` only for a checkout with eas.json, never writing it", async (t) => {
+  const env = makeHome(t, "integrations-expo");
+  const app = makeProject(t, env, "app");
+  makeProject(t, env, "web");
+  writeFileSync(join(app, "eas.json"), "{}\n");
+  const appId = projectIdOf(env, "app");
+
+  const bare = await runCli(env, ["project", "integrations", "app", "show"]);
+  assert.equal(bare.code, 0, bare.err.join("\n"));
+  assert.deepEqual(bare.out, ["no integrations", "expo: detected"]);
+  assert.equal(storedColumn(env, appId), null, "detection wrote a setting");
+  const other = await runCli(env, ["project", "integrations", "web", "show"]);
+  assert.deepEqual(other.out, ["no integrations"]);
+
+  for (const [arg, message] of [["expo.branch=-x", "takes a branch name such as production; got `-x`"], ["expo.branch=", "needs a value"], ["expo.branch=a b", "takes a branch name"], ["expo.ota=yes", "takes true or false"]]) {
+    const refused = await runCli(env, ["project", "integrations", "app", "set", arg]);
+    assert.equal(refused.code, 1, `${arg} was accepted`);
+    assert.ok(refused.err.join("\n").includes(message), `${arg}: ${refused.err.join("\n")}`);
+  }
+  assert.equal(storedColumn(env, appId), null);
+
+  const set = await runCli(env, ["project", "integrations", "app", "set", "expo.ota=true", "expo.branch=preview/v2"]);
+  assert.equal(set.code, 0, set.err.join("\n"));
+  assert.deepEqual(JSON.parse(storedColumn(env, appId)), { expo: { ota: true, branch: "preview/v2" } });
+  const shown = await runCli(env, ["project", "integrations", "app", "show"]);
+  assert.deepEqual(shown.out, ["expo.ota=true", "expo.branch=preview/v2", "expo: detected"]);
+  const json = await runCli(env, ["project", "integrations", "app", "show", "--json"]);
+  assert.deepEqual(Object.keys(JSON.parse(json.out[0])), ["project", "integrations", "providers"]);
+});
+
+test("getSetting answers the expo defaults: ota off and the production branch", () => {
+  assert.equal(getSetting(null, "expo", "ota"), false);
+  assert.equal(getSetting(null, "expo", "branch"), "production");
+  assert.equal(getSetting({ expo: { ota: true } }, "expo", "ota"), true);
+});
+
+test("detectionLines skips a throwing or non-matching detector and a missing checkout", async () => {
+  const throwing = { kind: "boom", detect: () => { throw new Error("nope"); } };
+  const yes = { kind: "yes", detect: () => true };
+  const truthy = { kind: "truthy", detect: () => "yes" };
+  await withProviders([throwing, yes, truthy], async () => {
+    assert.deepEqual(detectionLines("/somewhere"), ["yes: detected"]);
+    assert.deepEqual(detectionLines(null), []);
   });
 });
 

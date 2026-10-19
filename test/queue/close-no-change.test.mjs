@@ -90,7 +90,7 @@ test("a done job with no pull request closes with no gh or git call: the pre ste
     for (const name of ["origin", "log"]) assert.ok(checklist.finishedAt >= checklist.steps[name].at, `finishedAt precedes the ${name} step`);
     assert.equal(checklist.data.resolvedWithoutChange, true);
     assert.match(checklist.data.noticeLine, /^Closed: resolved without change on \d{4}-\d{2}-\d{2}$/);
-    assert.equal(outcome.postClose.steps.map((step) => `${step.name} ${step.status}`).join(", "), "origin done, log done");
+    assert.equal(outcome.postClose.steps.map((step) => `${step.name} ${step.status}`).join(", "), "ota skipped, origin done, log done");
 
     const view = jobView(row);
     assert.equal(view.resolution, "no-change");

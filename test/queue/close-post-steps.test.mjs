@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { defaultContext, run } from "../../src/cli/index.mjs";
+import { expo } from "../../src/integrations/expo.mjs";
 import { withProviders } from "../../src/integrations/registry.mjs";
 import { acquireClose, acquirePostClose, getJob, jobView } from "../../src/memory/jobs.mjs";
 import { CLOSE_STEPS, postCloseStepsNamed, runClosePipeline } from "../../src/queue/close.mjs";
@@ -138,10 +139,11 @@ test("with integrations the origin is resolved and the close logged once, the jo
 
     assert.equal(outcome.status, "closed");
     assert.deepEqual(outcome.postClose.steps, [
+      { name: "ota", status: "skipped", note: "no OTA provider" },
       { name: "origin", status: "done", note: "tracker 4507: resolved issue 4507" },
       { name: "log", status: "done", note: "tracker: posted" },
     ]);
-    assert.deepEqual(reported.map((step) => [step.name, step.status]).slice(4), [["origin", "done"], ["log", "done"]]);
+    assert.deepEqual(reported.map((step) => [step.name, step.status]).slice(4), [["ota", "skipped"], ["origin", "done"], ["log", "done"]]);
     assert.deepEqual(fetch.calls.map((call) => [call.method, call.url]), [
       ["PUT", "https://tracker.example/api/issues/4507/resolve"],
       ["POST", "https://tracker.example/api/log"],
@@ -192,7 +194,7 @@ test("two origins each write their own notice line, in registry order, and the j
     const { outcome, row } = await closeOnce(home, { fetch });
 
     assert.equal(row.status, "closed");
-    assert.equal(outcome.postClose.steps[0].status, "warning");
+    assert.equal(outcome.postClose.steps.find((step) => step.name === "origin").status, "warning");
     assert.deepEqual(checklistOf(row).data.originsNotified, {});
     assert.ok(
       row.notice_md.endsWith("After close: origin warning - tracker 4507: resolve refused (HTTP 500)\n\nAfter close: origin skipped - shadow 4507: no shadow connection in the org"),
@@ -239,6 +241,7 @@ test("an interrupted or overdue post-close step is a warning and the job stays c
     assert.equal(outcome.status, "closed");
     assert.equal(row.status, "closed");
     assert.deepEqual(outcome.postClose.steps.map((step) => [step.name, step.status, step.note]), [
+      ["ota", "skipped", "no OTA provider"],
       ["origin", "warning", "interrupted"],
       ["log", "warning", "interrupted"],
     ]);
@@ -255,7 +258,7 @@ test("an interrupted or overdue post-close step is a warning and the job stays c
     t.mock.timers.tick(60000);
     const { outcome, row } = await pending;
     assert.equal(row.status, "closed");
-    assert.equal(outcome.postClose.steps[0].note, "passed the post-close budget of 60s");
+    assert.equal(outcome.postClose.steps.find((step) => step.name === "origin").note, "passed the post-close budget of 60s");
     assert.ok(row.notice_md.includes("After close: origin warning - passed the post-close budget of 60s"));
   });
   t.mock.timers.reset();
@@ -272,6 +275,51 @@ test("a post-close checklist write that fails is reported as a line and the clos
     assert.ok(reported.every((step) => !String(step.note).includes("database is locked")), "the store's error text is never copied");
     assert.equal(outcome.postClose.steps.length, 1, "the steps after a failed write are not run");
   });
+});
+
+// A store recording the lease every post-close acquire asks for.
+function leaseRecordingStore(home, leases) {
+  const acquirePostClose = (id, options) => {
+    leases.push(options.leaseS);
+    return home.store.jobs.acquirePostClose(id, options);
+  };
+  return { ...home.store, jobs: { ...home.store.jobs, acquirePostClose } };
+}
+
+test("a project without OTA keeps the 60 s post-close budget and its 120 s lease; with expo.ota on they grow by the OTA budget and a warning keeps the job closed", async (t) => {
+  await withProviders([closingProvider(), expo], async () => {
+    const plain = postHome(t, "post-budget-plain");
+    const plainLeases = [];
+    const off = await closeOnce(plain, { fetch: fakeFetch(), store: leaseRecordingStore(plain, plainLeases) });
+    assert.deepEqual(plainLeases, [120]);
+    assert.deepEqual(off.outcome.postClose.steps[0], { name: "ota", status: "skipped", note: "expo.ota is off" });
+    assert.ok(!String(off.row.notice_md ?? "").includes("ota"), "an OTA that is off stays quiet");
+
+    const home = postHome(t, "post-budget-ota", { integrations: { ...LOGGING, expo: { ota: true } } });
+    const leases = [];
+    const on = await closeOnce(home, { fetch: fakeFetch(), store: leaseRecordingStore(home, leases) });
+    assert.deepEqual(leases, [720]);
+    assert.equal(on.row.status, "closed");
+    assert.deepEqual(on.outcome.postClose.steps.map((step) => [step.name, step.status]), [["ota", "warning"], ["origin", "done"], ["log", "done"]]);
+    assert.deepEqual(checklistOf(on.row).data.ota, { status: "warning", branch: "production", groupId: null, url: null, note: "the close has no eas, git or filesystem to publish with" });
+    assert.ok(on.row.notice_md.includes("After close: ota warning - the close has no eas, git or filesystem to publish with"));
+  });
+
+  let entered = null;
+  const hanging = closingProvider({ onClosed: () => new Promise(() => entered()) });
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  await withProviders([hanging, expo], async () => {
+    const home = postHome(t, "post-budget-overdue", { integrations: { ...LOGGING, expo: { ota: true } } });
+    const reached = new Promise((resolve) => {
+      entered = resolve;
+    });
+    const pending = closeOnce(home, { fetch: fakeFetch() });
+    await reached;
+    t.mock.timers.tick(660000);
+    const { outcome } = await pending;
+    assert.equal(outcome.postClose.steps.find((step) => step.name === "origin").note, "passed the post-close budget of 660s");
+  });
+  t.mock.timers.reset();
 });
 
 test("a log connection the project's org no longer uses is a noticed skip with no request to it", async (t) => {
@@ -368,7 +416,7 @@ test("queue close --again is refused without --steps and with --merged or --forc
 
 test("--steps refuses a pre-close or unknown step, a job not closed, a run inside a job and a live post-close lease", async (t) => {
   await withProviders([closingProvider()], async () => {
-    assert.throws(() => postCloseStepsNamed(["merge"]), /`merge` is not a post-close step; valid steps: origin, log/);
+    assert.throws(() => postCloseStepsNamed(["merge"]), /`merge` is not a post-close step; valid steps: ota, origin, log/);
     assert.throws(() => postCloseStepsNamed(["origin", "settle"]), /`settle` is not a post-close step/);
     assert.throws(() => postCloseStepsNamed([]), /no step is not a post-close step/);
 
@@ -428,7 +476,7 @@ test("queue close --steps prints each step and a summary, exits 1 on a warning, 
 
     const refused = await runCli(env, ["queue", "close", "J-1", "--steps", "merge"], {});
     assert.notEqual(refused.code, 0);
-    assert.match(refused.err.join("\n"), /valid steps: origin, log/);
+    assert.match(refused.err.join("\n"), /valid steps: ota, origin, log/);
     const forced = await runCli(env, ["queue", "close", "J-1", "--steps", "origin", "--force"], {});
     assert.notEqual(forced.code, 0);
     assert.match(forced.err.join("\n"), /cannot be combined with --merged or --force/);

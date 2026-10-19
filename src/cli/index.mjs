@@ -99,7 +99,7 @@ commands:
   connection test <name>                    check a stored connection against its service
   connection list [--json]                  list connections, their type and the orgs using them
   connection remove <name>                  unbind a connection from every org and delete its secret
-  mcp                                       start the stdio MCP server that exposes the thirty-one memory and queue tools
+  mcp                                       start the stdio MCP server that exposes the thirty-two memory and queue tools
   mcp --http [--port <n>] [--token <t>]     serve the same tools over Streamable HTTP on 127.0.0.1
   studio [--port <n>] [--api-only] [--no-open]  serve nightqueue studio, the local web cockpit, on 127.0.0.1
   hook <name>                               run a hook (session-start, prompt-context, agent-foreground, merger-guard, subagent-stop), reading the event JSON from stdin
@@ -109,7 +109,7 @@ commands:
   memory stats [--json]                     count lessons, memories, index entries and runs per project
   memory delete <id> [--project <name>]     delete one memory (M446 or 446) and its search entry; refused inside a queue job
   lesson delete <id> [--project <name>]     delete one lesson (L344 or 344) and its search entry; refused inside a queue job
-  queue add [project] <prompt...> [--run]   enqueue an unattended /nightqueue:resolve run; --run starts it detached
+  queue add [project] <prompt...> [--run]   enqueue an unattended /nightqueue:resolve run; --run starts it detached; --branch <name> or --worktree <path> starts it on existing work
   queue status [J-<id>|<PR URL>] [--json]  show one job or the table of the queue plus the counts per status
   queue status --follow [s] [--until-idle]  keep the table on screen, redrawn every s seconds (default 2)
   queue run [--job | --watch] [--max]       start the runner detached, one job at a time; --max <n> exits after n jobs, --foreground runs it here, --stop ends a watcher

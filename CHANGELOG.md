@@ -65,6 +65,16 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Expo OTA on close.** A new ambient `expo` provider uses the machine's `eas` login (no stored
+  token: `connection add --type expo` is refused like github) and shows as the second Studio
+  card, with the projects whose checkout has an `eas.json`. `project integrations <p> set
+  expo.ota=true` (and `expo.branch`, default `production`) makes every merged close publish
+  `eas update` of the merge commit in a throwaway worktree, with `node_modules` linked and the
+  checkout root's untracked `.env*` copied in, under a budget of its own of 600 s. The new
+  post-close step `ota` runs before `origin` and `log`, stores `close.data.ota`, and never fails
+  a close; the Discord reply and log gain an `OTA` field, and the Linear and Sentry close
+  comments end with the OTA line. `project integrations show` prints `expo: detected` for a
+  checkout with `eas.json`, and `nightqueue doctor` has an `eas` line.
 - **The operator reads, searches and writes Linear issues.** New MCP tools `tracker_read` (one
   issue whole: description, comments, attachments, assignee, state, priority, labels, team and
   project), `tracker_create`, `tracker_comment` and `tracker_update`; `tracker_issues` gains the

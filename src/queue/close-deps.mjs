@@ -1,8 +1,9 @@
 import { execFile } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, symlinkSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { ghPrChecks, ghPrDetail, ghPrDiffNames, ghPrMerge, ghRunRerun } from "../host/gh.mjs";
+import { easAccountStatus, runEasAsync } from "../host/eas.mjs";
+import { ghPrChecks, ghPrDetail, ghPrDiffNames, ghPrMerge, ghPrRequiredChecks, ghRunRerun } from "../host/gh.mjs";
 import { runGitAsync } from "../host/git.mjs";
 import { runNpmAsync } from "../host/npm.mjs";
 import { loadConfig, loadSecrets } from "../config/store.mjs";
@@ -59,6 +60,20 @@ function linkNodeModules(checkout, dir) {
   return true;
 }
 
+// The names of the `.env*` regular files at the root of a checkout, sorted; their content is never read.
+export function envFileNames(checkout) {
+  return readdirSync(checkout)
+    .filter((name) => name.startsWith(".env") && statSync(join(checkout, name), { throwIfNoEntry: false })?.isFile() === true)
+    .sort();
+}
+
+// Copies one root `.env*` file of a checkout into a throwaway worktree as a private regular file, never a link.
+export function copyEnvFile(checkout, dir, name) {
+  const target = join(dir, name);
+  copyFileSync(join(checkout, name), target);
+  chmodSync(target, 0o600);
+}
+
 // The environment the close's test suite runs in: the close's own, without the lease token.
 function testEnv(env) {
   const own = { ...env };
@@ -73,6 +88,7 @@ export function defaultCloseDeps(env = process.env) {
     gh: {
       prDetail: (url, options = {}) => ghPrDetail(url, { ...options, env }),
       prChecks: (url, options = {}) => ghPrChecks(url, { ...options, env }),
+      prRequiredChecks: (url, options = {}) => ghPrRequiredChecks(url, { ...options, env }),
       prMerge: (url, options = {}) => ghPrMerge(url, { ...options, env }),
       runRerun: (runId, options = {}) => ghRunRerun(runId, { ...options, env }),
       prDiffNames: (url, options = {}) => ghPrDiffNames(url, { ...options, env }),
@@ -84,6 +100,13 @@ export function defaultCloseDeps(env = process.env) {
       linkNodeModules,
       readTestScript,
       readText,
+      envFileNames,
+      copyEnvFile,
+    },
+    eas: {
+      whoami: (options = {}) => easAccountStatus({ ...options, env }),
+      update: (args, options = {}) => runEasAsync(args, { ...options, env }),
+      projectInfo: (args, options = {}) => runEasAsync(args, { ...options, env }),
     },
     runTest: ({ cwd, timeoutMs, signal }) => runNpmAsync(["test"], { cwd, env: testEnv(env), timeoutMs, signal }),
     merger: (options) => runMerger({ ...options, env: testEnv(env) }),

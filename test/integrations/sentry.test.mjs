@@ -340,6 +340,24 @@ test("the note of a no-change close carries the headline once and no instruction
   assert.ok(text.includes("The crash comes from an extension."));
 });
 
+test("the merge note ends with the OTA line on done and on warning, and has none on skipped or a no-change close", async () => {
+  const merged = { prUrl: "https://github.com/acme/api/pull/7", prNumber: 7, mergeSha: MERGE_SHA };
+  const head = "Fixed by https://github.com/acme/api/pull/7, merged as abc1234";
+  const url = "https://expo.dev/accounts/acme/projects/app/updates/0f3c9a12-aaaa";
+  const noteOf = async (result) => {
+    const fetch = fakeFetch(issueRoutes());
+    await sentry.onClosed({ ref: "4507", job: { id: 1, ref: "J-1", title: "fix the crash", project: "alpha" }, result, settings: {}, slot: { ...RECORD, name: "sn" }, connections: [], http: httpOf(fetch) });
+    return JSON.parse(fetch.calls[1].body).text;
+  };
+  assert.equal(await noteOf({ ...merged, ota: { status: "done", branch: "production", groupId: "0f3c9a12-aaaa", url, note: null } }), `${head}\n\nOTA published to production (${url})`);
+  assert.equal(await noteOf({ ...merged, ota: { status: "done", branch: "staging", groupId: "0f3c9a12", url: null, note: null } }), `${head}\n\nOTA published to staging`);
+  assert.equal(await noteOf({ ...merged, ota: { status: "warning", branch: "production", groupId: null, url: null, note: "eas update exited 1\nError: bundling failed" } }), `${head}\n\nOTA failed: eas update exited 1`);
+  assert.equal(await noteOf({ ...merged, ota: { status: "skipped", branch: "production", groupId: null, url: null, note: "expo.ota is off" } }), head);
+  assert.equal(await noteOf({ ...merged, ota: null }), head);
+  const noChange = await noteOf({ prUrl: null, prNumber: null, mergeSha: null, resolution: "no-change", conclusion: "Nothing to change.", ota: { status: "done", branch: "production", groupId: "g", url, note: null } });
+  assert.equal(noChange.includes("OTA"), false, `the no-change note carries an OTA line: ${noChange}`);
+});
+
 test("closing a job queued from a sentry link resolves the issue, and a refused update leaves the job closed with a notice line", async (t) => {
   const home = sentryHome(t, "sentry-close");
   setIntegrations(home.env, home.projectId, { sentry: { onClosed: "resolved" } });
@@ -347,7 +365,7 @@ test("closing a job queued from a sentry link resolves the issue, and a refused 
   const fetch = fakeFetch(issueRoutes());
   const { outcome, row } = await closeSentryJob(home, fetch);
   assert.equal(outcome.status, "closed");
-  assert.deepEqual(outcome.postClose.steps[0], { name: "origin", status: "done", note: "sentry 4507: issue 4507 marked resolved" });
+  assert.deepEqual(outcome.postClose.steps[1], { name: "origin", status: "done", note: "sentry 4507: issue 4507 marked resolved" });
   assert.deepEqual(fetch.calls.map((call) => call.method), ["GET", "PUT", "POST"]);
   assert.equal(row.status, "closed");
   assert.deepEqual(JSON.parse(row.close).data.originsNotified, { "sentry 4507": true });

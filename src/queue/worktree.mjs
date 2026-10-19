@@ -10,6 +10,7 @@ import { checkoutOfJob } from "../memory/registry-access.mjs";
 export const WORKTREE_READ_TIMEOUT_MS = 5000;
 export const WORKTREE_REMOVE_TIMEOUT_MS = 60000;
 export const KEPT_PREFIX = "Worktree kept: ";
+export const ADOPTED_WORKTREE_REASON = "it is the worktree this job was queued to start in; nightqueue removes only the worktrees it creates";
 const DROPPED_NAMES_MAX = 10;
 const LOCK_PID_RE = /\(pid (\d+)\b/;
 const WORKTREE_FIELD = "worktree ";
@@ -38,14 +39,15 @@ export function parseWorktreeList(porcelain) {
   return entries;
 }
 
-// The worktrees the given jobs name in the state of their run, canonical and mapped to `{ jobId, branch }`.
+// The worktrees the given jobs name in the state of their run, canonical and mapped to `{ jobId, branch, slug, type }`.
 export function jobWorktreeOwners(jobs, env = process.env) {
   const owners = new Map();
   for (const job of Array.isArray(jobs) ? jobs : []) {
     const state = readRunState({ projectId: job.project_id, slug: job.slug, env });
     const path = typeof state?.worktree === "string" ? state.worktree.trim() : "";
     const branch = typeof state?.branch === "string" ? state.branch.trim() : "";
-    if (path) owners.set(canonicalPath(path), { jobId: job.id, branch: branch || null });
+    const type = typeof state?.type === "string" ? state.type.trim() : "";
+    if (path) owners.set(canonicalPath(path), { jobId: job.id, branch: branch || null, slug: job.slug, type: type || null });
   }
   return owners;
 }
@@ -56,6 +58,26 @@ export async function openJobWorktrees({ store, env = process.env } = {}) {
     return jobWorktreeOwners(await store.jobs.listOpenJobs(), env);
   } catch {
     return new Map();
+  }
+}
+
+// The branch and worktree one job's run state holds, as `{ jobId, projectId, slug, type, branch, worktree }`, or null when it holds neither.
+function jobHold(job, env) {
+  const state = readRunState({ projectId: job.project_id, slug: job.slug, env });
+  const text = (value) => (typeof value === "string" && value.trim() !== "" ? value.trim() : null);
+  const branch = text(state?.branch);
+  const worktree = text(state?.worktree);
+  if (branch === null && worktree === null) return null;
+  return { jobId: job.id, projectId: job.project_id, slug: job.slug, type: text(state?.type), branch, worktree: worktree === null ? null : canonicalPath(worktree) };
+}
+
+// What every job that is not closed holds; null when the queue cannot be read, so the caller gates instead of assuming nobody owns anything.
+export async function openJobHolds({ store, env = process.env } = {}) {
+  try {
+    const jobs = await store.jobs.listOpenJobs();
+    return (Array.isArray(jobs) ? jobs : []).map((job) => jobHold(job, env)).filter(Boolean);
+  } catch {
+    return null;
   }
 }
 
@@ -87,6 +109,13 @@ export function canonicalPath(path) {
 // Tells whether two paths name the same directory once every component is resolved.
 export function sameDir(a, b) {
   return canonicalPath(a) === canonicalPath(b);
+}
+
+// Tells whether the run's worktree is the one the job was queued to start in, which the runtime never removes.
+export function isAdoptedWorktree(state) {
+  const adopted = typeof state?.adoptedWorktree === "string" ? state.adoptedWorktree.trim() : "";
+  const worktree = typeof state?.worktree === "string" ? state.worktree.trim() : "";
+  return adopted !== "" && worktree !== "" && sameDir(adopted, worktree);
 }
 
 // First line of a git message, short enough for a notice or a report line.
@@ -272,6 +301,7 @@ export async function releaseJobWorktree({ job, env = process.env, killImpl = ki
     const state = readRunState({ projectId: job.project_id, slug: job.slug, env });
     path = typeof state?.worktree === "string" && state.worktree.trim() ? state.worktree.trim() : null;
     if (!path) return null;
+    if (isAdoptedWorktree(state)) return { path, status: "kept", reason: ADOPTED_WORKTREE_REASON };
     const checkout = checkoutOfJob(job, env);
     if (!checkout) return { path, status: "kept", reason: `the project \`${job.project}\` is not registered` };
     const prRecorded = isPrUrl(job.pr_url) || isPrUrl(state?.outcome?.prUrl);

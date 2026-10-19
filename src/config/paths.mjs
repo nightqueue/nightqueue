@@ -201,6 +201,11 @@ export function runDir(projectId, slug, env = process.env) {
   return join(runsDir(env), projectId, slug);
 }
 
+// Path of the lock that makes taking a starting point one step per project: read who holds it, then record it.
+export function startPointsLockPath(projectId, env = process.env) {
+  return join(runsDir(env), projectId, ".start-points.lock");
+}
+
 // Path of the append-only file where a run queues the database records the store refused while it was unavailable.
 export function pendingWritesPath(projectId, slug, env = process.env) {
   return join(runDir(projectId, slug, env), "pending-writes.jsonl");

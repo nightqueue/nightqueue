@@ -1,7 +1,7 @@
 import { UserError } from "../config/errors.mjs";
 import { orgSlot, orgUsesConnection } from "./connections.mjs";
 import { quietFiles } from "./coverage.mjs";
-import { isHomeScoped, providerOf, providers } from "./registry.mjs";
+import { detectingProviders, detectsCheckout, isHomeScoped, providerOf, providers } from "./registry.mjs";
 
 export const INTEGRATION_ACTIONS = Object.freeze(["show", "set", "unset"]);
 
@@ -113,7 +113,14 @@ function parseConnection(setting, name, { orgId, config, secrets }) {
   return name;
 }
 
-const VALUE_PARSERS = { enum: parseEnum, boolean: parseBoolean, list: parseList, connection: parseConnection };
+// Reads a `text` value, matched against the declared pattern when there is one.
+function parseText(setting, text) {
+  const pattern = setting.spec.pattern;
+  if (!(pattern instanceof RegExp) || pattern.test(text)) return text;
+  throw new UserError(`\`${setting.key}\` takes ${setting.spec.format ?? `text matching ${pattern}`}; got \`${text}\``);
+}
+
+const VALUE_PARSERS = { enum: parseEnum, boolean: parseBoolean, list: parseList, text: parseText, connection: parseConnection };
 
 // The stored form of a value given as text for a setting.
 function parseValue(setting, value, files) {
@@ -174,11 +181,18 @@ function orgConnectionLines(integrations, { orgId, config }) {
     .map((kind) => `${kind}: org connection ${orgSlot(config, orgId, kind) ?? "none"}`);
 }
 
-// The lines that show a project's integrations: one `<key>=<value>` per setting, then the org connections; `no integrations` when there is none.
-export function integrationLines(integrations, { orgId, env }) {
+// One `<kind>: detected` line per provider that recognizes the checkout.
+export function detectionLines(checkout) {
+  return detectingProviders()
+    .filter((provider) => detectsCheckout(provider, checkout))
+    .map((provider) => `${provider.kind}: detected`);
+}
+
+// The lines that show a project's integrations: one `<key>=<value>` per setting, then the org connections, then what the checkout shows; `no integrations` when there is no setting.
+export function integrationLines(integrations, { orgId, env, checkout }) {
   const settings = settingEntries(integrations).map((entry) => `${entry.key}=${entry.value}`);
-  if (!settings.length) return ["no integrations"];
-  return [...settings, ...orgConnectionLines(integrations, { orgId, config: quietFiles(env).config })];
+  const stored = settings.length ? [...settings, ...orgConnectionLines(integrations, { orgId, config: quietFiles(env).config })] : ["no integrations"];
+  return [...stored, ...detectionLines(checkout)];
 }
 
 // The answer shape of a project's integrations: the stored value and the settings this build offers.

@@ -165,6 +165,12 @@ export function ambientLine(status: AmbientStatus | null | undefined, tool: stri
   return status.host ? `connected as ${status.login} · ${status.host}` : `connected as ${status.login}`;
 }
 
+// The projects an ambient module recognized, as `detected in <a>, <b>`, or null when there is none.
+export function ambientDetectedLine(status: AmbientStatus | null | undefined): string | null {
+  const names = Array.isArray(status?.detected) ? status.detected.filter((name) => typeof name === "string" && name) : [];
+  return names.length ? `detected in ${names.join(", ")}` : null;
+}
+
 // The names of the modules joined for a sentence, as `Discord, Linear and GitHub`.
 export function joinLabels(modules: readonly ModuleCard[]): string {
   const labels = modules.map((module) => module.label);

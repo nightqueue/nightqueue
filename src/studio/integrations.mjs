@@ -37,7 +37,7 @@ import {
   setDestination,
   unlinkProjectsUsing,
 } from "../integrations/destinations.mjs";
-import { manyTypes, moduleCards, providerOf } from "../integrations/registry.mjs";
+import { detectsCheckout, manyTypes, moduleCards, providerOf } from "../integrations/registry.mjs";
 import { jobRef } from "../memory/refs.mjs";
 import { refuseHomeWriteInsideJob } from "../queue/home-guard.mjs";
 import { openRegistryWriter, withReadOnlyStore } from "../store/open.mjs";
@@ -395,16 +395,29 @@ export async function ambientStatus({ kind, env }) {
   if (typeof status !== "function") throw new ApiRefusal(404, `\`${kind}\` has no machine status`, { code: "not-found" });
   const key = `${homeDir(env)}\0${kind}`;
   if (!statusesInFlight.has(key)) {
-    const probe = Promise.resolve()
-      .then(() => status(env))
+    const probe = Promise.all([Promise.resolve().then(() => status(env)), detectedProjects(providerOf(kind), env)])
+      .then(([machine, detected]) => ({ machine, detected }))
       .finally(() => statusesInFlight.delete(key));
     statusesInFlight.set(key, probe);
   }
-  return publicStatus(kind, await statusesInFlight.get(key));
+  const { machine, detected } = await statusesInFlight.get(key);
+  return publicStatus(kind, machine, detected);
 }
 
-// The public fields of a machine status: flags and account names only, never raw output.
-function publicStatus(kind, status) {
+// The names of the registered projects whose checkout the provider recognizes; null for a provider that detects nothing.
+async function detectedProjects(provider, env) {
+  if (typeof provider?.detect !== "function") return null;
+  if (!existsSync(dbPath(env))) return [];
+  try {
+    const projects = await withReadOnlyStore(env, (store) => store.projects.list());
+    return (Array.isArray(projects) ? projects : []).filter((project) => detectsCheckout(provider, project?.path)).map((project) => project.name);
+  } catch {
+    return [];
+  }
+}
+
+// The public fields of a machine status: flags, account names and detected project names only, never raw output.
+function publicStatus(kind, status, detected) {
   const text = (value) => (typeof value === "string" && value ? value : null);
   return {
     kind,
@@ -412,6 +425,7 @@ function publicStatus(kind, status) {
     authenticated: status?.authenticated === null ? null : status?.authenticated === true,
     login: text(status?.login),
     host: text(status?.host),
+    ...(Array.isArray(detected) ? { detected } : {}),
     checkedAt: new Date().toISOString(),
   };
 }
