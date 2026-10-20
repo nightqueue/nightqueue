@@ -4,7 +4,10 @@ Every notable change of this project is recorded here, newest first. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the
 versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## 0.7.0 - 2026-10-20
+
+0.6.0 was tagged in this file but never published to npm; a 0.5.x install reaches 0.7.0 directly
+and gets both sections. `nightqueue update` is required (schema v26).
 
 ### Breaking
 
@@ -64,6 +67,14 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
   accepted. Put what an investigation found in the job's prompt or an `issue_comment`.
 
 ### Added
+
+- **`npm run studio:demo` and `npm run studio:shots`.** `scripts/studio-demo.mjs` seeds a throwaway
+  home with an invented org (`acme`: `api`, `web`, `mobile`), runs eleven jobs through the real
+  runner with a scripted `claude` (`scripts/studio-demo-claude.mjs`, never the real one: the demo
+  refuses a non-executable fake and strips `claude` from `PATH`), closes five of them through the
+  store's own close writes, and serves the Studio over that home; `--capture` takes the
+  `docs/assets/studio-*.png` screenshots with Playwright at 2x, `--check` only seeds and lists the
+  night. The README and the landing page show these screenshots, so no real project appears in them.
 
 - **Expo OTA on close.** A new ambient `expo` provider uses the machine's `eas` login (no stored
   token: `connection add --type expo` is refused like github) and shows as the second Studio

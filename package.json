@@ -1,7 +1,7 @@
 {
   "name": "@nightqueue/nq",
   "version": "0.6.0",
-  "description": "Issues in, pull requests with proof out. A local queue of coding agents that fixes and proves each job — reproducing and root-causing the risky ones. Runs on Claude Code, on your machine.",
+  "description": "Issues in, pull requests with proof out. A local queue of coding agents with a cockpit: queue a job in the Studio, watch it reproduce, root-cause, fix and prove the change phase by phase, and come back to a pull request with evidence. Runs on Claude Code, on your machine.",
   "license": "BUSL-1.1",
   "author": {
     "name": "Maykon Vinicius",
@@ -19,6 +19,7 @@
   "keywords": [
     "claude-code",
     "claude",
+    "studio",
     "mcp",
     "agent",
     "queue",
@@ -49,7 +50,9 @@
     "release:check": "npm test && node scripts/release-check.mjs",
     "studio:dev": "node scripts/studio-dev.mjs",
     "studio:typecheck": "tsc -p studio/tsconfig.json --noEmit",
-    "studio:build": "npm run studio:typecheck && vite build --config studio/vite.config.mts && node scripts/studio-stamp.mjs write"
+    "studio:build": "npm run studio:typecheck && vite build --config studio/vite.config.mts && node scripts/studio-stamp.mjs write",
+    "studio:demo": "node scripts/studio-demo.mjs",
+    "studio:shots": "node scripts/studio-demo.mjs --capture"
   },
   "engines": {
     "node": ">=22"

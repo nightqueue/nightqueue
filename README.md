@@ -7,22 +7,26 @@
 [![node](https://img.shields.io/node/v/%40nightqueue%2Fnq)](package.json)
 [![license: BUSL-1.1](https://img.shields.io/badge/license-BUSL--1.1-blue)](LICENSE)
 
-Every job is proved before it ships. Bugs and risky changes are reproduced
-first, root-caused, fixed and attacked by adversarial QA, then checked at
-runtime; a docs or config change just runs your project's own checks. The pull
-request ships with Report → Cause → Changes → QA. A job that can't prove its fix
-stops at a gate with a written notice instead of opening a PR.
+A local queue of coding agents with a cockpit. Queue a job from a Linear issue
+or a line of prose, watch the pipeline reproduce, root-cause, fix, attack and
+verify it phase by phase, and come back to a pull request that carries its
+evidence — Report → Cause → Changes → QA. A job that can't prove its fix stops
+at a gate with a written notice instead of opening a PR.
+
+[![The nightqueue Studio: the queue of jobs, each with status, duration, tokens, project, title and pull request](docs/assets/studio-queue.png)](docs/assets/studio-queue.png)
 
 Queue the work during the day. Start the batch when you step away. Come back to
 pull requests — and to an agent that remembers what it learned last night.
 
-**Operate it however you work.** `nq` in the terminal, the Studio in the
-browser, or straight from Claude Code and Claude Desktop through the MCP server.
-Same queue, same pipeline, same memory underneath.
+**Operate it however you work.** The [Studio](#the-studio) in the browser
+(`nq studio`), `nq` in the terminal, or straight from Claude Code and Claude
+Desktop through the MCP server. Same queue, same pipeline, same memory
+underneath.
 
 <p>
   <a href="https://nightqueue.github.io">Website</a> ·
   <a href="#quick-start">Quick start</a> ·
+  <a href="#the-studio">Studio</a> ·
   <a href="docs/install.md">Install</a> ·
   <a href="docs/queue.md">Queue</a> ·
   <a href="docs/memory.md">Memory</a> ·
@@ -82,12 +86,57 @@ is written to a local SQLite home and recalled by the next job through the
 nightqueue MCP server. The full promise between the pipeline and the runner is
 written down in [docs/runtime-contract.md](docs/runtime-contract.md).
 
+## The Studio
+
+`nightqueue studio` serves the cockpit on `127.0.0.1` (port 4747 by default,
+one token per start): the queue, every job phase by phase, an operator terminal
+and the settings. Everything it does goes through the same runtime commands and
+MCP tools the CLI uses — nothing is Studio-only underneath.
+
+**A job, phase by phase.** The pipeline card shows the nine slots of the run
+from second zero, each in its agent's colour; a slot the tier skips is hatched
+and says why. Active time, tokens, cost and attempts, with the token share per
+phase. The live log is a tree — phase → lane → event — with answers, hand-backs
+and phase reports you can expand, and the notice the job wrote beside it.
+
+[![A closed job in the Studio: the pipeline track with nine coloured phases, 34m6s, 12.2M tokens, $8.24, the live log and the notice reading Delivered](docs/assets/studio-job.png)](docs/assets/studio-job.png)
+
+**An operator beside the queue.** A Claude Code session in a terminal docked at
+the bottom of every page, or split beside it. It runs `nightqueue open` in the
+home — investigate a bug, reproduce it in a throwaway worktree, review a
+finished job's pull request, prepare the next job — and never edits code, runs
+it, commits or opens a pull request; the queue does that. `Resume in terminal`
+reopens the session that did the work of any job in `gate`, `failed` or `done`.
+
+[![The Studio split in two: a Claude Code operator session on the left, the queue on the right](docs/assets/studio-operator.jpg)](docs/assets/studio-operator.jpg)
+
+**Queue in prose, or from Linear.** `+ Add job` takes the project, the whole
+request as prose, a tier (or lets the pipeline decide) and a priority, shows the
+exact `queue_add` call it will make, and `Queue and start runner` starts the
+batch at once. With Linear connected, the issues card below the queue lists the
+workspace by team and project; `Queue` on an issue opens the drawer with it as
+the job's origin.
+
+[![The Add job drawer: project, brief, tier, priority and the queue_add call it will make](docs/assets/studio-add-job.png)](docs/assets/studio-add-job.png)
+
+**Integrations, orgs and projects.** GitHub, Expo, Linear, Sentry and Discord as
+connections — a secret is never shown again once saved. Orgs and projects are
+registered, edited and removed from the same page.
+
+[![Studio settings: GitHub, Expo, Linear, Sentry and Discord integrations](docs/assets/studio-settings.png)](docs/assets/studio-settings.png)
+
+The Studio needs no extra install: `studio/dist` ships in the package, the
+terminal needs the optional `node-pty` (without it the Studio offers the command
+to copy), and `nightqueue doctor` reports both. The screenshots above come from
+`npm run studio:demo`: the real Studio over a throwaway home with three invented
+projects and one scripted night (`npm run studio:shots` regenerates them).
+
 ## Where jobs come from, where you drive them
 
 | In | Out |
 |---|---|
-| A Linear issue, queued with `origin: [{kind: "linear", ref}]` over MCP (from `tracker_issues`) or `--origin linear:MK-42` on the CLI | The Studio in the browser: queue, jobs and settings (`nightqueue studio`) |
-| One line in the terminal: `nightqueue queue add "<request>"` | The CLI: `nightqueue queue add`, `run`, `status` and `retry` |
+| A Linear issue: `Queue` on the Studio's issues card, `origin: [{kind: "linear", ref}]` over MCP (from `tracker_issues`) or `--origin linear:MK-42` on the CLI | The Studio in the browser: queue, jobs, operator and settings (`nightqueue studio`) |
+| A brief in prose: `+ Add job` in the Studio, or `nightqueue queue add "<request>"` in the terminal | The CLI: `nightqueue queue add`, `run`, `status` and `retry` |
 | A plan under discussion in Claude Code: `/nightqueue:queue` | The MCP server, from any Claude client: `queue_add`, `queue_status`, and memory tools such as `lesson_recall` and `memory_recall` |
 
 ## Why nightqueue
@@ -99,6 +148,7 @@ written down in [docs/runtime-contract.md](docs/runtime-contract.md).
 | Memory | gone when the window closes | lessons and memories persist per org |
 | Quality gate | whatever you remember to ask | your project's own checks on every run, plus adversarial QA on complex jobs |
 | Output | a diff in a terminal | a reviewable pull request with a report |
+| Visibility | a scrollback | the Studio: every job, phase by phase, with its cost and its notice |
 | When it runs | while you watch | while you sleep |
 
 Free, local and yours. A hosted **Team** tier — one shared queue and memory per
@@ -118,12 +168,13 @@ nightqueue queue add "fix the flaky worker"            # queue one deliverable
 nightqueue queue add "add the retry to the uploader"   # and the next one
 nightqueue queue run                                   # start the batch, detached, when you step away
 
-nightqueue queue status                                # the next morning: what each job became
-nightqueue queue retry 7 --note "rename the column"    # answer a gate and send the job back
+nightqueue studio                                      # the next morning: what each job became, phase by phase
+nightqueue queue retry 7 --note "rename the column"    # answer a gate and send the job back (or Retry with a note, in the Studio)
 ```
 
-Inside Claude Code, `/nightqueue:queue` turns the plan under discussion into a
-job, and `/nightqueue:resolve <request>` runs the pipeline on the spot.
+Everything above has a button in the Studio. Inside Claude Code,
+`/nightqueue:queue` turns the plan under discussion into a job, and
+`/nightqueue:resolve <request>` runs the pipeline on the spot.
 
 ## Commands
 
@@ -141,7 +192,7 @@ nightqueue queue cancel <id> --reason "<why>"
 nightqueue queue close <id> [--force] [--foreground] [--json]
 nightqueue queue close --merged [--json]
 nightqueue queue pause | resume
-nightqueue studio [--port <n>] [--no-open]    # the queue in the browser, on 127.0.0.1
+nightqueue studio [--port <n>] [--no-open]    # the Studio in the browser, on 127.0.0.1
 
 # memory
 nightqueue memory stats
