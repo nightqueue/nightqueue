@@ -1,6 +1,6 @@
 {
   "name": "@nightqueue/nq",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Issues in, pull requests with proof out. A local queue of coding agents with a cockpit: queue a job in the Studio, watch it reproduce, root-cause, fix and prove the change phase by phase, and come back to a pull request with evidence. Runs on Claude Code, on your machine.",
   "license": "BUSL-1.1",
   "author": {
