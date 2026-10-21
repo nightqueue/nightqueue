@@ -248,10 +248,12 @@ function boundWorktree(t, env, { slug = SLUG } = {}) {
   return repo;
 }
 
+const TRIAGE_TAIL = "\n## Validated brief\nok\n\n## Out of scope\n- No item excluded from the scope.\n\n## Request gaps\n- None.\n";
+
 test("`run check` answers OK on a complete artifact and names every section the artifact does not carry", async (t) => {
   const env = makeQueue(t, "cli-run-check-sections");
   const id = boundJob(env);
-  writeArtifact(env, "01-triage.md", "# Triage\n\n## Verdict: PROCEED\n\nEvidence level: 3\n");
+  writeArtifact(env, "01-triage.md", "# Triage\n\n## Verdict: PROCEED\n\nEvidence level: 3\n" + TRIAGE_TAIL);
   writeArtifact(env, "03-plan.md", "# Plan\n\n## Implementation plan\n\n- do it\n\n## Assumptions\n\nnone\n");
 
   const triage = await runCli(env, ["run", "check", "01"], { jobId: id });
@@ -327,16 +329,19 @@ test("`run check 01` requires `Evidence level: <1-4>` as the first line under ##
   const env = makeQueue(t, "cli-run-check-evidence");
   const id = boundJob(env);
   const cases = [
-    ["# Triage\n\n## Verdict: PROCEED\n\nThe cause is confirmed.\n", EVIDENCE_MISSING],
-    ["# Triage\n\n## Verdict: PROCEED\n\n## Diagnosis\nEvidence level: 3\n", EVIDENCE_MISSING],
-    ["# Triage\n\n## Verdict: PROCEED\n\nThe cause.\nEvidence level: 3\n", EVIDENCE_MISSING],
-    ["# Triage\n\n## Verdict: PROCEED\n\nEvidence level: 0\n", EVIDENCE_MISSING],
-    ["# Triage\n\n## Verdict: PROCEED\n\nEvidence level: 5\n", EVIDENCE_MISSING],
-    ["# Triage\n\n## Verdict: NOT-REPRODUCIBLE\nEvidence level: 1\n", "OK"],
-    ["# Triage\n\n## Verdict: PROCEED\n\n**Evidence level:** 4\n", "OK"],
-    ["# Triage\n\n## Verdict: PROCEED\n\n**Evidence level: 3**\n", "OK"],
-    ["# Triage\n\n## Verdict: PROCEED\n\n**Evidence level: 5**\n", EVIDENCE_MISSING],
-    ["# Triage\n\n## Diagnosis\n\n- cause\n", "MISSING: ## Verdict"],
+    ["# Triage\n\n## Verdict: PROCEED\n\nThe cause is confirmed.\n" + TRIAGE_TAIL, EVIDENCE_MISSING],
+    ["# Triage\n\n## Verdict: PROCEED\n\n## Diagnosis\nEvidence level: 3\n" + TRIAGE_TAIL, EVIDENCE_MISSING],
+    ["# Triage\n\n## Verdict: PROCEED\n\nThe cause.\nEvidence level: 3\n" + TRIAGE_TAIL, EVIDENCE_MISSING],
+    ["# Triage\n\n## Verdict: PROCEED\n\nEvidence level: 0\n" + TRIAGE_TAIL, EVIDENCE_MISSING],
+    ["# Triage\n\n## Verdict: PROCEED\n\nEvidence level: 5\n" + TRIAGE_TAIL, EVIDENCE_MISSING],
+    ["# Triage\n\n## Verdict: NOT-REPRODUCIBLE\nEvidence level: 1\n" + TRIAGE_TAIL, "OK"],
+    ["# Triage\n\n## Verdict: PROCEED\n\n**Evidence level:** 4\n" + TRIAGE_TAIL, "OK"],
+    ["# Triage\n\n## Verdict: PROCEED\n\n**Evidence level: 3**\n" + TRIAGE_TAIL, "OK"],
+    ["# Triage\n\n## Verdict: PROCEED\n\n**Evidence level: 5**\n" + TRIAGE_TAIL, EVIDENCE_MISSING],
+    ["# Triage\n\n## Verdict: NEEDS-CLARIFICATION\n\nEvidence level: 1\n" + TRIAGE_TAIL, "OK"],
+    ["# Triage\n\n## Verdict: PROCEED\n\nEvidence level: 3\n", "MISSING: ## Validated brief, ## Out of scope, ## Request gaps"],
+    ["# Triage\n\n## Verdict: PROCEED\n\nEvidence level: 3\n" + TRIAGE_TAIL.replace("\n## Request gaps\n- None.\n", ""), "MISSING: ## Request gaps"],
+    ["# Triage\n\n## Diagnosis\n\n- cause\n", "MISSING: ## Verdict, ## Validated brief, ## Out of scope, ## Request gaps"],
   ];
   for (const [body, expected] of cases) {
     writeArtifact(env, "01-triage.md", body);

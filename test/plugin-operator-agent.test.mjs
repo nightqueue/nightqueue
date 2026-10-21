@@ -124,12 +124,15 @@ test("every command qa.md shows is one the qa guard accepts, and a bare command 
   assert.equal(qaBashAllowed("npm test", env), false);
 });
 
-test("the triager's verdict opens with `Evidence level: <1|2|3|4>`, and the 0-4 scale is gone", () => {
-  const lines = TRIAGER.split("\n");
+test("the triager's request opens its verdict with `Evidence level: <1-4>`, and the 0-4 scale is gone", () => {
+  const request = readFileSync(join(pluginDir(), "skills/resolve/references/prompts/triager.md"), "utf8");
+  const lines = request.split("\n");
   const verdict = lines.findIndex((line) => line.startsWith("## Verdict:"));
-  assert.notEqual(verdict, -1, "triager.md has no `## Verdict:` template");
+  assert.notEqual(verdict, -1, "the triager request has no `## Verdict:` template");
   const firstLine = lines.slice(verdict + 1).find((line) => line.trim() !== "");
-  assert.equal(firstLine, "Evidence level: <1|2|3|4>");
-  assert.equal(TRIAGER.includes("0-4"), false);
-  assert.equal(/evidence level 0\b/i.test(TRIAGER), false);
+  assert.equal(firstLine, "Evidence level: <1-4>");
+  for (const text of [TRIAGER, request]) {
+    assert.equal(text.includes("0-4"), false);
+    assert.equal(/evidence level 0\b/i.test(text), false);
+  }
 });

@@ -6,7 +6,8 @@ import { fileURLToPath } from "node:url";
 import { buildPrompt } from "../src/queue/spawn.mjs";
 
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
-const AGENTS = ["coder", "qa-guardian", "verifier", "triager", "explore", "architect"];
+// A pipeline-independent agent (the triager) gets the rule from its request, never its file; the series ends with no agent carrying it.
+const AGENTS = ["coder", "qa-guardian", "verifier", "explore", "architect"];
 const REFUSAL = "too complex to verify that it stays inside the worktree";
 const PROMPTS = join(ROOT, "plugin/skills/resolve/references/prompts");
 
@@ -31,6 +32,7 @@ test("every subagent prompt template repeats the shell rule in one line and pres
   assert.equal(rule.split("\n").length, 1, "the shell rule of the prompts is not one line");
   assert.ok(rule.includes(REFUSAL), "the shell rule of the prompts does not name the refusal");
   assert.match(rule, /one simple command per Bash call, no heredocs \(`<<`\)/);
+  assert.ok(readFileSync(join(PROMPTS, "triager.md"), "utf8").includes("{{>_shell-rule}}"), "the triager request does not carry the shell rule");
   for (const name of readdirSync(PROMPTS).filter((file) => file.endsWith(".md"))) {
     const text = readFileSync(join(PROMPTS, name), "utf8");
     if (!name.startsWith("_")) assert.ok(text.includes("{{>_shell-rule}}"), `${name} does not repeat the shell rule`);
