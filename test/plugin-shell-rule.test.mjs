@@ -6,8 +6,8 @@ import { fileURLToPath } from "node:url";
 import { buildPrompt } from "../src/queue/spawn.mjs";
 
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
-// A pipeline-independent agent (the triager) gets the rule from its request, never its file; the series ends with no agent carrying it.
-const AGENTS = ["coder", "qa-guardian", "verifier", "explore", "architect"];
+// A pipeline-independent agent (the triager and the explore) gets the rule from its request, never its file; the series ends with no agent carrying it.
+const AGENTS = ["coder", "qa-guardian", "verifier", "architect"];
 const REFUSAL = "too complex to verify that it stays inside the worktree";
 const PROMPTS = join(ROOT, "plugin/skills/resolve/references/prompts");
 

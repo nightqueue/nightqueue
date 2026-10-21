@@ -8,14 +8,24 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
-- **The triager is pipeline-independent.** `plugin/agents/triager.md` holds who it is, how it
-  thinks, its method, resources and evidence standard — no phase, run artifact, orchestrator,
-  other agent, shell rule or deliverable section. Its request (`prompts/triager.md`, rendered by
-  `phase_prompt`) owns the deliverable: an `Inputs` line, a `## Deliver` block with the format of
-  each section, and the shared handoff.
+- **The triager and the explore are pipeline-independent.** `plugin/agents/triager.md` holds who
+  it is, how it thinks, its method, resources and evidence standard — no phase, run artifact,
+  orchestrator, other agent, shell rule or deliverable section. Its request (`prompts/triager.md`,
+  rendered by `phase_prompt`) owns the deliverable: an `Inputs` line, a `## Deliver` block with the
+  format of each section, and the shared handoff. `plugin/agents/explore.md` now holds only its
+  identity, method, resources (`nightqueue libs`, one lesson recall after reading the code) and
+  the rule that it never classifies what it observes. Its request (`prompts/explore.md`) owns the
+  `Inputs` line, the search rule, a `## Deliver` block — `## File map` (at most 30 files),
+  `## Access map` (the five terminals, plus the `unimplemented intent:`, `**No entry point:**`
+  and `partial:` lines) and `## Third-party libraries` (`- <lib>@<version>`, or `- None`) — and
+  the shared handoff. The stale "index saved" return and the `## Structural index` section of
+  the artifact are gone; `nightqueue run index-save` still reads the File map and the libraries.
 - **`nightqueue run check 01` enforces the four mandatory sections**: `## Verdict` (with
   `Evidence level: <1-4>` as its first line), `## Validated brief`, `## Out of scope` and
   `## Request gaps`, on every verdict — an artifact missing one answers `MISSING:`.
+- **`nightqueue run check 02` enforces `## File map`, `## Access map` and
+  `## Third-party libraries`.** It used to check that `02-explore.md` exists, nothing more; an
+  artifact missing one of the three now answers `MISSING:` with the absent headings.
 - **The shared `_handoff` partial carries the lesson-citation protocol** (`Lesson L<id> applied:`
   up to 2 lines outside the 10-line budget; recalled `L<id>`/`M<id>` refs cited in the return)
   for every prompt that includes it.

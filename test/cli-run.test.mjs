@@ -249,6 +249,7 @@ function boundWorktree(t, env, { slug = SLUG } = {}) {
 }
 
 const TRIAGE_TAIL = "\n## Validated brief\nok\n\n## Out of scope\n- No item excluded from the scope.\n\n## Request gaps\n- None.\n";
+const EXPLORE_OK = "# Explore\n\n## File map\n- /a.mjs — a\n\n## Access map\n- **No entry point:** text · grep\n\n## Third-party libraries\n- None\n";
 
 test("`run check` answers OK on a complete artifact and names every section the artifact does not carry", async (t) => {
   const env = makeQueue(t, "cli-run-check-sections");
@@ -268,7 +269,17 @@ test("`run check` answers OK on a complete artifact and names every section the 
   assert.deepEqual(qa.out, ["MISSING: ## Break hypotheses, ## Test recipe"]);
 
   const explore = await runCli(env, ["run", "check", "02"], { jobId: id });
-  assert.deepEqual(explore.out, ["MISSING: 02-explore.md (not written)"]);
+  assert.deepEqual(explore.out, ["MISSING: ## File map, ## Access map, ## Third-party libraries"]);
+
+  writeArtifact(env, "02-explore.md", EXPLORE_OK);
+  const exploreOk = await runCli(env, ["run", "check", "02"], { jobId: id });
+  assert.deepEqual(exploreOk.out, ["OK"]);
+
+  for (const heading of ["## Access map", "## Third-party libraries"]) {
+    writeArtifact(env, "02-explore.md", EXPLORE_OK.replace(`${heading}\n`, ""));
+    const exploreIncomplete = await runCli(env, ["run", "check", "02"], { jobId: id });
+    assert.deepEqual(exploreIncomplete.out, [`MISSING: ${heading}`]);
+  }
 
   writeArtifact(env, "06-runtime.md", "# Runtime\n\nDiff applies plan: yes\n");
   const runtimeIncomplete = await runCli(env, ["run", "check", "06.5"], { jobId: id });

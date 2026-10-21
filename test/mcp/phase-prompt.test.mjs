@@ -145,7 +145,7 @@ test("the handoff contract heads every prompt, and the fast prompts carry its ge
   for (const template of TEMPLATES) {
     assert.equal(renderTemplate(template, FULL).split("\n")[0], contract[0], `${template} does not open with the handoff contract`);
   }
-  for (const template of ["coder-fast", "verifier-fast", "triager"]) {
+  for (const template of ["coder-fast", "verifier-fast", "triager", "explore"]) {
     const render = renderTemplate(template, FULL);
     for (const line of contract.slice(3)) assert.ok(render.includes(`${line}\n`), `${template} misses: ${line}`);
   }
@@ -168,6 +168,28 @@ test("the triager request renders Inputs, the Deliver block with its nine headin
     }
     assert.equal(render.includes("Follow your triage methodology"), false);
     assert.equal(render.includes("step 5.2"), false);
+  }
+});
+
+const EXPLORE_HEADINGS = ["## File map", "## Access map", "## Third-party libraries"];
+
+test("the explore request renders Inputs, the Deliver block with its three headings and the handoff lines", () => {
+  for (const values of [FULL, { ...FULL, INDEX_MAP: "", INDEX_LIBS: "" }]) {
+    const render = renderTemplate("explore", values);
+    assert.ok(render.includes("\nInputs: "), "the explore request has no Inputs line");
+    assert.ok(render.includes("Lesson L<id> applied"), "the explore request lacks the lesson-citation protocol");
+    const lines = render.split("\n");
+    let from = lines.indexOf("## Deliver");
+    assert.notEqual(from, -1, "the explore request has no `## Deliver` block");
+    for (const heading of EXPLORE_HEADINGS) {
+      const at = lines.findIndex((line, index) => index > from && line.startsWith(heading));
+      assert.ok(at > from, `${heading} is missing or out of order after ## Deliver`);
+      from = at;
+    }
+    assert.equal(render.includes("index saved"), false, "the explore request still names the stale index return");
+    assert.equal(lines.some((line) => line.startsWith("project: ") || line.startsWith("repo_root: ")), false);
+    assert.ok(render.includes(`Repository: ${REPO}\nProject: alpha\n`), "the explore request lost the shared footer");
+    assert.equal(render.split("Relaunch note:").length - 1, 1, "the relaunch note is not rendered exactly once");
   }
 });
 

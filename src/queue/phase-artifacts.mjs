@@ -11,7 +11,7 @@ const EVIDENCE_FIRST_LINE = {
 export const PHASE_ARTIFACTS = new Map([
   ["00", { file: "00-brief.md", sections: ["## Brief"] }],
   ["01", { file: "01-triage.md", sections: ["## Verdict", "## Validated brief", "## Out of scope", "## Request gaps"], firstLineUnder: EVIDENCE_FIRST_LINE }],
-  ["02", { file: "02-explore.md", sections: [] }],
+  ["02", { file: "02-explore.md", sections: ["## File map", "## Access map", "## Third-party libraries"] }],
   ["03", { file: "03-plan.md", sections: ["## Implementation plan", "## Assumptions", "## Pre-mortem", "## Identified risks"] }],
   ["04", { file: "04-implementation.md", sections: [FILE_LIST] }],
   ["05a", { file: "05a-qa-analyst.md", sections: ["## Break hypotheses", "## Test recipe"], rounds: true }],

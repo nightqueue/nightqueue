@@ -224,10 +224,10 @@ the `## Usage coverage` — that is why the Map (QA) is written BEFORE any `Read
 Named escape hatches: *a Map written after the plan is a rubber stamp, not an enumeration*; *re-running
 the architect's greps confirms his method, it does not produce an independent enumeration*.
 
-1. **The `## Access map (QA)` of step 0** follows the format and the vocabulary of
-   `agents/explore.md` (one line per entry point:
-   `- <consumer> · <file:line> · <hop1 → hop2 → hop3> · terminal: <…>`, only the
-   valid terminals from there).
+1. **The `## Access map (QA)` of step 0** follows the format and the vocabulary of the
+   explore's `## Access map` (one line per entry point:
+   `- <consumer> · <file:line> · <hop1 → hop2 → hop3> · terminal: <…>`, the terminal one of
+   `click:`, `route:`, `job/cron/webhook:`, `command:` or `external consumer: not verifiable`).
 2. **Only then read both and diff them:** an entry point you found and the plan does not list, an entry point of
    the plan that does not exist in the code, a divergent terminal. Each divergence enters with
    `file:line`. A missing `02-explore.md` (a tier with no Explore) degrades it: the diff is only against
@@ -367,7 +367,7 @@ the coder uses to repair it and the verifier uses to re-run. Structure:
 
 ## Access map (QA)
 (only when 03-plan.md has ## Usage coverage — your independent enumeration of the entry points of the
-target code, in the format of agents/explore.md; it is on it that `M own scenarios` is counted)
+target code, in the format of the explore's `## Access map`; it is on it that `M own scenarios` is counted)
 - <consumer> · <file:line> · <hop1 → hop2 → hop3> · terminal: <…>
 
 ## Validated risks

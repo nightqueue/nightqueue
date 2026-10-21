@@ -17,7 +17,7 @@ const RUNTIME_WORK = {
   architect: "nightqueue libs",
   "qa-guardian": "nightqueue run secrets-sweep",
 };
-const INDEPENDENT = ["triager"];
+const INDEPENDENT = ["triager", "explore"];
 
 // Lists every file under plugin/ as an absolute path
 function pluginFiles() {
@@ -50,10 +50,10 @@ test("each agent names the runtime work that replaced its prose", () => {
   for (const [agent, mention] of Object.entries(RUNTIME_WORK)) {
     assert.ok(readAgent(agent).includes(mention), `${agent} does not name \`${mention}\``);
   }
-  assert.equal(
-    readAgent("explore").includes("nightqueue run index-save"),
-    true,
-    "explore does not say the runtime persists the index from its artifact",
+  assert.equal(readAgent("explore").includes("index-save"), false, "explore.md still names the index persistence");
+  assert.ok(
+    readFileSync(join(PROMPTS, "explore.md"), "utf8").includes("nightqueue run index-save"),
+    "the explore request does not say the runtime persists the index from its artifact",
   );
 });
 
