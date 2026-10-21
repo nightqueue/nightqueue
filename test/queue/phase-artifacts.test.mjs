@@ -1,6 +1,15 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { parseExploreArtifact } from "../../src/cli/explore-artifact.mjs";
 import { lastRound, nextFixLoop, nextRound, PHASE_ARTIFACTS } from "../../src/queue/phase-artifacts.mjs";
+
+const EXPLORE_HEADINGS = ["## File map", "## Access map", "## Third-party libraries"];
+
+test("the explore gate requires the headings the index-save parser reads", () => {
+  assert.deepEqual(PHASE_ARTIFACTS.get("02").sections, EXPLORE_HEADINGS);
+  const artifact = `${EXPLORE_HEADINGS[0]}\n- /a.mjs — a\n\n${EXPLORE_HEADINGS[1]}\n- **No entry point:** text · grep\n\n${EXPLORE_HEADINGS[2]}\n- None\n`;
+  assert.equal(parseExploreArtifact(artifact).files.length, 1);
+});
 
 test("the verifier, runtime and QA artifacts are round artifacts; the others are not", () => {
   const rounds = [...PHASE_ARTIFACTS].filter(([, artifact]) => artifact.rounds).map(([phase]) => phase);

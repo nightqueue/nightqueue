@@ -1,7 +1,7 @@
 {{#HAS_USAGE_COVERAGE}}
 Step 0 — BEFORE reading 03-plan.md: read
 `{{RUN_DIR}}/04-implementation.md` (## Modified files) and the target code and write YOUR
-## Access map (QA), in the format and vocabulary of agents/explore.md — a Map written after the
+## Access map (QA), in the format and vocabulary of the explore's `## Access map` — a Map written after the
 plan is a rubber stamp, not an enumeration.
 
 {{/HAS_USAGE_COVERAGE}}
