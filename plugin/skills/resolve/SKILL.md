@@ -586,7 +586,7 @@ Prompt: `phase_prompt` with `target: "triager"` — on a bug, pass the raw error
 user (below) as `raw_evidence`; the triager is the only agent that receives it.
 
 Launch **1 triager agent** with the answered `subagent_type` (`nightqueue:triager`), `model`
-(`haiku` if the tier is simple, `sonnet` if the tier is complex) and `prompt` verbatim — read
+(`sonnet` if the tier is simple, `sonnet` if the tier is complex) and `prompt` verbatim — read
 mode, it does not edit files. It writes the output to `01-triage.md`; run
 `nightqueue run check 01` (the artifact gate, step 5.2) before evaluating the verdict.
 
