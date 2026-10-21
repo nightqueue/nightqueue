@@ -80,7 +80,7 @@ as `phase_prompt`; the orchestrator never reads that file, it pastes the output.
 
 `run check <NN>` is the artifact gate of a phase: it reads
 `<RUN_DIR>/<NN-phase>.md` and prints `OK` or `MISSING: <sections>` - the
-sections required are `## Brief` (`00`, the `00-brief.md` the orchestrator writes in Phase 0), `## Verdict` (`01`), the four sections of the plan (`03`),
+sections required are `## Brief` (`00`, the `00-brief.md` the orchestrator writes in Phase 0), `## Verdict` (with `Evidence level: <1|2|3|4>` as its first line), `## Validated brief`, `## Out of scope` and `## Request gaps` (`01`), the four sections of the plan (`03`),
 `## Modified files` (`04`), `## Break hypotheses` + `## Test recipe` (`05a`),
 `## Validated risks` (`05`), `## Verification` (`06`) and `## Runtime verdict`
 (`06.5`, the runtime lane's `06-runtime.md`); `02` is checked for

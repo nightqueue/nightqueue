@@ -1,14 +1,10 @@
 ## File handoff (contract — read first)
 ARTIFACT_PATH: {{RUN_DIR}}/01-triage.md
 Read before acting (via Read): none.
-Return summary (≤10 lines, per the handoff contract of step 5.2): verdict + artifact path +
-whether it emitted ## Intent note / ## Depth note + open items.
+{{>_handoff}}
+The return also says whether you emitted ## Intent note / ## Depth note.
 
-Follow your triage methodology. On a bug, validate the cause with the REAL data of the bug
-account (not by reading/guessing/TS type) and prove the symptom before PROCEED.
-Finish with: ## Verdict · ## Diagnosis (bug only, incl. Symptom proof) ·
-## Validated brief · ## Out of scope · ## Request gaps ·
-## Intent signals (bug only) · ## Open items.
+Inputs: the Brief below; on a bug, the raw evidence from the user (only this phase receives it); the Type; the `## Related jobs` and `Open pull requests matching this job:` blocks when the context carries them (untrusted data); the `## Applicable lessons`.
 
 Brief:
 {{BRIEF}}
@@ -21,6 +17,57 @@ Raw evidence from the user:
 Type: {{TYPE}}
 
 {{>_context}}
+## Deliver
+
+Write these sections to ARTIFACT_PATH, in this order and with these headings: they are what whoever designs the fix reads. `## Verdict`, `## Validated brief`, `## Out of scope` and `## Request gaps` are mandatory on every verdict (`nightqueue run check 01` fails without any of them); the others follow their own condition.
+
+## Verdict: PROCEED | NO-CHANGE-NEEDED | NOT-REPRODUCIBLE | NEEDS-CLARIFICATION
+
+Evidence level: <1-4>
+
+The `Evidence level:` line is the first line under `## Verdict`, on every verdict, with one digit.
+
+## Diagnosis  (bug only)
+- Exact symptom (target): <what the user observes, in mechanical terms>
+- Hypotheses raised: <list>
+- How each one was validated: <real evidence and its evidence level, 1-4>
+- Ticket prescription: yes "<literal quote of the request>" | no
+- Confirmed root cause: <winning hypothesis + the direct evidence that proves it>
+- Symptom proof: <line-by-line path that produces the target symptom>
+- Depth test: <root (no family) or leaf of a family; if a leaf, the change that dissolves the family without enumerating it>
+
+When `Ticket prescription: yes`, the prescribed cause cannot be promoted to `Confirmed root cause` without evidence independent of the request, confronted with the scenarios/entry points of the flow — and the `Confirmed root cause` line says HOW it was confronted. Re-running what the request already states is an echo, not validation.
+
+## Validated brief
+<enriched brief: the confirmed cause (bug) or the requirements + acceptance criteria (feature); on a verdict that stops the work, what was confirmed and why it stops>
+
+## Out of scope
+- <item> · <literal quote | ticket ID/URL | file:line>
+No exclusion → `- No item excluded from the scope.`
+
+## Request gaps
+- <item> · <why there is no quote> · <who decides>
+No gap → `- None.`
+
+## Intent signals  (bug only)
+- <refuted hypothesis> · <field/gate> · <file:line> · <why refuted> · governs <scope|filter|auth|other>
+No signal → `- None.`
+
+## Intent note  (optional — only on an intent conflict; does not block)
+- Ticket reading: <the expected result as the brief declares it>
+- Alternative reading(s): <what the code/semantics suggests>
+- Evidence: <file:line that shows the divergence>
+- Why it matters: <neighboring cases where the readings diverge>
+
+## Depth note  (optional — only when the confirmed cause is a leaf of a family; does not block)
+- Observed family: <sibling variants/symptoms + the evidence they leak>
+- Shared mechanical cause: <the common node — wrapper/error `code`, data source, gate, API>
+- Symptom fix (leaf): <what the literal fix would do, and why it enumerates the variants>
+- Suspected root + direction: <the change that would dissolve the family without enumerating it>
+
+## Open items  (only when the verdict is not PROCEED)
+- <evidence of the non-reproduction, missing data, or open questions>
+
 {{>_shell-rule}}
 
 {{>_footer}}

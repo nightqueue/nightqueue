@@ -582,14 +582,8 @@ an open item of Phase 8.
 It always runs, both for bug/error and for feature/refactor, validating before exploration,
 architecture and implementation are spent.
 
-The triage methodology (≥2 hypotheses, ban on hedging, REAL payload vs TS type, bug account +
-discrimination gate, executable simulation, native SDK/crash reporter, symptom proof) lives in
-`triager.md`. The skill's prompt only injects the data and demands the output format.
-
 Prompt: `phase_prompt` with `target: "triager"` — on a bug, pass the raw error block of the
-user (below) as `raw_evidence`; the triager is the only agent that receives it. The prompt
-demands `## Verdict` · `## Diagnosis` (bug only, incl. Symptom proof) · `## Validated brief` ·
-`## Out of scope` · `## Request gaps` · `## Intent signals` (bug only) · `## Open items`.
+user (below) as `raw_evidence`; the triager is the only agent that receives it.
 
 Launch **1 triager agent** with the answered `subagent_type` (`nightqueue:triager`), `model`
 (`haiku` if the tier is simple, `sonnet` if the tier is complex) and `prompt` verbatim — read
@@ -669,8 +663,7 @@ only here. Walk this order and stop at the first one that resolves it:
 3. structural derivation from `01-triage.md`, **bidirectional**: `## Diagnosis` present and
    filled in (it has `Confirmed root cause` / `Symptom proof`) → `bug/error`;
    `## Diagnosis` absent or empty **and** `## Validated brief` with no symptom/wrong
-   behavior reported → `feature/refactor`. The triager only emits that section on a bug
-   (`agents/triager.md:246`);
+   behavior reported → `feature/refactor`. The triager's request only asks for `## Diagnosis` on a bug;
 4. real doubt after 1-3 → write `bug/error`. The fail-safe **requires** the coverage section,
    it never waives it — the gate below has the **divergence valve** for when it got it wrong.
 This same value decides the coverage gate below.

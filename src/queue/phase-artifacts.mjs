@@ -10,7 +10,7 @@ const EVIDENCE_FIRST_LINE = {
 // The artifact of each phase and the sections its gate requires; a phase with no required section is checked for existence alone.
 export const PHASE_ARTIFACTS = new Map([
   ["00", { file: "00-brief.md", sections: ["## Brief"] }],
-  ["01", { file: "01-triage.md", sections: ["## Verdict"], firstLineUnder: EVIDENCE_FIRST_LINE }],
+  ["01", { file: "01-triage.md", sections: ["## Verdict", "## Validated brief", "## Out of scope", "## Request gaps"], firstLineUnder: EVIDENCE_FIRST_LINE }],
   ["02", { file: "02-explore.md", sections: [] }],
   ["03", { file: "03-plan.md", sections: ["## Implementation plan", "## Assumptions", "## Pre-mortem", "## Identified risks"] }],
   ["04", { file: "04-implementation.md", sections: [FILE_LIST] }],

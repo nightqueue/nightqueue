@@ -4,6 +4,22 @@ Every notable change of this project is recorded here, newest first. The format
 follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the
 versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Changed
+
+- **The triager is pipeline-independent.** `plugin/agents/triager.md` holds who it is, how it
+  thinks, its method, resources and evidence standard — no phase, run artifact, orchestrator,
+  other agent, shell rule or deliverable section. Its request (`prompts/triager.md`, rendered by
+  `phase_prompt`) owns the deliverable: an `Inputs` line, a `## Deliver` block with the format of
+  each section, and the shared handoff.
+- **`nightqueue run check 01` enforces the four mandatory sections**: `## Verdict` (with
+  `Evidence level: <1-4>` as its first line), `## Validated brief`, `## Out of scope` and
+  `## Request gaps`, on every verdict — an artifact missing one answers `MISSING:`.
+- **The shared `_handoff` partial carries the lesson-citation protocol** (`Lesson L<id> applied:`
+  up to 2 lines outside the 10-line budget; recalled `L<id>`/`M<id>` refs cited in the return)
+  for every prompt that includes it.
+
 ## 0.7.0 - 2026-10-20
 
 0.6.0 was tagged in this file but never published to npm; a 0.5.x install reaches 0.7.0 directly

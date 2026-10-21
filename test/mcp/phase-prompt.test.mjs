@@ -145,9 +145,29 @@ test("the handoff contract heads every prompt, and the fast prompts carry its ge
   for (const template of TEMPLATES) {
     assert.equal(renderTemplate(template, FULL).split("\n")[0], contract[0], `${template} does not open with the handoff contract`);
   }
-  for (const template of ["coder-fast", "verifier-fast"]) {
+  for (const template of ["coder-fast", "verifier-fast", "triager"]) {
     const render = renderTemplate(template, FULL);
     for (const line of contract.slice(3)) assert.ok(render.includes(`${line}\n`), `${template} misses: ${line}`);
+  }
+});
+
+const TRIAGE_HEADINGS = ["## Verdict", "## Diagnosis", "## Validated brief", "## Out of scope", "## Request gaps", "## Intent signals", "## Intent note", "## Depth note", "## Open items"];
+
+test("the triager request renders Inputs, the Deliver block with its nine headings and the handoff lines", () => {
+  for (const values of [FULL, { ...FULL, IS_BUG: false }]) {
+    const render = renderTemplate("triager", values);
+    assert.ok(render.includes("\nInputs: "), "the triager request has no Inputs line");
+    assert.ok(render.includes("Lesson L<id> applied"), "the triager request lacks the lesson-citation protocol");
+    const lines = render.split("\n");
+    let from = lines.indexOf("## Deliver");
+    assert.notEqual(from, -1, "the triager request has no `## Deliver` block");
+    for (const heading of TRIAGE_HEADINGS) {
+      const at = lines.findIndex((line, index) => index > from && line.startsWith(heading));
+      assert.ok(at > from, `${heading} is missing or out of order after ## Deliver`);
+      from = at;
+    }
+    assert.equal(render.includes("Follow your triage methodology"), false);
+    assert.equal(render.includes("step 5.2"), false);
   }
 });
 

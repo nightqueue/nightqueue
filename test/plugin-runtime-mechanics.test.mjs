@@ -16,8 +16,8 @@ const RUNTIME_WORK = {
   explore: "nightqueue libs",
   architect: "nightqueue libs",
   "qa-guardian": "nightqueue run secrets-sweep",
-  triager: "Open pull requests matching this job:",
 };
+const INDEPENDENT = ["triager"];
 
 // Lists every file under plugin/ as an absolute path
 function pluginFiles() {
@@ -55,6 +55,15 @@ test("each agent names the runtime work that replaced its prose", () => {
     true,
     "explore does not say the runtime persists the index from its artifact",
   );
+});
+
+// A pipeline-independent agent learns about the runtime blocks from its request, never from its file.
+test("the triager's request names the blocks the runtime hands it", () => {
+  const request = readFileSync(join(PROMPTS, "triager.md"), "utf8");
+  for (const block of ["Open pull requests matching this job:", "## Related jobs"]) {
+    assert.ok(request.includes(block), `the triager request does not name \`${block}\``);
+    assert.equal(readAgent("triager").includes(block), false, `triager.md still names \`${block}\``);
+  }
 });
 
 // The verifier reads the scale of the diff off the block instead of running its own git commands.
@@ -101,8 +110,14 @@ test("the qa-guardian calls the sweep and still resolves its own plugin paths", 
 
 // The orchestrator only coordinates, so every lane returns pointers to its handoff file, never its contents.
 test("each agent returns a short pointer, never file contents nor a diff", () => {
-  for (const agent of AGENTS) {
+  for (const agent of AGENTS.filter((name) => !INDEPENDENT.includes(name))) {
     assert.ok(readAgent(agent).includes("never file contents, never a diff"), `${agent} may still return file contents or a diff`);
+  }
+  const handoff = readFileSync(join(PROMPTS, "_handoff.md"), "utf8");
+  assert.ok(handoff.includes("never file contents, never a diff"), "the shared handoff lost the short-pointer return");
+  for (const agent of INDEPENDENT) {
+    assert.ok(readFileSync(join(PROMPTS, `${agent}.md`), "utf8").includes("{{>_handoff}}"), `the ${agent} request does not carry the shared handoff`);
+    assert.equal(readAgent(agent).includes("never file contents, never a diff"), false, `${agent}.md still carries the return format`);
   }
 });
 
