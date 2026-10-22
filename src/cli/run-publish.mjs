@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { UserError } from "../config/errors.mjs";
-import { ghPrCreate } from "../host/gh.mjs";
+import { ghPrCreate, ghPrEditBody, ghPrUrlOfBranch } from "../host/gh.mjs";
 import { runGit } from "../host/git.mjs";
 import { commitTypeOf, publishedBranchName } from "../queue/branch-name.mjs";
 import { FILE_LIST, listedFiles } from "../queue/file-list.mjs";
@@ -19,6 +19,8 @@ export const PUBLISH_USAGE =
   "nightqueue run publish --message-file <path> --body-file <path> [--files-from <path>] [--extra <pathspec>] [--title <text>] [--remove-worktree]";
 
 const BASE_REFS = ["refs/remotes/origin/HEAD", "origin/main", "origin/master", "main", "master"];
+
+const ALREADY_EXISTS = /already exists/i;
 
 // Directories the pipeline never commits from, whoever asked for it: the host's own configuration and the scratch space of the run.
 const NEVER_COMMITTED_DIRS = [".claude", "tmp"];
@@ -251,12 +253,23 @@ function recordPublishedBranch({ run, branch, ctx }) {
 function publishBranch({ run, cwd, branch, title, bodyFile, env }) {
   const pushed = runGit({ args: ["push", "-u", "origin", branch], cwd, env });
   if (!pushed.ok) throw new UserError(`git could not push \`${branch}\`: ${failureLine(pushed)}`);
+  const url = openOrUpdatePr({ branch, title, bodyFile, cwd, env });
+  const recorded = recordOutcome({ projectId: run.projectId, slug: run.slug, status: "done", env });
+  const prRecorded = recordPrUrl({ projectId: run.projectId, slug: run.slug, prUrl: url, prTitle: title, env });
+  return { url, recorded, prRecorded };
+}
+
+// The URL of the pull request of the branch: the one gh opens, or the one the branch already has, whose body is then replaced.
+function openOrUpdatePr({ branch, title, bodyFile, cwd, env }) {
   const created = ghPrCreate({ title, bodyFile, head: branch, cwd, env });
   if (created.missing) throw new UserError(`\`${branch}\` is pushed, but the GitHub CLI is not installed: open the pull request by hand`);
-  if (!created.ok) throw new UserError(`\`${branch}\` is pushed, but gh could not open the pull request: ${failureLine(created)}`);
-  const recorded = recordOutcome({ projectId: run.projectId, slug: run.slug, status: "done", env });
-  const prRecorded = recordPrUrl({ projectId: run.projectId, slug: run.slug, prUrl: created.url, prTitle: title, env });
-  return { url: created.url, recorded, prRecorded };
+  if (created.ok) return created.url;
+  if (!ALREADY_EXISTS.test(created.stderr)) throw new UserError(`\`${branch}\` is pushed, but gh could not open the pull request: ${failureLine(created)}`);
+  const existing = ghPrUrlOfBranch({ head: branch, cwd, env });
+  if (!existing.url) throw new UserError(`\`${branch}\` is pushed and gh says its pull request exists, but no pull request with that head branch was found: ${failureLine(existing)}`);
+  const edited = ghPrEditBody({ url: existing.url, bodyFile, cwd, env });
+  if (!edited.ok) throw new UserError(`\`${branch}\` is pushed, but gh could not update its pull request ${existing.url}: ${failureLine(edited)}`);
+  return existing.url;
 }
 
 // Removes the worktree of the run from the checkout that owns it; the pull request is already open, so a refusal is reported, never fatal.
