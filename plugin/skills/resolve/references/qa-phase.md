@@ -3,7 +3,8 @@
 Read via Read by the /resolve orchestrator in Phase 5, before launching any qa-guardian. It is
 the single home of the Stage A gate and the consolidation. The QA attack brief and the LITE/ANALYST/PROVER prompts live in `prompts/`
 (`_qa-attack-brief.md`, `qa-lite.md`, `qa-analyst.md`, `qa-prover.md`): the pipeline gets them
-rendered by `phase_prompt` (`qa-lite`, `qa-analyst`, `qa-prover`), never assembled by hand.
+rendered by `phase_prompt` (`qa-lite`, `qa-analyst`, `qa-prover`), never assembled by hand. The
+shared report format they all deliver is `deliverables/qa-report.md`.
 
 **complex → two stages (analyst → parallel provers):** the analysis stays in a single
 head — it groups breaks by root (4 symptoms with the same cause = 1 fix, not 4) and crosses
@@ -16,7 +17,7 @@ below replace the single launch.
 verbatim — header `🛡️ QA-GUARDIAN · complex · ANALYST · ...`.
 
 **Stage A gate:** run `nightqueue run check 05a` (the artifact gate, step 5.2) over
-`05a-qa-analyst.md`, which must carry `## Break hypotheses` and `## Test recipe` — on
+`05a-qa-analyst.md`, which must carry the sections of the analyst request's `## Deliver` — on
 `MISSING`, relaunch the analyst (🔁) once; if it persists, terminate and inform the user. Zero
 runtime hypotheses → skip stage B and go straight to the consolidation.
 
@@ -43,6 +44,7 @@ contract that Phase 6 consumes:
 - `## Generated PoCs` = the provers' files + a note that the without-fix proof via stash was
   delegated to the verifier.
 - `## Invalidated assumptions` = the analyst's.
+- `## Verdict` = the aggregate verdict (below).
 - `INCONCLUSIVE` **never becomes HELD**: relaunch ONE prover (🔁) for that hypothesis with
   what was missing; if it remains inconclusive, record an ⚠️ open item.
 - Aggregate verdict: any proven break → `NEEDS FIX`; nothing proven and no open item →

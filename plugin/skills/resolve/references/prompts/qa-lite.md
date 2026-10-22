@@ -4,7 +4,14 @@ ARTIFACT_PATH: {{RUN_DIR}}/05-qa.md (append-only: this launch is ## Round {{ROUN
 Read before acting (via Read):
 - `{{RUN_DIR}}/04-implementation.md` — ## Modified files (the files to attack).
 - `{{RUN_DIR}}/03-plan.md` (open it only AFTER step 0 of the Access map (QA), when it
-  applies) — see the QA attack brief above, pasted here by the orchestrator.
+  applies) — ## Identified risks, ## Assumptions, ## Pre-mortem, and ## Symptom coverage /
+  ## Usage coverage when present; see the QA attack brief below.
+{{#HAS_USAGE_COVERAGE}}
+- `{{RUN_DIR}}/02-explore.md` when it exists — ## Access map, read only after your own ## Access map (QA).
+{{/HAS_USAGE_COVERAGE}}
+{{>_handoff}}
+
+Inputs: the artifacts above; the QA attack brief; the plugin paths of your methodology; the `## Applicable lessons` and `## Project memory` when the context carries them.
 
 QA attack brief:
 {{>_qa-attack-brief}}
@@ -33,8 +40,7 @@ against the fixed code; when feasible, prove that it would fail without the fix
 justify it explicitly in ## Generated PoCs.
 
 {{/IS_BUG}}
-Finish with ## Proven breaks, ## Validated risks, ## Generated PoCs and
-## Invalidated assumptions (or "None").
+{{>deliverables/qa-report}}
 
 {{>_context}}
 {{>_shell-rule}}

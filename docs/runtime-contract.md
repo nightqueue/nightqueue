@@ -537,7 +537,9 @@ and asks again without the exclusion when that would leave the phase with nothin
 
 `phase_prompt` returns `{prompt, subagent_type, model, artifact, check, open_items}`: the
 whole prompt of one /resolve subagent, rendered from the templates under
-`plugin/skills/resolve/references/prompts/`. It resolves the run like the `run_*` tools and reads
+`plugin/skills/resolve/references/prompts/` (a `{{>deliverables/<name>}}` partial is read from
+the sibling `references/deliverables/`, where the shared `## Deliver` blocks of the
+implementation, QA report and verification live). It resolves the run like the `run_*` tools and reads
 every value from it: the tier and type `nightqueue run start` recorded, the `## Brief` of
 `<RUN_DIR>/00-brief.md` (refused, naming the path, when it is missing), the routing row of
 `src/queue/routing.mjs`, the same context block `context_for_phase` answers (with the same

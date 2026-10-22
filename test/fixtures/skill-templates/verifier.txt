@@ -2,26 +2,35 @@
 ARTIFACT_PATH: <RUN_DIR>/06-verification.md (append-only: this launch is ## Round [n])
 Read before acting (via Read):
 - `<RUN_DIR>/05-qa.md`, its last `## Round` — ## Generated PoCs (run them all); items with
-  Proof=reading of ## Proven breaks (confirm by grep that they are gone).
+  Proof=reading of ## Proven breaks (confirm by grep that they are gone). Absent in a tier with no QA.
 - `<RUN_DIR>/04-implementation.md` — ## Modified files (the files to verify).
-Write the verdict and the detail to ARTIFACT_PATH via Write.
 If ARTIFACT_PATH exists, Read it and Write it back with every earlier round unchanged, then append
 `## Round [n]` at the end with this launch's whole output (every mandatory section, the verdict
 line included). Never edit an earlier round; otherwise create it with `## Round [n]`.
-Return to the orchestrator AT MOST 10 lines:
-verdict/status + the handoff file written + open items — never file contents, never a diff.
-Do NOT paste the complete detail.
+[the generic handoff lines]
+
+Inputs: the artifacts above; the tier and its scope; the stage when the plan is staged; the `## Applicable lessons` and `## Project memory` when the context carries them.
 
 Tier: [trivial | simple | complex]
 
 Run: [the `Verifier scope` cell of this tier's column in the Track routing table].
 Apply your methodology (the QA's PoCs and the Runtime API Check when they apply).
 A PoC that fails = the break is still present → FAILED.
-Final verdict: ## Verification: PASSED, ## Verification: PASSED-STATIC
-(runtime of the bug not executed) or ## Verification: FAILED.
+A QA report runs before you here: a changed input/API with no PoC and no justification in it is FAILED.
+
+## Deliver
+[the verification deliverable:]
+## Checks run
+## Verification: PASSED — [...]
+## Verification: PASSED-STATIC — [...]
+## Verification: FAILED — [...]
+Also write `<RUN_DIR>/evidence/automated-verification.md` with this round's `## Checks run`, `## Failures` and verdict line.
 
 [Paste the `block` of `context_for_phase` (target: "verifier") — omit when it came back empty:]
 [CONTEXT BLOCK]
+
+Search rule: [the search limits of a job]
+Long commands: [the Bash timeout of a job]
 
 Repository: [CWD PATH]
 Project: [PROJECT — the name on the Project: line of the prompt]

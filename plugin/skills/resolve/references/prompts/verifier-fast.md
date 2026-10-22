@@ -4,11 +4,15 @@ Read before acting (via Read): {{RUN_DIR}}/04-implementation.md — ## Modified 
 {{>_round}}
 {{>_handoff}}
 
-{{>_shell-rule}}
-
-{{>_footer}}
+Inputs: the artifact above; the tier and its scope.
 
 Tier: {{TIER}}
 
 Run: {{VERIFIER_SCOPE}}.
-Produce the verdict ## Verification: PASSED or ## Verification: FAILED.
+
+{{>deliverables/verification}}
+
+{{>_job-limits}}
+{{>_shell-rule}}
+
+{{>_footer}}

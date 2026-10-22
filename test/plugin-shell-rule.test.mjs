@@ -6,20 +6,20 @@ import { fileURLToPath } from "node:url";
 import { buildPrompt } from "../src/queue/spawn.mjs";
 
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
-// A pipeline-independent agent (the triager and the explore) gets the rule from its request, never its file; the series ends with no agent carrying it.
-const AGENTS = ["coder", "qa-guardian", "verifier", "architect"];
+const AGENTS_DIR = join(ROOT, "plugin/agents");
 const REFUSAL = "too complex to verify that it stays inside the worktree";
 const PROMPTS = join(ROOT, "plugin/skills/resolve/references/prompts");
 
-// The host refuses Bash it cannot prove stays inside the worktree; every place that briefs an agent has to say how to write commands it accepts.
-test("the worktree shell rule reaches the skill, every agent and the unattended prompt", () => {
+// The host refuses Bash it cannot prove stays inside the worktree; the skill and the unattended prompt say how to write commands it accepts, and an agent gets the rule from its request, never its own file.
+test("the worktree shell rule reaches the skill and the unattended prompt, and no agent file carries it", () => {
   const skill = readFileSync(join(ROOT, "plugin/skills/resolve/SKILL.md"), "utf8");
   assert.ok(skill.includes(REFUSAL), "the skill does not name the refusal");
   assert.match(skill, /no heredocs \(`<<`\)/);
-  for (const agent of AGENTS) {
-    const text = readFileSync(join(ROOT, `plugin/agents/${agent}.md`), "utf8");
-    assert.ok(text.includes("## Shell inside the worktree (mandatory)"), `${agent} carries no shell rule`);
-    assert.ok(text.includes(REFUSAL), `${agent} does not name the refusal`);
+  const agents = readdirSync(AGENTS_DIR).filter((name) => name.endsWith(".md"));
+  assert.ok(agents.length >= 6, "the agent files were not found");
+  for (const name of agents) {
+    const text = readFileSync(join(AGENTS_DIR, name), "utf8");
+    assert.equal(text.includes("## Shell inside the worktree"), false, `${name} still carries the shell rule`);
   }
   const prompt = buildPrompt({ job: { id: 1, prompt: "fix it" } });
   assert.match(prompt, /Shell rule: .*one simple command per Bash call, no heredocs/);

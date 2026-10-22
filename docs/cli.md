@@ -82,9 +82,13 @@ as `phase_prompt`; the orchestrator never reads that file, it pastes the output.
 `<RUN_DIR>/<NN-phase>.md` and prints `OK` or `MISSING: <sections>` - the
 sections required are `## Brief` (`00`, the `00-brief.md` the orchestrator writes in Phase 0), `## Verdict` (with `Evidence level: <1|2|3|4>` as its first line), `## Validated brief`, `## Out of scope` and `## Request gaps` (`01`), `## File map`, `## Access map` and
 `## Third-party libraries` (`02`), the four sections of the plan (`03`),
-`## Modified files` (`04`), `## Break hypotheses` + `## Test recipe` (`05a`),
-`## Validated risks` (`05`), `## Verification` (`06`) and `## Runtime verdict`
-(`06.5`, the runtime lane's `06-runtime.md`). `05a`, `05`, `06` and `06.5` are append-only, one `## Round <n>` per
+`## Modified files` (`04`), `## Proven breaks`, `## Break hypotheses`, `## Test recipe`,
+`## Validated risks`, `## Invalidated assumptions` and `## Verdict` (`05a`), `## Proven breaks`,
+`## Validated risks`, `## Invalidated assumptions`, `## Generated PoCs` and `## Verdict` (`05`),
+`## Checks run` and `## Verification` (`06`) and `## Runtime verdict`
+(`06.5`, the runtime lane's `06-runtime.md`). Each list is the mandatory part of the
+`## Deliver` block the phase's request renders (the plan and QA/verification report formats
+under `plugin/skills/resolve/references/`). `05a`, `05`, `06` and `06.5` are append-only, one `## Round <n>` per
 launch: their sections are required in the LAST `## Round` (to the end of the file),
 so an earlier round's verdict never passes a later launch; a file with no round
 heading is checked whole. `04` is the only artifact with a fallback: with no file list,
