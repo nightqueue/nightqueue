@@ -607,9 +607,7 @@ verdict as `reason`. A `NO-CHANGE-NEEDED` run also records its outcome in the Ph
 and closing it tells its origins it was resolved without a code change. NOT-REPRODUCIBLE and
 NEEDS-CLARIFICATION record no outcome: their job ends `cancelled`.
 
-If the triager's return signals that it emitted `## Intent note` or `## Depth note`, the
-architect reads them straight from `01-triage.md` in Phase 3 — neither blocks the advance; the
-architect decides whether to pause in their own Step 1.5.
+An `## Intent note` or `## Depth note` never blocks the advance.
 
 ### Phase 2 — Exploration
 
@@ -651,7 +649,7 @@ listener that already exists, L162-170"); pre-disqualifying an approach by diff 
 regression surface ("prefer the SMALLEST diff"). The ONLY constraint you may pass is
 **delivery** — the LIMIT of what may be delivered, never the HOW ("it must not touch native" is
 delivery; "additive fix in the existing listener" is design in disguise) — on the `Delivery
-constraints:` line. The architect decides the fix level in their own Step 1.5 and takes the
+constraints:` line. The architect decides the fix level itself and takes the
 trade-off to the user via `## Requires user confirmation` when the risk deserves it.
 
 **How to fill in `Type:`** — it holds whenever a phase needs the Type (3, 5, 6.5), not
@@ -668,15 +666,8 @@ only here. Walk this order and stop at the first one that resolves it:
    it never waives it — the gate below has the **divergence valve** for when it got it wrong.
 This same value decides the coverage gate below.
 
-The architect produces `## Implementation plan` + `## Assumptions` + `## Pre-mortem` +
-`## Identified risks` (mandatory in any type) and, when `Type = bug/error`, also `## Symptom
-coverage` and, when the conditions of their Step 5 match (a bug touching 2+ scenarios of the
-`## Access map`, or `**Always-gate class:** yes`), `## Usage coverage` (format and rules in
-`architect.md`). Risks and assumptions feed the QA; the coverage sections enumerate every path
-that produces the symptom.
-
-**Gate:** run `nightqueue run check 03` (the artifact gate, step 5.2 — it requires
-`## Implementation plan`, `## Assumptions`, `## Pre-mortem` and `## Identified risks`).
+**Gate:** run `nightqueue run check 03` (the artifact gate, step 5.2 — the mandatory sections
+of the architect request's `## Deliver`).
 `MISSING` after the 1× relaunch, or an insufficient brief, → inform the user and terminate.
 With the gate closed, read `03-plan.md` via Read.
 
@@ -706,7 +697,10 @@ each condition. It fires if ANY of them is true:
 1. a **scenario line** (starting with `- `) contains `changed=yes · source=pipeline`;
 2. a line **starting with** `**Always-gate class:**` matches `**Always-gate class:** yes`;
 3. an `unimplemented intent: <param> · governs <axis>` line of `02-explore.md` has `<axis>`
-   **equal** to the plan's `**Diff axis:**` (one is enough, by axis, never by count);
+   **equal** to the plan's `**Diff axis:**` (one is enough, by axis, never by count) — except
+   when that line's `<param>` is the very code or parameter the validated brief asks to change:
+   the ticket's own deliverable is not a parameter read and ignored elsewhere, and condition 3
+   does not fire on it;
 4. the **request** (Brief of Phase 0, `## Usage scenarios` of the spec, or `01-triage.md`)
    contains a **scenario line** (starting with `- `, containing ` · `) whose value is exactly
    `to confirm`; a mention in prose does not count.
@@ -740,8 +734,7 @@ architect (🔁) instructing the literal plan. Never write code before that conf
 
 Launch 1 coder agent: `phase_prompt` with `target: "coder"` (plus `stage` in a staged plan),
 then `Agent` with the answered `subagent_type` (`nightqueue:coder`), `model` and `prompt`
-verbatim. The `coder.md` already requires the `## Modified files` section
-and the completeness rule on a textual refactor — the prompt only injects the data.
+verbatim.
 
 Run `nightqueue run check 04` (the artifact gate, step 5.2). `GENERATED` means the coder left
 no file list and the runtime derived one from the worktree's own changes — accept and move on.
@@ -750,8 +743,7 @@ user that the implementation did not complete successfully and terminate.
 
 **One coder lane per stage:** a brief/plan with numbered stages launches one coder per stage,
 in order, never in parallel. Each prompt carries `Stage: <n> — <title>` (the `stage` of `phase_prompt`) and reads
-`03-plan.md` (its stage) and `04-implementation.md` (what earlier lanes did, when it exists);
-each lane appends its `### Stage <n>` block and rewrites the cumulative `## Modified files`.
+`03-plan.md` (its stage) and `04-implementation.md` (what earlier lanes did, when it exists).
 Run `nightqueue run check 04` after each lane, then the verifier between stages (the Phase 6
 prompt and its fix loop): a failing stage is fixed before the next lane starts. After the last
 stage, Phase 5 (QA) and the final Phase 6 verification run as usual.
@@ -770,34 +762,27 @@ The QA is **adversarial and fixes nothing**: it attacks the code on every front,
 proves each break with an executable PoC and hands the breaks back to the coder. The fixes
 happen in the Phase 6 loop, not here.
 
-The QA reads the file list of `04-implementation.md` (## Modified files) and the
-risks/assumptions/pre-mortem sections (and, on a bug, the symptom coverage one too)
-of `03-plan.md` via Read. The `## Identified risks` section of the plan is **mandatory**; if
-it is missing from `03-plan.md`, terminate and inform the user.
-
-The methodology (fronts as attack vectors, coercion/truthiness, regression in
-callers, Robustness test, an executable PoC per vector, the fallback-zero criterion on
-a bug) lives in `qa-guardian.md`. The prompt only injects the data and selects the mode
-by the tier. Every qa-guardian runs in **read/PoC mode, it does not edit source** (it only
-creates PoC/test files).
+The `## Identified risks` section of the plan is **mandatory**; if it is missing from
+`03-plan.md`, terminate and inform the user.
 
 Read `references/qa-phase.md` (this skill's base directory) via Read before launching any
 qa-guardian: it carries the Stage A gate and the consolidation. Read `references/prompts/_qa-attack-brief.md`
-too: the QA attack brief every LITE/ANALYST prompt carries, with the definitions the two
+too: the QA attack brief every LITE/ANALYST prompt carries. Read `references/deliverables/qa-report.md`
+as well: the `Symptom coverage:`/`Usage coverage:` line formats and the `N`/`M` definitions the two
 validations below audit. The LITE/ANALYST/PROVER prompts come from `phase_prompt` (`qa-lite`,
 `qa-analyst`, `qa-prover` with its `group`).
 
 **Validation of the coverage (only when `Type = bug/error` — LITE and complex):** confront
 the last `## Round` of `05-qa.md`: its `Symptom coverage: ...` line (opening `## Validated risks`) with the `## Symptom
-coverage` table of `03-plan.md`, using the QA attack brief's `N vectors of the plan's table` and
-`omitted:` definitions in `references/prompts/_qa-attack-brief.md` — N matches the table's total, the re-enumeration cites a concrete
+coverage` table of `03-plan.md`, using the `N` and
+`omitted:` definitions in `references/deliverables/qa-report.md` — N matches the table's total, the re-enumeration cites a concrete
 method (not "I reviewed the plan"), `omitted:` is filled in. Any mismatch or missing line → the
 QA skipped the attack: fail the phase and relaunch the QA (🔁).
 
 **Validation of the usage coverage (when `03-plan.md` has `## Usage coverage` — LITE and
 complex, also mandatory with `**Always-gate class:** yes`):** confront the last `## Round` of
 `05-qa.md`: its `## Access map (QA)` and its `Usage coverage: ...` line with `## Usage coverage` of `03-plan.md`,
-using the brief's `N` and `M` definitions in `references/prompts/_qa-attack-brief.md` — `N` and `M` match, `divergences:` and
+using the `N` and `M` definitions in `references/deliverables/qa-report.md` — `N` and `M` match, `divergences:` and
 `unconfirmed decisions:` are filled in, and no `## What to avoid`/`source=pipeline` item shows
 up as `HELD`. Any mismatch or missing piece → fail the phase and relaunch the QA (🔁), exactly
 as with the coverage. `unconfirmed decisions:` different from `none` does **not** change the
@@ -819,10 +804,7 @@ again, terminate without a commit and take it to the user (Phase 8).
 
 Launch 1 verifier agent: `phase_prompt` with `target: "verifier"` (plus `stage` between the
 stages of a staged plan), then `Agent` with the answered `subagent_type` (`nightqueue:verifier`),
-`model` (the ✅ verifier of the `routing` row, step 6) and `prompt` verbatim. The `verifier.md`
-already covers the detection of checks, running the QA's PoCs (a PoC missing when there was a
-changed input/API = FAILED; a PoC that fails = the break is still present) and the Runtime API
-Check (when the diff uses a third-party API). The prompt only defines the scope.
+`model` (the ✅ verifier of the `routing` row, step 6) and `prompt` verbatim.
 
 The verifier runs **after** the QA and is the independent executor: it **reproduces** the
 breaks proven by the QA (it runs the PoCs, it checks the static ones by grep). A PoC that
@@ -863,7 +845,7 @@ These rules govern Phases 5 and 6.5 and every subagent launched from them:
 **Real pull requests and nightqueue guards — hard rules.**
 
 - **(a)** Never unset, stub, override or work around a nightqueue guard or its environment variables (`NIGHTQUEUE_JOB_ID`, `NIGHTQUEUE_JOB_HOME`, `NIGHTQUEUE_JOB_CLAUDE_DIR`, or any refusal nightqueue prints) — not in a child env, not by calling the internal function behind the refusing command, not by a 'simulation'. A refusal is the guard working. A verification that can only proceed by bypassing one stops and is reported as a gate (`## Requires user confirmation`), never worked around.
-- **(b)** Any verification that creates, merges or closes a real pull request runs only in `~/Dev/nstest-demo` (remote `maykonVinicius/nstest-demo`) — never in the project's own repository or any other remote. If that checkout does not exist on this machine, no real pull request is created, merged or closed: the scenario is reported as a gate. The only publication the pipeline ever makes to the project's own origin is Phase 7's `nightqueue run publish`, which opens it through the `nightqueue run pr` path.
+- **(b)** Any verification that creates, merges or closes a real pull request runs only in `~/Dev/nstest-demo` (remote `maykonVinicius/nstest-demo`) — never in the project's own repository or any other remote. If that checkout does not exist on this machine, no real pull request is created, merged or closed: the scenario is reported as a gate. The only publication ever made to the project's own origin is `nightqueue run publish`, which opens it through the `nightqueue run pr` path.
 
 ### Phase 6.5 — Runtime validation (real execution)
 
@@ -876,9 +858,8 @@ Runs when the change (fix OR feature) is **observable at runtime**
 (UI/screen/flow/integration). Passing tsc/lint does NOT prove that the bug is gone nor that the
 feature delivers what was asked — only executing proves it. A manual CLI/MCP run here obeys
 the isolation rule of Phase 6: it goes through `nightqueue sandbox <cmd>`.
-The methodology — the cases (a)–(d2), the `Result` table and the `unavailable due to the
-environment` rule — lives in `verifier.md` (`Mode: RUNTIME`); this phase launches the lane and
-reads its verdict.
+The method lives in the verifier's `## Proving by execution` and the format in
+`prompts/runtime.md`; this phase launches the lane and applies the consequences below.
 
 Launch **1 verifier agent**: `phase_prompt` with `target: "runtime"`, then `Agent` with the
 answered `subagent_type` (`nightqueue:verifier`), `model` and `prompt` verbatim, with the header
@@ -888,7 +869,7 @@ Run `nightqueue run check 06.5` (the artifact gate, step 5.2). The lane's verdic
 (`## Runtime verdict`) decides: `CONFIRMED` → Phase 7; `NOT-MET` → the Phase 6 coder loop (same
 limit); `SYMPTOM-PERSISTS` → the discrimination below; `NEEDS-DEVICE` → the pause of step 7
 with the lane's device script, verbatim, in the gate block; `UNAVAILABLE` → ⚠️ open item per
-the rules the lane followed (a scenario with no recorded attempt is not `to confirm`).
+the gate below.
 
 **Symptom persisting — diagnosis before a loop (bug):** if the execution shows
 the bug STILL present, do NOT relaunch the coder automatically. First discriminate:
@@ -905,14 +886,22 @@ the bug STILL present, do NOT relaunch the coder automatically. First discrimina
    **At most 1 re-triage per pipeline** — if it persists again, terminate without a commit and
    take the complete history to the user (Phase 8).
 
-**Gate:** only move on to Phase 7 with the change confirmed at runtime — case (a)
-the 2 proofs, case (b) the screenshot, case (c) the user's verdict, case (d) every item
-of the acceptance criteria MET. A field position/value or a control-flow merely
-ASSUMED does not pass. Acceptance criteria not met (feature) → back to the coder
-(the Phase 6 loop, the same limit); a bug persisting → the discrimination flow above.
-A bug with `## Usage coverage` (item (d2)): move on with every scenario line `MET` or
-`NOT MET / to confirm` — the second case marks `⚠️` and becomes an open item, it never goes back to the
-coder; `NOT MET` without `to confirm` blocks like any criterion not met.
+**Gate:** only move on to Phase 7 with the change confirmed at runtime. A field position/value
+or a control-flow merely ASSUMED does not pass; a bug persisting → the discrimination flow above.
+1. `NOT MET` (without `to confirm`), or acceptance criteria not met (feature) → back to the
+   coder (the Phase 6 loop, the same limit).
+2. `NOT MET / to confirm` (a scenario whose proof depends on an unconfirmed product decision or
+   on an environment that is unavailable) → never back to the coder and never blocks Phase 7: it
+   marks `⚠️` on the 6.5 line (which forces the non-happy path of Phase 8 by the fail-safe rule)
+   and becomes a mandatory open item.
+3. A scenario with no recorded attempt is not `to confirm` → it blocks Phase 7: relaunch the
+   runtime lane (🔁) — the attempt is the lane's, never the coder's.
+4. This gate complements the Phase 3 usage-coverage gate: Phase 3 asks before coding, 6.5
+   measures after implementation.
+5. `NEEDS-DEVICE` (a physical-device case) → the pause of step 7 with the lane's device script
+   verbatim in the gate block; wait for the user's verdict before committing.
+6. Case (a) needs its 2 proofs, case (b) its screenshot, case (c) the user's verdict, and
+   cases (d)/(d2) every line `MET` or `NOT MET / to confirm`.
 
 ### Phase 7 — Commit and PR
 

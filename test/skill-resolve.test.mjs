@@ -219,7 +219,10 @@ test("the QA echo is gone, and the pair that replaces it is really in the flow",
   for (const template of ["qa-lite", "qa-analyst"]) {
     assert.ok(promptTemplate(template).includes("`{{RUN_DIR}}/03-plan.md` (open it only AFTER step 0"), `the ${template} prompt stopped reading the plan`);
   }
-  assert.ok(CLI_RUN.includes('sections: ["## Validated risks"]'), "`run check 05` no longer requires the section the plan feeds");
+  assert.ok(
+    CLI_RUN.includes('sections: ["## Proven breaks", "## Validated risks", "## Invalidated assumptions", "## Generated PoCs", "## Verdict"]'),
+    "`run check 05` no longer requires the sections of the QA report's ## Deliver",
+  );
 });
 
 test("the QA stage A gate records its marker with the tool, before stage B is launched", () => {
@@ -436,7 +439,11 @@ test("the raise line the Brief prints is the line the runtime parses", () => {
 test("the QA methodology lives in references/qa-phase.md and its prompts in references/prompts/, and both readers point there", () => {
   const phase5 = SKILL.slice(SKILL.indexOf("### Phase 5 —"), SKILL.indexOf("### Phase 6 —"));
   assert.match(phase5, /Read `references\/qa-phase\.md`/, "Phase 5 no longer points to the QA reference");
-  assert.match(phase5, /Read `references\/prompts\/_qa-attack-brief\.md`/, "Phase 5 no longer reads the definitions its validations audit");
+  assert.match(phase5, /Read `references\/prompts\/_qa-attack-brief\.md`/, "Phase 5 no longer reads the attack brief");
+  assert.match(phase5, /Read `references\/deliverables\/qa-report\.md`/, "Phase 5 no longer reads the definitions its validations audit");
+  for (const [, name] of `${SKILL}${QA_PHASE}`.matchAll(/deliverables\/([a-z0-9-]+\.md)/g)) {
+    assert.ok(existsSync(new URL(`../plugin/skills/resolve/references/deliverables/${name}`, import.meta.url)), `the skill names deliverables/${name}, which is not on disk`);
+  }
   assert.equal(QA_PHASE.includes("operator hunt"), false, "references/qa-phase.md still describes the operator hunt the operator guard removed");
   for (const anchor of ["**Stage A gate:**", "**Consolidation (inline"]) {
     const count = [SKILL, QA_PHASE, OPERATOR].reduce((sum, text) => sum + text.split(anchor).length - 1, 0);
@@ -476,7 +483,8 @@ test("the round artifacts are append-only and read by their last round, and no t
   assert.ok(SKILL.includes("**Round artifacts** (`05a-qa-analyst.md`, `05-qa.md`, `06-verification.md`, `06-runtime.md`)"));
   assert.ok(SKILL.includes("Every gate and every reader reads the LAST round"));
   assert.ok(QA_PHASE.includes("`## Round <n>` (n = its highest round + 1) holding this consolidation; otherwise `## Round 1`."));
-  assert.ok(promptTemplate("coder-fix").includes("### Fix loop {{FIX_LOOP}} — what was wrong / what changed"));
+  assert.ok(promptTemplate("coder-fix").includes("{{>deliverables/implementation}}"));
+  assert.ok(promptTemplate("../deliverables/implementation").includes("### Fix loop {{FIX_LOOP}} — what was wrong / what changed"));
   assert.ok(promptTemplate("_round").includes("Never edit an earlier round"));
   for (const name of ["verifier", "verifier-fast", "runtime", "qa-lite", "qa-analyst"]) {
     assert.ok(promptTemplate(name).includes("{{>_round}}"), `${name} misses the round rule`);

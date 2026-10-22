@@ -266,7 +266,7 @@ test("`run check` answers OK on a complete artifact and names every section the 
   assert.deepEqual(plan.out, ["MISSING: ## Pre-mortem, ## Identified risks"]);
 
   const qa = await runCli(env, ["run", "check", "05a"], { jobId: id });
-  assert.deepEqual(qa.out, ["MISSING: ## Break hypotheses, ## Test recipe"]);
+  assert.deepEqual(qa.out, ["MISSING: ## Proven breaks, ## Break hypotheses, ## Test recipe, ## Validated risks, ## Invalidated assumptions, ## Verdict"]);
 
   const explore = await runCli(env, ["run", "check", "02"], { jobId: id });
   assert.deepEqual(explore.out, ["MISSING: ## File map, ## Access map, ## Third-party libraries"]);
@@ -297,9 +297,11 @@ test("`run check` of a round artifact reads only its last `## Round`, and a lega
 
   writeArtifact(env, "06-verification.md", "## Round 1\n\n## Verification: FAILED\n\n## Round 2\n\n## Checks run\n- Tests: PASSED\n");
   assert.deepEqual(await check("06"), ["MISSING: ## Verification"]);
-  writeArtifact(env, "06-verification.md", "## Round 1\n\n## Verification: FAILED\n\n## Round 2\n\n## Verification: PASSED\n");
+  writeArtifact(env, "06-verification.md", "## Round 1\n\n## Checks run\n- Tests: FAILED\n\n## Verification: FAILED\n\n## Round 2\n\n## Verification: PASSED\n");
+  assert.deepEqual(await check("06"), ["MISSING: ## Checks run"], "a round with a verdict and no checks passed the gate");
+  writeArtifact(env, "06-verification.md", "## Round 1\n\n## Verification: FAILED\n\n## Round 2\n\n## Checks run\n- Tests: PASSED\n\n## Verification: PASSED\n");
   assert.deepEqual(await check("06"), ["OK"]);
-  writeArtifact(env, "06-verification.md", "# Verification\n\n## Verification: PASSED\n");
+  writeArtifact(env, "06-verification.md", "# Verification\n\n## Checks run\n- Tests: PASSED\n\n## Verification: PASSED\n");
   assert.deepEqual(await check("06"), ["OK"]);
   const decorated = "## Round 1\n\n## Verification: PASSED\n\n## Round 2 — retry\n\n## Checks run\n- Tests: FAILED\n";
   writeArtifact(env, "06-verification.md", decorated);
@@ -307,10 +309,13 @@ test("`run check` of a round artifact reads only its last `## Round`, and a lega
   writeArtifact(env, "06-verification.md", `${decorated}\n## Verification: FAILED\n`);
   assert.deepEqual(await check("06"), ["OK"]);
 
-  writeArtifact(env, "05-qa.md", "## Round 1\n\n## Validated risks\n- R1 HELD\n\n## Round 2\n\n## Proven breaks\nNone\n");
+  const qaRest = "## Invalidated assumptions\nNone\n\n## Generated PoCs\nNone\n\n## Verdict\nAPPROVED\n";
+  writeArtifact(env, "05-qa.md", `## Round 1\n\n## Validated risks\n- R1 HELD\n\n## Round 2\n\n## Proven breaks\nNone\n\n${qaRest}`);
   assert.deepEqual(await check("05"), ["MISSING: ## Validated risks"]);
-  writeArtifact(env, "05-qa.md", "## Round 1\n\n## Proven breaks\nNone\n\n## Round 2\n\n## Validated risks\n- R1 HELD\n");
+  writeArtifact(env, "05-qa.md", `## Round 1\n\n## Proven breaks\nNone\n\n## Round 2\n\n## Proven breaks\nNone\n\n## Validated risks\n- R1 HELD\n\n${qaRest}`);
   assert.deepEqual(await check("05"), ["OK"]);
+  writeArtifact(env, "05-qa.md", "## Round 1\n\n## Proven breaks\nNone\n\n## Validated risks\n- R1 HELD\n\n## Invalidated assumptions\nNone\n\n## Generated PoCs\nNone\n");
+  assert.deepEqual(await check("05"), ["MISSING: ## Verdict"], "a consolidated report with no verdict passed the gate");
 
   writeArtifact(env, "06-runtime.md", "## Round 1\n\n## Runtime verdict\nCONFIRMED\n\n## Round 2\n\nDiff applies plan: yes\n");
   assert.deepEqual(await check("06.5"), ["MISSING: ## Runtime verdict"]);
@@ -365,7 +370,7 @@ test("`run check 05a` outside a job answers for an operator run named by project
   const env = makeQueue(t, "cli-run-check-operator-05a");
   const slug = "hunt-the-notice";
   recordRunFields({ projectId: ensureProject(env, "alpha"), slug, fields: { origin: "operator" }, env });
-  writeArtifact(env, "05a-qa-analyst.md", "# QA\n\n## Break hypotheses\n\n- H1\n\n## Test recipe\n\nnode --test\n", { slug });
+  writeArtifact(env, "05a-qa-analyst.md", "# QA\n\n## Proven breaks\n\nNone\n\n## Break hypotheses\n\n- H1\n\n## Test recipe\n\nnode --test\n\n## Validated risks\n\n- R1 → hypothesis H1\n\n## Invalidated assumptions\n\nNone\n\n## Verdict\n\nNEEDS FIX\n", { slug });
   const qa = await runCli(env, ["run", "check", "05a", "--project", "alpha", "--slug", slug]);
   assert.equal(qa.code, 0);
   assert.deepEqual(qa.out, ["OK"]);
@@ -423,7 +428,7 @@ test("`run check` refuses a phase it does not know and a missing argument, and e
 
   const absent = await runCli(env, ["run", "check", "06"], { jobId: id });
   assert.equal(absent.code, 0);
-  assert.deepEqual(absent.out, ["MISSING: ## Verification"]);
+  assert.deepEqual(absent.out, ["MISSING: ## Checks run, ## Verification"]);
 });
 
 test("the top-level help lists `run` under its own heading, saying it acts on the run of the job it is called from", async (t) => {

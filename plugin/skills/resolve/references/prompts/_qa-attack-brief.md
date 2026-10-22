@@ -25,15 +25,8 @@ plan and absent from the diff = a break. (2) Is the list COMPLETE? Do NOT trust 
 the command declared in `**How I enumerated:**` and widen it on your own (writers of the
 state, entry points, handlers/listeners, jobs, error paths). A path that
 produces the ticket's symptom and is NOT in the table is an **omitted vector** = a break in
-## Proven breaks, with the command used and `file:line`. Record it as the FIRST line of
-## Validated risks:
-`Symptom coverage: <N vectors of the plan's table> · <command/criterion of your
-re-enumeration> · omitted: <file:line | none>` — the orchestrator audits that line.
-`N vectors of the plan's table` = the total of lines of the ## Symptom coverage table of the
-plan (`covered` + `not-covered`), NOT the number of vectors you confirmed in the diff:
-a `not-covered` vector counts towards N even without being in the diff (by definition it is
-not), and an omitted vector that YOU discovered does NOT enter N — it goes only in the
-`omitted:` field.
+## Proven breaks, with the command used and `file:line`. Record it on the `Symptom coverage:`
+line of ## Deliver.
 
 {{/IS_BUG}}
 {{#HAS_USAGE_COVERAGE}}
@@ -43,13 +36,6 @@ of the plan and diff the two against it. Every prohibition of ## What to avoid a
 `source=pipeline` line is a hypothesis to attack: a named consumer (file:line + entry point) →
 a proven break; without one → the label `the decision remains unconfirmed by the operator`,
 and `HELD` is FORBIDDEN on those items. ## Access map (QA) is mandatory whenever this front
-applies. Record it in ## Validated risks, right after the `Symptom coverage: ...` line when it
-exists (otherwise as the first line):
-`Usage coverage: <N lines of the plan> · <M own scenarios> · divergences: <file:line, ...|none> · unconfirmed decisions: <item, ...|none>`
-`N lines of the plan` = the total of scenario lines (the ones starting with `- `) inside the
-cut of the `## Usage coverage` section of `03-plan.md` — from the heading to the next `## `,
-outside a code block; the `**Diff axis:**`, `**Always-gate class:**` and `**Scenarios
-consulted:**` lines do NOT count. `M own scenarios` = the total of entry-point lines of the
-`## Access map (QA)` of the QA report; the `partial:` line and the `unimplemented intent:`
-lines do NOT count. The orchestrator audits that line with these same definitions.
+applies. Record it on the `Usage coverage:` line of ## Deliver (its two counts are defined
+there).
 {{/HAS_USAGE_COVERAGE}}

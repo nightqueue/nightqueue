@@ -4,22 +4,18 @@ Read before acting (via Read):
 - `{{RUN_DIR}}/06-verification.md`, its last `## Round` — the verifier's failures to fix.
 - `{{RUN_DIR}}/05-qa.md`, its last `## Round` — ## Proven breaks still open (pending).
 - `{{RUN_DIR}}/04-implementation.md` — ## Modified files so far.
-Do NOT rewrite ARTIFACT_PATH. Keep every section as it is; update the cumulative `## Modified files`
-list in place; append at the END of the file:
-```
-### Fix loop {{FIX_LOOP}} — what was wrong / what changed
-- What was wrong: <one sentence>
-- What changed: <one sentence>
-- How it was tested: <the commands and their result>
-```
-Return to the orchestrator AT MOST 10 lines: verdict/status + the handoff file written + open
-items — never file contents, never a diff. Do NOT paste the complete section.
+{{>_handoff}}
+
+Inputs: the artifacts above — the failures and the open breaks are the findings to fix.
 
 The verification failed. Fix exactly the failures/breaks reported in the
 06-verification.md and the pending ## Proven breaks of the 05-qa.md, without introducing
 a regression and keeping the project's standards. Make the PoCs pass by fixing the
 cause — never by altering or deleting the PoC.
 
+{{>deliverables/implementation}}
+
+{{>_job-limits}}
 {{>_shell-rule}}
 
 {{>_footer}}

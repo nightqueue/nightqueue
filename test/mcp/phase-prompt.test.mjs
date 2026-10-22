@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { runDir } from "../../src/config/paths.mjs";
@@ -8,6 +9,9 @@ import { addJob, claimJobById, persistRunFacts } from "../../src/memory/jobs.mjs
 import { saveLesson } from "../../src/memory/lessons.mjs";
 import { recordInjected } from "../../src/hooks/state.mjs";
 import { recordRunFields } from "../../src/queue/run-state.mjs";
+import { RUNTIME_PROMPT_RE } from "../../src/queue/narrate.mjs";
+import { PHASE_ARTIFACTS } from "../../src/queue/phase-artifacts.mjs";
+import { renderSkillTemplate } from "../../src/queue/skill-template.mjs";
 import { routingRow } from "../../src/queue/routing.mjs";
 import { ensureProject, makeHome, makeProject, projectIdOf, projectPathOf } from "../../test-support/memory.mjs";
 
@@ -134,10 +138,112 @@ function assertLinesPreserved(fixtureName, render, template) {
   }
 }
 
+// The values each template renders with in a real run, where only the prover gets a GROUP.
+function valuesOf(template) {
+  return template === "qa-prover" ? FULL : { ...FULL, GROUP: "" };
+}
+
 test("golden: every line of each old template survives, in order, in the render of its new home", () => {
   for (const [name, templates] of GOLDEN) {
-    for (const template of templates) assertLinesPreserved(name, renderTemplate(template, FULL), template);
+    for (const template of templates) assertLinesPreserved(name, renderTemplate(template, valuesOf(template)), template);
   }
+});
+
+const QA_REPORT_HEADINGS = ["## Proven breaks", "## Validated risks", "## Invalidated assumptions", "## Generated PoCs", "## Verdict"];
+
+test("the QA requests render the report Deliver block, and the prover only its verdict per hypothesis", () => {
+  for (const template of ["qa-lite", "qa-analyst"]) {
+    const render = renderTemplate(template, valuesOf(template));
+    assert.ok(render.includes("\nInputs: "), `${template} has no Inputs line`);
+    assert.ok(render.includes("Lesson L<id> applied"), `${template} lacks the lesson-citation protocol`);
+    const lines = render.split("\n");
+    let from = lines.indexOf("## Deliver");
+    assert.notEqual(from, -1, `${template} has no \`## Deliver\` block`);
+    for (const heading of QA_REPORT_HEADINGS) {
+      const at = lines.findIndex((line, index) => index > from && line === heading);
+      assert.ok(at > from, `${template}: ${heading} is missing or out of order after ## Deliver`);
+      from = at;
+    }
+    assert.equal(render.includes("no .md artifact of your own"), false, `${template} renders the prover's deliverable`);
+  }
+  const analyst = renderTemplate("qa-analyst", valuesOf("qa-analyst")).split("\n");
+  for (const heading of ["## Break hypotheses", "## Test recipe"]) assert.ok(analyst.includes(heading), `the analyst request does not deliver ${heading}`);
+  const prover = renderTemplate("qa-prover", FULL);
+  assert.ok(prover.includes("\n## Deliver\n"), "the prover request has no `## Deliver` block");
+  assert.ok(prover.includes("`PROVEN`"), "the prover request does not name its verdict per hypothesis");
+  assert.equal(prover.split("\n").includes("## Proven breaks"), false, "the prover request renders the full report");
+  assert.ok(prover.includes("Lesson L<id> applied"), "the prover request lacks the lesson-citation protocol");
+});
+
+// The artifact gate each request's deliverable answers to.
+const CHECK_OF = {
+  architect: "03",
+  coder: "04",
+  "coder-fast": "04",
+  "coder-fix": "04",
+  "qa-lite": "05",
+  "qa-analyst": "05a",
+  verifier: "06",
+  "verifier-fast": "06",
+  runtime: "06.5",
+};
+
+test("each request renders Inputs, the handoff, and after ## Deliver every section its artifact gate requires", () => {
+  for (const [template, check] of Object.entries(CHECK_OF)) {
+    for (const IS_BUG of [true, false]) {
+      const render = renderTemplate(template, { ...valuesOf(template), IS_BUG });
+      const lines = render.split("\n");
+      assert.ok(lines.some((line) => line.startsWith("Inputs: ")), `${template} has no Inputs line`);
+      assert.ok(render.includes("Lesson L<id> applied"), `${template} lacks the handoff lines`);
+      const from = lines.indexOf("## Deliver");
+      assert.notEqual(from, -1, `${template} has no \`## Deliver\` block`);
+      for (const section of PHASE_ARTIFACTS.get(check).sections) {
+        assert.ok(lines.some((line, index) => index > from && line.startsWith(section)), `${template}: ${section} (run check ${check}) is not delivered after ## Deliver`);
+      }
+    }
+  }
+});
+
+test("the prover renders only its verdict branch, and only the fix-loop coder renders the fix-loop block", () => {
+  const prover = renderTemplate("qa-prover", FULL).split("\n");
+  assert.ok(prover.includes("## Deliver"), "the prover request has no `## Deliver` block");
+  for (const heading of PHASE_ARTIFACTS.get("05").sections) assert.equal(prover.includes(heading), false, `the prover renders the report heading ${heading}`);
+  const values = { ...FULL, FIX_LOOP: "" };
+  assert.ok(renderTemplate("coder-fix", FULL).includes("### Fix loop 1 — what was wrong / what changed\n"), "the fix-loop coder lost its block");
+  for (const template of ["coder", "coder-fast"]) {
+    assert.equal(renderTemplate(template, values).includes("### Fix loop"), false, `${template} renders the fix-loop block`);
+  }
+});
+
+test("a `{{>dir/name}}` partial resolves from the sibling directory, and a missing one throws naming that directory", (t) => {
+  const root = mkdtempSync(join(tmpdir(), "nightqueue-partials-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const prompts = join(root, "prompts");
+  mkdirSync(prompts);
+  mkdirSync(join(root, "deliverables"));
+  writeFileSync(join(root, "deliverables", "report.md"), "## Deliver\n{{>_note}}");
+  writeFileSync(join(prompts, "_note.md"), "Note: {{NAME}}\n");
+  writeFileSync(join(prompts, "ask.md"), "Ask\n{{>deliverables/report}}\nEnd\n");
+  writeFileSync(join(prompts, "broken.md"), "{{>deliverables/missing}}\n");
+  writeFileSync(join(prompts, "escape.md"), "{{>deliverables/../ask}}\n");
+  assert.equal(renderSkillTemplate(prompts, "ask", { NAME: "x" }), "Ask\n## Deliver\nNote: x\nEnd\n");
+  assert.throws(() => renderSkillTemplate(prompts, "broken", {}), (error) => error.message.includes("`deliverables/missing`") && error.message.includes(root));
+  assert.throws(() => renderSkillTemplate(prompts, "escape", {}), /unresolved tag/);
+});
+
+test("the verifier requests render the verification Deliver block, and the runtime lane keeps its own line and verdicts", () => {
+  for (const template of ["verifier", "verifier-fast"]) {
+    const lines = renderTemplate(template, FULL).split("\n");
+    const from = lines.indexOf("## Deliver");
+    assert.notEqual(from, -1, `${template} has no \`## Deliver\` block`);
+    assert.ok(lines.indexOf("## Checks run") > from, `${template} does not deliver ## Checks run`);
+    assert.ok(lines.some((line, index) => index > from && line.startsWith("## Verification: FAILED")), `${template} does not deliver the verdict line`);
+    assert.ok(lines.some((line) => line.startsWith("Inputs: ")), `${template} has no Inputs line`);
+  }
+  const runtime = renderTemplate("runtime", FULL);
+  assert.ok(RUNTIME_PROMPT_RE.test(runtime), "the runtime render lost its `Mode: RUNTIME` line");
+  assert.ok(runtime.split("\n").includes("## Runtime verdict"), "the runtime request does not deliver ## Runtime verdict");
+  assert.ok(runtime.includes("Lesson L<id> applied"), "the runtime request lacks the lesson-citation protocol");
 });
 
 test("the handoff contract heads every prompt, and the fast prompts carry its generic lines verbatim", () => {
@@ -339,6 +445,18 @@ test("the runtime lane may write another artifact of the run, which then has no 
   await assert.rejects(phasePrompt({ target: "qa-prover" }, { run, env }), /`group` is required/);
 });
 
+test("a `group` on a QA target other than the prover is refused, so its lane never loses its .md report", async (t) => {
+  const { env, run } = makeRun(t, "phase-prompt-group-leak", { tier: "complex" });
+  for (const target of ["qa-lite", "qa-analyst"]) {
+    await assert.rejects(phasePrompt({ target, group: "H1,H2" }, { run, env }), /`group` is only accepted with `target: "qa-prover"`/);
+    const own = await phasePrompt({ target }, { run, env });
+    assert.match(own.prompt, /## Proven breaks/);
+    assert.doesNotMatch(own.prompt, /no \.md artifact of your own/);
+  }
+  const prover = await phasePrompt({ target: "qa-prover", group: "H1,H2" }, { run, env });
+  assert.match(prover.prompt, /no \.md artifact of your own/);
+});
+
 test("a round artifact's prompt names the next `## Round`, counted by the runtime from the file on disk", async (t) => {
   const { env, run, dir } = makeRun(t, "phase-prompt-round", { tier: "complex" });
   const first = await phasePrompt({ target: "verifier" }, { run, env });
@@ -358,7 +476,7 @@ test("the fix-loop coder appends the next `### Fix loop` block and never rewrite
   writeFileSync(join(dir, "04-implementation.md"), "## Modified files\n/a.mjs\n\n### Fix loop 1 — what was wrong / what changed\n- What was wrong: x\n");
   const fix = await phasePrompt({ target: "coder-fix" }, { run, env });
   assert.ok(fix.prompt.includes("### Fix loop 2 — what was wrong / what changed\n"), fix.prompt);
-  assert.ok(fix.prompt.includes("Do NOT rewrite ARTIFACT_PATH."), fix.prompt);
+  assert.ok(fix.prompt.includes("This launch is fix loop 2: do NOT rewrite ARTIFACT_PATH"), fix.prompt);
   const coder = await phasePrompt({ target: "coder" }, { run, env });
   assert.equal(coder.prompt.includes("### Fix loop"), false, coder.prompt);
 });

@@ -14,9 +14,9 @@ export const PHASE_ARTIFACTS = new Map([
   ["02", { file: "02-explore.md", sections: ["## File map", "## Access map", "## Third-party libraries"] }],
   ["03", { file: "03-plan.md", sections: ["## Implementation plan", "## Assumptions", "## Pre-mortem", "## Identified risks"] }],
   ["04", { file: "04-implementation.md", sections: [FILE_LIST] }],
-  ["05a", { file: "05a-qa-analyst.md", sections: ["## Break hypotheses", "## Test recipe"], rounds: true }],
-  ["05", { file: "05-qa.md", sections: ["## Validated risks"], rounds: true }],
-  ["06", { file: "06-verification.md", sections: ["## Verification"], rounds: true }],
+  ["05a", { file: "05a-qa-analyst.md", sections: ["## Proven breaks", "## Break hypotheses", "## Test recipe", "## Validated risks", "## Invalidated assumptions", "## Verdict"], rounds: true }],
+  ["05", { file: "05-qa.md", sections: ["## Proven breaks", "## Validated risks", "## Invalidated assumptions", "## Generated PoCs", "## Verdict"], rounds: true }],
+  ["06", { file: "06-verification.md", sections: ["## Checks run", "## Verification"], rounds: true }],
   ["06.5", { file: "06-runtime.md", sections: ["## Runtime verdict"], rounds: true }],
 ]);
 

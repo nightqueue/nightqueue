@@ -11,6 +11,16 @@ test("the explore gate requires the headings the index-save parser reads", () =>
   assert.equal(parseExploreArtifact(artifact).files.length, 1);
 });
 
+test("the plan, implementation, QA and verification gates require the mandatory sections of their ## Deliver blocks", () => {
+  const sections = (phase) => PHASE_ARTIFACTS.get(phase).sections;
+  assert.deepEqual(sections("03"), ["## Implementation plan", "## Assumptions", "## Pre-mortem", "## Identified risks"]);
+  assert.deepEqual(sections("04"), ["## Modified files"]);
+  assert.deepEqual(sections("05a"), ["## Proven breaks", "## Break hypotheses", "## Test recipe", "## Validated risks", "## Invalidated assumptions", "## Verdict"]);
+  assert.deepEqual(sections("05"), ["## Proven breaks", "## Validated risks", "## Invalidated assumptions", "## Generated PoCs", "## Verdict"]);
+  assert.deepEqual(sections("06"), ["## Checks run", "## Verification"]);
+  assert.deepEqual(sections("06.5"), ["## Runtime verdict"]);
+});
+
 test("the verifier, runtime and QA artifacts are round artifacts; the others are not", () => {
   const rounds = [...PHASE_ARTIFACTS].filter(([, artifact]) => artifact.rounds).map(([phase]) => phase);
   assert.deepEqual(rounds, ["05a", "05", "06", "06.5"]);

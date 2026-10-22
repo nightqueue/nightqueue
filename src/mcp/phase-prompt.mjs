@@ -200,6 +200,13 @@ function text(value) {
   return typeof value === "string" ? value.trim() : "";
 }
 
+// Refuses a call whose `group` does not match its target: required by the qa-prover, refused by every other target.
+function requireGroupRule(args) {
+  const hasGroup = text(args.group) !== "";
+  if (args.target === "qa-prover" && !hasGroup) throw new UserError("`group` is required with `target: \"qa-prover\"`: the IDs/label of the same-root group");
+  if (args.target !== "qa-prover" && hasGroup) throw new UserError(`\`group\` is only accepted with \`target: "qa-prover"\`, not with \`target: "${args.target}"\`: drop it to render this lane's own report`);
+}
+
 // The values every template may read, resolved from the run and the call.
 async function promptValues({ args, template, run, state, env, openItems }) {
   const { tier, type } = requireTierAndType(state);
@@ -209,7 +216,7 @@ async function promptValues({ args, template, run, state, env, openItems }) {
   const repo = repositoryOf({ run, state, env, openItems });
   const query = text(args.query) || briefField(brief, "Affected area");
   const lookup = { template, row, query, run, repo, env, openItems };
-  if (args.target === "qa-prover" && !text(args.group)) throw new UserError("`group` is required with `target: \"qa-prover\"`: the IDs/label of the same-root group");
+  requireGroupRule(args);
   const artifact = runtimeArtifact(args.target, args.artifact);
   const ownArtifact = args.target === "runtime" ? artifact : TARGETS[args.target]?.artifact;
   return {

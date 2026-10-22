@@ -3,6 +3,8 @@ ARTIFACT_PATH: {{RUN_DIR}}/04-implementation.md
 Read before acting (via Read): {{#TRIAGED}}`{{RUN_DIR}}/01-triage.md` — ## Validated brief and the confirmed cause.{{/TRIAGED}}{{^TRIAGED}}none{{/TRIAGED}}
 {{>_handoff}}
 
+Inputs: the brief below; the affected files; the project conventions when named; the `## Applicable lessons` and `## Project memory` when the context carries them.
+
 Brief:
 {{BRIEF}}
 
@@ -23,9 +25,9 @@ Follow the test patterns already in the project and
 cover the new behaviour in the test file that already covers this area.
 {{/SIMPLE}}
 
-Write `04-implementation.md` per your Required output (`## Modified files`, `## Done`,
-`## Left`, `## How it was tested`).
+{{>deliverables/implementation}}
 
+{{>_job-limits}}
 {{>_shell-rule}}
 
 {{>_footer}}

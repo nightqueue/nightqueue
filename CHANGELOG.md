@@ -29,6 +29,50 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 - **The shared `_handoff` partial carries the lesson-citation protocol** (`Lesson L<id> applied:`
   up to 2 lines outside the 10-line budget; recalled `L<id>`/`M<id>` refs cited in the return)
   for every prompt that includes it.
+- **The architect is pipeline-independent.** `plugin/agents/architect.md` holds who it is, how it
+  operates, its resources (`nightqueue libs`, one lesson recall after reading the code) and its
+  method (Steps 1–4), plus a `When to stop and ask` list of every trigger — no phase, run artifact,
+  orchestrator, shell rule or section definition. Its request (`prompts/architect.md`) owns the
+  `Inputs` (including the intent and depth notes Phase 1 used to point at), a `## Deliver` block
+  with every format line and rule of the plan, and the shared handoff.
+- **The coder is pipeline-independent.** `plugin/agents/coder.md` keeps its coding guidelines,
+  `## How you operate` (with or without a plan, one stage at a time), `## Resources` and
+  `## Reading discipline`. Its three requests (`coder`, `coder-fast`, `coder-fix`) own the
+  `Inputs`, the shared handoff, the search and long-command limits (`prompts/_job-limits.md`) and
+  the shared `deliverables/implementation.md` (`## Modified files`, `## Done`, `## Left`,
+  `## How it was tested`, and the fix-loop block that renders only for `coder-fix`).
+- **The qa-guardian is pipeline-independent.** `plugin/agents/qa-guardian.md` holds the fronts,
+  the proof rules and the four scopes a request may ask for (complete, light, analysis without
+  runtime PoCs, proving an assigned group) — no mode names, phases or report structure. Its three
+  requests (`qa-lite`, `qa-analyst`, `qa-prover`) own the `Inputs`, the handoff and the shared
+  `deliverables/qa-report.md`: the prover gets only its verdict per hypothesis, the others the full
+  report, which is now the single home of the `Symptom coverage:`/`Usage coverage:` lines and
+  their `N`/`M` definitions. The Phase 5 consolidation also writes `## Verdict`.
+- **The verifier is pipeline-independent.** `plugin/agents/verifier.md` holds Steps 1–2.11, a
+  `## Proving by execution` method (cases (a)–(d2) and the deferring rule) and a
+  `## Verdict standard`. Its requests (`verifier`, `verifier-fast`, `runtime`) own the `Inputs`,
+  the handoff, `prompts/_job-limits.md` and either the shared `deliverables/verification.md`
+  (`## Checks run`, `## Failures`, `## Runtime API Check`, the `## Verification: <X>` line) or,
+  for the runtime lane, an inline `## Deliver` with `## Runtime verdict`, `Diff applies plan:` and
+  the `Result` table. `Mode: RUNTIME` stays alone on its line. The consequences of the runtime
+  verdict moved into SKILL Phase 6.5.
+- **Shared deliverables and `{{>dir/name}}` partials.** A template may include
+  `{{>deliverables/<name>}}`, read from the `references/` sibling of the templates directory (one
+  directory level, no dots); a missing one throws naming the directory.
+- **`nightqueue run check 05a`, `05` and `06` enforce their `## Deliver` sections.** `05a`:
+  `## Proven breaks`, `## Break hypotheses`, `## Test recipe`, `## Validated risks`,
+  `## Invalidated assumptions`, `## Verdict`; `05`: `## Proven breaks`, `## Validated risks`,
+  `## Invalidated assumptions`, `## Generated PoCs`, `## Verdict`; `06`: `## Checks run` and
+  `## Verification`. `03`, `04` and `06.5` already matched and are unchanged.
+- **The usage-coverage gate no longer fires on the ticket's own deliverable.** Condition 3 (and
+  the architect's matching step) skips an `unimplemented intent` line whose parameter is the very
+  code or parameter the validated brief asks to change.
+- **Handoff and guard wording.** The first `_handoff` line names "every mandatory section of
+  `## Deliver`" and lets a request with no ARTIFACT_PATH (the prover) write only the files its
+  deliverable names. The guard block's last sentence reads "The only publication ever made to the
+  project's own origin is `nightqueue run publish`…", byte-identical in its four copies. The search
+  and long-command rules every coder and verifier lane got from its agent file now come from
+  `prompts/_job-limits.md`.
 
 ## 0.7.0 - 2026-10-20
 
