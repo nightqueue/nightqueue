@@ -1,0 +1,4 @@
+OK
+VERDICT: PROCEED
+GATE: brief-field-empty — Commit type
+recorded: none (GATE: brief-field-empty — Commit type)

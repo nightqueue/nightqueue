@@ -47,13 +47,51 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
   message before committing and prints one `REJECTED: commit message — <reason>` per violation:
   a bad subject, a missing blank line 2, a `Co-Authored-By:` or `Refs:` trailer, and, under the
   fallback, a subject that is not Conventional Commits.
+- **The triager writes the Brief and the request critique.** Its request now takes the raw
+  request (`{{RAW_REQUEST}}`, the job's own prompt inside a job plus the operator's gate answer,
+  the new `phase_prompt` `request` input outside one) and the origin data (`{{ORIGIN}}`), and
+  its triage opens with `## Brief` (Affected area, Context, Objective, Expected outcome, Type,
+  Bug account, Key evidence, Commit type, a `**Slug:**` while the run still holds its
+  provisional slug, Stages) and `## Request critique`. `plugin/agents/triager.md` gains a
+  pipeline-independent `## Framing the request` method section. `phase_prompt` renders the
+  triager without `00-brief.md` and without a type; `raw_evidence` is accepted and ignored.
+- **`run check 01` writes `00-brief.md` and records the commit type and the slug.** On `OK` it
+  copies the triage's `## Brief` into `<RUN_DIR>/00-brief.md` (`recorded: brief 00-brief.md`),
+  records the Brief's Type (`recorded: type <t>`, `(was <old>)` when it replaces one),
+  `commitType` (`recorded: commit type <c>`) and, last, the slug: a job run still on its
+  provisional slug takes the Brief's `**Slug:**`, the row rebound and the run dir renamed
+  (`recorded: slug <new> (renamed from <old>; run dir <path>)`); otherwise the slug is kept with
+  the reason. New gate codes, each with a fixture: `brief-missing` (every verdict),
+  `brief-field-empty — <field>`, `brief-type-invalid` and `brief-commit-type-invalid`
+  (`PROCEED` only). The runner follows the renamed run after the session.
+- **`PROPOSE-ALTERNATIVE` triage verdict.** The triager proposes a cheaper or safer path (the
+  alternative and its trade-off in `## Open items`); the check records the termination and the
+  job pauses at a gate exactly like `NEEDS-CLARIFICATION`, its notice composed from
+  `## Open items`.
+- **`nightqueue queue add` refuses a dependent prompt** with the same message as the MCP
+  `queue_add`, from one shared function; nothing is queued.
+- **The Sentry origin carries the three most recent events in full**, newest first, from one
+  `events/?full=true&per_page=3` request (an event listed without its entries is read once
+  more), with the same per-event frame, breadcrumb, field and tag caps and no private data.
 
 ### Changed
+
+- **The triager runs in every tier, on `sonnet`.** The routing table has one triager model,
+  `trivial` and `simple` run `0 · 1 · 4 · 6 · 7 · 8`, the phases and tasks of a tier no longer
+  depend on the type, and the `Request critique (step 2.5)` row and the `requestCritique` key
+  are gone.
+- **`run start` takes `--type` and `--commit-type` as optional.** They are validated only when
+  given; `run check 01` records both from the Brief. `run check 00` and the `SLUG:` declaration
+  still work for an older plugin.
+- **`/resolve` no longer writes the Brief.** Phase 0 drops the Brief template (step 1), the
+  request critique (step 2.5), `run check 00` and the `SLUG:` rename; the interactive worktree
+  is entered as `<slug>`, since the commit type is known only after the triage. The spawn
+  prompt's run line reads "Use that RUN_DIR as it comes."
 
 - **`queue_add` refuses a dependent prompt, and `queue_retry` refuses a finished job.** A prompt
   that conditions the work on another job or pull request (`after J-<n>`,
   `once PR #<n> is merged`, `depends on J-<n>`/`depends on job`, `when #<n> lands`, outside
-  fenced code and comment threads) is refused with the `/resolve` step 2.5 wording, and nothing
+  fenced code and comment threads) is refused with the triager's fixed-alternative wording, and nothing
   is queued. A `closed` job, or a `done` job whose pull request is merged, answers "a finished
   job does not resume; queue a new one", for the MCP tool and the CLI alike.
 - **`/resolve` reads the check, not the artifacts.** Phases 1, 2, 3, 5, 6 and 6.5 and steps

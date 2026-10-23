@@ -32,6 +32,7 @@ import { formatDuration, formatNarration } from "../queue/narrate.mjs";
 import { blockerLines, claimBlocker } from "../queue/claim.mjs";
 import { worktreeLine } from "../queue/close.mjs";
 import { cancelJobAndWorktree } from "../queue/cancel.mjs";
+import { refuseDependentPrompt } from "../queue/dependent-prompt.mjs";
 import { closeMerged, CLOSE_MERGED_DEADLINE_MS } from "../queue/close-merged.mjs";
 import { runMaintenance } from "../queue/maintenance.mjs";
 import { jobIdOfPrUrl } from "../queue/pr-lookup.mjs";
@@ -334,6 +335,7 @@ async function addFromPrompt(positionals, values, ctx) {
   const target = await resolveTarget(loadConfig(ctx.env, { warn: ctx.err }), positionals, values, ctx);
   const prompt = target.words.join(" ").trim();
   if (!prompt) throw new UserError(`missing argument; usage: ${USAGE.add}`);
+  refuseDependentPrompt(prompt);
   if (target.fromCwd) ctx.out(`project \`${target.project.name}\` resolved from the current directory`);
   return await openStore(ctx.env).jobs.addJob({ projectId: target.project.id, prompt, ...addLimits(values), ...startOptions(values, ctx) });
 }

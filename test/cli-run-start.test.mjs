@@ -78,8 +78,8 @@ test("`run start` answers the run, the ONE routing row of its tier, the phases a
   assert.equal(answer.runDir, runDir(ensureProject(env, "alpha"), SLUG, env));
   assert.equal(answer.commitType, "feat");
   assert.deepEqual(answer.routing, routingRow("simple"));
-  assert.deepEqual(answer.phases, ["implementation", "verification", "commit"]);
-  assert.deepEqual(answer.tasks, ["implementation", "verification", "commit"]);
+  assert.deepEqual(answer.phases, ["triage", "implementation", "verification", "commit"]);
+  assert.deepEqual(answer.tasks, ["triage", "implementation", "verification", "commit"]);
   assert.deepEqual(answer.prTemplate, { source: "nightqueue", label: "nightqueue (fallback)", headings: ["## Report", "## Cause", "## Changes", "## QA"] });
   assert.equal(typeof answer.commitConvention, "string");
   assert.deepEqual(answer.commitTemplate, { source: "nightqueue", path: null, label: "nightqueue (fallback)" });
@@ -117,7 +117,7 @@ test("`run start` refuses a tier, a type or a commit type outside the pipeline's
     [["--tier", "huge", "--type", "bug/error", "--commit-type", "fix"], /unknown tier `huge`; accepted: trivial, simple, complex/],
     [["--tier", "simple", "--type", "chore", "--commit-type", "fix"], /unknown type `chore`; accepted: bug\/error, feature\/refactor/],
     [["--tier", "simple", "--type", "bug/error", "--commit-type", "wip"], /unknown commit type `wip`; accepted: feat, fix, refactor, docs, style, build, chore, test/],
-    [["--tier", "simple", "--type", "bug/error"], /unknown commit type ``/],
+    [["--type", "bug/error"], /unknown tier ``/],
   ];
   for (const [flags, message] of cases) {
     const result = await runCli(env, ["run", "start", ...flags], { jobId: id });
@@ -125,6 +125,34 @@ test("`run start` refuses a tier, a type or a commit type outside the pipeline's
     assert.match(result.errText, message);
   }
   assert.equal(readRunState({ projectId: ensureProject(env, "alpha"), slug: SLUG, env }), null, "a refused call recorded something");
+});
+
+test("`run start --tier` alone answers the tier's phases with no type nor commit type, and records only the tier", async (t) => {
+  const env = makeQueue(t, "run-start-tier-only");
+  const id = boundJob(env);
+
+  const answer = answerOf(await runCli(env, ["run", "start", "--tier", "simple"], { jobId: id }));
+
+  assert.equal(answer.type, null);
+  assert.equal(answer.commitType, null);
+  assert.deepEqual(answer.phases, ["triage", "implementation", "verification", "commit"]);
+  assert.deepEqual(answer.tasks, ["triage", "implementation", "verification", "commit"]);
+  const state = readRunState({ projectId: ensureProject(env, "alpha"), slug: SLUG, env });
+  assert.equal(state.tier, "simple");
+  assert.equal("type" in state, false, "run start recorded a type it was never given");
+  assert.equal("commitType" in state, false, "run start recorded a commit type");
+});
+
+test("`run start --tier` alone answers the type and the commit type `run check 01` already recorded", async (t) => {
+  const env = makeQueue(t, "run-start-tier-recorded");
+  const id = boundJob(env);
+  recordRunFields({ projectId: ensureProject(env, "alpha"), slug: SLUG, fields: { type: "bug/error", commitType: "fix" }, env });
+
+  const answer = answerOf(await runCli(env, ["run", "start", "--tier", "complex"], { jobId: id }));
+
+  assert.equal(answer.type, "bug/error");
+  assert.equal(answer.commitType, "fix");
+  assert.deepEqual(answer.routing, routingRow("complex"));
 });
 
 test("`run start --routing` prints the whole routing table and resolves no run, inside a job or outside", async (t) => {

@@ -3,10 +3,15 @@ import { join } from "node:path";
 import { UserError } from "../config/errors.mjs";
 import { runDir } from "../config/paths.mjs";
 import { packageRoot } from "../host/paths.mjs";
+import { originEntry, readOriginFiles } from "../integrations/enrich.mjs";
 import { registeredProject } from "../memory/registry-access.mjs";
+import { COMMIT_TYPES } from "../queue/branch-name.mjs";
+import { DEPENDENT_PROMPT_REFUSAL } from "../queue/dependent-prompt.mjs";
 import { nextFixLoop, nextRound } from "../queue/phase-artifacts.mjs";
 import { isStateObject, readRunState } from "../queue/resume.mjs";
+import { callerJobId } from "../queue/retry.mjs";
 import { phasesFor, routingRow } from "../queue/routing.mjs";
+import { isProvisionalSlug } from "../queue/run-slug.mjs";
 import { renderSkillTemplate, skillReferencesDir } from "../queue/skill-template.mjs";
 import { openStore } from "../store/open.mjs";
 import { callerContext, indexLine, phaseContextBlock, runInjectedLessonIds } from "./phase-context.mjs";
@@ -49,6 +54,8 @@ const ARTIFACT_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*\.md$/;
 const ROUND_TARGETS = ["verifier", "runtime", "qa-lite", "qa-analyst"];
 const INJECTED_LIMIT = 40;
 const NONE_RECORDED = "none recorded";
+const QUERY_WORDS = 12;
+const BRIEF_WRITER = "run `nightqueue run check 01` first: it writes the Brief from the triage's `## Brief`";
 
 // The directory the prompt templates ship in, inside the plugin of this runtime.
 export function promptsDir() {
@@ -73,10 +80,10 @@ function readBrief(dir) {
   try {
     text = readFileSync(path, "utf8");
   } catch {
-    throw new UserError(`write the Brief to ${path} first (then \`nightqueue run check 00\`)`);
+    throw new UserError(`the run has no Brief at ${path}: ${BRIEF_WRITER}`);
   }
   const start = text.search(/^## Brief\s*$/m);
-  if (start < 0) throw new UserError(`${path} has no \`## Brief\` section: write the Brief there first (then \`nightqueue run check 00\`)`);
+  if (start < 0) throw new UserError(`${path} has no \`## Brief\` section: ${BRIEF_WRITER}`);
   const rest = text.slice(start);
   const end = rest.slice(1).search(/^## /m);
   return (end < 0 ? rest : rest.slice(0, end + 1)).trim();
@@ -88,11 +95,12 @@ function briefField(brief, field) {
   return line ? line.trim().slice(field.length + 5).trim() : "";
 }
 
-// The run's recorded tier and type, refusing a run that `run start` never recorded.
-function requireTierAndType(state) {
-  const tier = isStateObject(state) ? state.tier : null;
-  const type = isStateObject(state) ? state.type : null;
-  if (!tier || !type) throw new UserError("the run has no tier and type recorded yet: run `nightqueue run start` first");
+// The run's recorded tier and type; the tier is required by every target, the type by every target but the triager, which records it.
+function requireTierAndType(state, target) {
+  const tier = isStateObject(state) && state.tier ? state.tier : null;
+  const type = isStateObject(state) && state.type ? state.type : null;
+  if (!tier) throw new UserError("the run has no tier recorded yet: run `nightqueue run start` first");
+  if (!type && target !== "triager") throw new UserError("the run has no type recorded yet: run `nightqueue run check 01` first");
   return { tier, type };
 }
 
@@ -121,7 +129,7 @@ async function contextBlock({ template, row, query, run, repo, env, openItems })
   const target = LESSON_TARGET_OF[template];
   if (!target || (template === "coder-fast" && !row.contextForCoder)) return "";
   const answer = await tolerant(openItems, "the context block", { block: "" }, () =>
-    phaseContextBlock({ target, query, project: run.project, repoRoot: repo }, env),
+    phaseContextBlock({ target, query, project: run.project, repoRoot: repo, origin: template !== "triager" }, env),
   );
   return answer.block ?? "";
 }
@@ -207,14 +215,67 @@ function requireGroupRule(args) {
   if (args.target !== "qa-prover" && hasGroup) throw new UserError(`\`group\` is only accepted with \`target: "qa-prover"\`, not with \`target: "${args.target}"\`: drop it to render this lane's own report`);
 }
 
+// Refuses a `request` on any target but the triager, the only one that reads the request instead of the Brief.
+function requireRequestRule(args) {
+  if (args.target !== "triager" && text(args.request) !== "") {
+    throw new UserError(`\`request\` is only accepted with \`target: "triager"\`, not with \`target: "${args.target}"\`: every other target reads the Brief of 00-brief.md`);
+  }
+}
+
+// The caller's own job row, or null outside a job or when the store cannot read it (named in an open item).
+async function ownJobRow(env, openItems) {
+  const id = callerJobId(env);
+  if (id === null) return null;
+  return tolerant(openItems, "reading this job's row", null, () => openStore(env).jobs.getJob(id));
+}
+
+// The operator's answer to the gate, appended to the request unless the prompt already carries it.
+function operatorAnswer(note, prompt) {
+  const answer = typeof note === "string" ? note.trim() : "";
+  return answer && !prompt.includes(answer) ? `\n\nOperator answer to the gate: ${answer}` : "";
+}
+
+// The request the triager reads: the job's own prompt inside a job, else the `request` argument.
+function rawRequest({ job, args, env, openItems }) {
+  const asked = text(args.request);
+  const prompt = typeof job?.prompt === "string" ? job.prompt.trim() : "";
+  if (prompt) {
+    if (asked) openItems.push("`request` was ignored: inside a job the triager reads the job's own prompt");
+    return prompt + operatorAnswer(job.operator_note, prompt);
+  }
+  if (asked) return asked;
+  if (callerJobId(env) !== null) throw new UserError("this job's prompt could not be read: pass the request as `request`");
+  throw new UserError('`request` is required with `target: "triager"` outside a job: the user\'s request, verbatim');
+}
+
+// The values only the triager reads: the raw request, its origin data, whether it names the slug, and the fixed lists it chooses from.
+async function triagerValues({ args, run, dir, env, openItems }) {
+  const fixed = { COMMIT_TYPES: COMMIT_TYPES.join(", "), DEPENDENT_REFUSAL: DEPENDENT_PROMPT_REFUSAL };
+  if (args.target !== "triager") return { ...fixed, RAW_REQUEST: "", ORIGIN: "", NEEDS_SLUG: false };
+  const job = await ownJobRow(env, openItems);
+  return {
+    ...fixed,
+    RAW_REQUEST: rawRequest({ job, args, env, openItems }),
+    ORIGIN: readOriginFiles(join(dir, "origin")).map(originEntry).join("\n\n"),
+    NEEDS_SLUG: isProvisionalSlug(job, run.slug),
+  };
+}
+
+// The first words of a text, the recall query of a prompt that has no Brief yet.
+function leadingWords(source) {
+  return source.split(/\s+/).filter(Boolean).slice(0, QUERY_WORDS).join(" ");
+}
+
 // The values every template may read, resolved from the run and the call.
 async function promptValues({ args, template, run, state, env, openItems }) {
-  const { tier, type } = requireTierAndType(state);
+  const { tier, type } = requireTierAndType(state, args.target);
+  requireRequestRule(args);
   const dir = runDir(run.projectId, run.slug, env);
-  const brief = readBrief(dir);
+  const brief = args.target === "triager" ? "" : readBrief(dir);
+  const triage = await triagerValues({ args, run, dir, env, openItems });
   const row = routingRow(tier);
   const repo = repositoryOf({ run, state, env, openItems });
-  const query = text(args.query) || briefField(brief, "Affected area");
+  const query = text(args.query) || briefField(brief, "Affected area") || leadingWords(triage.RAW_REQUEST);
   const lookup = { template, row, query, run, repo, env, openItems };
   requireGroupRule(args);
   const artifact = runtimeArtifact(args.target, args.artifact);
@@ -224,7 +285,7 @@ async function promptValues({ args, template, run, state, env, openItems }) {
     REPOSITORY: repo,
     PROJECT: run.project,
     TIER: tier,
-    TYPE: type,
+    TYPE: type ?? "",
     BRIEF: brief,
     AFFECTED_AREA: briefField(brief, "Affected area"),
     OBJECTIVE: briefField(brief, "Objective"),
@@ -239,7 +300,7 @@ async function promptValues({ args, template, run, state, env, openItems }) {
     TRIAGED: existsSync(join(dir, "01-triage.md")),
     HAS_USAGE_COVERAGE: planHasUsageCoverage(dir),
     PLUGIN_ROOT: join(packageRoot(), "plugin"),
-    RAW_EVIDENCE: type === BUG ? text(args.raw_evidence) : "",
+    ...triage,
     DELIVERY_CONSTRAINTS: text(args.delivery_constraints),
     STAGE: text(args.stage),
     GROUP: text(args.group),
@@ -257,7 +318,7 @@ function modelFor(spec, { tier, type }, openItems) {
   const planned = phasesFor(tier, type).includes(spec.phase);
   const model = routingRow(tier).models[spec.model];
   if (planned && model) return model;
-  openItems.push(`the ${spec.phase} phase does not run in the ${tier} tier (${type}); rendered anyway, with the complex-tier model (a tier raise may be under way)`);
+  openItems.push(`the ${spec.phase} phase does not run in the ${tier} tier (${type ?? "no type recorded"}); rendered anyway, with the complex-tier model (a tier raise may be under way)`);
   return routingRow("complex").models[spec.model];
 }
 
@@ -266,7 +327,7 @@ export async function phasePrompt(args, { run, env = process.env }) {
   const spec = TARGETS[args?.target];
   if (!spec) throw new UserError(`unknown target \`${String(args?.target)}\`; accepted: ${PROMPT_TARGETS.join(", ")}`);
   const state = readRunState({ projectId: run.projectId, slug: run.slug, env });
-  const { tier, type } = requireTierAndType(state);
+  const { tier, type } = requireTierAndType(state, args.target);
   const template = templateOf(args.target, tier);
   const openItems = [];
   const values = await promptValues({ args, template, run, state, env, openItems });

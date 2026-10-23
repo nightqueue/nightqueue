@@ -1,5 +1,13 @@
 # Triage
 
+## Brief
+**Affected area:** src/notice.mjs
+**Context:** the gate notice is built by `composeNotice`
+**Objective:** fill the gate notice again
+**Expected outcome:** the gate notice carries the section it names
+**Type:** bug/error
+**Commit type:** fix
+
 ## Verdict: PROCEED
 
 Evidence level: 3

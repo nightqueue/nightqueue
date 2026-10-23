@@ -1,6 +1,7 @@
 import { PIPELINE_TASK_TYPES } from "../memory/runs.mjs";
 import { lastRound, PHASE_ARTIFACTS } from "./phase-artifacts.mjs";
 import { hasGateMarker, sectionOf, unfencedLines } from "./stream.mjs";
+import { briefGates, briefType } from "./triage-brief.mjs";
 
 // The contract of `nightqueue run check`: one fact per line, in this order, each with a stable prefix.
 // OK | MISSING: <sections> | GENERATED, then VERDICT:, GATE:, OPEN:, TYPE-MISMATCH:, CONFIRM:, INVALIDATED:, DIFF-APPLIES:,
@@ -348,16 +349,21 @@ function usageCoverageGates(ctx) {
   ];
 }
 
-// The facts of the triage: a PROCEED on a bug needs a filled `Symptom proof:`.
-function triageFacts(ctx) {
-  if (ctx.verdict !== "PROCEED" || ctx.type !== BUG) return {};
+// The symptom-proof gate of the triage: a PROCEED on a bug needs a filled `Symptom proof:`.
+function symptomProofGates(ctx) {
+  if (ctx.verdict !== "PROCEED" || ctx.type !== BUG) return [];
   const lines = bodyLines(ctx.text, "## Diagnosis");
   const value = lines === null ? null : fieldValue(lines, "Symptom proof");
   let evidence = null;
   if (lines === null) evidence = "## Diagnosis absent";
   else if (value === null) evidence = "Symptom proof: line absent";
   else if (!isFilled(value)) evidence = `Symptom proof: ${value || "(empty)"}`;
-  return evidence === null ? {} : { gates: [gate("symptom-proof-missing", evidence)] };
+  return evidence === null ? [] : [gate("symptom-proof-missing", evidence)];
+}
+
+// The facts of the triage: the gates of its `## Brief` first, then the symptom proof of a bug.
+function triageFacts(ctx) {
+  return { gates: [...briefGates(ctx.text, ctx.verdict), ...symptomProofGates(ctx)] };
 }
 
 // The facts of the plan: its gates, its Type mismatch and its pause for confirmation.
@@ -610,7 +616,8 @@ export function evaluateCheck({ check, texts = {}, state = null }) {
   const whole = read(artifact.file);
   const text = artifact.rounds ? lastRound(whole) : whole;
   const triage = read("01-triage.md");
-  const base = { check, artifact, text, triage, brief: read("00-brief.md"), explore: read("02-explore.md"), plan: read("03-plan.md"), type: runType(state, triage) };
+  const type = (check === "01" ? briefType(text) : null) ?? runType(state, triage);
+  const base = { check, artifact, text, triage, brief: read("00-brief.md"), explore: read("02-explore.md"), plan: read("03-plan.md"), type };
   const ctx = { ...base, verdict: artifact.verdict ? readVerdict(text, artifact.verdict) : null };
   const missing = missingParts(ctx);
   const common = { check, type: ctx.type, evaluated: text };

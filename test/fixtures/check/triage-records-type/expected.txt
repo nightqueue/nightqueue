@@ -1,4 +1,7 @@
 OK
 VERDICT: PROCEED
 recorded: type feature/refactor
+recorded: brief 00-brief.md
+recorded: commit type feat
 recorded: phase_done triage PROCEED
+recorded: slug check-contract

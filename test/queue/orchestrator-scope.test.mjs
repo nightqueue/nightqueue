@@ -153,7 +153,7 @@ const SKILL_PRESCRIBED = [
   ["git rev-parse --is-inside-work-tree", "git rev-parse --is-inside-work-tree"],
   ["git branch --show-current", "git branch --show-current"],
   ["git fetch\n     origin", "git fetch origin"],
-  ["git worktree add <path> -b <type>/<slug> origin/main", "git worktree add /work/wt -b feat/slug origin/main"],
+  ["git worktree add <path> -b worktree-<slug> origin/main", "git worktree add /work/wt -b worktree-slug origin/main"],
   ["git status --short", "git status --short"],
   ["git diff --stat", "git diff --stat"],
   ["git diff --stat|--shortstat|--name-only|--name-status", "git diff --name-only"],
@@ -161,11 +161,7 @@ const SKILL_PRESCRIBED = [
   ["gh pr view|list|status|checks|create", "gh pr view 3"],
   ["gh pr create", "gh pr create --title t --body-file /runs/p/s/pr-body.md"],
   ["nightqueue run check <NN>", "nightqueue run check 06.5"],
-  ["nightqueue run check 00", "nightqueue run check 00"],
-  [
-    "nightqueue run start --tier <tier> --type <bug/error|feature/refactor> --commit-type <type> --expect-slug <slug>",
-    "nightqueue run start --tier simple --type bug/error --commit-type fix --expect-slug fix-the-worker",
-  ],
+  ["nightqueue run start --tier <tier>", "nightqueue run start --tier simple"],
   [
     "nightqueue run publish --message-file <RUN_DIR>/commit-message.txt --body-file <RUN_DIR>/pr-body.md",
     "nightqueue run publish --message-file /runs/p/s/commit-message.txt --body-file /runs/p/s/pr-body.md --extra test/x.regression.test.mjs",

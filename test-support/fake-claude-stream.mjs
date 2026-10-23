@@ -62,6 +62,7 @@ function sleep(ms) {
 // Plays one attempt: the first slice of the stream, a silent hold, the rest, and a last silent hold before the exit.
 async function play(step) {
   if (typeof step.commitFile === "string") commitFile(step.commitFile);
+  if (Array.isArray(step.exec)) execFileSync(process.execPath, step.exec, { stdio: ["ignore", "ignore", "pipe"] });
   if (step.stdout) process.stdout.write(step.stdout);
   if (step.stderr) process.stderr.write(step.stderr);
   if (step.holdMs) await sleep(step.holdMs);

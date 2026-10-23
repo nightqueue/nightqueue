@@ -2,6 +2,7 @@ import { withLockSync } from "../config/lock.mjs";
 import { runDir } from "../config/paths.mjs";
 import { jobRef } from "../memory/refs.mjs";
 import { PIPELINE_TASK_TYPES, PIPELINE_TIERS } from "../memory/runs.mjs";
+import { COMMIT_TYPES } from "./branch-name.mjs";
 import { isRunPath, isStateObject, readRunState, RESUME_PHASE_ORDER, RESUME_SCHEMA_VERSION, saveRunState } from "./resume.mjs";
 import { offTierPhases } from "./routing.mjs";
 import { isPrUrl } from "./stream.mjs";
@@ -41,6 +42,7 @@ const RUN_FIELDS = {
   origin: ["operator"],
   [EVIDENCE_LEVEL]: [1, 2, 3, 4],
   planStatus: ["draft", "approved"],
+  commitType: COMMIT_TYPES,
 };
 
 // Who may record a skip through `run_skip`: the pipeline's own agents; `tier` skips are written by the runtime only.

@@ -64,6 +64,16 @@ function carriesDeliver(request, name) {
   return shared.length > 0;
 }
 
+// The triager frames the raw request itself, and its request asks for the Brief, the critique and the alternative verdict.
+test("the triager frames the request, and its request delivers the Brief and the request critique", () => {
+  const agent = readFileSync(join(ROOT, "plugin/agents/triager.md"), "utf8");
+  assert.ok(agent.split("\n").includes("## Framing the request"), "the triager agent has no ## Framing the request section");
+  const request = readFileSync(join(PROMPTS, "triager.md"), "utf8");
+  for (const part of ["\n## Brief\n", "\n## Request critique\n", "PROPOSE-ALTERNATIVE"]) {
+    assert.ok(request.includes(part), `the triager request does not carry ${part.trim()}`);
+  }
+});
+
 // What the agent must deliver and how it returns lives in the request the pipeline renders.
 test("each pipeline-independent agent's request owns the deliverable, the handoff and the shell rule", () => {
   assert.equal(Object.values(REQUESTS).flat().length, 12, "the six agents no longer map to their twelve requests");

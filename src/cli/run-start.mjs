@@ -14,13 +14,13 @@ import { commitConvention } from "./run-publish.mjs";
 import { resolveRun, RUN_OPTIONS, worktreeOf } from "./run-context.mjs";
 
 export const START_USAGE =
-  "nightqueue run start --tier <trivial|simple|complex> --type <bug/error|feature/refactor> --commit-type <type> [--expect-slug <slug>] [--project <name> --slug <slug>] | --routing";
+  "nightqueue run start --tier <trivial|simple|complex> [--type <bug/error|feature/refactor>] [--commit-type <type>] [--expect-slug <slug>] [--project <name> --slug <slug>] | --routing";
 
 // How long `run start` waits for the runner to bind a slug the orchestrator just declared, and how often it looks.
 const SLUG_WAIT_MS = 10000;
 const SLUG_POLL_MS = 250;
 
-// The options `run start` reads, with the three the row of the run cannot be answered without.
+// The options `run start` reads: the tier is required, the type and the commit type are validated only when given.
 function startOptions(argv) {
   const options = {
     tier: { type: "string" },
@@ -30,18 +30,23 @@ function startOptions(argv) {
   };
   const { values, positionals } = parseCommand(argv, { ...RUN_OPTIONS, ...options });
   checkArgs(positionals, { max: 0, usage: START_USAGE });
-  const commitType = (values["commit-type"] ?? "").trim();
-  if (!COMMIT_TYPES.includes(commitType)) {
+  const commitType = optionalText(values["commit-type"]);
+  if (commitType !== null && !COMMIT_TYPES.includes(commitType)) {
     throw new UserError(`unknown commit type \`${commitType}\`; accepted: ${COMMIT_TYPES.join(", ")}`);
   }
-  const expected = (values["expect-slug"] ?? "").trim() || null;
+  const expected = optionalText(values["expect-slug"]);
   if (expected !== null && !isSafeSegment(expected)) {
     throw new UserError(`invalid \`--expect-slug\` \`${expected}\`: a run slug is one path segment of letters, digits and \`. _ + -\``);
   }
   const tier = (values.tier ?? "").trim();
-  const type = (values.type ?? "").trim();
+  const type = optionalText(values.type);
   phasesFor(tier, type);
   return { values, tier, type, commitType, expected };
+}
+
+// The trimmed value of an optional flag, or null when it was not given or is blank.
+function optionalText(value) {
+  return typeof value === "string" && value.trim() ? value.trim() : null;
 }
 
 // Waits, inside a job, for the runner to bind the slug the orchestrator just declared; it never renames anything itself.
@@ -56,7 +61,7 @@ async function awaitDeclaredSlug(expected, ctx) {
   }
 }
 
-// The tier and type the run goes on with: a recorded tier is never lowered and a recorded type wins over the requested one.
+// The tier and type the run goes on with: a recorded tier is never lowered, a recorded type wins over the requested one, and no type yet is null.
 function effectiveClassification(state, { tier, type }) {
   const recordedTier = stateText(state, "tier");
   const recordedType = stateText(state, "type");
@@ -67,9 +72,10 @@ function effectiveClassification(state, { tier, type }) {
   };
 }
 
-// Records the type and the tier of the run, the same write `run_set` makes; a refusal is reported, never fatal.
+// Records the tier of the run, and its type when one is known, the same write `run_set` makes; a refusal is reported, never fatal.
 function recordTypeAndTier(run, { type, tier }, ctx) {
-  const recorded = recordRunFields({ projectId: run.projectId, slug: run.slug, fields: { type, tier }, env: ctx.env });
+  const fields = type === null ? { tier } : { type, tier };
+  const recorded = recordRunFields({ projectId: run.projectId, slug: run.slug, fields, env: ctx.env });
   if (recorded.status !== "written") ctx.err(`nightqueue: the type and tier were not recorded on the run: ${recorded.reason}`);
 }
 
@@ -118,10 +124,10 @@ export async function runStart(argv, ctx) {
     branch: stateText(state, "branch"),
     tier,
     type,
-    commitType: options.commitType,
+    commitType: options.commitType ?? stateText(state, "commitType"),
     routing: routingRow(tier),
-    phases: phasesFor(tier, type),
-    tasks: tasksFor(tier, type),
+    phases: phasesFor(tier),
+    tasks: tasksFor(tier),
     prTemplate,
     commitConvention: commitConvention(cwd, ctx.env),
     commitTemplate: findCommitTemplate(cwd, ctx.env),

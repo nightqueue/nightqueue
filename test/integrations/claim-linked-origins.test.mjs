@@ -45,8 +45,7 @@ function fakeFetch(issue) {
   const calls = [];
   const sentry = {
     [`${SENTRY_API}/issues/4507/`]: { shortId: "API-12", title: "TypeError", count: "1", userCount: 1 },
-    [`${SENTRY_API}/issues/4507/events/?per_page=5`]: [],
-    [`${SENTRY_API}/issues/4507/events/latest/`]: { entries: [], tags: [] },
+    [`${SENTRY_API}/issues/4507/events/?full=true&per_page=3`]: [{ eventID: "e0", title: "TypeError", entries: [], tags: [] }],
   };
   const impl = async (url) => {
     calls.push(url);

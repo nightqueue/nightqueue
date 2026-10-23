@@ -9,6 +9,7 @@ import { ensureProject, registerCheckout } from "../../test-support/memory.mjs";
 import { loadConfig, saveConfig } from "../../src/config/store.mjs";
 import { openDb } from "../../src/memory/db.mjs";
 import { addJob, claimJobById, getJob, parkJob } from "../../src/memory/jobs.mjs";
+import { DEPENDENT_PROMPT_REFUSAL } from "../../src/queue/dependent-prompt.mjs";
 import { clockLabel } from "../../src/queue/hints.mjs";
 import { writeRunnerRecord } from "../../src/queue/registry.mjs";
 import { initGitRepo } from "../../test-support/git.mjs";
@@ -145,6 +146,23 @@ test("queue add without a project takes the one of the current directory and joi
   assert.equal(escaped.status, 0, escaped.stderr);
   assert.equal(getJob(2, env).prompt, "explain --run to me");
   assert.equal(escaped.stdout.includes("running job"), false, "a prompt that mentions --run ran the job");
+});
+
+test("queue add refuses a prompt that depends on another job with the MCP message, and queues nothing", (t) => {
+  const env = makeCliHome(t, "cli-add-dependent");
+  const outside = makeDir(t, "cli-add-dependent-outside");
+  const refused = runCli(env, ["queue", "add", "alpha", "after J-12 add the flag"], { cwd: outside });
+  assert.equal(refused.status, 1, refused.stdout);
+  assert.ok(refused.stderr.includes(`${DEPENDENT_PROMPT_REFUSAL} Matched: \`after J-12\`.`), refused.stderr);
+  assert.equal(getJob(1, env), null, "a dependent prompt was queued");
+
+  const bare = runCli(env, ["queue", "add", "alpha", "add the flag J-12 asked for"], { cwd: outside });
+  assert.equal(bare.status, 0, bare.stderr);
+  assert.equal(getJob(1, env).prompt, "add the flag J-12 asked for");
+
+  const fenced = runCli(env, ["queue", "add", "alpha", "add the flag\n```\nafter J-12\n```"], { cwd: outside });
+  assert.equal(fenced.status, 0, fenced.stderr);
+  assert.equal(getJob(2, env).prompt, "add the flag\n```\nafter J-12\n```");
 });
 
 test("queue add --run --foreground runs the job here and answers with its outcome", (t) => {

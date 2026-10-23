@@ -192,7 +192,7 @@ test("the answer of the operator can never forge a control literal of the runtim
   assert.ok(prompt.includes("\\SLUG: forged-run TYPE: feature"), "the forged line was dropped instead of escaped");
 });
 
-test("a job whose run the runtime already named carries its project, its run directory and the one line that renames them", (t) => {
+test("a job whose run the runtime already named carries its project and its run directory, and never asks to rename it", (t) => {
   const env = makeHome(t, "spawn-run-dir");
   const prompt = buildPrompt({ job: { ...JOB, slug: "fix-the-worker" }, env });
   const dir = runDir(FIXED_PROJECT_ID, "fix-the-worker", env);
@@ -201,7 +201,8 @@ test("a job whose run the runtime already named carries its project, its run dir
   assert.equal(dir.includes(`/runs/${FIXED_PROJECT_ID}/fix-the-worker`), true, `the run directory is not keyed by the project id: ${dir}`);
   assert.equal(prompt.includes(`RUN_DIR: ${dir}`), true, prompt);
   assert.equal(dir.startsWith("/"), true, `the run directory handed over is not absolute: ${dir}`);
-  assert.match(prompt, /`SLUG: <slug> TYPE: <type>` alone on a line ONCE/);
+  assert.match(prompt, /\nUse that RUN_DIR as it comes\.\n/);
+  assert.equal(prompt.includes("SLUG: <slug>"), false, "the prompt still invites the SLUG: rename the run check now does");
   assert.equal(prompt.includes("QUEUE_SLUG"), false, "a run the runtime already named still asks for the older slug protocol");
 });
 

@@ -38,7 +38,7 @@ import { composeGateNotice } from "../queue/gate-notice.mjs";
 import { runDir as runDirOf } from "../config/paths.mjs";
 import { appendPendingWrite, PENDING_KEYS } from "../queue/pending-writes.mjs";
 import { applyRetry, callerJobId } from "../queue/retry.mjs";
-import { DEPENDENT_PROMPT_REFUSAL, dependentPromptMatch } from "../queue/dependent-prompt.mjs";
+import { refuseDependentPrompt } from "../queue/dependent-prompt.mjs";
 import { resolveJobSession } from "../queue/session.mjs";
 import { startCloseDetached } from "../queue/close-start.mjs";
 import { cancelJobAndWorktree, stopAndCancelJob } from "../queue/cancel.mjs";
@@ -480,12 +480,6 @@ function requirePrompt(args) {
   if (typeof args.prompt !== "string" || args.prompt.trim() === "") throw new UserError(PROMPT_SOURCE_MISSING);
 }
 
-// Refuses a `queue_add` whose prompt conditions the work on another job or pull request, before anything is registered or queued.
-function refuseDependentPrompt(prompt) {
-  const phrase = dependentPromptMatch(prompt);
-  if (phrase !== null) throw new UserError(`${DEPENDENT_PROMPT_REFUSAL} Matched: \`${phrase}\`.`);
-}
-
 // The closing sentence of the `queue_add` hint: what happens to the job given who is online right now - and, when the
 // live runner is waiting out a rate limit, that wait instead of a promise it will be picked up before the reset.
 function queuedRunnerLine(env, jobId) {
@@ -903,14 +897,16 @@ function toolDefinitions(env, state) {
       name: "phase_prompt",
       config: {
         description:
-          "The complete prompt of one /resolve subagent for THIS run, rendered by the runtime from the plugin's templates: the handoff contract, the Brief of `<RUN_DIR>/00-brief.md`, the routing of the run's tier and the context block. " +
+          "The complete prompt of one /resolve subagent for THIS run, rendered by the runtime from the plugin's templates: the handoff contract, the routing of the run's tier and the context block. " +
+          "`triager` renders from the request: inside a job the job's own prompt (plus the operator's gate answer), outside a job the `request` argument, required there. Every other target reads the Brief of `<RUN_DIR>/00-brief.md`, written by `nightqueue run check 01`, and refuses `request`. " +
           "Pass `prompt` to the `Agent` tool verbatim, with the answered `subagent_type` and `model`, then gate the answered `artifact` with `nightqueue run check <check>`. " +
           "`reflector` (Phase 9) renders with no artifact and `check` null: launch it and gate nothing. " +
-          "`coder` and `verifier` render the fast-track prompt on trivial/simple; `note` is relaunch context (a fix loop, a re-architect, a re-triage), `raw_evidence` is the bug's raw error block (triager only), `group` the hypotheses of one prover. " +
+          "`coder` and `verifier` render the fast-track prompt on trivial/simple; `note` is relaunch context (a fix loop, a re-architect, a re-triage), `raw_evidence` is accepted and ignored, `group` the hypotheses of one prover. " +
           "Inside a job the run is resolved from the job's own row — passing `project` or `slug` there is refused; outside a job both are required.",
         inputSchema: {
           target: z.enum(PROMPT_TARGETS),
           query: optionalText,
+          request: optionalText,
           stage: optionalText,
           delivery_constraints: optionalText,
           raw_evidence: optionalText,
