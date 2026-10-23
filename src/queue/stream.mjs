@@ -433,9 +433,20 @@ export function prUrlRepo(url) {
   return `${owner}/${name}`.toLowerCase();
 }
 
-// Tells whether an event is the host announcing a pull request it has just OPENED, carrying a `url` that really is one.
-function isPublishedPr(event) {
-  return event?.type === "system" && event.subtype === "code_change_published" && event.action === "created" && isPrUrl(event.url);
+// Tells whether an event is the host announcing a pull request it has just OPENED, or EDITED when that URL is vouched for (recorded by `run publish` or proven to head the run's branch; the event itself names no branch).
+function isPublishedPr(event, vouched) {
+  if (event?.type !== "system" || event.subtype !== "code_change_published" || !isPrUrl(event.url)) return false;
+  return event.action === "created" || (event.action === "edited" && vouched.includes(event.url));
+}
+
+// URLs of the pull requests the host announced as EDITED in a stream, deduplicated.
+export function editedPublicationUrls(log) {
+  const urls = String(log ?? "")
+    .split("\n")
+    .map(parseEventLine)
+    .filter((event) => event?.type === "system" && event.subtype === "code_change_published" && event.action === "edited" && isPrUrl(event.url))
+    .map((event) => event.url);
+  return [...new Set(urls)];
 }
 
 // Repository a publication happened in: the `repo` the host named, or the one its own URL carries when it named none.
@@ -457,11 +468,11 @@ function publishedBranch(event) {
 }
 
 // Every pull request the host published in the run's own repository, in stream order.
-function ownRepoPublications(log, repo) {
+function ownRepoPublications(log, repo, vouched) {
   const published = String(log ?? "")
     .split("\n")
     .map(parseEventLine)
-    .filter(isPublishedPr);
+    .filter((event) => isPublishedPr(event, vouched));
   if (published.length === 0) return [];
   const own = ownRepo(published, repo);
   return published.filter((event) => publishedRepo(event) === own);
@@ -469,6 +480,7 @@ function ownRepoPublications(log, repo) {
 
 // Whether a publication is the run's own (`own`), provably another branch's (`foreign`) or cannot be told (`unproven`).
 function publicationKind(event, { branch, hints }) {
+  if (event.action === "edited") return "own";
   const named = publishedBranch(event);
   const runBranch = typeof branch === "string" ? branch.trim() : "";
   if (!named || !runBranch) return "unproven";
@@ -491,8 +503,9 @@ function strayPublication(publications, finalUrl) {
 
 // Pull request the HOST itself published (`system`/`code_change_published` with `action: "created"`) that is the run's own delivery, and the last one dropped.
 // Only the run's repository speaks; a publication leads the runtime's `recorded` URL only when it names the run's own branch, and one naming another branch never wins.
-export function publishedDelivery(log, { repo = null, branch = null, hints = {}, recorded = null } = {}) {
-  const publications = ownRepoPublications(log, repo).map((event) => ({ event, kind: publicationKind(event, { branch, hints }) }));
+export function publishedDelivery(log, { repo = null, branch = null, hints = {}, recorded = null, provenEdits = [] } = {}) {
+  const vouched = [...(recorded ? [recorded] : []), ...(Array.isArray(provenEdits) ? provenEdits : [])];
+  const publications = ownRepoPublications(log, repo, vouched).map((event) => ({ event, kind: publicationKind(event, { branch, hints }) }));
   const delivered = deliveredPublication(publications, recorded);
   const url = delivered ? delivered.event.url : null;
   return { url, stray: strayPublication(publications, url ?? recorded) };

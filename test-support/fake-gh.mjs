@@ -86,6 +86,7 @@ function prView() {
 
 // Answers `gh pr create` with the URL the test asked for; without one the fake refuses to invent it.
 function prCreate() {
+  if (process.env.NIGHTQUEUE_FAKE_GH_PR_EXISTS === "1") fail('a pull request for branch "feat/add-slugify" into branch "main" already exists:');
   const url = process.env.NIGHTQUEUE_FAKE_GH_PR_URL;
   if (!url) fail("fake gh: NIGHTQUEUE_FAKE_GH_PR_URL is not set; refusing to invent a pull request URL", 2);
   process.stdout.write(`${url}\n`);
@@ -116,6 +117,7 @@ function main() {
   if (command === "pr" && sub === "view") return prView();
   if (command === "pr" && sub === "create") return prCreate();
   if (command === "pr" && sub === "list") return prList();
+  if (command === "pr" && sub === "edit") return undefined;
   return fail(`fake gh: unknown command \`${args.join(" ")}\``);
 }
 

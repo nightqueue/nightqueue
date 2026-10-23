@@ -11,6 +11,7 @@ import { sqliteToIso } from "../memory/schema.mjs";
 import { openStore, openStoreReadOnly } from "../store/open.mjs";
 import { acquire, bashTimeoutS, concurrencyCap, gate, inheritUserEnvironment, isPaused, leaseHeartbeatMs, release, renew, resumeSessionEnabled, stillOwned } from "./claim.mjs";
 import { backoffMs, classifyJobResult, isTerminalRuntimeKill, isTransientFailure, nightqueueMcpUnreachable } from "./classify.mjs";
+import { provenEditedPrUrls } from "./edit-proof.mjs";
 import { recordedFiles } from "./file-list.mjs";
 import { BLOCK_CODES, preflight } from "./preflight.mjs";
 import { createStoreOutage, OUTAGE_STOPPED, waitNextPass } from "./store-outage.mjs";
@@ -90,6 +91,7 @@ const DEFAULT_DEPS = {
   idleTimeoutS: IDLE_TIMEOUT_S,
   maintenanceImpl: runMaintenance,
   prListImpl: ghPrList,
+  prDetailImpl: undefined,
   finishJobImpl: null,
   killImpl: null,
   keepAwakeImpl: holdRunnerAwake,
@@ -505,7 +507,8 @@ async function runAttempts(job, ctx) {
     const planPath = isRunPath(job.project_id, facts.slug) ? join(runDir(job.project_id, facts.slug, env), "03-plan.md") : null;
     const state = readRunState({ projectId: job.project_id, slug: facts.slug, env });
     const runOutcome = await attemptRunOutcome(job, facts.slug, { since: attemptStartedAt, store: ctx.store });
-    const outcome = classifyJobResult({ ...result, state, planPath, runOutcome });
+    const provenEdits = await provenEditedPrUrls(result.log, { state, detailImpl: deps.prDetailImpl });
+    const outcome = classifyJobResult({ ...result, state, planPath, runOutcome, provenEdits });
     if (!isRetryable(job, attempt, result, outcome, state)) {
       return { lost: false, facts, attempt, ...totals, outcome, result };
     }

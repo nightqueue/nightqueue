@@ -171,13 +171,14 @@ function withStrayPr(noticeMd, stray, prUrl) {
 }
 
 // The pull request of the run: its own branch's publication, the runtime's record, then the text - never a publication proven to be another branch's.
-function resolvePrUrl(log, { state, record }) {
+function resolvePrUrl(log, { state, record, provenEdits }) {
   const reported = record?.prUrl ?? extractPrUrlFromStream(log);
   const delivery = publishedDelivery(log, {
     repo: prUrlRepo(reported),
     branch: state?.branch ?? null,
     hints: { type: state?.type, slug: state?.slug },
     recorded: record?.prUrl ?? null,
+    provenEdits,
   });
   const fallback = reported === delivery.stray?.url ? null : reported;
   return { prUrl: delivery.url ?? fallback, stray: delivery.stray };
@@ -199,10 +200,10 @@ function classifyEnding({ record, state, resultText, log, ending, prUrl, planPat
 }
 
 // Classifies one attempt of a job from what the pipeline recorded, its stream, how the process ended, the run's plan and the outcome its own telemetry recorded.
-export function classifyJobResult({ log, exitCode, timedOut = false, idleTimedOut = false, stopped = false, state = null, planPath = null, runOutcome = null } = {}) {
+export function classifyJobResult({ log, exitCode, timedOut = false, idleTimedOut = false, stopped = false, state = null, planPath = null, runOutcome = null, provenEdits = [] } = {}) {
   const resultText = extractResultText(log) ?? "";
   const record = pipelineOutcome(state);
-  const { prUrl, stray } = resolvePrUrl(log, { state, record });
+  const { prUrl, stray } = resolvePrUrl(log, { state, record, provenEdits });
   const kill = runtimeKillFromStream(log);
   if (kill && isTerminalKill(kill, record)) {
     return { status: "failed", prUrl, noticeMd: withStrayPr(runtimeKillNotice(kill), stray, prUrl), resultText };
