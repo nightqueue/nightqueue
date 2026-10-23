@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { dirname, join } from "node:path";
 import { PassThrough } from "node:stream";
 import { test } from "node:test";
+import { newId } from "../../src/config/ids.mjs";
 import { jobLogPath, homeDir, runDir } from "../../src/config/paths.mjs";
 import { isSafeSegment } from "../../src/queue/resume.mjs";
 import { claudeConfigDir, packageRoot } from "../../src/host/paths.mjs";
@@ -144,12 +145,26 @@ test("the MCP server of an unattended child is pinned to the job it runs, and an
   const operator = JSON.parse(mcpConfigArg(env)).mcpServers.nightqueue.env;
   assert.equal("NIGHTQUEUE_JOB_ID" in operator, false, "an operator session pinned a job identity it does not have");
 
+  const session = newId();
+  const pinned = JSON.parse(mcpConfigArg(env, null, { operator: { mode: "operator", session, pid: "42" } })).mcpServers.nightqueue.env;
+  assert.deepEqual(pinned, { NIGHTQUEUE_HOME: homeDir(env), NIGHTQUEUE_MODE: "operator", NIGHTQUEUE_OPERATOR_SESSION: session, NIGHTQUEUE_OPERATOR_PID: "42" });
+
   const args = buildArgs({ prompt: "do the work", env, jobId: 7 });
   assert.equal(JSON.parse(argValue(args, "--mcp-config")).mcpServers.nightqueue.env.NIGHTQUEUE_JOB_ID, "7");
   assert.equal(
     "NIGHTQUEUE_JOB_ID" in JSON.parse(argValue(buildArgs({ prompt: "p", env }), "--mcp-config")).mcpServers.nightqueue.env,
     false,
   );
+});
+
+test("a job's MCP server never carries the operator session, even when the parent process runs in one", (t) => {
+  const env = { ...makeHome(t, "spawn-mcp-no-operator"), NIGHTQUEUE_MODE: "operator", NIGHTQUEUE_OPERATOR_SESSION: newId(), NIGHTQUEUE_OPERATOR_PID: "42" };
+  for (const jobId of [7, null]) {
+    const mcpEnv = JSON.parse(argValue(buildArgs({ prompt: "p", env, jobId }), "--mcp-config")).mcpServers.nightqueue.env;
+    for (const key of ["NIGHTQUEUE_MODE", "NIGHTQUEUE_OPERATOR_SESSION", "NIGHTQUEUE_OPERATOR_PID"]) assert.equal(key in mcpEnv, false, `${key} reached a job's MCP server`);
+  }
+  const owned = JSON.parse(mcpConfigArg(env, 7, { operator: { session: newId() } })).mcpServers.nightqueue.env;
+  assert.equal("NIGHTQUEUE_OPERATOR_SESSION" in owned, false, "a job id let an operator session through");
 });
 
 test("--resume is only appended for a session id that is safe as argv", (t) => {

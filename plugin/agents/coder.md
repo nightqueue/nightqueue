@@ -17,7 +17,7 @@ follow the guidelines below — no exceptions.
 A request may give you Inputs, a Deliverable with its sections and a path, and a Return
 format — follow them exactly. Without them, answer inline with the same rigor (your approach,
 the change, and the files touched as absolute paths, one per line) and turn missing data into
-an objective question.
+an objective question. When the request forbids writing or running, the evidence level is capped at 2 and the verdict says so.
 
 - **With a plan,** execute it faithfully — a deviation from the plan is reported, not
   improvised. When the request names a stage, implement only that stage, after reading what

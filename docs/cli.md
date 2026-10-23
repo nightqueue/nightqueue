@@ -1046,8 +1046,8 @@ nightqueue sandbox worktree --drop <path>          # dropped <path> (or: gone <p
 ```
 
 `nightqueue sandbox worktree <project> | --drop <path>` is the one exception to the verbatim
-forwarding: a first argument `worktree` manages the ephemeral QA worktrees of the operator's
-`qa` subagent instead of running a program of that name. `<project>` (a registered name,
+forwarding: a first argument `worktree` manages ephemeral QA worktrees, a CLI facility for
+reproducing a behavior away from the checkout, instead of running a program of that name. `<project>` (a registered name,
 else id; an unknown one is refused, and git's first line is the error when the checkout cannot
 give a worktree) gets a worktree detached at the checkout's `HEAD` under
 `<NIGHTQUEUE_HOME>/qa/<project id>/<id>`, `<id>` a fresh ULID; exactly one line
@@ -1064,24 +1064,11 @@ are refused from inside a job against the runner's own home.
 A qa worktree is stale when git registers it and either its id says it is older than 6 hours
 or its lock names a pid that is gone; a worktree locked by hand (no pid in the reason) is never
 stale. `nightqueue open` drops the stale ones; `nightqueue doctor` lists them and
-`nightqueue doctor --fix` drops them; the SubagentStop hook of an operator session drops the
-worktree its `qa` subagent announced on the first line of its final message
-(`QA_WORKTREE: <path>`, or, with no final message, the first such line of its last assistant
-entry in its transcript) when that session holds the lock
-or nobody does - a worktree another live session holds is never dropped. Nothing under `qa/`
-that git does not register is ever removed, except an empty directory.
+`nightqueue doctor --fix` drops them. A worktree another live session holds is never dropped.
+Nothing under `qa/` that git does not register is ever removed, except an empty directory.
 
-The `qa` subagent's Bash is held to its worktree by the guard hook, which is a best-effort
-**anchor, not a sandbox**: every command other than the two `sandbox worktree` forms must have
-the exact shape `cd <path inside a qa worktree> && …` - a bare command is refused even when the
-shell already stands in the worktree - and the rest may hold no `cd`, `pushd` or `popd`, no
-`..` segment, no `$(…)`, `$'…'`, backtick, backslash or `$VAR`, no leading `~`, no newline, no
-glob or brace next to a dot, and no absolute path outside that worktree except `/dev/null` (an
-option glued to one, `-C/etc`, included). In any segment of the chain, `nightqueue` runs only as
-`nightqueue sandbox <cmd>`, `gh` only as `gh pr view|diff|checks|list|status` or
-`gh issue view|list`, and `git` never as `push`, `remote` or `config`. A program the command
-runs can still reach outside it; tests that touch a nightqueue home go through
-`cd <path> && nightqueue sandbox <cmd>`.
+Inside an operator session, `nightqueue sandbox worktree` is in the never band, and
+`nightqueue sandbox <cmd>` is a `run` that needs the person's consent (see [Open](#open)).
 
 ## Open
 
@@ -1112,9 +1099,15 @@ read that project. The block also carries a `Registered projects` section (`name
 pending`, pending jobs only, the preselected project first, at most 30 lines), so with no project
 the operator lists the registered ones from it and asks which, in an opening message with no tool call.
 `NIGHTQUEUE_OPERATOR_PID` carries the pid of the `nightqueue open` process, which owns the qa
-worktrees the session creates. A `NIGHTQUEUE_PROJECT`, `NIGHTQUEUE_MODE` or
-`NIGHTQUEUE_OPERATOR_PID` inherited from the caller is never passed on, and a job a runner
-started from inside an operator session never inherits any of the three.
+worktrees the session creates. `NIGHTQUEUE_OPERATOR_SESSION` carries a fresh ULID each launch
+mints (a resume is a new launch, so a new id), pinned both in claude's env (the hooks read it)
+and in the MCP server's env inside `--mcp-config`: it keys the session's consents (below). A
+`NIGHTQUEUE_PROJECT`, `NIGHTQUEUE_MODE`, `NIGHTQUEUE_OPERATOR_PID` or
+`NIGHTQUEUE_OPERATOR_SESSION` inherited from the caller is never passed on, and a job a runner
+started from inside an operator session never inherits any of them.
+
+The session runs with `--permission-mode default`, whatever a checkout's local settings say, so
+Claude Code's own permission prompt is always there; a queued job keeps `bypassPermissions`.
 
 With `--resume <session>` the cwd is the directory the session was born in (the first `cwd` its
 transcript under `CLAUDE_CONFIG_DIR/projects` records, when that directory still exists), else
@@ -1128,42 +1121,91 @@ after git's own expiry; a failure is one warning line. Then the stale qa worktre
 `operator · dropped <n> stale qa worktree(s)`. `queue session` and a studio terminal run both
 too, through the same launcher.
 
-**The guard.** The operator investigates, plans and queues; it never edits and never
-executes. The PreToolUse hook of an operator session (matcher
-`Agent|Task|Bash|Read|Grep|Glob|Edit|Write|MultiEdit|NotebookEdit`) answers every refusal with
-one line starting `operator guard:`:
+**The guard.** The operator investigates, plans, queues, and makes a small change on the
+person's checkout once the person consented to it. The PreToolUse hook of an operator session
+(matcher `Agent|Task|Bash|Read|Grep|Glob|Edit|Write|MultiEdit|NotebookEdit`) judges every call
+of the main thread and of every subagent it launched under three bands, and answers every
+refusal with one line starting `operator guard:`:
 
-- main thread: `Edit`, `Write`, `MultiEdit` and `NotebookEdit` are refused; `Read`, `Grep` and
-  `Glob` read anything on disk except `secrets.json` and any `.env*` file (`.env`, `.env.local`,
-  …), a `Grep` whose `path` is the home or a parent of it is refused because the sweep would
-  read `secrets.json`, a path that cannot be resolved is refused, and an absolute Glob `pattern`
-  or Grep `glob` is judged by its static prefix;
-  Bash only as one bare command (no `;`, `&&`, `|`, redirection, substitution or backslash) that
-  is either `nightqueue|nq <command> …` with `<command>` one of `queue`,
-  `project`, `org`, `connection`, `doctor`, `memory`, `libs`, `version` - never `queue session`,
-  `project add|move`, `queue add --run` or `doctor --fix`, never
-  `--follow` or `--foreground` - or `git -C <checkout> [--no-optional-locks] <read> …` on a
-  registered checkout, `<read>` one of `log`, `show`, `diff`, `blame`, `ls-tree`, `ls-files`,
-  `rev-parse`, `branch --list` and `--no-optional-locks status` (never `--output*`,
-  `--ext-diff`, `--no-index`, `--exec`, nor a global option other than `-C`); `Agent`/`Task`
-  only for the `triage`, `qa` and `reviewer` subagents;
-- the `qa` subagent: `Edit`/`Write`/`MultiEdit`/`NotebookEdit` only inside a qa worktree
-  `<home>/qa/<project id>/<id>`; Bash only as `nightqueue sandbox worktree <project>`,
-  `nightqueue sandbox worktree --drop <path>`, or `cd <path inside a qa worktree> && …` (see
-  [Sandbox](#sandbox));
-- any other subagent (`triage`, `reviewer`): no edit tool; Bash is one bare nightqueue read
-  (`queue status|log`, `project list`, `org list`,
-  `connection list`, `memory stats`, `doctor` without `--fix`, `version`), the main thread's
-  `git -C` reads, `gh pr view|diff|checks|list|status` or `gh issue view|list`;
-- every subagent reads exactly where the main thread reads, so delegating never reaches the
-  secrets or a `.env*` file.
+- **free**: `Read`, `Grep` and `Glob` read anything on disk except `secrets.json` and any
+  `.env*` file (`.env`, `.env.local`, …); a `Grep` whose `path` is the home or a parent of it is
+  refused because the sweep would read `secrets.json`, a path that cannot be resolved is
+  refused, and an absolute Glob `pattern` or Grep `glob` is judged by its static prefix. The
+  main thread's free Bash is one bare command (no `;`, `&&`, `|`, redirection, substitution or
+  backslash) that is either `nightqueue|nq <command> …` with `<command>` one of `queue`,
+  `project`, `org`, `connection`, `doctor`, `memory`, `lesson`, `libs`, `version` - never
+  `queue session`, `project add|move` or `doctor --fix`, never `--follow` or `--foreground` -
+  or `git -C <checkout> [--no-optional-locks] <read> …` on a registered checkout, `<read>` one
+  of `log`, `show`, `diff`, `blame`, `ls-tree`, `ls-files`, `rev-parse`, `branch --list` and
+  `--no-optional-locks status` (never `--output*`, `--ext-diff`, `--no-index`, `--exec`, nor a
+  global option other than `-C`). A subagent's free Bash is one bare nightqueue read
+  (`queue status|log`, `project list`, `org list`, `connection list`, `memory stats`, `doctor`
+  without `--fix`, `libs`, `version`), the main thread's `git -C` reads (also written
+  `cd <checkout> && git <read>`), `gh pr view|diff|checks|list|status` or `gh issue view|list`.
+  `Agent`/`Task` launches any plugin agent but the operator itself, spelled
+  `nightqueue:<name>` or `plugin_nightqueue_<name>` (`architect`, `coder`, `explore`, `merger`,
+  `qa-guardian`, `reflector`, `reviewer`, `triager`, `verifier`); a bare name is refused.
+- **with consent**: a write (`Edit`, `Write`, `MultiEdit`, `NotebookEdit`) is `edit` on an
+  existing path and `create` on a new one, and an `edit` outside every registered checkout is
+  refused; any other Bash is `git-write` (a git subcommand that is neither a read nor never:
+  `add`, `commit`, `push`, `checkout`, `stash`, `merge`, …) or `run` (`nightqueue verify` and
+  `nightqueue sandbox <cmd>` included). It must be one bare command written
+  `cd <registered checkout> && <command>`, `git -C <registered checkout> <command>`, or bare
+  with the cwd inside a checkout; any other shape, a glob or brace character (`* ? [ ] { }`)
+  included, is refused with the accepted form. It passes
+  only when a live consent of the session covers it, else
+  `operator guard: needs consent (<kind> <scope>): ask the person …, record the answer with operator_consent, then retry`.
+- **never**, refused even with a consent: deleting files (`rm`, `rmdir`, `unlink`, `shred`,
+  `find -delete`, `-exec rm`), `git push` with `--force*`/`-f`/`--delete`/`--mirror`/`--prune`
+  or a `+`/`:` refspec, `git branch -D|-d`, `git reset --hard`, `git clean`, `git rm`, writing
+  the nightqueue home, the Claude config dir, `~/.codex`, any `.claude/settings*.json` or
+  anything inside a `.git` directory (its config and hooks run commands; `.gitattributes` stays
+  editable), naming `.env*` or `secrets.json` (a `<rev>:<path>`, a glob that could match one
+  and a brace that expands to one included), the refused nightqueue forms
+  (`queue add --run`, `queue session`, `project add|move`, `doctor --fix`, `open`,
+  `sandbox worktree`, …), `sh -c`/`eval` text. A path is judged where it really points: a
+  symlink, a dangling one included, is followed. Every segment of a chain is scanned, relative
+  words against the cwd and then each `cd`, so `cd <checkout> && rm -rf x` is never, not a
+  shape refusal.
 
-A registry that cannot be read refuses `git -C` (the reason names `nightqueue doctor`), an error inside the guard refuses every tool but the reads, and an edit,
-`Bash`, `Agent` or `Task` call whose `tool_input` is not an object is refused: the operator
-guard fails closed, unlike a job's.
+**Consents.** The `operator_consent` MCP tool records what the person said yes to, in an
+append-only JSONL file `<home>/operator/<session>.jsonl` (never in a checkout), one event per
+line: a grant carries the kind, the scope, the reason and the person's answer quoted verbatim;
+a revoke (`revoke: true`) withdraws the live grants of the same project, kind and scope. Each
+event also appends one line to the session log `<home>/logs/operator-<session>.log`
+(`<ISO> consent <kind> <scope> · <project> · "<answer>"`, or `<ISO> revoke …`). A scope is
+exactly what was consented and nothing wider is inferred: a path covers itself and what lies
+under it; a command consent is a prefix of words: it covers every command that opens with
+them, run in that project's checkout (`npm test` covers `npm test -- --grep x`, never
+`npm run build`; `git push origin` covers a push of any ref), so the ask shows that reach;
+`<connection> <METHOD> <path>` covers that request with any body, and in an operator session
+`connection_call` answers `needs-consent` to a POST, PATCH or PUT no live `connection-write`
+consent covers, or when the record cannot be read, sending nothing. A scope with a newline,
+tab or other control character, or a command scope with a glob or brace character, is
+refused. Consents end with the
+`nightqueue open` process: a resumed session starts with none. Inside a job, or outside an
+operator session, the tool is refused.
+
+The runtime record is the audit and the guard; the host's permission prompt is the barrier
+for `Edit`, `Write` and `Bash` only. `operator_consent` and `connection_call` are pre-approved
+MCP tools, so no prompt stands before them: for them the guard's record is the only control,
+and the operator agent never calls either without the person's answer in the conversation.
+An allowed call answers nothing, never `allow`, so Claude Code still prompts for it, and the
+never band does not rely on the prompt.
+
+A registry that cannot be read refuses `git -C` (the reason names `nightqueue doctor`), a
+consent record that cannot be read or an error inside the guard refuses every tool but the
+reads, and an edit, `Bash`, `Agent` or `Task` call whose `tool_input` is not an object is
+refused: the operator guard fails closed, unlike a job's.
+
+**Direct changes.** For a small change, the operator states the scope, asks consent for `edit`
+(+`create`) and `run`, records each answer, and launches `nightqueue:coder` on the person's
+current checkout and branch, with no worktree; then optionally `nightqueue:verifier` and
+`git -C <checkout> diff --stat`. No commit, push or pull request without a `git-write`
+consent. A direct change is no job: nothing is queued, and no telemetry is recorded.
 
 A fresh session opens with the operator's greeting: who it is (the nightqueue operator), the
-preselected project or the list of registered ones (from the session block, no tool call), what it does, what it never does, and
+preselected project or the list of registered ones (from the session block, no tool call), what it does, what needs the person's consent, and
 where to start. A resumed session is not greeted again. The `nightqueue` MCP tools are
 pre-approved for the session (`permissions.allow: ["mcp__nightqueue__*"]` in the settings it
 is started with), so the operator never asks before reading the queue or the

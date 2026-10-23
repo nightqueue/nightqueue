@@ -317,7 +317,8 @@ contract 4 the one where the tracker is removed, contract 5 the one that adds
 `tracker_issues` (Linear issues through the home's Linear connection), contract 6 the one
 where `queue_add`'s `origin` is a list of `{kind, ref}` (`[]` for none), contract 7 the one that
 adds `lesson_delete` and `memory_delete`, contract 8 the one that removes the `decision_*`
-tools, and contract 9 the one that adds `connection_call`.
+tools, contract 9 the one that adds `connection_call`, and contract 10 the one that adds
+`operator_consent`.
 A client keeps the tool definitions it read when it connected, so after such an update reopen
 the ones still running: Claude Code sessions (start a new one), Claude Desktop and Cowork
 conversations (open a new conversation, or restart the app), and a running `nq open`. Until

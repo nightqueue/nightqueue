@@ -169,14 +169,13 @@ export function jobSettings(env = process.env) {
   return { hooks: data.hooks, claudeMdExcludes: [join(claudeConfigDir(env), "CLAUDE.md")] };
 }
 
-// The `--settings` payload of an operator session: the jobs' settings with the guard also fencing the edit tools, the qa worktree sweep on SubagentStop, plus the nightqueue tools and the two web reads (WebFetch, WebSearch) pre-approved.
+// The `--settings` payload of an operator session: the jobs' settings with the guard also fencing the edit tools, plus the nightqueue tools and the two web reads (WebFetch, WebSearch) pre-approved.
 export function operatorSettings(env = process.env) {
   const settings = jobSettings(env);
   const preToolUse = eventGroups(settings, "PreToolUse").map((group) => ({ ...group, matcher: OPERATOR_TOOL_MATCHER }));
-  const subagentStop = [{ hooks: [{ type: "command", command: hookCommand("subagent-stop", env), timeout: 60 }] }];
   return {
     ...settings,
-    hooks: { ...settings.hooks, PreToolUse: preToolUse, SubagentStop: subagentStop },
+    hooks: { ...settings.hooks, PreToolUse: preToolUse },
     permissions: { allow: [...OPERATOR_ALLOWED_TOOLS] },
   };
 }

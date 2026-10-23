@@ -73,6 +73,25 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 - **The Sentry origin carries the three most recent events in full**, newest first, from one
   `events/?full=true&per_page=3` request (an event listed without its entries is read once
   more), with the same per-event frame, breadcrumb, field and tag caps and no private data.
+- **The operator works in three bands: free, with consent, never.** Reads, the free Bash and
+  read-only delegation need no ask. Editing or creating files in a registered checkout, running
+  a command there (`cd <checkout> && <command>`), a git write and an API write pass the operator
+  guard only when the person's answer is on record. Deleting files, a force or delete push,
+  `reset --hard`, `clean`, writing the nightqueue home or Claude/Codex settings, and reading
+  secrets or `.env*` are refused even with a record. The guard judges the operator's subagents
+  the same way, so `nightqueue:coder` edits a checkout after the person's consent.
+- **`operator_consent` records the person's consent.** It takes a kind (`edit`, `create`, `run`,
+  `git-write`, `connection-write`), the exact scope and the person's answer quoted verbatim, and
+  `revoke: true` withdraws it. Records live in `<home>/operator/<session>.jsonl`, never in a
+  checkout, with one line per consent in `<home>/logs/operator-<session>.log`. Each
+  `nightqueue open` mints its own session, so consents end with it. Refused inside a job and
+  outside an operator session.
+- **Direct changes.** The operator can make a small change on the person's current checkout and
+  branch through `nightqueue:coder`, with no worktree and no job: nothing is queued and no
+  telemetry is recorded, and nothing is committed or pushed without a `git-write` consent.
+- **The evidence cap of a read-only request.** The triager, explore, architect, coder,
+  qa-guardian and verifier cap their evidence level at 2, and say so, when the request forbids
+  writing or running.
 
 ### Changed
 
@@ -170,6 +189,24 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
   project's own origin is `nightqueue run publish`…", byte-identical in its four copies. The search
   and long-command rules every coder and verifier lane got from its agent file now come from
   `prompts/_job-limits.md`.
+- **The operator delegates to the pipeline's own agents.** The operator guard lets `Agent`
+  launch every plugin agent but the operator itself, under `nightqueue:<name>` or
+  `plugin_nightqueue_<name>` (a bare name is refused). `operator.md` delegates to the triager,
+  explore, architect, qa-guardian, verifier, coder and reviewer with an inline
+  Inputs/Deliver/Return request and no handoff file. A subagent's free Bash gains `nightqueue libs`.
+- **The operator session runs in Claude Code's default permission mode.** `nightqueue open`
+  pins `--permission-mode default`, whatever a checkout's local settings say, so the host's
+  prompt stays the barrier; a queued job keeps `bypassPermissions`.
+- **`connection_call` needs a `connection-write` consent in an operator session.** A POST,
+  PATCH or PUT that no live consent covers answers `needs-consent` and sends nothing; a GET, a
+  call inside a job and any other client are unchanged.
+- **Tool contract 10**, for the `operator_consent` tool.
+
+### Removed
+
+- **The `triage` and `qa` operator agents**, with the qa lane of the operator guard and the
+  `subagent-stop` hook that dropped the worktree `nightqueue:qa` announced. `nightqueue sandbox
+  worktree` stays a CLI facility, swept by `nightqueue open` and `nightqueue doctor --fix`.
 
 ## 0.7.0 - 2026-10-20
 

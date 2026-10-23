@@ -409,9 +409,12 @@ read-only and sit behind the same token gate as the rest of `/api`.
 
 **Operator sessions.** `nightqueue open` (and `nightqueue queue session`, and a studio
 terminal through them) starts `claude` with `NIGHTQUEUE_MODE=operator`,
-`NIGHTQUEUE_OPERATOR_PID=<pid of the launcher>` and, only when a project is preselected,
-`NIGHTQUEUE_PROJECT=<project id>`; an inherited value of any of the three is dropped first, and
-the runner strips all three from every job it spawns. `nightqueue open` runs in the home, never
+`NIGHTQUEUE_OPERATOR_PID=<pid of the launcher>`, `NIGHTQUEUE_OPERATOR_SESSION=<a ULID minted
+per launch>` and, only when a project is preselected, `NIGHTQUEUE_PROJECT=<project id>`; an
+inherited value of any of them is dropped first, and the runner strips them all from every job
+it spawns. The same session id, `NIGHTQUEUE_MODE` and the pid are pinned explicitly in the MCP
+server's env inside `--mcp-config` (a job's MCP env never carries them), and the argv pins
+`--permission-mode default` (a job keeps `bypassPermissions`). `nightqueue open` runs in the home, never
 in a checkout; a hook resolves the session's project from its directory, else from
 `NIGHTQUEUE_PROJECT` (never inside a job, and only for a well-formed id), and SessionStart then
 leads its block with `Current project (preselected by nightqueue open): <name>`. In operator mode only (never in a
@@ -425,60 +428,74 @@ probe each; no log tail, no gh), omitted when the registry cannot be listed. The
 `--settings` are the jobs' settings with two changes, neither of which reaches the host's
 `settings.json` (`desiredHooks` and the doctor hook check are unchanged, so an edit in any other
 Claude session never spawns a hook): the PreToolUse matcher becomes
-`Agent|Task|Bash|Read|Grep|Glob|Edit|Write|MultiEdit|NotebookEdit`, and a `SubagentStop` group
-runs `nightqueue hook subagent-stop` (timeout 60 s); `permissions.allow` pre-approves
-`mcp__nightqueue__*`, `WebFetch` and `WebSearch`: the operator reads the web (a linked page, an
-issue, a library's docs) without a prompt; the guard does not judge those two tools, since they
-neither edit nor execute.
+`Agent|Task|Bash|Read|Grep|Glob|Edit|Write|MultiEdit|NotebookEdit`, and `permissions.allow`
+pre-approves `mcp__nightqueue__*`, `WebFetch` and `WebSearch` only: the operator reads the web
+(a linked page, an issue, a library's docs) without a prompt; the guard does not judge those
+two tools, since they neither edit nor execute. Edit, Write and Bash are never pre-approved.
 
 The `agent-foreground` hook in operator mode is the operator guard. Each refusal is a PreToolUse
 `deny` whose reason is one line starting `operator guard:`, naming what is allowed instead; it never moves
-a call to the foreground. The main thread (no `agent_id` in the payload) may not use `Edit`,
-`Write`, `MultiEdit` or `NotebookEdit`; reads anything on disk but `<home>/secrets.json` and any
-`.env*` file, never a Grep whose `path` is the home or a parent of it (the sweep would read the
-secrets file) nor a path that cannot be resolved (an absolute Glob `pattern` or Grep `glob` is
-judged by its static prefix too); Bash only as one bare command with no shell
-operator or backslash:
-`nightqueue|nq <queue|project|org|connection|doctor|memory|lesson|libs|version> …`
-(not `queue session`, `project add|move`, `queue add --run`,
-`doctor --fix`, `--follow` or `--foreground`) or a read-only `git -C <checkout> …`; and
-`Agent`/`Task` only for the `triage`, `qa` and `reviewer` subagents (`<role>`,
-`nightqueue:<role>` or `plugin_nightqueue_<role>`). Every top-level CLI command is classified as
-allowed or refused in one list, and so is every subcommand of `queue` and `project`;
-a test keeps both exhaustive. Every subagent reads exactly where the main thread reads. The
-`qa` subagent may edit only inside a qa worktree `<home>/qa/<project id>/<id>`; its Bash is
-`nightqueue sandbox worktree <project>`, `nightqueue sandbox worktree --drop <path>`, or a
-command of the exact shape `cd <path inside a qa worktree> && …` - the only accepted shape for
-anything else; the text after `&&` may hold no `cd`/`pushd`/`popd`, `..` segment, `$(…)`,
-`$'…'`, backtick, backslash, `$VAR`, leading `~`, newline, glob or brace next to a dot, or
-absolute path outside the worktree except `/dev/null` (an option glued to one, `-C/etc`,
-included); in any segment of the chain `nightqueue` runs only as `nightqueue sandbox <cmd>`,
-`gh` only as a read, and `git` never as `push`, `remote` or `config`. This anchor is
-best-effort, **not a sandbox**: it reads the command line, and a program the command starts can
-still reach outside the worktree. Any other subagent may not edit, and its Bash is one bare
-`nightqueue|nq` read (`queue status|log`, `project list`,
-`org list`, `connection list`, `memory stats`, `doctor` without `--fix`, `version`), the main
-thread's `git -C` reads, `gh pr view|diff|checks|list|status` or `gh issue view|list`. The
-guard fails closed: an error inside it refuses every tool but `Read`/`Grep`/`Glob`, an `Edit`,
-`Write`, `MultiEdit`, `NotebookEdit`, `Bash`, `Agent` or `Task` call whose `tool_input` is not
-an object is refused, and a registry it cannot read refuses `git -C`.
+a call to the foreground; an allowed call answers nothing (never `allow`), so the host's
+permission prompt still applies. Every call of the main thread and of every subagent (a payload
+with `agent_id`/`agent_type`) is judged in one order: a malformed call; the reads (anything on
+disk but `<home>/secrets.json` and any `.env*` file, never a Grep whose `path` is the home or a
+parent of it, nor a path that cannot be resolved; an absolute Glob `pattern` or Grep `glob` is
+judged by its static prefix); `Agent`/`Task` (main thread), allowed for every plugin agent but
+the operator under `nightqueue:<name>` or `plugin_nightqueue_<name>` (`PIPELINE_AGENTS`; a bare
+name, `nightqueue:triage`, `nightqueue:qa` are refused); the writes; then Bash. A write or a Bash
+command lands in one of three bands:
+
+- **never**, refused with `operator guard: never (<what>)` even when a consent would match:
+  a write under the home, the Claude config dir, `~/.codex`, any `.claude/settings*.json` or
+  `.codex/`, or a `.env*` file; a Bash command any segment of which (split on unquoted `;`,
+  `&`, `|`, `(`, `)`, newline, `$(` and backtick, env assignments and wrappers such as `sudo`,
+  `env`, `xargs`, `timeout <n>` skipped) deletes files, force- or delete-pushes, runs
+  `git branch -D|-d`, `reset --hard`, `clean` or `rm`, is a refused nightqueue form (every
+  refused top-level command but `verify` and `sandbox <cmd>`, plus `sandbox worktree`,
+  `queue session`, `project add|move`, `queue add --run`, `doctor --fix`, `--follow`,
+  `--foreground`), runs `sh -c`/`eval` text, names the home, or names a `.env*` or
+  `secrets.json` path (a `<rev>:<path>` included). A relative path word is resolved only after
+  an explicit `cd` in the command.
+- **free**: the main thread's one bare
+  `nightqueue|nq <queue|project|org|connection|doctor|memory|lesson|libs|version> …` (not
+  `queue session`, `project add|move`, `queue add --run`, `doctor --fix`, `--follow` or
+  `--foreground`) or read-only `git -C <checkout> …`; a subagent's one bare `nightqueue|nq` read
+  (`queue status|log`, `project list`, `org list`, `connection list`, `memory stats`, `doctor`
+  without `--fix`, `libs`, `version`), the `git -C` reads (also as
+  `cd <checkout> && git <read>`), `gh pr view|diff|checks|list|status` or `gh issue view|list`.
+  Every top-level CLI command is classified as allowed or refused in one list, and so is every
+  subcommand of `queue` and `project`; a test keeps both exhaustive.
+- **consent**: a write is `edit` (an existing path, inside a registered checkout, else refused)
+  or `create` (a new path); any other Bash is `git-write` (a git subcommand neither read nor
+  never) or `run`, and must be one bare command as `cd <registered checkout> && <command>`,
+  `git -C <registered checkout> <command>`, or bare from a cwd inside a checkout (a git `-c`,
+  `--git-dir`, `--work-tree`, `--namespace` or `--exec-path` option is refused). It passes only
+  when a live consent of the session covers it, else
+  `operator guard: needs consent (<kind> <scope>): …`.
+
+Consents live in `<home>/operator/<NIGHTQUEUE_OPERATOR_SESSION>.jsonl`, append-only, one JSON
+event per line: a grant `{at, session, pid, project_id, project, kind, scope, reason, answer}` or
+a revoke `{at, revoke: true, project_id, kind, scope, answer?}`; the live consents are the grants
+no later revoke of the same project, kind and scope withdrew. A missing file is no consent, an
+unparsable line is skipped, any other read error fails closed. Each event appends one line to
+`<home>/logs/operator-<session>.log`. Coverage is never widened: a path consent covers its
+canonical path and what lies under it (a symlink resolving into the never band stays never); a
+command consent covers a command run in its project's current checkout whose words, after
+`git`/`-C <dir>` and a leading `timeout <n>`, open with the consent's words; a
+`connection-write` consent covers one exact `<connection> <METHOD> <path>`. Without a session id
+(no `nightqueue open`, or inside a job) there are no consents. The record is the audit and the
+guard; the host's prompt is the barrier.
+
+The guard fails closed: an error inside it refuses every tool but `Read`/`Grep`/`Glob`, an
+`Edit`, `Write`, `MultiEdit`, `NotebookEdit`, `Bash`, `Agent` or `Task` call whose `tool_input`
+is not an object is refused, and a registry it cannot read refuses `git -C`.
 Job mode is unchanged and still fails open.
 
-The `subagent-stop` hook acts only in an operator session (`NIGHTQUEUE_MODE=operator`, no
-`NIGHTQUEUE_JOB_ID`), on `SubagentStop`, for the `qa` role. Its one candidate is the first line
-of `last_assistant_message` when it reads `QA_WORKTREE: <path>`; only when the payload has no
-`last_assistant_message`, it is the first `QA_WORKTREE: <path>` line of the subagent's last
-assistant entry in the final 2 MB of `agent_transcript_path` - a path the transcript merely
-quotes elsewhere is never a candidate. Backticks around the path and trailing `.,;:)` are
-dropped. The candidate is dropped (unlock, `git worktree
-remove --force`, `git worktree prune`) only when it is a qa worktree of this home whose
-project's checkout exists and whose lock names `NIGHTQUEUE_OPERATOR_PID`, or that has no lock:
-a worktree another live session holds is never dropped. It always answers nothing and never
-fails the session. What it misses, `nightqueue open` and `nightqueue doctor --fix` drop once the
-worktree is stale (see [the CLI](cli.md#sandbox)).
+In an operator session the MCP server's instructions replace the tools-only line with the
+three-band line and add one line on `connection-write`; any other client sees them unchanged.
 
-The thirty-two MCP tools of tool contract 9, with the parameters `nightqueue mcp` actually
-accepts (every answer carries `contract: 9`; a call to a tool an older contract had and this one
+The thirty-three MCP tools of tool contract 10, with the parameters `nightqueue mcp` actually
+accepts (every answer carries `contract: 10`; a call to a tool an older contract had and this one
 dropped is answered with the older-definitions line):
 
 | tool | parameters |
@@ -502,7 +519,8 @@ dropped is answered with the older-definitions line):
 | `tracker_create` | `team`, `title` (at most 255), `description?` (at most 50,000), `priority?` (0-4), `state?`, `labels?`, `assignee?` (a name, display name, email or `me`) (writes only after the person's explicit ok; refused inside a job before anything is sent; answers `{ok: true, provider, issue: {ref, title, url}}`; an unknown or ambiguous name is `invalid-input` with the valid names and nothing is sent) |
 | `tracker_comment` | `ref`, `body` (at most 50,000) (writes only after the person's explicit ok; refused inside a job; answers `{ok: true, provider, ref, comment: {url}}`) |
 | `tracker_update` | `ref`, `title?`, `description?` (replaces the whole text), `priority?`, `state?`, `assignee?` (`none` unassigns), `labels_add?`, `labels_remove?` (writes only after the person's explicit ok; refused inside a job; answers `{ok: true, provider, issue, changed}`; a write that timed out or was not confirmed answers `provider-unavailable` with a hint to read the issue before trying again; no tracker tool deletes or archives) |
-| `connection_call` | `connection` (a stored connection's name), `method?` (`GET` default, `POST`, `PATCH`, `PUT`; any other, `DELETE` included, is `invalid-input`), `path?` (at most 2,000; relative to the root: a scheme, a leading `//`, a `.` or `..` segment, `\`, `?`, `#`, whitespace or an encoded `.`, `/` or `\` is `invalid-input`), `query?` (an object of text, number, boolean or list of texts), `body?` (JSON, at most 50,000 characters serialized, never on a GET) (the runtime injects the secret and the host is fixed by the kind: Sentry `<url>/api/0/`, Linear `https://api.linear.app/graphql` with an empty path and the GraphQL in `body`, Discord the webhook URL itself with an empty path (GET or POST) or exactly `messages/<id>` (GET or PATCH, to read or edit a posted message), and only `thread_id` and `wait` in `query`; a redirect is never followed; 10 s timeout; answers `{ok: true, status, body, body_truncated?}` with the body redacted then cut at 50,000 characters, or the normal answer `{ok: false, error: "no-connection" \| "invalid-input" \| "provider-unavailable", status, detail}` with a fixed detail, never the provider's message, the URL or a header; a GET reads, any other method only after the person's explicit ok to the exact connection, method, path and body; a non-GET is refused inside a job before anything is sent, a GET is allowed) |
+| `connection_call` | `connection` (a stored connection's name), `method?` (`GET` default, `POST`, `PATCH`, `PUT`; any other, `DELETE` included, is `invalid-input`), `path?` (at most 2,000; relative to the root: a scheme, a leading `//`, a `.` or `..` segment, `\`, `?`, `#`, whitespace or an encoded `.`, `/` or `\` is `invalid-input`), `query?` (an object of text, number, boolean or list of texts), `body?` (JSON, at most 50,000 characters serialized, never on a GET) (the runtime injects the secret and the host is fixed by the kind: Sentry `<url>/api/0/`, Linear `https://api.linear.app/graphql` with an empty path and the GraphQL in `body`, Discord the webhook URL itself with an empty path (GET or POST) or exactly `messages/<id>` (GET or PATCH, to read or edit a posted message), and only `thread_id` and `wait` in `query`; a redirect is never followed; 10 s timeout; answers `{ok: true, status, body, body_truncated?}` with the body redacted then cut at 50,000 characters, or the normal answer `{ok: false, error: "no-connection" \| "invalid-input" \| "provider-unavailable" \| "needs-consent", status, detail}` with a fixed detail, never the provider's message, the URL or a header; a GET reads, any other method only after the person's explicit ok to the exact connection, method, path and body; a non-GET is refused inside a job before anything is sent, a GET is allowed; in an operator session a non-GET with no live `connection-write` consent covering it answers `needs-consent` and sends nothing) |
+| `operator_consent` | `kind` (`edit`, `create`, `run`, `git-write`, `connection-write`), `scope` (at most 2,000: an absolute path for edit/create, one bare command for run, a writing git subcommand for git-write, `<connection> <POST\|PATCH\|PUT> <path>` for connection-write), `project?` (required but for connection-write), `reason?` and `answer?` (the person's answer quoted verbatim; both required on a grant), `revoke?` (records the person's consent in `<home>/operator/<session>.jsonl` and one line in `<home>/logs/operator-<session>.log`; a never-band scope, a revoke that matches nothing, a call inside a job or outside an operator session are refused; answers `{ok: true, consent, line}` or `{ok: true, revoked, line}`) |
 | `queue_status` | `job_id?`, `pr_url?` (never with `job_id`), `limit?` (1-50) |
 | `queue_run` | `job_id?` |
 | `queue_stop` | `pid?` |
