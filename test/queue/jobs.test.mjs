@@ -74,29 +74,16 @@ test("addJob refuses an empty prompt and every value outside the accepted ranges
   assert.throws(() => enqueue(env, { maxAttempts: 99 }), /invalid `max_attempts`/);
   assert.throws(() => enqueue(env, { timeoutS: 30 }), /invalid `timeout_s`/);
   const job = addJob({ projectId: ensureProject(env, "alpha"), prompt: "  fix the worker  " }, env);
-  assert.deepEqual({ ...job, id: undefined }, { id: undefined, projectId: ensureProject(env, "alpha"), project: "alpha", priority: 5, maxAttempts: 1, timeoutS: 14400, tier: null, origin: [], startBranch: null, startWorktree: null });
+  assert.deepEqual({ ...job, id: undefined }, { id: undefined, projectId: ensureProject(env, "alpha"), project: "alpha", priority: 5, maxAttempts: 1, timeoutS: 14400, origin: [], startBranch: null, startWorktree: null });
   assert.equal(getJob(job.id, env).prompt, "fix the worker");
 });
 
-test("the operator's tier is stored, refused when it is not one of the three, and absent when nothing was informed", (t) => {
+test("addJob writes no tier, whatever a caller still passes, and the job view carries none", (t) => {
   const env = makeQueue(t, "jobs-tier");
   const job = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker", tier: "complex" }, env);
-  assert.equal(job.tier, "complex");
-  assert.equal(getJob(job.id, env).tier, "complex");
-  assert.equal(jobView(getJob(job.id, env)).tier, "complex");
-
-  assert.throws(
-    () => addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the parser", tier: "urgent" }, env),
-    /invalid `tier`: `urgent`; expected one of trivial\|simple\|complex/,
-  );
-  assert.equal(countsByStatus(env).pending, 1, "the refused tier still wrote a job row");
-
-  for (const tier of ["", "   ", undefined, null]) {
-    const none = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the parser", tier }, env);
-    assert.equal(none.tier, null, `\`${String(tier)}\` should store no tier`);
-    assert.equal(getJob(none.id, env).tier, null);
-  }
-  assert.equal(addJob({ projectId: ensureProject(env, "alpha"), prompt: "trim it", tier: " simple " }, env).tier, "simple");
+  assert.equal("tier" in job, false);
+  assert.equal(openDb(env).prepare("SELECT tier FROM jobs WHERE id = ?").get(job.id).tier, null, "the deprecated `jobs.tier` column was written");
+  assert.equal("tier" in jobView(getJob(job.id, env)), false);
 });
 
 test("the claim takes the highest priority first, arms the lease and spends one attempt", (t) => {
@@ -315,8 +302,8 @@ test("finishing a job closes it and links only the pipeline run of the same proj
   const id = enqueue(env);
   claimJobById(id, { worker: WORKER, cap: CAP }, env);
   persistRunFacts(id, { worker: WORKER, slug: "fix-the-worker" }, env);
-  const mine = logPipelineRun({ projectId: projectIdOf(env, "alpha"), slug: "fix-the-worker", tier: "simple", outcome: "pr_opened", phases: [] }, env);
-  const foreign = logPipelineRun({ projectId: projectIdOf(env, "beta"), slug: "fix-the-worker", tier: "simple", outcome: "pr_opened", phases: [] }, env);
+  const mine = logPipelineRun({ projectId: projectIdOf(env, "alpha"), slug: "fix-the-worker", outcome: "pr_opened", phases: [] }, env);
+  const foreign = logPipelineRun({ projectId: projectIdOf(env, "beta"), slug: "fix-the-worker", outcome: "pr_opened", phases: [] }, env);
   assert.equal(
     finishJob(
       id,

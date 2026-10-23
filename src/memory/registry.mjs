@@ -2,6 +2,7 @@ import { UserError } from "../config/errors.mjs";
 import { isId, newId } from "../config/ids.mjs";
 import { projectContaining } from "../config/projects.mjs";
 import { DEFAULT_ORG_NAME } from "../config/schema.mjs";
+import { requireAgent, requireModel } from "../queue/routing.mjs";
 import { hasColumn } from "./columns.mjs";
 import { DATA_TABLES } from "./ddl.mjs";
 import { requireKey, suggestKey } from "./refs.mjs";
@@ -18,6 +19,8 @@ const PROJECT_VIEW = `SELECT p.id, p.name, p.key, p.path, p.org_id, o.name AS or
 const ORG_VIEW = "SELECT id, name, key, created_at FROM orgs";
 
 const KEY_TAKEN = "owner key taken";
+
+const AGENTS_KEY = "agents";
 
 // Tells whether a SQLite failure is the violation of a UNIQUE constraint on the given column.
 function isUniqueViolation(err, column) {
@@ -121,11 +124,57 @@ export function projectById(db, id) {
   return db.prepare(`${PROJECT_VIEW} WHERE p.id = ?`).get(String(id ?? "")) ?? null;
 }
 
-// The integrations of a project as an object, or null when it has none, its value is unreadable or the column is not there yet.
-export function projectIntegrations(db, id) {
+// The whole settings JSON of a project (its integrations plus the reserved agents key), or null.
+function projectSettings(db, id) {
   if (!hasColumn(db, "projects", "integrations")) return null;
   const row = db.prepare("SELECT integrations FROM projects WHERE id = ?").get(String(id ?? ""));
   return parseIntegrations(row?.integrations);
+}
+
+// A settings object without the key named, or null when nothing else is left.
+function withoutKey(settings, key) {
+  if (!settings) return null;
+  const { [key]: _dropped, ...rest } = settings;
+  return Object.keys(rest).length > 0 ? rest : null;
+}
+
+// The integrations of a project as an object, or null when it has none, its value is unreadable or the column is not there yet.
+export function projectIntegrations(db, id) {
+  return withoutKey(projectSettings(db, id), AGENTS_KEY);
+}
+
+// The agent model overrides of a project (`{ <agent>: { model } }`), or null when it has none.
+export function projectAgents(db, id) {
+  const agents = projectSettings(db, id)?.[AGENTS_KEY];
+  return isFilledObject(agents) ? agents : null;
+}
+
+// Writes the whole settings JSON of a project; an empty object stores NULL.
+function writeProjectSettings(db, { id, settings }) {
+  const isEmpty = Object.keys(settings).length === 0;
+  db.prepare("UPDATE projects SET integrations = ? WHERE id = ?").run(isEmpty ? null : JSON.stringify(settings), String(id));
+}
+
+// Refuses an agent overrides value that is not `{ <agent>: { model: <model> } }` with known names.
+function requireAgentOverrides(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new UserError("project agents must be an object of `{ <agent>: { model } }`");
+  for (const [agent, entry] of Object.entries(value)) {
+    requireAgent(agent);
+    requireModel(entry?.model);
+  }
+  return value;
+}
+
+// Writes a project's agent model overrides, keeping its integrations; null or an empty object removes them.
+export function setProjectAgents(db, { id, value }) {
+  if (!projectById(db, id)) throw new UserError(`unknown project id \`${id}\``);
+  if (!hasColumn(db, "projects", "integrations")) throw new UserError("this database has no project settings column yet; run `nightqueue update` to migrate it");
+  const agents = value === null || value === undefined ? {} : requireAgentOverrides(value);
+  const integrations = projectIntegrations(db, id) ?? {};
+  const normalized = Object.fromEntries(Object.entries(agents).map(([agent, entry]) => [agent, { model: entry.model }]));
+  const settings = Object.keys(normalized).length > 0 ? { ...integrations, [AGENTS_KEY]: normalized } : integrations;
+  writeProjectSettings(db, { id, settings });
+  return projectAgents(db, id);
 }
 
 // Tells whether a value is a plain object with at least one key.
@@ -149,7 +198,9 @@ export function setProjectIntegrations(db, { id, value }) {
   if (!projectById(db, id)) throw new UserError(`unknown project id \`${id}\``);
   const isEmpty = value === null || value === undefined || (typeof value === "object" && !Array.isArray(value) && Object.keys(value).length === 0);
   if (!isEmpty && !isFilledObject(value)) throw new UserError("project integrations must be an object of settings per provider");
-  db.prepare("UPDATE projects SET integrations = ? WHERE id = ?").run(isEmpty ? null : JSON.stringify(value), String(id));
+  const integrations = isEmpty ? {} : (withoutKey(value, AGENTS_KEY) ?? {});
+  const agents = projectAgents(db, id);
+  writeProjectSettings(db, { id, settings: agents ? { ...integrations, [AGENTS_KEY]: agents } : integrations });
   return projectIntegrations(db, id);
 }
 

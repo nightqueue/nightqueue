@@ -34,25 +34,28 @@ nightqueue run log --json     # the same table as the only thing on stdout
 nightqueue run commit --message-file msg.txt   # stage what the implementation listed, and commit it
 nightqueue run pr --template                   # print and record the PR template in effect
 nightqueue run pr --body-file body.md          # check the body, push and open the pull request
-nightqueue run start --tier simple             # the run's routing row, phases and tasks, as JSON
-nightqueue run start --routing                 # the whole routing table, every tier, as markdown
+nightqueue run start                           # the run's agent models, phases and tasks, as JSON
+nightqueue run start --routing                 # the default agent model table, as markdown
 nightqueue run publish --message-file msg.txt --body-file body.md      # check the body, commit once, push and open the PR
 nightqueue run report                          # the tables of the final report, from the run's own records
 ```
 
-`run start --tier <t> [--type <bug/error|feature/refactor>] [--commit-type <c>]
+`run start [--type <bug/error|feature/refactor>] [--commit-type <c>]
 [--expect-slug <slug>]` is Phase 0's mechanics in one call. `--type` and
 `--commit-type` are optional (the shipped plugin passes neither: `run check 01` records
-both from the triager's Brief) and validated only when given. It refuses a tier, a
-type or a commit type outside the pipeline's own (naming the accepted values),
-records the `tier`, and the `type` when given, in `state.json` (the same write as
-`run_set`) and the pull request template in effect (the same as `run pr --template`),
-and prints one JSON line: `project`, `slug`, `runDir`, the `worktree` and `branch` the
-runtime recorded (it never creates a worktree), `tier`, `type` (the recorded one, else
-the requested one, else null), `commitType` (the requested one, else the recorded one,
-else null), the ONE `routing` row of the tier (from `src/queue/routing.mjs`), the
-`phases` and `tasks` of the tier (the triager runs in every tier, so they never depend
-on the type), `prTemplate`, `commitConvention` and `commitTemplate`
+both from the triager's Brief) and validated only when given. It refuses a type or a
+commit type outside the pipeline's own (naming the accepted values), and refuses
+`--tier` with ``\`--tier\` was removed: every run executes the one pipeline; run
+`nightqueue run start` without it`` (there is no risk tier: every run executes every
+phase). It records the `type` when given in `state.json` (the same write as `run_set`)
+and the pull request template in effect (the same as `run pr --template`), and prints
+one JSON line: `project`, `slug`, `runDir`, the `worktree` and `branch` the runtime
+recorded (it never creates a worktree), `type` (the recorded one, else the requested
+one, else null), `commitType` (the requested one, else the recorded one, else null),
+`models` (`{<agent>: <model>}`, the defaults of `src/queue/routing.mjs` with the
+project's overrides of `project models` applied; a store that cannot be read answers
+the defaults and says so on stderr), the `phases` and `tasks` (every phase of the one
+pipeline), `prTemplate`, `commitConvention` and `commitTemplate`
 (`{source, path, label}`: the commit message template in effect, first match wins - `config`,
 git's own `commit.template` read in the run's checkout when it names an existing file; `repo`,
 the repository's convention file (`.gitmessage` gives `path`); else `nightqueue`, the fallback
@@ -60,9 +63,9 @@ of `plugin/skills/resolve/references/commit-template.md`, `path` null). With `--
 inside a job, it waits up to 10 seconds for the runner to bind the slug the
 orchestrator of an older plugin just declared (`SLUG: <slug> TYPE: <type>`) and answers `slugDeclared`
 and `slugBound`; it never renames anything itself. Calling it again answers the
-same JSON. `run start --routing` takes no other option: it prints the whole routing
-table of `src/queue/routing.mjs` as markdown, one row per line, and resolves no run
-and writes nothing, inside a job or outside.
+same JSON. `run start --routing` takes no other option: it prints the default agent
+model table of `src/queue/routing.mjs` as markdown (`| Agent | Model |`, one row per
+agent), and resolves no run and writes nothing, inside a job or outside.
 
 `run publish --message-file <p> --body-file <p> [--files-from <p>] [--extra
 <pathspec>]... [--title <t>] [--remove-worktree]` is `run commit` then `run pr` in
@@ -86,8 +89,8 @@ It prints the same `CONVENTION:`, `COMMITTED:`, `BRANCH:`, `PR:` and `WORKTREE:`
 lines as the two commands, which keep working unchanged.
 
 `run report [--json]` renders the tables of Phase 8 from `state.json`, the job log
-and `03-plan.md`: the step table (complex) or the compact `Verification ✅ · PR
-<url>` line (trivial/simple), a `Happy: yes|no —
+and `03-plan.md`: the step table, one row per step (`⏭️` only for the runtime phase
+after a PASSED verification, a purely static change), a `Happy: yes|no —
 <first failing gate>` line decided by the fail-safe rule (a termination, a failed
 verdict, a re-run, a planned phase never recorded, a plan with `## Requires user
 confirmation`, no delivery recorded), and, when not happy, the execution table with
@@ -121,7 +124,7 @@ The first line keeps that meaning; the check also answers the phase's verdict an
 fact per line under a stable prefix, in this order: `VERDICT: <value>` (`01`, `05a`, `05`,
 `06`, `06.5`; a verdict outside the phase's values is a `MISSING:` of the verdict line),
 `GATE: <code> — <evidence>`, `OPEN: <text>`, `TYPE-MISMATCH: …`,
-`CONFIRM: requires-user-confirmation`, `INVALIDATED: <item>`, `DIFF-APPLIES: yes|no`,
+`CONFIRM: requires-user-confirmation`, `QA: lite|full` (`03`), `INVALIDATED: <item>`, `DIFF-APPLIES: yes|no`,
 `NEEDS-DEVICE`, `index: …` (`02`), the `recorded: …` lines, and `SCRIPT:` followed by the
 device script, always last. A `MISSING:` first line prints nothing else. Headings are matched
 by prefix, outside fenced code and HTML comments; round artifacts are read on their last
@@ -320,6 +323,9 @@ nightqueue project remove api --purge [--yes]      # delete it and every row it 
 nightqueue project integrations api show [--json] # one <kind>.<key>=<value> line per setting, or "no integrations"
 nightqueue project integrations api set <kind>.<key>=<value> ...   # validated against the provider that declares the key
 nightqueue project integrations api unset <kind>.<key> ...         # the last key removed leaves the project without integrations
+nightqueue project models api [--json]             # one <agent>=<model> (default|project) line per agent
+nightqueue project models api --set coder=sonnet   # the project's coder runs on sonnet; --set repeats
+nightqueue project models api --unset coder        # back to the default model; --unset repeats
 
 echo "$SENTRY_AUTH_TOKEN" | nightqueue connection add sn --type sentry --set org=acme [--set url=https://sentry.example.com]
 nightqueue connection test sn                      # prints org=<slug>, never the token
@@ -389,6 +395,21 @@ merged job (see the post-close steps under [Queue](#queue)), and `expo.branch` (
 or digit (`set expo.branch=-x` and an empty value are refused). When the checkout has an
 `eas.json` at its root, `show` adds `expo: detected` after the settings (also after `no
 integrations`); detection only reports, it never sets `expo.ota`.
+
+**Project models.** `project models <project> [--set <agent>=<model>]... [--unset
+<agent>]... [--json]` shows or changes the model each agent of the pipeline runs on for
+that project. The defaults live in `src/queue/routing.mjs` (`run start --routing` prints
+them): triager `sonnet`, explore `haiku`, architect `opus`, coder `opus`, qa-analyst
+`sonnet`, qa-prover `haiku`, verifier `haiku`, reflector `haiku` (the merger runs on
+`sonnet` and is not overridable). With no option it prints one `<agent>=<model>
+(default|project)` line per agent; `--json` gives `{project, agents: {<agent>: {model,
+source}}}`. `--set` takes an agent of that list and a model among `opus`, `sonnet` and
+`haiku` - anything else is refused naming the accepted values, and one invalid argument
+changes nothing; `--unset` brings the agent back to its default. The override is stored in
+the project's settings under `agents.<agent>.model`, apart from what `project integrations`
+shows and keeps (a `set`/`unset` of integrations never drops it). `phase_prompt` answers the
+resolved `model` for each agent and `run start` answers them under `models`. `--set` and
+`--unset` are refused from inside a job.
 
 A path that starts with `-` has to come after `--` (`nightqueue init -- -weird-dir`),
 otherwise it is parsed as an unknown option and rejected.

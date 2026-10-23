@@ -91,9 +91,9 @@ function pendingTail(job: Job, runnersOnline: number): string {
   return `${runnersOnline} runner${runnersOnline === 1 ? "" : "s"} busy — picked up when one frees`;
 }
 
-// The second line of a pending job: item, priority, tier, queue time and why it waits.
+// The second line of a pending job: item, priority, queue time and why it waits.
 function pendingDetail(job: Job, runnersOnline: number): string {
-  const parts = [`p${job.priority}`, job.tier, `queued ${hhmmUtc(job.created_at)} UTC`, pendingTail(job, runnersOnline)];
+  const parts = [`p${job.priority}`, `queued ${hhmmUtc(job.created_at)} UTC`, pendingTail(job, runnersOnline)];
   return parts.filter(Boolean).join(" · ");
 }
 

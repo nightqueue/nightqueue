@@ -93,8 +93,28 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
   qa-guardian and verifier cap their evidence level at 2, and say so, when the request forbids
   writing or running.
 
+- **Models per agent, with a per-project override.** `src/queue/routing.mjs` holds one default
+  model per agent: triager `sonnet`, explore `haiku`, architect `opus`, coder `opus`,
+  qa-analyst `sonnet`, qa-prover `haiku`, verifier `haiku`, reflector `haiku`, merger `sonnet`
+  (`nightqueue run start --routing` prints the table). `nightqueue project models <project>
+  [--set <agent>=<model>]... [--unset <agent>]... [--json]` shows or overrides them for one
+  project (`opus`, `sonnet` or `haiku`; the merger is not overridable); the override is stored
+  as `agents.<agent>.model` in the project's settings, which `project integrations` never shows
+  nor drops. `phase_prompt` answers the resolved `model`, and `run start` answers `models`.
+- **The QA mode is decided by the plan.** `nightqueue run check 03` prints `QA: lite|full`
+  after `CONFIRM:`: `full` when `## Identified risks` holds two or more 🔴 risk items (list items
+  or table rows, outside fenced code) or the plan declares `**Always-gate class:** yes`, else
+  `lite`. Phase 5 reads that line and nothing else; the architect writes one `🔴|🟡|🟢` marker on
+  each risk line. `phase_prompt` adds an `open_items` line when a QA target contradicts the mode.
+
 ### Changed
 
+- **One pipeline, no risk tier.** Every run executes every phase (triager, exploration,
+  architect, coder, QA, verifier, runtime unless the change is purely static), with at most 2
+  fix iterations; the trivial/simple fast tracks and the `coder-fast`/`verifier-fast` prompts
+  are gone. `run report` prints one format: the step table, every step, `⏭️` only for a
+  runtime phase skipped on a purely static change. The Studio shows no tier chip, badge, Add
+  job field or median-by-tier line, and its pipeline card always has the nine slots.
 - **The triager runs in every tier, on `sonnet`.** The routing table has one triager model,
   `trivial` and `simple` run `0 · 1 · 4 · 6 · 7 · 8`, the phases and tasks of a tier no longer
   depend on the type, and the `Request critique (step 2.5)` row and the `requestCritique` key
@@ -201,6 +221,18 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
   PATCH or PUT that no live consent covers answers `needs-consent` and sends nothing; a GET, a
   call inside a job and any other client are unchanged.
 - **Tool contract 10**, for the `operator_consent` tool.
+
+### Deprecated
+
+- **The tier.** `queue_add` with a `tier` value, `nightqueue queue add --tier` and
+  `nightqueue run start --tier` are refused with a line saying the tier was removed, and nothing
+  is queued or recorded; a `null` or blank `tier` is ignored. `pipeline_log` still accepts
+  `tier`, `tier_operator` and `tier_raise_reason` from an older plugin and ignores them, and
+  `run_set` no longer takes `tier`/`tier_raise_reason`. The `jobs.tier`,
+  `pipeline_runs.tier`, `tier_operator` and `tier_raise_reason` columns stay in the schema,
+  unread (`pipeline_runs.tier` is NOT NULL, so new rows carry the constant `complex`) until a
+  later schema bump drops them. The runner no longer parses `Tier raised:`, the spawn prompt has
+  no `Tier:` line, and `store.jobs.tierBaseline` is gone.
 
 ### Removed
 

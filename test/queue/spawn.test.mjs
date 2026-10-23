@@ -388,15 +388,8 @@ test("no handoff block at all when the decision refused the resume or the slug i
   }
 });
 
-test("the prompt carries the operator's tier only when the job has one", () => {
-  const tiered = buildPrompt({ job: { ...JOB, tier: "simple" } });
-  assert.ok(
-    tiered.includes(
-      "Tier: simple (set by the operator - the pipeline may only raise it, with evidence, never lower it)",
-    ),
-    tiered,
-  );
-  for (const tier of [null, undefined, "", "   "]) {
+test("the prompt never carries a tier line, even for a legacy job row that still has a tier", () => {
+  for (const tier of ["simple", "complex", null, undefined, "", "   "]) {
     assert.equal(
       buildPrompt({ job: { ...JOB, tier } }).includes("Tier:"),
       false,

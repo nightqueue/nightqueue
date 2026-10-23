@@ -6,18 +6,19 @@ import { packageRoot } from "../host/paths.mjs";
 import { originEntry, readOriginFiles } from "../integrations/enrich.mjs";
 import { registeredProject } from "../memory/registry-access.mjs";
 import { COMMIT_TYPES } from "../queue/branch-name.mjs";
+import { qaModeOf } from "../queue/check-contract.mjs";
 import { DEPENDENT_PROMPT_REFUSAL } from "../queue/dependent-prompt.mjs";
 import { nextFixLoop, nextRound } from "../queue/phase-artifacts.mjs";
 import { isStateObject, readRunState } from "../queue/resume.mjs";
 import { callerJobId } from "../queue/retry.mjs";
-import { phasesFor, routingRow } from "../queue/routing.mjs";
+import { modelFor, PIPELINE_CONSTANTS } from "../queue/routing.mjs";
 import { isProvisionalSlug } from "../queue/run-slug.mjs";
 import { renderSkillTemplate, skillReferencesDir } from "../queue/skill-template.mjs";
 import { openStore } from "../store/open.mjs";
 import { callerContext, indexLine, phaseContextBlock, runInjectedLessonIds } from "./phase-context.mjs";
 import { runTimelineLines } from "./run-timeline.mjs";
 
-// The subagent every target launches, the routing row that names its model, the pipeline phase it belongs to, and its artifact gate.
+// The subagent every target launches, the agent whose model it runs on, the pipeline phase it belongs to, and its artifact gate.
 const TARGETS = {
   triager: { agent: "nightqueue:triager", model: "triager", phase: "triage", artifact: "01-triage.md", check: "01" },
   explore: { agent: "nightqueue:explore", model: "explore", phase: "explore", artifact: "02-explore.md", check: "02" },
@@ -26,17 +27,16 @@ const TARGETS = {
   "coder-fix": { agent: "nightqueue:coder", model: "coder", phase: "implementation", artifact: "04-implementation.md", check: "04" },
   verifier: { agent: "nightqueue:verifier", model: "verifier", phase: "verification", artifact: "06-verification.md", check: "06" },
   runtime: { agent: "nightqueue:verifier", model: "verifier", phase: "runtime", artifact: "06-runtime.md", check: "06.5" },
-  "qa-lite": { agent: "nightqueue:qa-guardian", model: "qaGuardian", phase: "qa", artifact: "05-qa.md", check: "05" },
-  "qa-analyst": { agent: "nightqueue:qa-guardian", model: "qaGuardian", phase: "qa", artifact: "05a-qa-analyst.md", check: "05a" },
-  "qa-prover": { agent: "nightqueue:qa-guardian", model: "qaGuardian", phase: "qa", artifact: null, check: null },
-  reflector: { agent: "nightqueue:reflector", model: "coder", phase: null, artifact: null, check: null },
+  "qa-lite": { agent: "nightqueue:qa-guardian", model: "qa-analyst", phase: "qa", artifact: "05-qa.md", check: "05" },
+  "qa-analyst": { agent: "nightqueue:qa-guardian", model: "qa-analyst", phase: "qa", artifact: "05a-qa-analyst.md", check: "05a" },
+  "qa-prover": { agent: "nightqueue:qa-guardian", model: "qa-prover", phase: "qa", artifact: null, check: null },
+  reflector: { agent: "nightqueue:reflector", model: "reflector", phase: null, artifact: null, check: null },
 };
 
 export const PROMPT_TARGETS = Object.keys(TARGETS);
 
 // The lesson target of each template that carries a context block; a template missing here gets none.
 export const LESSON_TARGET_OF = {
-  "coder-fast": "coder",
   triager: "triager",
   explore: "explore",
   architect: "architect",
@@ -47,13 +47,13 @@ export const LESSON_TARGET_OF = {
 };
 
 const BUG = "bug/error";
-const FAST_TIERS = ["trivial", "simple"];
 const INDEX_LIMIT = 40;
 const BRIEF_FILE = "00-brief.md";
 const ARTIFACT_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*\.md$/;
 const ROUND_TARGETS = ["verifier", "runtime", "qa-lite", "qa-analyst"];
 const INJECTED_LIMIT = 40;
 const NONE_RECORDED = "none recorded";
+const QA_TARGET_MODE = { "qa-lite": "lite", "qa-analyst": "full", "qa-prover": "full" };
 const QUERY_WORDS = 12;
 const BRIEF_WRITER = "run `nightqueue run check 01` first: it writes the Brief from the triage's `## Brief`";
 
@@ -65,12 +65,6 @@ export function promptsDir() {
 // Renders one prompt template with its values; an unresolved placeholder throws.
 export function renderTemplate(name, values) {
   return renderSkillTemplate(promptsDir(), name, values);
-}
-
-// The template a target renders for a tier: the fast tracks have their own coder and verifier prompts.
-export function templateOf(target, tier) {
-  if ((target === "coder" || target === "verifier") && FAST_TIERS.includes(tier)) return `${target}-fast`;
-  return target;
 }
 
 // The `## Brief` section of the run's brief, refusing a run whose brief was never written.
@@ -95,13 +89,11 @@ function briefField(brief, field) {
   return line ? line.trim().slice(field.length + 5).trim() : "";
 }
 
-// The run's recorded tier and type; the tier is required by every target, the type by every target but the triager, which records it.
-function requireTierAndType(state, target) {
-  const tier = isStateObject(state) && state.tier ? state.tier : null;
+// The run's recorded type, required by every target but the triager, which records it.
+function requireType(state, target) {
   const type = isStateObject(state) && state.type ? state.type : null;
-  if (!tier) throw new UserError("the run has no tier recorded yet: run `nightqueue run start` first");
   if (!type && target !== "triager") throw new UserError("the run has no type recorded yet: run `nightqueue run check 01` first");
-  return { tier, type };
+  return type;
 }
 
 // Where the code of the run lives: the recorded worktree, else the registered checkout of its project, named in an open item.
@@ -125,26 +117,24 @@ async function tolerant(openItems, what, fallback, lookup) {
 }
 
 // The context block of a template that carries one, with the same recall `context_for_phase` makes.
-async function contextBlock({ template, row, query, run, repo, env, openItems }) {
+async function contextBlock({ template, query, run, repo, env, openItems }) {
   const target = LESSON_TARGET_OF[template];
-  if (!target || (template === "coder-fast" && !row.contextForCoder)) return "";
+  if (!target) return "";
   const answer = await tolerant(openItems, "the context block", { block: "" }, () =>
     phaseContextBlock({ target, query, project: run.project, repoRoot: repo, origin: template !== "triager" }, env),
   );
   return answer.block ?? "";
 }
 
-// The known index of the project for the fast coder's paths and the explore's map.
-async function indexValues({ template, row, query, run, repo, env, openItems }) {
-  const empty = { INDEX_PATHS: "", INDEX_MAP: "", INDEX_LIBS: "" };
-  const wanted = template === "explore" || (template === "coder-fast" && row.indexRecall);
-  if (!wanted || !run.projectId) return empty;
+// The known index of the project for the explore's map.
+async function indexValues({ template, query, run, repo, env, openItems }) {
+  const empty = { INDEX_MAP: "", INDEX_LIBS: "" };
+  if (template !== "explore" || !run.projectId) return empty;
   const { files, libs } = await tolerant(openItems, "the index recall", { files: [], libs: [] }, () =>
     openStore(env).index.recallProjectIndex({ projectId: run.projectId, repoRoot: repo, query, limit: INDEX_LIMIT }),
   );
-  if (template === "coder-fast") return { ...empty, INDEX_PATHS: files.map((file) => `- ${file.path}`).join("\n") };
   const libText = libs.map((lib) => `${lib.lib}@${lib.version}`).join(", ");
-  return { ...empty, INDEX_MAP: files.map(indexLine).join("\n"), INDEX_LIBS: libText || "none" };
+  return { INDEX_MAP: files.map(indexLine).join("\n"), INDEX_LIBS: libText || "none" };
 }
 
 // True when the plan of the run carries a `## Usage coverage` section.
@@ -268,15 +258,14 @@ function leadingWords(source) {
 
 // The values every template may read, resolved from the run and the call.
 async function promptValues({ args, template, run, state, env, openItems }) {
-  const { tier, type } = requireTierAndType(state, args.target);
+  const type = requireType(state, args.target);
   requireRequestRule(args);
   const dir = runDir(run.projectId, run.slug, env);
   const brief = args.target === "triager" ? "" : readBrief(dir);
   const triage = await triagerValues({ args, run, dir, env, openItems });
-  const row = routingRow(tier);
   const repo = repositoryOf({ run, state, env, openItems });
   const query = text(args.query) || briefField(brief, "Affected area") || leadingWords(triage.RAW_REQUEST);
-  const lookup = { template, row, query, run, repo, env, openItems };
+  const lookup = { template, query, run, repo, env, openItems };
   requireGroupRule(args);
   const artifact = runtimeArtifact(args.target, args.artifact);
   const ownArtifact = args.target === "runtime" ? artifact : TARGETS[args.target]?.artifact;
@@ -284,19 +273,17 @@ async function promptValues({ args, template, run, state, env, openItems }) {
     RUN_DIR: dir,
     REPOSITORY: repo,
     PROJECT: run.project,
-    TIER: tier,
     TYPE: type ?? "",
     BRIEF: brief,
     AFFECTED_AREA: briefField(brief, "Affected area"),
     OBJECTIVE: briefField(brief, "Objective"),
     EXPECTED_OUTCOME: briefField(brief, "Expected outcome"),
     BUG_ACCOUNT: briefField(brief, "Bug account") || "not identified",
-    VERIFIER_SCOPE: row.verifierScope,
-    CLAUDE_MD: row.claudeMd && existsSync(join(repo, "CLAUDE.md")) ? join(repo, "CLAUDE.md") : "",
+    VERIFIER_SCOPE: PIPELINE_CONSTANTS.verifierScope,
+    CLAUDE_MD: existsSync(join(repo, "CLAUDE.md")) ? join(repo, "CLAUDE.md") : "",
     CONTEXT_BLOCK: await contextBlock(lookup),
     ...(await indexValues(lookup)),
     IS_BUG: type === BUG,
-    SIMPLE: tier === "simple",
     TRIAGED: existsSync(join(dir, "01-triage.md")),
     HAS_USAGE_COVERAGE: planHasUsageCoverage(dir),
     PLUGIN_ROOT: join(packageRoot(), "plugin"),
@@ -312,26 +299,32 @@ async function promptValues({ args, template, run, state, env, openItems }) {
   };
 }
 
-// The model of the target's agent in the run's tier; a lane outside the phases takes its tier's model, an agent the tier does not route the complex one, with an open item.
-function modelFor(spec, { tier, type }, openItems) {
-  if (spec.phase === null) return routingRow(tier).models[spec.model];
-  const planned = phasesFor(tier, type).includes(spec.phase);
-  const model = routingRow(tier).models[spec.model];
-  if (planned && model) return model;
-  openItems.push(`the ${spec.phase} phase does not run in the ${tier} tier (${type ?? "no type recorded"}); rendered anyway, with the complex-tier model (a tier raise may be under way)`);
-  return routingRow("complex").models[spec.model];
+// The agent model overrides of the run's project, or null without a project or when the store cannot read them (named in an open item).
+async function runProjectAgents({ run, env, openItems }) {
+  if (!run.projectId) return null;
+  return tolerant(openItems, "the project's agent models", null, () => openStore(env).projects.agents(run.projectId));
 }
 
-// The complete prompt of one subagent of THIS run, with the agent, the model, the artifact and the gate the orchestrator passes through unchanged.
+// Names in an open item a QA target the plan's QA mode does not ask (`qa-lite` under `full`, the analyst or a prover under `lite`); no plan, no item.
+function noteQaModeMismatch({ target, dir, openItems }) {
+  const wanted = QA_TARGET_MODE[target];
+  const plan = wanted ? readHandoff(dir, "03-plan.md") : "";
+  if (plan.trim() === "") return;
+  const mode = qaModeOf(plan);
+  if (mode !== wanted) openItems.push(`the plan's QA mode is ${mode} (\`run check 03\`); ${target} was rendered anyway`);
+}
+
+// The complete prompt of one subagent of THIS run, with the agent, its model (the default or the project's override), the artifact and the gate the orchestrator passes through unchanged.
 export async function phasePrompt(args, { run, env = process.env }) {
   const spec = TARGETS[args?.target];
   if (!spec) throw new UserError(`unknown target \`${String(args?.target)}\`; accepted: ${PROMPT_TARGETS.join(", ")}`);
   const state = readRunState({ projectId: run.projectId, slug: run.slug, env });
-  const { tier, type } = requireTierAndType(state, args.target);
-  const template = templateOf(args.target, tier);
+  requireType(state, args.target);
+  const template = args.target;
   const openItems = [];
   const values = await promptValues({ args, template, run, state, env, openItems });
-  const model = modelFor(spec, { tier, type }, openItems);
+  noteQaModeMismatch({ target: args.target, dir: values.RUN_DIR, openItems });
+  const model = modelFor(spec.model, await runProjectAgents({ run, env, openItems }));
   const artifact = args.target === "runtime" ? values.ARTIFACT : spec.artifact;
   return {
     prompt: renderTemplate(template, values),

@@ -2,20 +2,21 @@ import { readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-export const TIERS = ["trivial", "simple", "complex"];
 export const SKILL_DIR = join(resolve(dirname(fileURLToPath(import.meta.url)), ".."), "plugin", "skills", "resolve");
 
-// The skill files the orchestrator reads for a tier: SKILL.md and the PR template always, the QA reference and attack brief on complex only.
-export function loadedFiles(tier, skillDir = SKILL_DIR) {
-  if (!TIERS.includes(tier)) throw new Error(`unknown tier \`${tier}\`; expected one of ${TIERS.join(", ")}`);
-  const files = [join(skillDir, "SKILL.md"), join(skillDir, "references", "pr-template.md")];
-  if (tier !== "complex") return files;
-  return [...files, join(skillDir, "references", "qa-phase.md"), join(skillDir, "references", "prompts", "_qa-attack-brief.md")];
+// The skill files the orchestrator reads on every run: SKILL.md, the PR template, the QA reference and the attack brief.
+export function loadedFiles(skillDir = SKILL_DIR) {
+  return [
+    join(skillDir, "SKILL.md"),
+    join(skillDir, "references", "pr-template.md"),
+    join(skillDir, "references", "qa-phase.md"),
+    join(skillDir, "references", "prompts", "_qa-attack-brief.md"),
+  ];
 }
 
-// The bytes a tier loads from the skill, read from disk.
-export function loadedBytes(tier, skillDir = SKILL_DIR) {
-  return loadedFiles(tier, skillDir).reduce((sum, path) => sum + Buffer.byteLength(readFileSync(path, "utf8")), 0);
+// The bytes a run loads from the skill, read from disk.
+export function loadedBytes(skillDir = SKILL_DIR) {
+  return loadedFiles(skillDir).reduce((sum, path) => sum + Buffer.byteLength(readFileSync(path, "utf8")), 0);
 }
 
 // The markdown heading a line opens, or null for a body line.

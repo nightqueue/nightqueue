@@ -8,6 +8,7 @@ import { loadConfig } from "../config/store.mjs";
 import { changeProjectIntegrations, integrationLines, integrationsView } from "../integrations/settings.mjs";
 import { requireKey } from "../memory/refs.mjs";
 import { refuseHomeWriteInsideJob } from "../queue/home-guard.mjs";
+import { agentModels, requireAgent, requireModel } from "../queue/routing.mjs";
 import { openRegistryReader, openRegistryWriter, openStore } from "../store/open.mjs";
 import { checkArgs, parseCommand } from "./args.mjs";
 import { askKey, choose } from "./prompt.mjs";
@@ -237,6 +238,73 @@ async function runIntegrations(argv, ctx) {
   await changeIntegrations(ctx, { name, action, args, json: values.json === true });
 }
 
+const MODELS_USAGE = "nightqueue project models <project> [--set <agent>=<model>]... [--unset <agent>]... [--json]";
+
+// Each agent's model for a project and where it comes from (`project` override or `default`).
+function modelView(projectAgents) {
+  const models = agentModels(projectAgents);
+  return Object.fromEntries(
+    Object.entries(models).map(([agent, model]) => [agent, { model, source: model === projectAgents?.[agent]?.model ? "project" : "default" }]),
+  );
+}
+
+// Prints a project's agent models, as lines or as the JSON answer.
+function printModels(ctx, { project, projectAgents, json }) {
+  const agents = modelView(projectAgents);
+  if (json) {
+    ctx.out(JSON.stringify({ project: project.name, agents }));
+    return;
+  }
+  for (const [agent, { model, source }] of Object.entries(agents)) ctx.out(`${agent}=${model} (${source})`);
+}
+
+// Reads `--set` values written `<agent>=<model>`, each name validated.
+function modelAssignments(values) {
+  return values.map((arg) => {
+    const at = arg.indexOf("=");
+    if (at <= 0) throw new UserError(`\`${arg}\` is not <agent>=<model>; usage: ${MODELS_USAGE}`);
+    return { agent: requireAgent(arg.slice(0, at)), model: requireModel(arg.slice(at + 1)) };
+  });
+}
+
+// The overrides after the sets and unsets are applied, every name validated before anything is written.
+function changedAgents(current, { set, unset }) {
+  const next = { ...(current ?? {}) };
+  for (const { agent, model } of modelAssignments(set)) next[agent] = { model };
+  for (const agent of unset) delete next[requireAgent(agent)];
+  return next;
+}
+
+// Runs `project models <project>` without changes: reads only, a home without a database knowing no project.
+async function showModels(ctx, { name, json }) {
+  const store = await openRegistryReader(ctx.env);
+  if (!store) throw new UserError(`unknown project \`${name}\`; no project is registered yet`);
+  const project = await requireProject(store, name);
+  printModels(ctx, { project, projectAgents: await store.projects.agents(project.id), json });
+}
+
+// Runs `project models <project> --set/--unset`: every change validated before the one write, refused inside a job.
+async function changeModels(ctx, { name, set, unset, json }) {
+  refuseHomeWriteInsideJob(ctx.env);
+  const store = await openRegistryWriter(ctx.env);
+  const project = await requireProject(store, name);
+  const next = changedAgents(await store.projects.agents(project.id), { set, unset });
+  const projectAgents = await store.projects.setAgents(project.id, next);
+  printModels(ctx, { project, projectAgents, json });
+}
+
+// Runs `project models`: shows or changes the model each agent of the project runs on.
+async function runModels(argv, ctx) {
+  const options = { set: { type: "string", multiple: true }, unset: { type: "string", multiple: true }, json: { type: "boolean" } };
+  const { values, positionals } = parseCommand(argv, options);
+  checkArgs(positionals, { min: 1, max: 1, usage: MODELS_USAGE });
+  const set = values.set ?? [];
+  const unset = values.unset ?? [];
+  const json = values.json === true;
+  if (set.length === 0 && unset.length === 0) return await showModels(ctx, { name: positionals[0], json });
+  await changeModels(ctx, { name: positionals[0], set, unset, json });
+}
+
 const SUBCOMMANDS = new Map([
   ["add", runAdd],
   ["list", runList],
@@ -245,6 +313,7 @@ const SUBCOMMANDS = new Map([
   ["remove", runRemove],
   ["move", runMove],
   ["integrations", runIntegrations],
+  ["models", runModels],
 ]);
 
 export const SUBCOMMAND_NAMES = Object.freeze([...SUBCOMMANDS.keys()]);

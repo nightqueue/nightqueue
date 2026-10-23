@@ -2,15 +2,13 @@ import { Clock } from "lucide-react";
 import type { CSSProperties, ReactNode } from "react";
 import { activeMs, attemptsSummary, compactCount, formatDurationMs, spanMs, tokenCounters, tokensTotalLabel, usdLabel, wallMs } from "../../lib/format";
 import { legendEntries, type ShareEntry, shareEntries } from "../../lib/track";
-import type { Job, JobDetail, JobMeta, Timeline, TimelinePhase } from "../../lib/types";
+import type { Job, JobDetail, Timeline, TimelinePhase } from "../../lib/types";
 import { useNow } from "../../lib/useNow";
 import { ActionIcon } from "../StatusIcon";
 
 export interface TotalsStripProps {
   job: JobDetail;
   row: Job | undefined;
-  baseline: JobMeta["baseline"] | undefined;
-  tier: string | null;
   timeline: Timeline;
 }
 
@@ -57,14 +55,12 @@ function tokensTotal(job: JobDetail, row: Job | undefined): Total {
   };
 }
 
-// The cost cell: the cost so far, the tier median beside it, the orchestrator's turns and context.
-function costTotal(job: JobDetail, baseline: JobMeta["baseline"] | undefined, tier: string | null): Total {
-  const median = tier && baseline && baseline.n > 0 ? baseline : null;
+// The cost cell: the cost so far, the orchestrator's turns and context.
+function costTotal(job: JobDetail): Total {
   return {
     key: job.status === "running" ? "cost so far" : "cost",
     value: usdLabel(job.cost_usd),
-    lines: [median ? `median ${tier} ${usdLabel(median.cost)}` : null, `orch ${compactCount(job.orch_turns)} turns · ctx ${compactCount(job.orch_ctx_last)} · base ctx ${compactCount(job.baseline_ctx)}`],
-    title: median ? `${tier} median: ${compactCount(median.turns)} turns · ${compactCount(median.ctx)} ctx · ${usdLabel(median.cost)} (n=${median.n})` : undefined,
+    lines: [`orch ${compactCount(job.orch_turns)} turns · ctx ${compactCount(job.orch_ctx_last)} · base ctx ${compactCount(job.baseline_ctx)}`],
   };
 }
 
@@ -133,10 +129,10 @@ function ShareBar({ phases }: { phases: TimelinePhase[] }) {
 }
 
 // The job's totals above the phases: active time, tokens, cost, attempts and the token share by phase.
-export function TotalsStrip({ job, row, baseline, tier, timeline }: TotalsStripProps) {
+export function TotalsStrip({ job, row, timeline }: TotalsStripProps) {
   const now = useNow();
   const running = job.status === "running";
-  const totals = [activeTotal(job, now), tokensTotal(job, row), costTotal(job, baseline, tier), attemptsTotal(job)];
+  const totals = [activeTotal(job, now), tokensTotal(job, row), costTotal(job), attemptsTotal(job)];
   return (
     <div className={`${CELL_GRID} rounded-md border border-line bg-inset px-3.5 pt-2.5 pb-3`}>
       {totals.map((total, index) => (

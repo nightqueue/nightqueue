@@ -16,10 +16,22 @@ const RENAMED_FIELDS = {
   queue_add: [`${OLD_TRACKER_WORD}_item_id`, `${REMOVED_TRACKER_WORD}_id`],
 };
 
-// Inputs removed with the operator runs, by tool: a call that still sends one with a value is refused, never silently stripped.
+// The refusal line of an input removed with the operator runs.
+function operatorRunLine(field) {
+  return `\`${field}\` was removed with the operator runs: operator runs no longer exist, so there is no run to bind or record; put what was found in \`prompt\``;
+}
+
+export const TIER_REMOVED_LINE =
+  "`tier` was removed: every job runs the one /resolve pipeline (one model per agent, QA mode chosen by `run check 03`); drop it - a client still sending it is an older nightqueue plugin, update it";
+
+// Inputs a newer contract removed, by tool, each with its refusal line: a call that still sends one with a value is refused, never silently stripped.
 const RETIRED_FIELDS = {
-  queue_add: ["run_dir"],
-  run_set: ["origin", "evidence_level", "plan_status"],
+  queue_add: { run_dir: operatorRunLine("run_dir"), tier: TIER_REMOVED_LINE },
+  run_set: {
+    origin: operatorRunLine("origin"),
+    evidence_level: operatorRunLine("evidence_level"),
+    plan_status: operatorRunLine("plan_status"),
+  },
 };
 
 // The one line a client with cached older tool definitions is answered with.
@@ -70,16 +82,12 @@ function hasValue(value) {
   return typeof value !== "string" || value.trim() !== "";
 }
 
-// The refusal line of one retired input.
-export function retiredFieldLine(field) {
-  return `\`${field}\` was removed with the operator runs: operator runs no longer exist, so there is no run to bind or record; put what was found in \`prompt\``;
-}
-
-// Refuses a call carrying a value for an input retired with the operator runs, before validation would strip it silently.
+// Refuses a call carrying a value for a retired input, before validation would strip it silently.
 export function refuseRetiredFields(name, args) {
   if (args === null || typeof args !== "object") return;
-  const field = (RETIRED_FIELDS[name] ?? []).find((key) => Object.hasOwn(args, key) && hasValue(args[key]));
-  if (field) throw new UserError(retiredFieldLine(field));
+  const retired = Object.entries(RETIRED_FIELDS[name] ?? {});
+  const found = retired.find(([key]) => Object.hasOwn(args, key) && hasValue(args[key]));
+  if (found) throw new UserError(found[1]);
 }
 
 // What one server instance remembers about the clients it served; in memory only, never in the database.

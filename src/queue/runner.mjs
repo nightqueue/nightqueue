@@ -50,7 +50,6 @@ import {
   extractSessionIdFromEventLine,
   extractSlugFromEventLine,
   extractSlugTypeFromEventLine,
-  extractTierRaiseFromEventLine,
   extractUsage,
   isPrUrl,
   sawDisabledBackgroundTask,
@@ -284,22 +283,6 @@ async function captureSlugOverride(job, facts, line, ctx) {
   await adoptSlug(job, facts, declared.slug, ctx);
 }
 
-// Records the tier a raise announced in the Brief moved the run to, with the evidence that justified it; a state that refuses the write is said out loud and never costs the run.
-function persistTierRaise(job, raise, slug, env) {
-  const written = recordRunFields({ projectId: job.project_id, slug, fields: { tier: raise.to, tierRaiseReason: raise.reason }, env });
-  if (written.status !== "written") appendJobLog(job.id, `the tier raise could not be recorded in the state of the run: ${written.reason}`, env);
-}
-
-// Records the tier raise the orchestrator announced; the Brief is written before the run has a slug, so a raise waits in the facts until there is a state.json to record it into.
-async function captureTierRaise(job, facts, line, ctx) {
-  facts.tierRaise = extractTierRaiseFromEventLine(line) ?? facts.tierRaise;
-  if (!facts.tierRaise || !isSafeSegment(facts.slug)) return;
-  const raise = facts.tierRaise;
-  facts.tierRaise = null;
-  await syncRunSlug(job, facts, ctx);
-  persistTierRaise(job, raise, facts.slug, ctx.env);
-}
-
 // The accumulated log of a job as it is on disk: the only reading that carries the attempt markers the telemetry is measured from; a log that cannot be read measures nothing.
 function readJobLog(jobId, env) {
   try {
@@ -413,7 +396,6 @@ async function captureFacts(job, facts, line, attempt, ctx) {
   await syncRunSlug(job, facts, ctx);
   await captureSlug(job, facts, line, ctx);
   await captureSlugOverride(job, facts, line, ctx);
-  await captureTierRaise(job, facts, line, ctx);
   await captureRateLimit(job, facts, line, ctx);
   await captureSession(job, facts, line, attempt, ctx);
 }
@@ -509,7 +491,6 @@ async function runAttempts(job, ctx) {
     rateLimit: null,
     fiveHour: null,
     pause: null,
-    tierRaise: null,
   };
   const pauseSignalImpl = deps.pauseSignalImpl ?? (() => ownPauseUntilMs(env) ?? pauseUntilMs(facts.pause));
   const resumeForced = resumeSessionEnabled(env) || wasRateLimitParked(job);

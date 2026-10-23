@@ -91,7 +91,7 @@ const BASH_TABLE = [
   ["nightqueue run index-save", true],
   ["nightqueue run commit", true],
   ["nightqueue run pr", true],
-  ["nightqueue run start --tier simple --type bug/error --commit-type fix --expect-slug fix-x", true],
+  ["nightqueue run start --type bug/error --commit-type fix --expect-slug fix-x", true],
   ["nightqueue run publish --message-file /runs/p/s/commit-message.txt --body-file /runs/p/s/pr-body.md", true],
   ["nightqueue run report", true],
   ["nightqueue run start --routing", true],
@@ -161,7 +161,8 @@ const SKILL_PRESCRIBED = [
   ["gh pr view|list|status|checks|create", "gh pr view 3"],
   ["gh pr create", "gh pr create --title t --body-file /runs/p/s/pr-body.md"],
   ["nightqueue run check <NN>", "nightqueue run check 06.5"],
-  ["nightqueue run start --tier <tier>", "nightqueue run start --tier simple"],
+  ["nightqueue run start", "nightqueue run start"],
+  ["nightqueue run start --routing", "nightqueue run start --routing"],
   [
     "nightqueue run publish --message-file <RUN_DIR>/commit-message.txt --body-file <RUN_DIR>/pr-body.md",
     "nightqueue run publish --message-file /runs/p/s/commit-message.txt --body-file /runs/p/s/pr-body.md --extra test/x.regression.test.mjs",

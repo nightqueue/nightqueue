@@ -10,7 +10,7 @@ import { FIXED_PROJECT_ID, makeHome } from "../../test-support/memory.mjs";
 // H1: `record()` (src/queue/run-state.mjs) is a plain synchronous read-modify-write of the WHOLE
 // state.json, with no lock. Its two real writers run in two different OS processes: the agent's MCP
 // `run_phase_done` handler (tools.mjs) and the queue-runner's fire-and-forget fact capture
-// (runner.mjs `captureFacts` -> `persistTierRaise` -> `recordRunFields`). This PoC drives the exact
+// (runner.mjs `captureFacts` -> `persistRunType` -> `recordRunFields`). This PoC drives the exact
 // same exported functions those two real callers drive, from two real `node` child processes racing
 // against the SAME state.json - never a hand-interleaved read/write inside one process.
 
@@ -41,7 +41,7 @@ function readState(env) {
   return JSON.parse(readFileSync(join(runDir(RUN.projectId, RUN.slug, env), "state.json"), "utf8"));
 }
 
-test("the agent's phase writes and the runner's tier writes both survive a real two-process race", async (t) => {
+test("the agent's phase writes and the runner's field writes both survive a real two-process race", async (t) => {
   for (let attempt = 1; attempt <= RACE_ATTEMPTS; attempt += 1) {
     const env = makeHome(t, `run-state-race-${attempt}`);
 
@@ -53,12 +53,12 @@ test("the agent's phase writes and the runner's tier writes both survive a real 
     assert.equal(
       state.phases.length,
       COUNT,
-      `attempt ${attempt}: only ${state.phases.length}/${COUNT} of the agent's \`run_phase_done\` appends survived - the runner's concurrent tier write clobbered the rest (lost update)`,
+      `attempt ${attempt}: only ${state.phases.length}/${COUNT} of the agent's \`run_phase_done\` appends survived - the runner's concurrent field write clobbered the rest (lost update)`,
     );
     assert.equal(
-      state.tierRaiseReason,
+      state.branch,
       `runner-${COUNT - 1}`,
-      `attempt ${attempt}: the runner's own last tier write (\`runner-${COUNT - 1}\`) did not survive either - got \`${state.tierRaiseReason}\``,
+      `attempt ${attempt}: the runner's own last field write (\`runner-${COUNT - 1}\`) did not survive either - got \`${state.branch}\``,
     );
   }
 });

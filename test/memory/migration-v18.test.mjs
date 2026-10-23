@@ -414,7 +414,7 @@ test("the five project-only tables are rebuilt by id: same rows, same values, th
 
   const apiId = registry.projectByName(db, "api").id;
   assert.equal(saveLesson({ projectId: apiId, title: "t", root_cause: "r", solution: "s", prevention: "p" }, env).id, 5, "a lesson id was reused");
-  assert.equal(logPipelineRun({ projectId: apiId, slug: "next", tier: "simple", outcome: "pr_opened" }, env).runId, 4, "a run id was reused");
+  assert.equal(logPipelineRun({ projectId: apiId, slug: "next", outcome: "pr_opened" }, env).runId, 4, "a run id was reused");
   assert.deepEqual(recentMemories({ projectId: apiId }, env).map((row) => [row.key, row.project]), [["deploy", "api"], ["global", null]]);
 });
 

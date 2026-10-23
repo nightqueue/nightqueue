@@ -92,7 +92,7 @@ async function waitFor(check, label) {
 test("a run that opens a pull request ends as done, with its facts, usage and pipeline run linked", async (t) => {
   const { env } = makeRunnerHome(t, "runner-done", [{ stdout: doneStream({ notice: "the pull request is open" }), exitCode: 0 }]);
   const id = enqueue(env);
-  const logged = logPipelineRun({ projectId: projectIdOf(env, "alpha"), slug: SLUG, tier: "simple", outcome: "pr_opened", phases: [] }, env);
+  const logged = logPipelineRun({ projectId: projectIdOf(env, "alpha"), slug: SLUG, outcome: "pr_opened", phases: [] }, env);
 
   const cycle = await runJobCycle(env, id);
 
@@ -269,7 +269,6 @@ test("the durations and the models of the telemetry come from the stream, and th
     {
       projectId: projectIdOf(env, "alpha"),
       slug: SLUG,
-      tier: "simple",
       outcome: "pr_opened",
       durationS: 999,
       phases: [
@@ -298,7 +297,11 @@ test("the durations and the models of the telemetry come from the stream, and th
   );
 
   const state = JSON.parse(readFileSync(join(runDir(ensureProject(env, "alpha"), SLUG, env), "state.json"), "utf8"));
-  assert.deepEqual({ tier: state.tier, reason: state.tierRaiseReason }, { tier: "complex", reason: "a stack trace in the claim path" });
+  assert.deepEqual(
+    { tier: "tier" in state, reason: "tierRaiseReason" in state },
+    { tier: false, reason: false },
+    "a `Tier raised:` line an older Brief printed was recorded as a tier",
+  );
 });
 
 test("a run that stops at the gate ends as gate and keeps the notice for the operator", async (t) => {

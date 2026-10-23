@@ -3,7 +3,9 @@ import { appendFileSync, existsSync, mkdirSync, statSync, writeFileSync } from "
 import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { dbPath, jobLogPath, runDir } from "../../src/config/paths.mjs";
+import { openDb } from "../../src/memory/db.mjs";
 import { addJob, bindRunSlug, claimJobById, countsByStatus, finishJob, retryJob } from "../../src/memory/jobs.mjs";
+import { setProjectAgents } from "../../src/memory/registry.mjs";
 import { saveRunState } from "../../src/queue/resume.mjs";
 import { snapshotPatch } from "../../src/studio/events.mjs";
 import { ensureProject, makeHome, makeProject } from "../../test-support/memory.mjs";
@@ -19,7 +21,7 @@ function sleep(ms) {
 function seededHome(t, name) {
   const env = makeHome(t, name);
   makeProject(t, env, "alpha");
-  const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker", tier: "complex" }, env).id;
+  const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker" }, env).id;
   return { env, id };
 }
 
@@ -122,7 +124,7 @@ test("a job stream narrates the current attempt with structured fields, its time
   assert.equal(publish.phase, 8);
   assert.equal(publish.clock, "01:20");
   const timeline = events.filter((event) => event.name === "timeline").at(-1).data;
-  assert.equal(timeline.track, "Standard");
+  assert.deepEqual(Object.keys(timeline), ["phases", "clockMs"], "the timeline carries no track and no tier");
   const coder = timeline.phases.find((phase) => phase.number === 4);
   assert.deepEqual([coder.state, coder.durationMs, coder.model], ["done", 60000, "opus"]);
   assert.equal(timeline.phases.find((phase) => phase.number === 8).state, "done");
@@ -152,7 +154,7 @@ test("a job stream carries the studio's rich narration: phase and report events,
   const env = makeHome(t, "studio-events-rich");
   makeProject(t, env, "alpha");
   const projectId = ensureProject(env, "alpha");
-  const id = addJob({ projectId, prompt: "fix the worker", tier: "complex" }, env).id;
+  const id = addJob({ projectId, prompt: "fix the worker" }, env).id;
   claimJobById(id, { worker: "host:1", cap: 4 }, env);
   bindRunSlug(id, { worker: "host:1", candidates: ["fix-the-worker"] }, env);
   mkdirSync(runDir(projectId, "fix-the-worker", env), { recursive: true });
@@ -191,7 +193,7 @@ function lateSlugJob(t, name) {
   const env = makeHome(t, name);
   makeProject(t, env, "alpha");
   const projectId = ensureProject(env, "alpha");
-  const id = addJob({ projectId, prompt: "fix the worker", tier: "complex" }, env).id;
+  const id = addJob({ projectId, prompt: "fix the worker" }, env).id;
   claimJobById(id, { worker: "host:1", cap: 4 }, env);
   const path = jobLogPath(id, env);
   mkdirSync(dirname(path), { recursive: true });
@@ -288,7 +290,7 @@ function writeTwoAttemptLog(env, id) {
   writeFileSync(path, `${attemptMarker(1)}\n${toNdjson(first)}${attemptMarker(2, SECOND_ATTEMPT_ISO)}\n${toNdjson(second)}`);
 }
 
-test("a resumed job streams every attempt as narration in order, its timeline keeps both attempts' phases and the run's tier", async (t) => {
+test("a resumed job streams every attempt as narration in order, its timeline keeps both attempts' phases, and a legacy state tier never reaches the meta", async (t) => {
   const env = makeHome(t, "studio-events-resumed");
   makeProject(t, env, "alpha");
   const projectId = ensureProject(env, "alpha");
@@ -300,7 +302,8 @@ test("a resumed job streams every attempt as narration in order, its timeline ke
   finishJob(id, { worker: "host:1", status: "done", prUrl: "https://github.com/acme/api/pull/8" }, env);
   const { port } = await startStudio(t, env);
   const events = await readEvents(port, { path: `/events?job=J-${id}`, headers: { cookie: studioCookie(port) }, until: (list) => list.some((event) => event.name === "end") });
-  assert.equal(events[0].data.tier, "complex", "the run's tier stands in for the row's null tier");
+  assert.equal("tier" in events[0].data, false, "the meta carries a tier");
+  assert.equal("baseline" in events[0].data, false, "the meta carries a tier baseline");
   const narration = events.filter((event) => event.name === "narration").flatMap((event) => event.data);
   assert.deepEqual([narration[0].kind, narration[0].text], ["attempt", "attempt 1"]);
   const triager = narration.findIndex((event) => event.kind === "laneOpen" && event.agent === "triager");
@@ -309,7 +312,6 @@ test("a resumed job streams every attempt as narration in order, its timeline ke
   assert.equal(narration.some((event) => event.kind === "usage"), false);
   assert.deepEqual(events.at(-1).data, { status: "done", reason: "job done", final: true });
   const timeline = events.filter((event) => event.name === "timeline").at(-1).data;
-  assert.equal(timeline.track, "Standard");
   const phase = (number) => timeline.phases.find((entry) => entry.number === number);
   assert.deepEqual([phase(1).state, phase(1).durationMs, phase(1).tokens_label], ["done", 40000, "~3k"]);
   assert.deepEqual([phase(2).state, phase(2).durationMs], ["done", 30000]);
@@ -320,10 +322,10 @@ test("a resumed job streams every attempt as narration in order, its timeline ke
 test("a skip recorded in state.json mid-stream shows on the next timeline event", async (t) => {
   const job = lateSlugJob(t, "studio-events-skip");
   bindLateSlug(job, { plan: false });
-  saveRunState({ projectId: job.projectId, slug: "fix-the-worker", env: job.env, state: { tier: "complex" } });
+  saveRunState({ projectId: job.projectId, slug: "fix-the-worker", env: job.env, state: { type: "bug/error" } });
   const act = () => {
     const skips = { qa: { by: "architect", reason: "docs only", at: "2026-10-09T10:00:00.000Z" } };
-    saveRunState({ projectId: job.projectId, slug: "fix-the-worker", env: job.env, state: { tier: "complex", skips } });
+    saveRunState({ projectId: job.projectId, slug: "fix-the-worker", env: job.env, state: { type: "bug/error", skips } });
     appendFileSync(job.path, toNdjson([runCheckEvent("toolu_b", 9)]));
   };
   const qaOf = (event) => event.data.phases.find((phase) => phase.number === 5);
@@ -332,7 +334,20 @@ test("a skip recorded in state.json mid-stream shows on the next timeline event"
   const timelines = events.filter((event) => event.name === "timeline");
   assert.equal(qaOf(timelines[0]).state, "pending", "the first timeline came before the skip");
   assert.deepEqual(qaOf(timelines.at(-1)).skipped, { by: "architect", reason: "docs only", at: "2026-10-09T10:00:00.000Z" });
-  assert.equal(timelines.at(-1).data.tier, "complex");
+  assert.equal("tier" in timelines.at(-1).data, false);
+});
+
+test("the job stream's meta and timeline carry the project's agent models, its overrides applied", async (t) => {
+  const job = lateSlugJob(t, "studio-events-models");
+  setProjectAgents(openDb(job.env), { id: job.projectId, value: { "qa-analyst": { model: "haiku" } } });
+  bindLateSlug(job, { plan: false });
+  const act = () => appendFileSync(job.path, toNdjson([runCheckEvent("toolu_b", 9)]));
+  const events = await readJobStream(t, job, { act, done: (list) => list.some((event) => event.name === "timeline") });
+  const meta = events.find((event) => event.name === "meta").data;
+  assert.equal(meta.models["qa-analyst"], "haiku");
+  assert.equal(meta.models.coder, "opus");
+  const timeline = events.find((event) => event.name === "timeline").data;
+  assert.equal(timeline.phases.find((phase) => phase.number === 5).model, "haiku", "the pending qa-guardian slot shows the project's qa-analyst model");
 });
 
 const TIER_SKIP_AT = "2026-10-09T10:00:00.000Z";
@@ -352,31 +367,30 @@ async function timelinesAfter(t, job, act) {
   return events.filter((event) => event.name === "timeline");
 }
 
-test("a run tier recorded mid-stream over a different row tier drives the next timeline's tier and skips", async (t) => {
+test("legacy tier skips recorded mid-stream show on the next timeline as skips of the `tier` author", async (t) => {
   const job = lateSlugJob(t, "studio-events-tier-recorded");
   bindLateSlug(job, { plan: false });
   const act = () => {
     const skips = { explore: { by: "tier", reason: null, at: TIER_SKIP_AT }, architecture: { by: "tier", reason: null, at: TIER_SKIP_AT }, qa: { by: "tier", reason: null, at: TIER_SKIP_AT } };
-    saveRunState({ projectId: job.projectId, slug: "fix-the-worker", env: job.env, state: { tier: "simple", type: "bug/error", skips } });
+    saveRunState({ projectId: job.projectId, slug: "fix-the-worker", env: job.env, state: { type: "bug/error", skips } });
     appendFileSync(job.path, toNdjson([runCheckEvent("toolu_b", 9)]));
   };
   const timelines = await timelinesAfter(t, job, act);
-  assert.equal(timelines[0].data.tier, "complex", "the row tier is the fallback before state.json records one");
-  assert.equal(timelines.at(-1).data.tier, "simple");
-  assert.deepEqual(skippedNumbers(timelines.at(-1)), [2, 3, 5, 7]);
+  assert.deepEqual(skippedNumbers(timelines[0]), [], "nothing is skipped before state.json records a skip");
+  assert.deepEqual(skippedNumbers(timelines.at(-1)), [2, 3, 5]);
+  assert.equal(timelines.at(-1).data.phases.find((phase) => phase.number === 2).skipped.by, "tier");
 });
 
-test("a run tier raised mid-stream from simple to complex clears the tier skips on the next timeline", async (t) => {
-  const job = lateSlugJob(t, "studio-events-tier-raised");
+test("skips cleared from state.json mid-stream leave the next timeline with none", async (t) => {
+  const job = lateSlugJob(t, "studio-events-skips-cleared");
   bindLateSlug(job, { plan: false });
-  saveRunState({ projectId: job.projectId, slug: "fix-the-worker", env: job.env, state: { tier: "simple", type: "bug/error" } });
+  saveRunState({ projectId: job.projectId, slug: "fix-the-worker", env: job.env, state: { type: "bug/error", skips: { explore: { by: "tier", at: TIER_SKIP_AT } } } });
   const act = () => {
-    saveRunState({ projectId: job.projectId, slug: "fix-the-worker", env: job.env, state: { tier: "complex", type: "bug/error", skips: {} } });
+    saveRunState({ projectId: job.projectId, slug: "fix-the-worker", env: job.env, state: { type: "bug/error", skips: {} } });
     appendFileSync(job.path, toNdjson([runCheckEvent("toolu_b", 9)]));
   };
   const timelines = await timelinesAfter(t, job, act);
-  assert.equal(timelines[0].data.tier, "simple");
-  assert.equal(timelines.at(-1).data.tier, "complex");
+  assert.deepEqual(skippedNumbers(timelines[0]), [2]);
   assert.deepEqual(skippedNumbers(timelines.at(-1)), []);
 });
 
@@ -495,7 +509,7 @@ function loopLagProbe() {
 test("a resumed job with a large earlier attempt streams its full timeline without stalling the server's event loop", async (t) => {
   const env = makeHome(t, "studio-events-large-log");
   makeProject(t, env, "alpha");
-  const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker", tier: "complex" }, env).id;
+  const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker" }, env).id;
   claimJobById(id, { worker: "host:1", cap: 4 }, env);
   writeLargeTwoAttemptLog(env, id);
   finishJob(id, { worker: "host:1", status: "done", prUrl: "https://github.com/acme/api/pull/9" }, env);

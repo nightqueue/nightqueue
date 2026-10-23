@@ -8,7 +8,7 @@ import { run } from "../src/cli/index.mjs";
 import { phasePrompt } from "../src/mcp/phase-prompt.mjs";
 import { openDb } from "../src/memory/db.mjs";
 import { addJob, getJob } from "../src/memory/jobs.mjs";
-import { evaluateCheck } from "../src/queue/check-contract.mjs";
+import { evaluateCheck, qaModeOf } from "../src/queue/check-contract.mjs";
 import { composeGateNotice } from "../src/queue/gate-notice.mjs";
 import { decideResume, readRunState } from "../src/queue/resume.mjs";
 import { applyRetry } from "../src/queue/retry.mjs";
@@ -276,7 +276,7 @@ test("a code token with regex characters named verbatim in the brief holds the c
   const explore = "# Explore\n\n## Access map\n- unimplemented intent: `run_outcome(from_artifact)` · governs filter\n";
   const triage = texts["01-triage.md"].replace("Make listJobs", "Make run_outcome(from_artifact) and listJobs");
   const result = evaluateCheck({ check: "03", texts: { ...texts, "02-explore.md": explore, "01-triage.md": triage }, state: { type: "feature/refactor" } });
-  assert.deepEqual(result.lines, ["OK"]);
+  assert.deepEqual(result.lines, ["OK", "QA: lite"]);
 });
 
 test("table cells keep a pipe inside a code span, and a lone backtick is plain text", () => {
@@ -285,7 +285,29 @@ test("table cells keep a pipe inside a code span, and a lone backtick is plain t
   const texts = readFixture("coverage-table-pipes").texts;
   const plan = texts["03-plan.md"].replace("| 2 | a \\| b path |", "| 2 | a ` b path |");
   const result = evaluateCheck({ check: "03", texts: { ...texts, "03-plan.md": plan }, state: { type: "bug/error" } });
-  assert.deepEqual(result.lines, ["OK"]);
+  assert.deepEqual(result.lines, ["OK", "QA: lite"]);
+});
+
+test("the QA mode counts 🔴 risk items of `## Identified risks` only: list items and table body rows", () => {
+  const risks = (body) => `## Implementation plan\n- x\n\n## Identified risks\n${body}`;
+  assert.equal(qaModeOf(risks("| ID | 🔴 severity | Scenario |\n|---|---|---|\n| R1 | 🔴 | a |\n| R2 | 🟡 | b |\n")), "lite", "a 🔴 table header is no risk");
+  assert.equal(qaModeOf(risks("| ID | Severity | Scenario |\n|---|---|---|\n| R1 | 🔴 | a |\n| R2 | 🔴 | b |\n")), "full");
+  assert.equal(qaModeOf(risks("* [R1] 🔴 a\n+ [R2] 🔴 b\n")), "full");
+  assert.equal(qaModeOf(risks("- [R1] 🔴 a\n<!-- - [R2] 🔴 b -->\n")), "lite", "a commented-out risk is not counted");
+  assert.equal(qaModeOf(`${risks("- [R1] 🔴 a\n")}\n## Notes\n- [R2] 🔴 b\n`), "lite", "a 🔴 in a later section is not a risk");
+  assert.equal(qaModeOf("## Implementation plan\n- x\n"), "lite", "a plan without risks is lite");
+  assert.equal(qaModeOf("  **Always-gate class:** yes — rows change\n"), "full");
+  assert.equal(qaModeOf("**Always-gate class:** no\n"), "lite");
+});
+
+test("the QA line never changes completion nor the memo line of check 03", () => {
+  const { texts } = readFixture("qa-full-risks");
+  const result = evaluateCheck({ check: "03", texts, state: { type: "feature/refactor" } });
+  assert.equal(result.completes, true);
+  assert.equal(result.memoLine, "OK");
+  const confirm = evaluateCheck({ check: "03", texts: readFixture("confirm").texts, state: { type: "bug/error" } });
+  assert.deepEqual(confirm.lines.slice(-2), ["CONFIRM: requires-user-confirmation", "QA: lite"]);
+  for (const check of ["05", "06", "06.5"]) assert.equal(evaluateCheck({ check, texts }).lines.some((line) => line.startsWith("QA: ")), false, check);
 });
 
 test("a `###` confirmation heading the check announces is the section the gate notice composes", async (t) => {
@@ -355,7 +377,7 @@ test("a terminal triage with a partial Brief fires no field gate and still termi
 
 test("check 01 writes the Brief the phase prompts read and records the type and the commit type", async (t) => {
   const seeded = seedRun(t, "writes-brief", { fixture: {}, texts: { "01-triage.md": triageWith("PROCEED") } });
-  recordRunFields({ projectId: seeded.projectId, slug: SLUG, fields: { tier: "simple" }, env: seeded.env });
+  recordRunFields({ projectId: seeded.projectId, slug: SLUG, fields: { branch: "fix/the-worker" }, env: seeded.env });
   const { out } = await runCheck(seeded.env, "01");
   assert.deepEqual(out, [
     "OK",

@@ -34,22 +34,20 @@ test("the queue skill carries the three cutting rules of a job", () => {
 test("the queue skill resolves the project by the longest registered path prefix, and asks ONE question in both forms", () => {
   assert.ok(SKILL.includes("nightqueue project list --json"), SKILL);
   assert.ok(SKILL.includes("longest prefix of the current working"), SKILL);
-  assert.ok(SKILL.includes('`Queue "<title>" for <project> as <tier>? [Y/n]`'), SKILL);
-  assert.ok(SKILL.includes('`Queue "<title>" for <cwd> (register as <name>) as <tier>? [Y/n]`'), SKILL);
+  assert.ok(SKILL.includes('`Queue "<title>" for <project>? [Y/n]`'), SKILL);
+  assert.ok(SKILL.includes('`Queue "<title>" for <cwd> (register as <name>)? [Y/n]`'), SKILL);
   assert.equal(SKILL.includes("Register <cwd> as <name> and queue the job?"), false, "the old registration question survived");
   assert.ok(SKILL.includes("`register: true`"), SKILL);
   assert.ok(SKILL.includes("One question, never more."), SKILL);
   assert.equal(SKILL.includes("nightqueue project add <path>"), false, "the skill still sends the user to `project add`");
 });
 
-test("the queue skill proposes a tier the user can override in that same answer, and repeats it in the report", () => {
-  assert.ok(SKILL.includes("`tier` is your reading of the risk"), SKILL);
+test("the queue skill sends no tier: every job runs the one pipeline", () => {
+  assert.equal(/tier/i.test(SKILL), false, "the queue skill still names a tier");
   for (const tier of ["`trivial`", "`simple`", "`complex`"]) {
-    assert.ok(SKILL.includes(tier), `${tier} is missing from the tier bullet`);
+    assert.equal(SKILL.includes(tier), false, `${tier} survived in the queue skill`);
   }
-  assert.ok(SKILL.includes("the pipeline may raise it with evidence, never lower it"), SKILL);
-  assert.ok(SKILL.includes("an\n  answer naming another tier queues it with that tier"), SKILL);
-  assert.ok(SKILL.includes("the job ref (`J-<id>`) `queue_add` returned and the `tier` it was queued as"), SKILL);
+  assert.ok(SKILL.includes("the job ref (`J-<id>`) `queue_add` returned;"), SKILL);
 });
 
 test("the queue skill only records the job, never starts it, and knows `queue_add` has no `run` parameter", () => {

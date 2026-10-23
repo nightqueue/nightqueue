@@ -196,7 +196,7 @@ Eleven tables plus three full text mirrors:
 | `memory` | project facts and durable choices of the code, as key and value, per project or global |
 | `project_index` | the file to responsibility map of a project, with the mtime the file had when it was indexed |
 | `project_libs` | the libraries of a project with the version that was actually resolved |
-| `pipeline_runs` | one row per `/resolve` run: tier, task type, outcome, gate stop, duration, model and session |
+| `pipeline_runs` | one row per `/resolve` run: tier (deprecated, the constant `complex`), task type, outcome, gate stop, duration, model and session |
 | `pipeline_phases` | one row per phase of a run: sequence, phase, model, status, retry, duration and the `reason` the phase ran again (added on open to an older database, null on a first run) |
 | `jobs` | one row per queue job: project, prompt, priority, status, attempts, lease, slug, session, branch, pull request, notice, usage and cost |
 | `lessons_fts`, `memory_fts` | FTS5 mirrors of the two text tables, kept in sync by triggers on insert, update and delete |

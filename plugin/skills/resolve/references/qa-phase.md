@@ -6,15 +6,26 @@ the single home of the Stage A gate and the consolidation. The QA attack brief a
 rendered by `phase_prompt` (`qa-lite`, `qa-analyst`, `qa-prover`), never assembled by hand. The
 shared report format they all deliver is `deliverables/qa-report.md`.
 
-**complex → two stages (analyst → parallel provers):** the analysis stays in a single
+**Mode — read from `run check 03`:** the `QA: lite|full` line of the last
+`nightqueue run check 03` answer decides, and nothing else (on a resume, run the check again:
+it is a pure read of the plan). The check answers `full` when the plan declares
+`**Always-gate class:** yes` or lists two or more 🔴 risks under `## Identified risks`, and
+`lite` otherwise.
+
+**lite → one lane:** launch 1 qa-guardian — `phase_prompt` with `target: "qa-lite"`, then
+`Agent` with the answered `subagent_type`, `model` and `prompt` verbatim — header
+`🛡️ QA-GUARDIAN · LITE · ...`. It writes `05-qa.md` (its own `## Round <n>`); then run
+`nightqueue run check 05`. Stages A and B and the consolidation below do not apply.
+
+**full → two stages (analyst → parallel provers):** the analysis stays in a single
 head — it groups breaks by root (4 symptoms with the same cause = 1 fix, not 4) and crosses
 callers and interactions between files. The proof — the write→run→iterate loop of each PoC,
 the serial bottleneck of the phase — is distributed across parallel provers. Stages A and B
 below replace the single launch.
 
-**Stage A — Analyst (complex):** launch 1 qa-guardian — `phase_prompt` with
+**Stage A — Analyst (full):** launch 1 qa-guardian — `phase_prompt` with
 `target: "qa-analyst"`, then `Agent` with the answered `subagent_type`, `model` and `prompt`
-verbatim — header `🛡️ QA-GUARDIAN · complex · ANALYST · ...`.
+verbatim — header `🛡️ QA-GUARDIAN · ANALYST · ...`.
 
 **Stage A gate:** run `nightqueue run check 05a` (the artifact gate, step 5.2) over
 `05a-qa-analyst.md`, which must carry the sections of the analyst request's `## Deliver` — on
@@ -25,11 +36,11 @@ When that gate closes, the check records the marker itself (`recorded: qa_stage_
 over `05a-qa-analyst.md`) BEFORE launching stage B — never by writing the file: this is what
 makes a resume skip the analyst if the provers die halfway.
 
-**Stage B — Provers (complex):** launch **N qa-guardian in parallel, all in a single message**
+**Stage B — Provers (full):** launch **N qa-guardian in parallel, all in a single message**
 (the `subagent_type` and `model` `phase_prompt` answers, `mode: "bypassPermissions"`) — one
 per root group of the hypotheses (never one per symptom). The `description` of each prover's Agent call MUST start with
 `H<N> (group: <group>): ` — the cockpit identifies each prover lane and its verdict by that
-prefix. Single header of the phase: `🛡️ QA-GUARDIAN · complex · PROVERS ×N · ...`. On a resume
+prefix. Single header of the phase: `🛡️ QA-GUARDIAN · PROVERS ×N · ...`. On a resume
 whose block says `From stage: qa-stage-b`, `05a-qa-analyst.md` is already on disk: read its last `## Round` and
 start from here, without rebuilding stage A. The prompt of each one: `phase_prompt` with
 `target: "qa-prover"` and `group` = the IDs/label of its same-root group, passed verbatim.

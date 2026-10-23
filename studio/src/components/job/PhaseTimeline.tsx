@@ -2,7 +2,7 @@ import { CircleCheck, LoaderCircle, SkipForward, TriangleAlert } from "lucide-re
 import type { CSSProperties, ReactNode } from "react";
 import { phaseVar } from "../../lib/phase-colors";
 import { phaseAttemptsTitle, phaseCaption, trackCounts } from "../../lib/track";
-import type { AttemptRow, Job, JobDetail, JobMeta, JobStatus, Timeline, TimelinePhase } from "../../lib/types";
+import type { AttemptRow, Job, JobDetail, JobStatus, Timeline, TimelinePhase } from "../../lib/types";
 import { ActionIcon, StatusIcon } from "../StatusIcon";
 import { CardTitle } from "./Card";
 import { BUDGET_COUNTER_TOOLTIP } from "./JobHeader";
@@ -58,8 +58,6 @@ const CHIP = "inline-flex items-center gap-[5px] rounded-full border px-[9px] py
 interface PhaseTimelineProps {
   job: JobDetail;
   row: Job | undefined;
-  baseline: JobMeta["baseline"] | undefined;
-  tier: string | null;
   timeline: Timeline | null;
   runElapsedMs: number | null;
 }
@@ -141,16 +139,15 @@ function agentsSummary(phases: TimelinePhase[], running: TimelinePhase[]): strin
   return `phases ${first.number}–${last.number} · ${done} of ${lanes.length} agents done`;
 }
 
-// The card's header: the track or `tier pending`, its phase range and agents done, the outcome, skipped and attempt chips.
+// The card's header: the title, its phase range and agents done, the outcome, skipped and attempt chips.
 function TrackHeader({ job, timeline }: { job: JobDetail; timeline: Timeline | null }) {
-  const known = timeline !== null && timeline.track !== null;
+  const known = timeline !== null;
   const phases = timeline?.phases ?? [];
   const { running, skipped } = trackCounts(phases);
   const summary = agentsSummary(phases, running);
   return (
     <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-muted">
-      <CardTitle>{known ? `Pipeline · ${timeline.track} track` : "Pipeline"}</CardTitle>
-      {timeline !== null && !known && <span className="text-dim">tier pending</span>}
+      <CardTitle>Pipeline</CardTitle>
       {summary && <span>{summary}</span>}
       <span className="ml-auto inline-flex flex-wrap items-center gap-2">
         {known && <OutcomeChip phases={running} status={job.status} />}
@@ -202,18 +199,17 @@ function PhaseSegment({ phase, caption, attemptsTitle }: { phase: TimelinePhase;
 
 interface TrackProps {
   phases: TimelinePhase[];
-  tier: string | null;
   runElapsedMs: number | null;
   clockMs: number | null;
   attemptsLog: AttemptRow[] | null | undefined;
 }
 
 // The nine slots on one line; a gate is the state of the phase it stopped, a skipped slot is narrower and hatched.
-function Track({ phases, tier, runElapsedMs, clockMs, attemptsLog }: TrackProps) {
+function Track({ phases, runElapsedMs, clockMs, attemptsLog }: TrackProps) {
   return (
     <div className="flex items-start gap-1.5 overflow-x-auto pb-1">
       {phases.map((phase) => (
-        <PhaseSegment key={phase.number} phase={phase} caption={phaseCaption(phase, { runElapsedMs, clockMs, tier })} attemptsTitle={phaseAttemptsTitle(phase, attemptsLog)} />
+        <PhaseSegment key={phase.number} phase={phase} caption={phaseCaption(phase, { runElapsedMs, clockMs })}attemptsTitle={phaseAttemptsTitle(phase, attemptsLog)} />
       ))}
     </div>
   );
@@ -236,7 +232,7 @@ function TrackSkeleton() {
 }
 
 // The pipeline card: the job's totals, then the nine slots of the universal track.
-export function PhaseTimeline({ job, row, baseline, tier, timeline, runElapsedMs }: PhaseTimelineProps) {
+export function PhaseTimeline({ job, row, timeline, runElapsedMs }: PhaseTimelineProps) {
   return (
     <section aria-label="phases" className="flex flex-col gap-3 rounded-lg border border-line bg-surface px-4 py-3.5">
       <TrackHeader job={job} timeline={timeline} />
@@ -244,8 +240,8 @@ export function PhaseTimeline({ job, row, baseline, tier, timeline, runElapsedMs
         <TrackSkeleton />
       ) : (
         <>
-          <TotalsStrip job={job} row={row} baseline={baseline} tier={tier} timeline={timeline} />
-          <Track phases={timeline.phases} tier={timeline.tier ?? null} runElapsedMs={runElapsedMs} clockMs={timeline.clockMs ?? null} attemptsLog={job.attempts_log} />
+          <TotalsStrip job={job} row={row} timeline={timeline} />
+          <Track phases={timeline.phases} runElapsedMs={runElapsedMs} clockMs={timeline.clockMs ?? null} attemptsLog={job.attempts_log} />
         </>
       )}
     </section>

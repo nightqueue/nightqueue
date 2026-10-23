@@ -278,10 +278,10 @@ function truncatedEvent(start) {
 
 // The state of one job stream: the timeline of every attempt, the touched files and the batch waiting to be flushed.
 function createJobState({ res, env, job, extras, isClosed }) {
-  return { res, env, id: job.id, isClosed, job, runDir: extras.run_dir ?? null, reported: new Set(), timeline: createTimeline(), timelineDirty: false, recordedFiles: extras.files, files: new Set(), pending: [], timer: null, flushChain: Promise.resolve(), status: job.status };
+  return { res, env, id: job.id, isClosed, job, runDir: extras.run_dir ?? null, reported: new Set(), timeline: createTimeline({ models: extras.models ?? null }), timelineDirty: false, recordedFiles: extras.files, files: new Set(), pending: [], timer: null, flushChain: Promise.resolve(), status: job.status };
 }
 
-// Sends the timeline as it stands, re-reading the run's tier, skips and type from one state.json read on every send.
+// Sends the timeline as it stands, re-reading the run's skips and type from one state.json read on every send.
 function sendTimeline(state) {
   sendEvent(state.res, "timeline", state.timeline.snapshot({ ...runTrackFacts(state.job, state.env), status: state.status }));
 }

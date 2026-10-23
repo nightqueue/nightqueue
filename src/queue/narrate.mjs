@@ -3,7 +3,7 @@ import { truncateByCodePoint } from "../memory/jobs.mjs";
 import { clockLabel } from "./hints.mjs";
 import { extractNotice, extractPrUrl, hasGateMarker, laneName, parseEventLine, parseSlugLine, tokensFromEvent } from "./stream.mjs";
 import { jobRef } from "../memory/refs.mjs";
-import { slotNumberOf, trackPhaseNumbers } from "./routing.mjs";
+import { slotNumberOf, TRACK_SLOTS } from "./routing.mjs";
 import { PHASE_ARTIFACTS } from "./phase-artifacts.mjs";
 
 const ATTEMPT_LINE_RE = /^=== attempt (\d+) @ (\S+) ===$/;
@@ -795,16 +795,15 @@ function isoOf(ms) {
   return Number.isFinite(ms) ? new Date(ms).toISOString() : null;
 }
 
-// Position of a pipeline phase in the tier's track as { phase, phases }, null parts when the tier or the phase is unknown.
-function trackPosition(tier, number) {
-  const numbers = trackPhaseNumbers(tier);
-  if (!numbers) return { phase: null, phases: null };
+// Position of a pipeline phase in the track as { phase, phases }, a null phase when the phase is unknown.
+function trackPosition(number) {
+  const numbers = TRACK_SLOTS.map((slot) => slot.number);
   const index = Number.isFinite(number) ? numbers.indexOf(number) : -1;
   return { phase: index >= 0 ? index + 1 : null, phases: numbers.length };
 }
 
 // What a running job is doing right now, derived on demand from the tail of its log and never stored.
-export function liveState(tail, { tier = null, nowMs = Date.now() } = {}) {
+export function liveState(tail, { nowMs = Date.now() } = {}) {
   const state = readLiveTail(tail);
   const lane = [...state.lanes.values()].pop() ?? null;
   const last = lane ? lane.last : state.orchLast;
@@ -813,7 +812,7 @@ export function liveState(tail, { tier = null, nowMs = Date.now() } = {}) {
     attempt: state.attempt,
     agent: lane ? lane.agent : ORCHESTRATOR,
     model: lane ? lane.model : null,
-    ...trackPosition(tier, number),
+    ...trackPosition(number),
     intent: lane ? lane.intent : state.orchIntent,
     last: last ? { kind: last.kind, text: last.text, at: isoOf(last.atMs) } : null,
     lane_opened_at: lane ? isoOf(lane.openedMs) : null,

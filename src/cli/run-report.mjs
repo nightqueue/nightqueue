@@ -1,7 +1,6 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { isStateObject } from "../queue/resume.mjs";
-import { phasesFor } from "../queue/routing.mjs";
 import { renderSkillTemplate, skillReferencesDir } from "../queue/skill-template.mjs";
 import { runDurationS } from "../queue/telemetry.mjs";
 import { checkArgs, parseCommand } from "./args.mjs";
@@ -46,7 +45,7 @@ function entriesOf(state, phase) {
   return phases.filter((entry) => entry?.phase === phase);
 }
 
-// True when the verification passed with a real run of the checks, which is what lets a complex change skip 6.5 as purely static.
+// True when the verification passed with a real run of the checks, which is what lets a change skip 6.5 as purely static.
 function passedWithoutRuntimeDebt(state) {
   const last = entriesOf(state, "verification").at(-1);
   return last !== undefined && verdictWord(last.verdict) === "PASSED";
@@ -61,35 +60,24 @@ function commitStep(state) {
   return { icon: "⚠️", highlight: "no pull request recorded" };
 }
 
-// The status and the highlight of one step, derived from what the run recorded and whether the tier runs it.
-function stepStatus(step, { state, planned }) {
+// The status and the highlight of one step, derived from what the run recorded.
+function stepStatus(step, { state }) {
   if (step.phase === "commit") return commitStep(state);
   const entries = entriesOf(state, step.phase);
   const last = entries.at(-1);
   const note = typeof last?.note === "string" ? last.note.trim() : "";
-  if (!planned.includes(step.phase)) return { icon: "⏭️", highlight: "does not run in this tier" };
   if (entries.length === 0 && step.phase === "runtime" && passedWithoutRuntimeDebt(state)) return { icon: "⏭️", highlight: "purely static change" };
   if (entries.length === 0) return { icon: "⚠️", highlight: "not recorded" };
   if (entries.length > 1) return { icon: "🔁", highlight: note || `recorded ${entries.length} times` };
   return { icon: verdictIcon(last.verdict), highlight: note || (typeof last.verdict === "string" ? last.verdict.trim() : "") };
 }
 
-// The phases the tier of the run plans; a run that never recorded its tier or type is held to every phase (fail-safe).
-function plannedPhases(state) {
-  try {
-    return phasesFor(state.tier, state.type);
-  } catch {
-    return STEPS.map((step) => step.phase);
-  }
-}
-
-// One row per step of the pipeline, each with its icon and highlight.
+// One row per step of the pipeline, each with its icon and highlight; every run executes every step.
 function stepRows(state) {
-  const planned = plannedPhases(state);
-  return STEPS.map((step) => ({ ...step, ...stepStatus(step, { state, planned }) }));
+  return STEPS.map((step) => ({ ...step, ...stepStatus(step, { state }) }));
 }
 
-// The plan of the run, or an empty text when the tier wrote none.
+// The plan of the run, or an empty text when the run wrote none.
 function readPlan(runDir) {
   try {
     return readFileSync(join(runDir, "03-plan.md"), "utf8");
@@ -118,7 +106,7 @@ function cellText(value) {
     .trim();
 }
 
-// The rows of the step table of a complex run.
+// The rows of the step table of a run.
 function stepTableRows(steps) {
   return steps.map((row) => `| ${row.step} | ${row.agent} | ${row.icon} | ${cellText(row.highlight)} |`).join("\n");
 }
@@ -145,7 +133,6 @@ function buildReport(run, state, log) {
   const reason = firstFailingGate(state, steps, readPlan(run.runDir));
   return {
     slug: run.slug,
-    tier: state.tier ?? null,
     steps,
     happy: reason === null,
     reason,
@@ -156,12 +143,8 @@ function buildReport(run, state, log) {
 
 // The values the report layout (references/report.md) is filled with.
 function reportValues(report) {
-  const stepOf = (phase) => report.steps.find((row) => row.phase === phase);
   return {
     SLUG: report.slug,
-    FAST_TRACK: report.tier === "trivial" || report.tier === "simple",
-    VERIFICATION_ICON: stepOf("verification").icon,
-    DELIVERY: stepOf("commit").highlight,
     STEP_ROWS: stepTableRows(report.steps),
     HAPPY: report.happy,
     HAPPY_LINE: report.happy ? "Happy: yes" : `Happy: no — ${cellText(report.reason)}`,

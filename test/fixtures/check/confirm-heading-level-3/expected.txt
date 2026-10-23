@@ -1,3 +1,4 @@
 OK
 CONFIRM: requires-user-confirmation
+QA: lite
 recorded: phase_done architecture OK

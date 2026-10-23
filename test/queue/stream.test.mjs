@@ -17,17 +17,16 @@ import {
   extractSessionIdFromEventLine,
   extractSlugFromEventLine,
   extractSlugTypeFromEventLine,
-  extractTierRaiseFromEventLine,
   extractUsage,
   hasGateMarker,
   hasGateMarkerInStream,
+  isControlLine,
   isSessionIdSafe,
   isSubagentEvent,
   lastAttemptStream,
   orchestratorText,
   parseSlugLine,
   parseSlugTypeLine,
-  parseTierRaiseLine,
   publishedDelivery,
   runtimeKillFromStream,
   sawDisabledBackgroundTask,
@@ -103,31 +102,10 @@ test("the run is renamed by a STANDALONE `SLUG:` line, with its optional type, a
   assert.equal(extractSlugTypeFromEventLine("not json at all"), null);
 });
 
-test("a tier raise is read from the STANDALONE line of the Brief, and only from the orchestrator", () => {
-  assert.deepEqual(parseTierRaiseLine("Tier raised: simple -> complex: a native SDK is involved"), {
-    from: "simple",
-    to: "complex",
-    reason: "a native SDK is involved",
-  });
-  assert.deepEqual(parseTierRaiseLine("   Tier raised:  trivial  ->  simple :  the brief is ambiguous  "), {
-    from: "trivial",
-    to: "simple",
-    reason: "the brief is ambiguous",
-  });
-  assert.equal(parseTierRaiseLine("A raise is written as `Tier raised: <from> -> <to>: <evidence>`"), null);
-  assert.equal(parseTierRaiseLine("Tier raised: simple -> complex"), null);
-  assert.equal(parseTierRaiseLine("Tier raised: simple -> urgent: a stack trace"), null);
-  assert.equal(parseTierRaiseLine(null), null);
-
-  const brief = assistantEvent("## Brief\nTier: simple\nTier raised: simple -> complex: a stack trace\nType: bug/error");
-  assert.deepEqual(extractTierRaiseFromEventLine(line(brief)), { from: "simple", to: "complex", reason: "a stack trace" });
-  assert.equal(extractTierRaiseFromEventLine(line(assistantEvent("Tier raised: simple -> complex: x", { parentToolUseId: "toolu_1" }))), null);
-  assert.equal(extractTierRaiseFromEventLine("not json at all"), null);
-  assert.deepEqual(
-    extractTierRaiseFromEventLine(line(assistantEvent("Tier raised: trivial -> simple: a guess\nTier raised: simple -> complex: the evidence"))),
-    { from: "simple", to: "complex", reason: "the evidence" },
-    "the last standalone line of the event should win",
-  );
+test("a `Tier raised:` line an older Brief still prints is plain text, never a control literal of the runtime", () => {
+  assert.equal(isControlLine("Tier raised: simple -> complex: a native SDK is involved"), false);
+  assert.equal(isControlLine("Tier: simple"), false);
+  assert.equal(isControlLine("SLUG: fix-the-worker"), true, "the slug line stopped being a control literal");
 });
 
 test("a session id only becomes argv of --resume when it is safe, and it comes from any event", () => {

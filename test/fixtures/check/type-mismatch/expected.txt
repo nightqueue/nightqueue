@@ -1,3 +1,4 @@
 OK
 TYPE-MISMATCH: the request declared bug/error, but "Add an option to list only the active jobs" reports no symptom — triage: feature/refactor (## Diagnosis absent or empty)
+QA: lite
 recorded: phase_done architecture OK
