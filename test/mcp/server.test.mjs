@@ -15,7 +15,7 @@ import { DB_USER_VERSION } from "../../src/memory/schema.mjs";
 import { clockLabel } from "../../src/queue/hints.mjs";
 import { writeRunnerRecord } from "../../src/queue/registry.mjs";
 import { assertIsolatedEnv, isolatedHostVars } from "../../test-support/host.mjs";
-import { ensureProject, makeDir, makeHome, makeProject, projectIdOf, seedLegacyV8Home } from "../../test-support/memory.mjs";
+import { ensureProject, makeDir, makeHome, makeProject, projectIdOf, seedClosedJob, seedLegacyV8Home } from "../../test-support/memory.mjs";
 import { FAKE_CLAUDE } from "../../test-support/queue-fake.mjs";
 import * as registry from "../../src/memory/registry.mjs";
 
@@ -707,6 +707,41 @@ test("queue_add enqueues by project NAME and refuses a path or a project nobody 
   const outOfRange = await client.callTool({ name: "queue_add", arguments: { project: "alpha", prompt: "fix it", priority: 42 } });
   assert.equal(outOfRange.isError, true);
   assert.doesNotMatch(textOf(outOfRange), /\.mjs:\d+/);
+});
+
+test("queue_add refuses a prompt that depends on another job before resolving or queueing anything", async (t) => {
+  const env = makeQueueHome(t, "mcp-queue-add-dependent");
+  const client = await connect(t, env);
+
+  for (const project of ["alpha", "ghost"]) {
+    const refused = await client.callTool({ name: "queue_add", arguments: { project, prompt: "Add the export button after J-12." } });
+    assert.equal(refused.isError, true);
+    assert.equal(
+      textOf(refused).includes(
+        "This brief depends on another job's pull request. A job must be self-contained: fold this work into that job (as a stage) or make it independent. Nothing was changed. Matched: `after J-12`.",
+      ),
+      true,
+      textOf(refused),
+    );
+  }
+  assert.equal(getJob(1, env), null, "a refused prompt was queued");
+
+  const fenced = payloadOf(
+    await client.callTool({ name: "queue_add", arguments: { project: "alpha", prompt: "Fix the log line.\n\n```\nrun after J-12\n```\n" } }),
+  );
+  assert.equal(fenced.id, 1);
+});
+
+test("queue_retry refuses a closed job as finished and writes nothing", async (t) => {
+  const env = makeQueueHome(t, "mcp-queue-retry-closed");
+  const id = seedClosedJob(env);
+  const before = getJob(id, env);
+  const client = await connect(t, env);
+
+  const refused = await client.callTool({ name: "queue_retry", arguments: { job_id: id, note: "again" } });
+  assert.equal(refused.isError, true);
+  assert.match(textOf(refused), new RegExp(`J-${id} is closed: a finished job does not resume; queue a new one`));
+  assert.deepEqual(getJob(id, env), before, "a refused retry wrote to the closed job");
 });
 
 test("queue_add carries the operator's tier, echoes it only when there is one, and refuses an unknown value", async (t) => {

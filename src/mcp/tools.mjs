@@ -34,8 +34,11 @@ import { liveRunnersReport, unreadableRegistry } from "../queue/registry.mjs";
 import { failedCoreSection, jobDetailView, prUrlsOf, queueView } from "../queue/view.mjs";
 import { isSafeSegment, readRunState, RESUME_PHASE_ORDER } from "../queue/resume.mjs";
 import { resolveJobRun } from "../queue/job-run.mjs";
+import { composeGateNotice } from "../queue/gate-notice.mjs";
+import { runDir as runDirOf } from "../config/paths.mjs";
 import { appendPendingWrite, PENDING_KEYS } from "../queue/pending-writes.mjs";
 import { applyRetry, callerJobId } from "../queue/retry.mjs";
+import { DEPENDENT_PROMPT_REFUSAL, dependentPromptMatch } from "../queue/dependent-prompt.mjs";
 import { resolveJobSession } from "../queue/session.mjs";
 import { startCloseDetached } from "../queue/close-start.mjs";
 import { cancelJobAndWorktree, stopAndCancelJob } from "../queue/cancel.mjs";
@@ -96,6 +99,7 @@ const SERVER_INSTRUCTIONS = [
   "nightqueue is a backlog of unattended coding jobs, not a synchronous executor: `queue_add` records work, it never runs it.",
   "Never queue a job on your own initiative: present the brief first (title and detail) and call `queue_add` only after the person gives an explicit go.",
   "One job is one self-contained deliverable, and a large plan is ONE job with numbered stages written in the prompt, never several jobs that depend on each other.",
+  "`queue_add` refuses a prompt that conditions the work on another job or pull request (`after J-<n>`, `once PR #<n> is merged`, `depends on J-<n>`/`depends on job`, `when #<n> lands`), and `queue_retry` refuses a closed job or a done job whose pull request merged: queue a new one.",
   "Operate nightqueue through these MCP tools only - never the CLI, the database file, the home directory or the project's files.",
   "Start a single job now, with `queue_run` and its `job_id`, only when the person asks for that one job now; the whole batch starts with `queue_run` without `job_id`.",
   "Every job ends as an open pull request (`done`), as `done` with no pull request when the run concluded on purpose that no code change is needed (its conclusion in `notice_md`), or stopped at a gate with its reason in `notice_md`.",
@@ -303,6 +307,30 @@ function runAnswer(result, { project, slug }) {
   return { ok: true, project, slug, path: result.path };
 }
 
+// Tells whether a `run_outcome` call asks the runtime to compose its notice, refusing the combinations that have no single source of truth.
+function wantsComposedNotice(args) {
+  const composed = (typeof args.question === "string" && args.question.trim() !== "") || Boolean(args.from_artifact);
+  if (!composed) return false;
+  if (args.status !== "gate") throw new UserError("`question` and `from_artifact` only compose a `gate` notice: nothing was recorded");
+  if (typeof args.notice === "string" && args.notice.trim() !== "") {
+    throw new UserError("send either `notice` or `question`/`from_artifact`, never both: nothing was recorded");
+  }
+  return true;
+}
+
+// The gate notice the runtime composes from the run's own artifact and/or the question.
+function composedGateNotice(args, run, env) {
+  if (typeof run.projectId !== "string" || run.projectId === "") {
+    throw new UserError(`the run directory of \`${run.project}/${run.slug}\` is unknown, so no artifact can compose the notice: nothing was recorded`);
+  }
+  return composeGateNotice({
+    runDir: runDirOf(run.projectId, run.slug, env),
+    jobId: callerJobId(env),
+    question: args.question,
+    fromArtifact: args.from_artifact ?? null,
+  });
+}
+
 // The fields of state.json `run_set` writes, in the argument names the plugin sends.
 const RUN_SET_FIELDS = {
   type: "type",
@@ -450,6 +478,12 @@ async function changeProjectIntegrationsAnswer(args, env) {
 // Refuses a `queue_add` without the text of the job's prompt.
 function requirePrompt(args) {
   if (typeof args.prompt !== "string" || args.prompt.trim() === "") throw new UserError(PROMPT_SOURCE_MISSING);
+}
+
+// Refuses a `queue_add` whose prompt conditions the work on another job or pull request, before anything is registered or queued.
+function refuseDependentPrompt(prompt) {
+  const phrase = dependentPromptMatch(prompt);
+  if (phrase !== null) throw new UserError(`${DEPENDENT_PROMPT_REFUSAL} Matched: \`${phrase}\`.`);
 }
 
 // The closing sentence of the `queue_add` hint: what happens to the job given who is online right now - and, when the
@@ -1081,7 +1115,7 @@ function toolDefinitions(env, state) {
       guardsHome: true,
       config: {
         description:
-          "Enqueues an unattended /nightqueue:resolve run for a registered project. `project` is the registered NAME, never a path. One job is one self-contained deliverable that can be reviewed and merged on its own. Large work is ONE job with numbered stages written in the prompt — never several jobs that depend on each other. A job that needs another job's pull request merged first is cut wrong: fold it into that job. Independent jobs may run in parallel and merge in any order. " +
+          "Enqueues an unattended /nightqueue:resolve run for a registered project. `project` is the registered NAME, never a path. One job is one self-contained deliverable that can be reviewed and merged on its own. Large work is ONE job with numbered stages written in the prompt — never several jobs that depend on each other. A job that needs another job's pull request merged first is cut wrong: fold it into that job. A prompt that conditions the work on another job or pull request (`after J-<n>`, `once PR #<n> is merged`, `depends on J-<n>` / `depends on job`, `when #<n> lands`, outside code blocks and quoted comment threads) is refused and nothing is queued. Independent jobs may run in parallel and merge in any order. " +
           "This tool only records the job; it never runs it. Queue it now and start the whole batch later with `queue_run` (no `job_id`); start a single job now only when the user asks for that one job now. The hint reports how many runners are live right now, and a job queued with none online waits until `nightqueue queue run` starts one. " +
           "With `project` omitted, `cwd` (the absolute working directory of the caller) resolves the project. When no project is registered for it, the answer is `needs_registration`: ask the user to confirm, then call again with the same `cwd` and `register: true`. Registration never happens without `register: true`.",
         inputSchema: {
@@ -1134,6 +1168,7 @@ function toolDefinitions(env, state) {
       },
       handler: async (args) => {
         requirePrompt(args);
+        refuseDependentPrompt(args.prompt);
         const target = await resolveQueueTarget(args, env);
         if (target.offer && args.register !== true) return needsRegistration(target);
         const registered = target.offer ? await registerOffer(target.offer, args.key, env) : null;
@@ -1345,7 +1380,7 @@ function toolDefinitions(env, state) {
       name: "queue_retry",
       config: {
         description:
-          "Sends a gated, failed or cancelled job back to the queue. A gated job only moves with `note`, which reaches the run as the answer to its gate - except a job the preflight gated (its `blocked_code` is set: dirty checkout, wrong branch, missing checkout or `claude`, or `store-unavailable`: the session could not reach this server), which moves without one once its cause is fixed. " +
+          "Sends a gated, failed or cancelled job back to the queue. A gated job only moves with `note`, which reaches the run as the answer to its gate - except a job the preflight gated (its `blocked_code` is set: dirty checkout, wrong branch, missing checkout or `claude`, or `store-unavailable`: the session could not reach this server), which moves without one once its cause is fixed. A finished job never resumes: a `closed` job, or a `done` job whose pull request is merged, is refused with \"a finished job does not resume; queue a new one\". " +
           "Without `fresh` the run resumes from the last phase, keeping slug, branch, session and run directory; with `fresh` it starts from phase 0 and the run directory is dropped. " +
           "`run` starts a DETACHED runner, the same one `queue_run` starts - and the same one the `--run` of the CLI starts, unless it is asked for `--foreground`; a job that cannot be claimed right now answers `waiting` and starts nothing. " +
           "Inside an unattended run this tool only accepts the id of the job it is running: retrying another job is refused, because the note is delivered as a human answer in that job's next prompt.",
@@ -1418,13 +1453,23 @@ function toolDefinitions(env, state) {
       config: {
         description:
           "Records how the run ended: `done` when the pull request exists, `gate` with the `notice` the operator has to answer, `no_change` with the run's conclusion as `notice` when the run concluded on purpose that no code change is needed (the job ends `done` with no pull request). " +
+          "A `gate` may instead send `question` and/or `from_artifact: {file, section}` (a run artifact such as `03-plan.md` and a heading such as `## Requires user confirmation`): the runtime composes the whole `## Notice` body - the section verbatim under `## Requires user confirmation`, the question, and the answer line - and returns it as `notice`; then end the turn, with no `## Notice` in the final text. `notice` together with either is refused. " +
           "The pull request URL is NOT a parameter: the runtime writes it from what the session really published. " +
           "Inside a job the run is resolved from the job's own row — passing `project` or `slug` there is refused; outside a job both are required.",
-        inputSchema: { status: z.enum(RUN_OUTCOME_STATUSES), notice: optionalText, project: optionalText, slug: optionalText },
+        inputSchema: {
+          status: z.enum(RUN_OUTCOME_STATUSES),
+          notice: optionalText,
+          question: optionalText,
+          from_artifact: z.object({ file: z.string(), section: z.string() }).nullable().optional(),
+          project: optionalText,
+          slug: optionalText,
+        },
       },
       handler: async (args) => {
         const run = await callerRun(args, env);
-        return runAnswer(recordOutcome({ ...run, status: args.status, notice: args.notice, env }), run);
+        if (!wantsComposedNotice(args)) return runAnswer(recordOutcome({ ...run, status: args.status, notice: args.notice, env }), run);
+        const notice = composedGateNotice(args, run, env);
+        return { ...runAnswer(recordOutcome({ ...run, status: args.status, notice, env }), run), notice };
       },
     },
     {

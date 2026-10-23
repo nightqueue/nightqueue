@@ -1,0 +1,14 @@
+# Triage
+
+## Verdict: NEEDS-CLARIFICATION
+
+Evidence level: 2
+
+## Validated brief
+Add an option to list only the active jobs.
+
+## Out of scope
+- None.
+
+## Request gaps
+- None.

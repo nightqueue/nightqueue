@@ -367,23 +367,55 @@ export function extractNotice(text) {
 // A level-2 heading other than the confirmation one, which ends its section.
 const NEXT_SECTION_RE = /^##\s+\S/;
 
-// The `## Requires user confirmation` section of a plan's text, heading included, up to the next level-2 heading outside a fence.
-export function confirmationSection(text) {
+// The first section whose heading line the predicate accepts, heading included, up to the next level-2 heading, both read outside a fence.
+function sectionWhere(text, isHeading) {
   const scanned = linesWithFenceState(text);
-  let start = -1;
-  let end = scanned.length;
-  scanned.forEach((entry, index) => {
-    if (!isMarkerCandidate(entry)) return;
-    if (start < 0 && GATE_HEADING_RE.test(entry.line)) start = index;
-    else if (start >= 0 && end === scanned.length && NEXT_SECTION_RE.test(entry.line)) end = index;
-  });
+  const start = scanned.findIndex((entry) => isMarkerCandidate(entry) && isHeading(entry.line));
   if (start < 0) return null;
+  const next = scanned.slice(start + 1).findIndex((entry) => isMarkerCandidate(entry) && NEXT_SECTION_RE.test(entry.line));
+  const end = next < 0 ? scanned.length : start + 1 + next;
   const body = scanned
     .slice(start, end)
     .map((entry) => entry.line)
     .join("\n")
     .trim();
   return body || null;
+}
+
+// The section whose heading line starts with the heading (so `## Verification: FAILED` is `## Verification`), read outside a fence; null when absent.
+export function sectionOf(text, heading) {
+  return sectionWhere(text, (line) => line.trimEnd().startsWith(heading));
+}
+
+// The section whose heading, at any level from `#` to `######`, starts with the heading's title, read outside a fence; null when absent.
+export function sectionOfAnyLevel(text, heading) {
+  const title = String(heading ?? "").replace(/^#+\s*/, "");
+  if (title === "") return null;
+  return sectionWhere(text, (line) => {
+    const match = /^#{1,6}\s+(.*)$/.exec(line.trimEnd());
+    return match !== null && match[1].startsWith(title);
+  });
+}
+
+// Whether a notice nests another artifact's section: the first non-blank line after its gate heading is a heading of its own.
+export function nestsAnotherSection(text) {
+  const lines = unfencedLines(text);
+  const gateAt = lines.findIndex((line) => GATE_HEADING_RE.test(line));
+  if (gateAt < 0) return false;
+  const next = lines.slice(gateAt + 1).find((line) => line.trim() !== "");
+  return next !== undefined && /^#{1,6}\s+\S/.test(next) && !GATE_HEADING_RE.test(next);
+}
+
+// The lines of a text that lie outside every code fence and are not a `cat -n` style quotation.
+export function unfencedLines(text) {
+  return linesWithFenceState(text)
+    .filter(isMarkerCandidate)
+    .map((entry) => entry.line);
+}
+
+// The `## Requires user confirmation` section of a plan's text, heading included, up to the next level-2 heading outside a fence.
+export function confirmationSection(text) {
+  return sectionWhere(text, (line) => GATE_HEADING_RE.test(line));
 }
 
 // Last `## Notice` the ORCHESTRATOR said in an intermediate event, the only fallback when the result has none.

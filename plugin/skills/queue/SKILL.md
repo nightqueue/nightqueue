@@ -62,7 +62,7 @@ runs unattended, with no access to this conversation:
   which is the registration question too and, on yes, sends `register: true`.
 - One question, never more. Yes or an empty answer queues it as proposed; an
   answer naming another tier queues it with that tier; no queues nothing.
-- There is no `run` parameter: recording the job is all this tool does.
+- There is no `run` parameter: recording the job is all this tool does. A prompt that conditions the work on another job or pull request (`after J-<n>`, `once PR #<n> is merged`, `depends on J-<n>`, `when #<n> lands`) is refused and nothing is queued: fold it into that job as a stage, or make it independent.
 - Never start the job. Only when the user explicitly asks for that one job now
   do you call `queue_run` with its `job_id`; otherwise the whole batch is
   started by the user, later, with `nightqueue queue run`.

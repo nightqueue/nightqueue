@@ -308,7 +308,7 @@ test("a closed job is terminal for cancel, for retry and for close, and retry st
 
   const retried = runCli(env, ["queue", "retry", String(closed)]);
   assert.equal(retried.status, 1);
-  assert.match(retried.stderr, /cannot be retried from status `closed`/);
+  assert.match(retried.stderr, new RegExp(`J-${closed} is closed: a finished job does not resume; queue a new one`));
 
   const reclosed = runCli(env, ["queue", "close", String(closed), "--foreground"]);
   assert.equal(reclosed.status, 1);

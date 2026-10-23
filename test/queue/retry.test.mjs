@@ -5,10 +5,11 @@ import { test } from "node:test";
 import { homeDir, runDir } from "../../src/config/paths.mjs";
 import { openDb } from "../../src/memory/db.mjs";
 import { addJob, claimJobById, getJob } from "../../src/memory/jobs.mjs";
-import { discardRunDir } from "../../src/queue/resume.mjs";
+import { discardRunDir, readRunState, writeRunTerminal } from "../../src/queue/resume.mjs";
 import { applyRetry } from "../../src/queue/retry.mjs";
+import { recordTermination, RUNTIME_AUTHOR } from "../../src/queue/run-state.mjs";
 import { buildPrompt } from "../../src/queue/spawn.mjs";
-import { ensureProject, makeHome, makeProject } from "../../test-support/memory.mjs";
+import { ensureProject, makeHome, makeProject, seedClosedJob, seedDoneJob } from "../../test-support/memory.mjs";
 
 const SESSION_ID = "11111111-2222-3333-4444-555555555555";
 
@@ -137,6 +138,33 @@ test("a retry without --fresh keeps the slug, the branch, the session and the ru
   assert.equal(readFileSync(join(dir, "01-triage.md"), "utf8"), "triage\n");
 });
 
+// Seeds the state of a run stopped by `run check 01` (a runtime termination) and its terminal witness.
+function stoppedRun(env, { slug = "fix-the-worker" } = {}) {
+  const run = { projectId: ensureProject(env, "alpha"), slug, env };
+  recordTermination({ ...run, phase: "triage", reason: "NEEDS-CLARIFICATION: which one?", by: RUNTIME_AUTHOR });
+  writeRunTerminal({ ...run, terminal: { status: "gate", at: new Date().toISOString() } });
+  return run;
+}
+
+test("the answer to a gate lifts the runtime's termination of that attempt, and the terminal witness as before", async (t) => {
+  const env = makeQueue(t, "retry-lifts-termination");
+  const id = gatedJob(env);
+  const run = stoppedRun(env);
+  await applyRetry({ id, note: "the first one", env });
+  const state = readRunState(run);
+  assert.equal(state.termination, undefined);
+  assert.equal(state.terminal, undefined);
+});
+
+test("a retry of a cancelled job keeps its termination, so the next attempt starts fresh as today", async (t) => {
+  const env = makeQueue(t, "retry-keeps-termination");
+  const id = gatedJob(env);
+  openDb(env).prepare("UPDATE jobs SET status = 'cancelled' WHERE id = ?").run(id);
+  const run = stoppedRun(env);
+  await applyRetry({ id, note: "again", env });
+  assert.equal(readRunState(run).termination.by, RUNTIME_AUTHOR);
+});
+
 test("a refused retry never reaches the run directory", async (t) => {
   const env = makeQueue(t, "retry-refused-keeps-dir");
   const id = gatedJob(env);
@@ -221,4 +249,77 @@ test("the run directory of a job in another project is never touched by a retry"
   await applyRetry({ id, note: "start over", fresh: true, env });
   assert.equal(existsSync(other), true, "the retry deleted the run of another project with the same slug");
   rmSync(other, { recursive: true, force: true });
+});
+
+// A pull request reader that answers one fixed GitHub state and counts its calls.
+function prReader(state) {
+  const reader = async () => {
+    reader.calls += 1;
+    return { ok: true, state, mergedAt: state === "MERGED" ? "2026-10-01T00:00:00Z" : null };
+  };
+  reader.calls = 0;
+  return reader;
+}
+
+// The test home with the pull request check switched back on, so the injected reader is asked.
+function checkingPrs(env) {
+  return { ...env, NIGHTQUEUE_NO_PR_CHECK: "" };
+}
+
+test("a closed job is refused as finished, without asking GitHub and without one column moved", async (t) => {
+  const env = makeQueue(t, "retry-closed-finished");
+  const id = seedClosedJob(env);
+  const before = getJob(id, env);
+  const reader = prReader("MERGED");
+
+  await assert.rejects(
+    applyRetry({ id, note: "again", env: checkingPrs(env), prStateImpl: reader }),
+    new RegExp(`J-${id} is closed: a finished job does not resume; queue a new one$`),
+  );
+  assert.equal(reader.calls, 0);
+  assert.deepEqual(getJob(id, env), before, "a refused retry wrote to the closed job");
+});
+
+test("a done job whose pull request merged is refused as finished, and nothing is written", async (t) => {
+  const env = makeQueue(t, "retry-done-merged");
+  const id = seedDoneJob(env);
+  const before = getJob(id, env);
+  const reader = prReader("MERGED");
+
+  await assert.rejects(
+    applyRetry({ id, note: "again", env: checkingPrs(env), prStateImpl: reader }),
+    new RegExp(`J-${id} is done and its pull request is merged: a finished job does not resume; queue a new one`),
+  );
+  assert.equal(reader.calls, 1);
+  assert.deepEqual(getJob(id, env), before, "a refused retry wrote to the done job");
+});
+
+test("a done job whose pull request is open, unreadable or unchecked keeps the status refusal of the store", async (t) => {
+  const env = makeQueue(t, "retry-done-not-merged");
+  const id = seedDoneJob(env);
+  const failing = async () => {
+    throw new Error("gh is offline");
+  };
+  const open = prReader("OPEN");
+  const unchecked = prReader("MERGED");
+
+  for (const [prStateImpl, runEnv] of [
+    [open, checkingPrs(env)],
+    [failing, checkingPrs(env)],
+    [unchecked, { ...env, NIGHTQUEUE_NO_PR_CHECK: "1" }],
+  ]) {
+    await assert.rejects(applyRetry({ id, note: "again", env: runEnv, prStateImpl }), /cannot be retried from status `done`/);
+  }
+  assert.equal(open.calls, 1, "the open pull request was never asked about");
+  assert.equal(unchecked.calls, 0, "NIGHTQUEUE_NO_PR_CHECK=1 still asked GitHub");
+  assert.equal(getJob(id, env).status, "done");
+});
+
+test("a done job with no pull request never asks GitHub", async (t) => {
+  const env = makeQueue(t, "retry-done-no-pr");
+  const id = seedDoneJob(env, { prUrl: null });
+  const reader = prReader("MERGED");
+
+  await assert.rejects(applyRetry({ id, note: "again", env: checkingPrs(env), prStateImpl: reader }), /cannot be retried from status `done`/);
+  assert.equal(reader.calls, 0);
 });

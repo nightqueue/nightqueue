@@ -1,8 +1,11 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { classifyJobResult } from "../../src/queue/classify.mjs";
+import { composeGateNotice } from "../../src/queue/gate-notice.mjs";
 import { confirmationSection, extractNoticeFromStream, extractResultText, hasGateMarker } from "../../src/queue/stream.mjs";
 import { GATE_MARKER, noticeText, resultEvent, systemInitEvent, toNdjson } from "../../test-support/streams.mjs";
 
@@ -48,6 +51,67 @@ test("a gate notice that carries the plan's confirmation block verbatim, plus th
   const outcome = classifyJobResult({ log, exitCode: 0, planPath: PLAN_FIXTURE });
   assert.equal(outcome.status, "gate");
   assert.equal(outcome.noticeMd, notice);
+});
+
+// The `run_outcome` path: the runtime composed the notice from the plan's own section, and the final
+// text is one plain line with no `## Notice` - the record alone makes it a real gate.
+test("a gate recorded with a notice composed from the plan, and a final text without `## Notice`, is a real gate", () => {
+  const notice = composeGateNotice({
+    runDir: dirname(PLAN_FIXTURE),
+    jobId: 42,
+    fromArtifact: { file: "03-plan.md", section: "## Requires user confirmation" },
+  });
+  const log = toNdjson([systemInitEvent(), resultEvent({ text: "Paused at the architecture gate." })]);
+  const state = { outcome: { status: "gate", notice } };
+
+  const outcome = classifyJobResult({ log, exitCode: 0, state, planPath: PLAN_FIXTURE });
+  assert.equal(outcome.status, "gate");
+  assert.equal(outcome.noticeMd, notice);
+  assert.ok(notice.startsWith(confirmationSection(readFileSync(PLAN_FIXTURE, "utf8"))), "the plan's section is carried verbatim");
+  assert.ok(notice.endsWith('Answer with: nightqueue queue retry J-42 --note "<your answer>"'));
+});
+
+// A run directory whose plan holds a confirmation section of 1000+ code points and whose runtime asks for a device.
+function longPlanRun(t) {
+  const dir = mkdtempSync(join(tmpdir(), "nightqueue-nested-gate-"));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  const points = Array.from({ length: 12 }, (_, i) => `- C${i + 1}: ${"decision detail ".repeat(5)}`).join("\n");
+  writeFileSync(join(dir, "03-plan.md"), `# Plan\n\n## Requires user confirmation\n\n${points}\n\n## Next\n\nx\n`);
+  writeFileSync(join(dir, "06-runtime.md"), "## Runtime verdict\n\nNEEDS-DEVICE: open the app on a phone and tap the button once.\n");
+  return { dir, planPath: join(dir, "03-plan.md") };
+}
+
+test("a recorded notice nesting another artifact's section is a gate even when the plan's section is far longer", (t) => {
+  const { dir, planPath } = longPlanRun(t);
+  const notice = composeGateNotice({ runDir: dir, jobId: 7, fromArtifact: { file: "06-runtime.md", section: "## Runtime verdict" } });
+  assert.ok([...confirmationSection(readFileSync(planPath, "utf8"))].length - [...notice].length > 200, "setup: the notice is 200+ cp shorter");
+
+  const log = toNdjson([systemInitEvent(), resultEvent({ text: "Paused at the device gate." })]);
+  const recorded = classifyJobResult({ log, exitCode: 0, state: { outcome: { status: "gate", notice } }, planPath });
+  assert.deepEqual([recorded.status, recorded.noticeMd], ["gate", notice]);
+
+  const inText = classifyJobResult({ log: toNdjson([systemInitEvent(), resultEvent({ text: noticeText(notice) })]), exitCode: 0, planPath });
+  assert.equal(inText.status, "failed", "the `## Notice` in the final text is measured as before");
+});
+
+test("a short recorded notice that nests nothing is still measured against the plan's section", (t) => {
+  const { planPath } = longPlanRun(t);
+  const log = toNdjson([systemInitEvent(), resultEvent({ text: "Paused." })]);
+  const outcome = classifyJobResult({ log, exitCode: 0, state: { outcome: { status: "gate", notice: `${GATE_MARKER}\n\nApproved?` } }, planPath });
+  assert.equal(outcome.status, "failed");
+});
+
+test("a notice composed from the plan's own section plus a question is a gate", (t) => {
+  const { dir, planPath } = longPlanRun(t);
+  const notice = composeGateNotice({
+    runDir: dir,
+    jobId: 7,
+    question: "Is this a bug or a feature/refactor? the diff adds a flag",
+    fromArtifact: { file: "03-plan.md", section: "## Requires user confirmation" },
+  });
+  const log = toNdjson([systemInitEvent(), resultEvent({ text: "Paused at the architecture gate." })]);
+  const outcome = classifyJobResult({ log, exitCode: 0, state: { outcome: { status: "gate", notice } }, planPath });
+  assert.deepEqual([outcome.status, outcome.noticeMd], ["gate", notice]);
 });
 
 // The margin: a notice that keeps the heading but drops almost every point of the plan's own

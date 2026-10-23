@@ -1,0 +1,3 @@
+OK
+GATE: coverage-enumeration-no-method — I analyzed the code and the callers
+recorded: none (GATE: coverage-enumeration-no-method — I analyzed the code and the callers)
