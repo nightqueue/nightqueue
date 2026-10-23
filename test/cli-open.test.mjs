@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { defaultContext, run } from "../src/cli/index.mjs";
+import { isId } from "../src/config/ids.mjs";
 import { homeDir } from "../src/config/paths.mjs";
 import { registerCheckout } from "../test-support/memory.mjs";
 import { loadConfig, saveConfig } from "../src/config/store.mjs";
@@ -73,7 +74,7 @@ test("`nightqueue open` in the checkout starts claude in the home with the opera
   assert.equal(result.code, 0, result.err.join("\n"));
   const calls = launches(home.callsPath);
   assert.equal(calls.length, 1);
-  const [{ argv, cwd, mode, pluginDirEnv, jobId, project, operatorPid }] = calls;
+  const [{ argv, cwd, mode, pluginDirEnv, jobId, project, operatorPid, operatorSession }] = calls;
   assert.equal(argValue(argv, "--agent"), "nightqueue:nightqueue-operator");
   assert.equal(argValue(argv, "--setting-sources"), "project,local");
   assert.deepEqual(JSON.parse(argValue(argv, "--settings")), operatorSettings(home.env));
@@ -81,9 +82,14 @@ test("`nightqueue open` in the checkout starts claude in the home with the opera
   assert.equal(argv.at(-1), OPERATOR_OPENING_PROMPT, "a fresh session does not open with the greeting prompt");
   assert.equal(argValue(argv, "--plugin-dir"), pluginDir());
   assert.ok(JSON.parse(argValue(argv, "--mcp-config")).mcpServers.nightqueue, "the nightqueue MCP server is not configured");
-  for (const absent of ["-p", "--print", "--strict-mcp-config", "--resume", "--append-system-prompt", "--permission-mode"]) {
+  for (const absent of ["-p", "--print", "--strict-mcp-config", "--resume", "--append-system-prompt", "bypassPermissions"]) {
     assert.equal(argv.includes(absent), false, `${absent} was passed`);
   }
+  assert.equal(argValue(argv, "--permission-mode"), "default", "the operator does not run in the host's default permission mode");
+  const mcpEnv = JSON.parse(argValue(argv, "--mcp-config")).mcpServers.nightqueue.env;
+  assert.ok(isId(operatorSession), `no operator session id reached claude: ${operatorSession}`);
+  assert.equal(mcpEnv.NIGHTQUEUE_OPERATOR_SESSION, operatorSession, "the MCP server and the hooks disagree on the session");
+  assert.equal(mcpEnv.NIGHTQUEUE_MODE, "operator");
   assert.equal(mode, "operator");
   assert.equal(pluginDirEnv, pluginDir());
   assert.equal(jobId, null);
@@ -106,6 +112,8 @@ test("`nightqueue open <project>` from an unrelated directory runs in the home w
     assert.equal(call.cwd, home.home);
     assert.equal(call.project, home.project.id);
   }
+  const sessions = launches(home.callsPath).map((call) => call.operatorSession);
+  assert.equal(new Set(sessions).size, 2, "two launches shared one operator session id");
 });
 
 test("an unregistered directory opens in the home with no project, a stale inherited one dropped; an unknown name is refused", async (t) => {

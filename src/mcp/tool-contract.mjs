@@ -1,7 +1,7 @@
 import { UserError } from "../config/errors.mjs";
 
-// The version of the tool input shapes; bump it whenever a tool's input shape changes incompatibly (contract 1 is the pre-v19 integer ids, 2 the refs, 3 the tracker renamed, 4 the tracker removed, 5 the tracker_issues tool, home-scoped connections and `queue_add` `origin: false`, 6 `origin` is a list of {kind, ref}, 7 the `lesson_delete` and `memory_delete` tools, 8 the decision tools removed, 9 the `connection_call` tool).
-export const TOOL_CONTRACT = 9;
+// The version of the tool input shapes; bump it whenever a tool's input shape changes incompatibly (contract 1 is the pre-v19 integer ids, 2 the refs, 3 the tracker renamed, 4 the tracker removed, 5 the tracker_issues tool, home-scoped connections and `queue_add` `origin: false`, 6 `origin` is a list of {kind, ref}, 7 the `lesson_delete` and `memory_delete` tools, 8 the decision tools removed, 9 the `connection_call` tool, 10 the `operator_consent` tool).
+export const TOOL_CONTRACT = 10;
 
 export const STALE_CONTRACT_ADVISORY = "this client's tool contract is older than the server";
 

@@ -1,4 +1,4 @@
-import { existsSync, readdirSync, realpathSync } from "node:fs";
+import { existsSync, lstatSync, readdirSync, readlinkSync, realpathSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { homeDir } from "../config/paths.mjs";
 import { claudeConfigDir, claudePluginsDir, hostPackageRoot, packageRoot } from "../host/paths.mjs";
@@ -6,6 +6,7 @@ import { claudeConfigDir, claudePluginsDir, hostPackageRoot, packageRoot } from 
 export const PLUGIN_DIR_ENV = "NIGHTQUEUE_PLUGIN_DIR";
 const JOB_HOME_ENV = "NIGHTQUEUE_JOB_HOME";
 const SPILL_DIR = "tool-results";
+const MAX_LINK_HOPS = 40;
 
 // Freezes one rule of a closed list, with its argv.
 function freezeRule(rule) {
@@ -99,16 +100,34 @@ export function describeOrchestratorBashRules() {
   return ORCHESTRATOR_BASH_RULES.map(describeRule).join(", ");
 }
 
-// Real path of a path, or of its nearest existing ancestor with the missing rest appended, so a symlink never hides where a path really points.
-export function canonicalPath(path) {
+// The absolute target of a symlink whose target does not exist, or null when the path is no such link.
+function danglingLinkTarget(path) {
+  try {
+    return lstatSync(path).isSymbolicLink() ? resolve(dirname(path), readlinkSync(path)) : null;
+  } catch {
+    return null;
+  }
+}
+
+// The canonical form of a path after `hops` dangling symlinks were already followed.
+function canonicalAfterHops(path, hops) {
   const absolute = resolve(path);
   let existing = absolute;
-  while (!existsSync(existing) && dirname(existing) !== existing) existing = dirname(existing);
+  while (!existsSync(existing) && dirname(existing) !== existing) {
+    const target = hops < MAX_LINK_HOPS ? danglingLinkTarget(existing) : null;
+    if (target !== null) return canonicalAfterHops(join(target, relative(existing, absolute)), hops + 1);
+    existing = dirname(existing);
+  }
   try {
     return join(realpathSync(existing), relative(existing, absolute));
   } catch {
     return absolute;
   }
+}
+
+// Real path of a path, or of its nearest existing ancestor with the missing rest appended, a dangling symlink followed, so no link hides where a path points.
+export function canonicalPath(path) {
+  return canonicalAfterHops(path, 0);
 }
 
 // The home of the job the hook runs for: the one the runtime pinned on the child, else the configuration home.

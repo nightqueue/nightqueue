@@ -103,9 +103,9 @@ and phase reports you can expand, and the notice the job wrote beside it.
 
 **An operator beside the queue.** A Claude Code session in a terminal docked at
 the bottom of every page, or split beside it. It runs `nightqueue open` in the
-home — investigate a bug, reproduce it in a throwaway worktree, review a
-finished job's pull request, prepare the next job — and never edits code, runs
-it, commits or opens a pull request; the queue does that. `Resume in terminal`
+home — investigate a bug, make a small change on your checkout, review a
+finished job's pull request, prepare the next job — and edits, runs commands or
+writes git only after you consent; it never deletes files or force-pushes. `Resume in terminal`
 reopens the session that did the work of any job in `gate`, `failed` or `done`.
 
 [![The Studio split in two: a Claude Code operator session on the left, the queue on the right](docs/assets/studio-operator.jpg)](docs/assets/studio-operator.jpg)

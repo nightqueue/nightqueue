@@ -67,6 +67,7 @@ import { coverageField, coverageLabel, jobOriginCoverage } from "../integrations
 import { changeProjectIntegrations, INTEGRATION_ACTIONS, integrationsView } from "../integrations/settings.mjs";
 import { redactSecrets, redactValue } from "../integrations/redact.mjs";
 import { CONNECTION_CALL_BOUNDS, connectionCall } from "../integrations/connection-call.mjs";
+import { CONSENT_KINDS, operatorSession, recordConsent } from "../queue/operator-consent.mjs";
 import {
   TRACKER_BOUNDS,
   TRACKER_LIMIT,
@@ -94,13 +95,18 @@ import {
 } from "./tool-contract.mjs";
 
 const SERVER_NAME = "nightqueue";
-const SERVER_INSTRUCTIONS = [
+const OPERATE_THROUGH_TOOLS = "Operate nightqueue through these MCP tools only - never the CLI, the database file, the home directory or the project's files.";
+const OPERATOR_MODE_LINE =
+  "In a `nightqueue open` session the operator reads freely, and edits, creates, runs or writes git in a registered checkout only after the person's explicit answer recorded with `operator_consent` (kind and scope exactly as consented); it never deletes files, force-pushes, writes the nightqueue home or touches Claude/Codex settings.";
+const OPERATOR_CONNECTION_LINE =
+  "In a `nightqueue open` session `connection_call` sends a POST, PATCH or PUT only when a live `operator_consent` of kind `connection-write` (`<connection> <METHOD> <path>`) covers it, else it answers `needs-consent` and sends nothing.";
+const SERVER_INSTRUCTION_LINES = [
   `tool contract ${TOOL_CONTRACT}: every answer carries \`contract\`; a tool refused with "your client has the tool definitions of an older nightqueue" means this session cached old definitions - start a new session or restart the MCP client.`,
   "nightqueue is a backlog of unattended coding jobs, not a synchronous executor: `queue_add` records work, it never runs it.",
   "Never queue a job on your own initiative: present the brief first (title and detail) and call `queue_add` only after the person gives an explicit go.",
   "One job is one self-contained deliverable, and a large plan is ONE job with numbered stages written in the prompt, never several jobs that depend on each other.",
   "`queue_add` refuses a prompt that conditions the work on another job or pull request (`after J-<n>`, `once PR #<n> is merged`, `depends on J-<n>`/`depends on job`, `when #<n> lands`), and `queue_retry` refuses a closed job or a done job whose pull request merged: queue a new one.",
-  "Operate nightqueue through these MCP tools only - never the CLI, the database file, the home directory or the project's files.",
+  OPERATE_THROUGH_TOOLS,
   "Start a single job now, with `queue_run` and its `job_id`, only when the person asks for that one job now; the whole batch starts with `queue_run` without `job_id`.",
   "Every job ends as an open pull request (`done`), as `done` with no pull request when the run concluded on purpose that no code change is needed (its conclusion in `notice_md`), or stopped at a gate with its reason in `notice_md`.",
   "At a gate, read `notice_md` whole with `queue_status`, present it to the person, and answer with `queue_retry` only after the person answers; a done job is closed with `queue_close`.",
@@ -109,7 +115,14 @@ const SERVER_INSTRUCTIONS = [
   "At the end of a session that changed or learned something, offer `/nightqueue:reflect` once: it proposes lessons and memories and saves only the ones the person confirms.",
   ...trackerInstructionLines(),
   "`connection_call` calls the API behind a stored connection by its name, with the secret injected by the runtime and never shown; a GET reads, any other method only after the person said yes to the exact request (connection, method, path, body), and it is refused inside a queue job",
-].join("\n");
+];
+
+// The server's instructions: the operator-mode lines in place of the tools-only line when the server serves a `nightqueue open` session, else the plain ones.
+function serverInstructions(env) {
+  if (operatorSession(env) === null) return SERVER_INSTRUCTION_LINES.join("\n");
+  const lines = SERVER_INSTRUCTION_LINES.map((line) => (line === OPERATE_THROUGH_TOOLS ? OPERATOR_MODE_LINE : line));
+  return [...lines, OPERATOR_CONNECTION_LINE].join("\n");
+}
 const PROMPT_SOURCE_MISSING = "queue_add needs `prompt`, the whole request as prose";
 const RECALL_LIMIT = 8;
 const INDEX_LIMIT = 40;
@@ -817,8 +830,8 @@ function connectionCallTool(env) {
       description:
         "Calls the API behind a stored connection by its name; the runtime injects the secret and never shows it, and the host is fixed by the connection's kind. " +
         "`method` is GET (the default), POST, PATCH or PUT; any other is refused. `path` is relative to the connection's API root (empty for a kind that takes none; a webhook connection takes empty or `messages/<id>` to GET or PATCH a posted message): no scheme, no leading `//`, no `.` or `..` segment, no `\\`, `?` or `#`; query parameters only come through `query`. `body` is JSON, at most 50,000 characters serialized, never on a GET. " +
-        "Call any method other than GET only after showing the person exactly what will be sent (connection, method, path, body) and getting an explicit ok, never on your own initiative. Refused inside a queue job, and nothing is sent; a GET is allowed inside a job. " +
-        "Answers `{ok: true, status, body, body_truncated?}` with the body redacted and cut at 50,000 characters, or `{ok: false, error: \"no-connection\" | \"invalid-input\" | \"provider-unavailable\", status, detail}` as a normal answer; a detail saying the call may still have been applied means check before trying again.",
+        "Call any method other than GET only after showing the person exactly what will be sent (connection, method, path, body) and getting an explicit ok, never on your own initiative. Refused inside a queue job, and nothing is sent; a GET is allowed inside a job. In a `nightqueue open` session a non-GET also needs a live `operator_consent` of kind `connection-write` covering it, else it answers `needs-consent` and nothing is sent. " +
+        "Answers `{ok: true, status, body, body_truncated?}` with the body redacted and cut at 50,000 characters, or `{ok: false, error: \"no-connection\" | \"invalid-input\" | \"provider-unavailable\" | \"needs-consent\", status, detail}` as a normal answer; a detail saying the call may still have been applied means check before trying again.",
       inputSchema: {
         connection: z.string().describe("A stored connection's name."),
         method: optionalText.describe("GET (default), POST, PATCH or PUT."),
@@ -831,7 +844,43 @@ function connectionCallTool(env) {
   };
 }
 
-// The thirty-two tools of the plugin contract, with the parameter names the plugin actually sends.
+// Refuses a consent outside a `nightqueue open` session: inside a queue job, or on a server that serves no operator session.
+function consentSession(env) {
+  const own = callerJobId(env);
+  if (own !== null) throw new UserError(`refused: \`operator_consent\` inside job \`${own}\`: a consent is the person's answer in a \`nightqueue open\` session, and a job has no person to ask`);
+  const session = operatorSession(env);
+  if (session === null) throw new UserError("refused: only a `nightqueue open` session records a consent, and this server serves none");
+  return session;
+}
+
+// The tool that records what the person consented to in this operator session, the record the operator guard reads.
+function operatorConsentTool(env) {
+  return {
+    name: "operator_consent",
+    config: {
+      description:
+        "Records what the person consented to in this `nightqueue open` session, so the operator guard lets exactly that through: never call it without the person's explicit answer, quoted in `answer`, to an ask that named what, where and how to undo it; never widen a scope the person did not say; `revoke: true` withdraws it. " +
+        "`kind` is edit or create (`scope` an absolute path: a file or a directory of the project's checkout; a create outside it names one file), run (one bare command, e.g. `npm test`), git-write (a git subcommand that writes, e.g. `commit`) or connection-write (`<connection> <POST|PATCH|PUT> <path>`, `-` for no path). " +
+        "`project` is the registered project (required but for connection-write). Answers `{ok: true, consent, line}` or `{ok: true, revoked, line}`; refused inside a queue job and outside an operator session.",
+      inputSchema: {
+        project: optionalText,
+        kind: z.enum(CONSENT_KINDS),
+        scope: z.string().max(2000).describe("Exactly what the person consented to."),
+        reason: optionalText.describe("Why the consent is asked (required on a grant)."),
+        answer: optionalText.describe("The person's own answer, quoted verbatim (required on a grant)."),
+        revoke: z.boolean().nullable().optional(),
+      },
+    },
+    handler: async (args) => {
+      const session = consentSession(env);
+      const project = args.kind === "connection-write" && !args.project ? null : await memoryProject(args.project, env);
+      const result = recordConsent({ session, project, kind: args.kind, scope: args.scope, reason: args.reason, answer: args.answer, revoke: args.revoke === true, env });
+      return { ok: true, ...result };
+    },
+  };
+}
+
+// The thirty-three tools of the plugin contract, with the parameter names the plugin actually sends.
 function toolDefinitions(env, state) {
   return [
     {
@@ -1254,6 +1303,7 @@ function toolDefinitions(env, state) {
     },
     ...trackerWriteTools(env),
     connectionCallTool(env),
+    operatorConsentTool(env),
     {
       name: "queue_status",
       config: {
@@ -1518,7 +1568,7 @@ function refuseRemovedToolCalls(server, state) {
   });
 }
 
-// Builds the MCP server with the thirty-two tools of the plugin contract.
+// Builds the MCP server with the thirty-three tools of the plugin contract.
 export function createServer(env = process.env) {
   const server = new McpServer(
     {
@@ -1529,7 +1579,7 @@ export function createServer(env = process.env) {
       // MCP spec 2025-11-25: clients that support server icons render this next to the server name.
       icons: [{ src: "https://nightqueue.github.io/avatar.png", mimeType: "image/png", sizes: ["1024x1024"] }],
     },
-    { instructions: SERVER_INSTRUCTIONS },
+    { instructions: serverInstructions(env) },
   );
   const state = newContractState();
   const session = { env, state };

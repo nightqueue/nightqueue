@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
+import { mkdirSync } from "node:fs";
 import { test } from "node:test";
+import { newId } from "../../src/config/ids.mjs";
+import { operatorConsentPath } from "../../src/config/paths.mjs";
 import { loadSecrets, saveSecrets } from "../../src/config/store.mjs";
+import { recordConsent } from "../../src/queue/operator-consent.mjs";
 import { connectionCall } from "../../src/integrations/connection-call.mjs";
 import { requestJson } from "../../src/integrations/http.mjs";
 import { withProviders } from "../../src/integrations/registry.mjs";
@@ -280,4 +284,39 @@ test("an answer echoing another connection's webhook token is redacted", async (
   const env = callHome(t, "cc-other-parts");
   const answer = await call(env, { connection: "sn", path: "x/" }, fakeFetch({ text: JSON.stringify({ u: encodeURIComponent(WEBHOOK_URL) }) }));
   assert.ok(!JSON.stringify(answer).includes(WEBHOOK_TOKEN), JSON.stringify(answer));
+});
+
+test("in an operator session a write goes out only under a live connection-write consent, a GET and any other client unchanged", async (t) => {
+  const home = callHome(t, "cc-operator-consent");
+  const session = newId();
+  const env = { ...home, NIGHTQUEUE_MODE: "operator", NIGHTQUEUE_OPERATOR_SESSION: session };
+  const args = { connection: "sn", method: "POST", path: "/x/", body: { a: 1 } };
+  const unconsented = fakeFetch();
+  assert.deepEqual(await call(env, args, unconsented), {
+    ok: false,
+    error: "needs-consent",
+    status: null,
+    detail: "needs consent (connection-write sn POST x/): show the person the exact request, record their answer with operator_consent, then call again; nothing was sent",
+  });
+  assert.equal(unconsented.calls.length, 0);
+  assert.equal((await call(env, { connection: "sn", path: "x/" }, fakeFetch())).ok, true, "a GET needed a consent");
+  assert.equal((await call(home, args, fakeFetch())).ok, true, "a client outside an operator session needed a consent");
+  recordConsent({ session, kind: "connection-write", scope: "sn POST x/", reason: "post the fix", answer: "yes, post it", env });
+  const consented = fakeFetch();
+  assert.equal((await call(env, args, consented)).ok, true);
+  assert.equal(consented.calls.length, 1);
+  assert.equal((await call(env, { ...args, method: "PUT" }, fakeFetch())).error, "needs-consent", "a POST consent covered a PUT");
+});
+
+test("in an operator session an unreadable consent record answers needs-consent and sends nothing, never a thrown error", async (t) => {
+  const home = callHome(t, "cc-operator-unreadable");
+  const session = newId();
+  const env = { ...home, NIGHTQUEUE_MODE: "operator", NIGHTQUEUE_OPERATOR_SESSION: session };
+  mkdirSync(operatorConsentPath(session, env), { recursive: true });
+  const fetch = fakeFetch();
+  const answer = await call(env, { connection: "sn", method: "POST", path: "/x/", body: { a: 1 } }, fetch);
+  assert.equal(answer.ok, false);
+  assert.equal(answer.error, "needs-consent");
+  assert.match(answer.detail, /the consent record could not be read .*nothing was sent$/);
+  assert.equal(fetch.calls.length, 0);
 });

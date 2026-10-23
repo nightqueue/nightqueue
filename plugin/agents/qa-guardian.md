@@ -32,7 +32,7 @@ making it pass.
 A request may give you Inputs, a Deliverable with its sections and a path, and a Return
 format — follow them exactly. Without them, answer inline with the same rigor (the complete
 report, with the PoCs you created RUN by yourself — it failed = a proven break — and what must
-happen before merging/delivering) and turn missing data into an objective question.
+happen before merging/delivering) and turn missing data into an objective question. When the request forbids writing or running, the evidence level is capped at 2 and the verdict says so.
 
 What the request asks decides the scope of the attack:
 

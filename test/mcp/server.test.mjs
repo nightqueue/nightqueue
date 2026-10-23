@@ -6,6 +6,7 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { newId } from "../../src/config/ids.mjs";
 import { homeDir, jobLogPath, logsDir, PACKAGE_NAME, queuePausedPath, runnersDir, runtimeCurrentLink, runtimeDir, runtimeVersionsDir } from "../../src/config/paths.mjs";
 import { loadConfig, loadSecrets, saveConfig, saveSecrets } from "../../src/config/store.mjs";
 import { packageRoot } from "../../src/host/paths.mjs";
@@ -35,6 +36,7 @@ const CONTRACT_TOOLS = [
   "memory_delete",
   "memory_recall",
   "memory_save",
+  "operator_consent",
   "phase_prompt",
   "pipeline_log",
   "project_integrations",
@@ -93,13 +95,32 @@ function textOf(result) {
   return result.content.map((block) => block.text).join("\n");
 }
 
-test("the server exposes exactly the thirty-two tools of the contract, none of them a decision tool", async (t) => {
+test("the server exposes exactly the thirty-three tools of the contract, none of them a decision tool", async (t) => {
   const env = makeHome(t, "mcp-tools");
   const client = await connect(t, env);
   const names = (await client.listTools()).tools.map((tool) => tool.name).sort();
   assert.deepEqual(names, CONTRACT_TOOLS);
   assert.equal(names.some((name) => name.startsWith("decision_")), false);
-  assert.equal(names.length, 32, "the contract list and the server disagree on how many tools there are");
+  assert.equal(names.length, 33, "the contract list and the server disagree on how many tools there are");
+  const consent = (await client.listTools()).tools.find((tool) => tool.name === "operator_consent");
+  assert.ok(consent.description.includes("never call it without the person's explicit answer, quoted in `answer`"), consent.description);
+});
+
+const TOOLS_ONLY_LINE = "Operate nightqueue through these MCP tools only - never the CLI, the database file, the home directory or the project's files.";
+
+test("an operator-session server swaps the tools-only line for the three-band line and adds the connection-write line; a plain server keeps its instructions", async (t) => {
+  const home = makeHome(t, "mcp-instructions");
+  const plain = (await connect(t, home)).getInstructions();
+  assert.ok(plain.split("\n").includes(TOOLS_ONLY_LINE));
+  assert.equal(plain.includes("operator_consent"), false, "a plain server's instructions name the operator consent");
+  const operator = (await connect(t, { ...home, NIGHTQUEUE_MODE: "operator", NIGHTQUEUE_OPERATOR_SESSION: newId() })).getInstructions();
+  const lines = operator.split("\n");
+  assert.equal(lines.includes(TOOLS_ONLY_LINE), false);
+  const swapped = lines.findIndex((line) => line.startsWith("In a `nightqueue open` session the operator reads freely"));
+  assert.equal(swapped, plain.split("\n").indexOf(TOOLS_ONLY_LINE));
+  assert.match(lines[swapped], /only after the person's explicit answer recorded with `operator_consent`/);
+  assert.match(lines.at(-1), /`connection-write`/);
+  assert.deepEqual(lines.filter((_, index) => index !== swapped).slice(0, -1), plain.split("\n").filter((line) => line !== TOOLS_ONLY_LINE));
 });
 
 const CONNECTION_REFUSAL = "connection_call: refused: `connection_call` POST inside J-7: a call that is not a GET is the operator's call, made only outside a queue run after the person's explicit ok; a run may only GET. Nothing was sent";
@@ -113,7 +134,7 @@ test("connection_call with an unknown connection name is a normal no-connection 
     error: "no-connection",
     status: null,
     detail: "no stored connection named that way; the person lists them with `nightqueue connection list`",
-    contract: 9,
+    contract: 10,
   });
 });
 
@@ -151,7 +172,7 @@ test("tracker_issues with no tracker connection is a normal answer carrying the 
     error: "no-connection",
     provider: "linear",
     hint: 'connect it: echo "$LINEAR_API_KEY" | nightqueue connection add linear --type linear',
-    contract: 9,
+    contract: 10,
   });
 });
 
@@ -179,7 +200,7 @@ test("every new tracker tool with no tracker connection answers the no-connectio
       error: "no-connection",
       provider: "linear",
       hint: 'connect it: echo "$LINEAR_API_KEY" | nightqueue connection add linear --type linear',
-      contract: 9,
+      contract: 10,
     }, name);
   }
 });
@@ -510,7 +531,7 @@ test("the index round trip reports the freshness of the checkout", async (t) => 
       },
     }),
   );
-  assert.deepEqual(saved, { ok: true, files: 1, libs: 0, contract: 9 });
+  assert.deepEqual(saved, { ok: true, files: 1, libs: 0, contract: 10 });
 
   const fresh = payloadOf(
     await client.callTool({ name: "index_recall", arguments: { project: "alpha", repo_root: repo } }),
@@ -671,7 +692,7 @@ test("queue_add enqueues by project NAME and refuses a path or a project nobody 
     timeoutS: 600,
     origin: [],
     hint: "queued J-1 for `alpha` (1 pending). 0 runners online - pending jobs will wait until `nightqueue queue run` starts one.",
-    contract: 9,
+    contract: 10,
   });
   assert.equal(getJob(1, env).prompt, "fix the worker");
 
@@ -1536,7 +1557,7 @@ test("queue_stop answers the CLI line per runner, and refuses an unknown pid", a
   const client = await connect(t, env);
 
   const empty = payloadOf(await client.callTool({ name: "queue_stop", arguments: {} }));
-  assert.deepEqual(empty, { ok: true, runners: [{ outcome: "absent", pid: null, message: "runner is not running" }], contract: 9 });
+  assert.deepEqual(empty, { ok: true, runners: [{ outcome: "absent", pid: null, message: "runner is not running" }], contract: 10 });
 
   const unknown = await client.callTool({ name: "queue_stop", arguments: { pid: 999999 } });
   assert.equal(unknown.isError, true, textOf(unknown));

@@ -1,6 +1,5 @@
-import { basename, isAbsolute, join, relative, sep } from "node:path";
-import { isId } from "../config/ids.mjs";
-import { SHIM_NAME, SHORTCUT_SHIM_NAMES, qaDir, secretsPath } from "../config/paths.mjs";
+import { basename, isAbsolute } from "node:path";
+import { SHIM_NAME, SHORTCUT_SHIM_NAMES, secretsPath } from "../config/paths.mjs";
 import { registeredCheckouts } from "../memory/registry-access.mjs";
 import { FORBIDDEN_SHELL_CHARS, canonicalPath, insideRoots, isDeniedFlag, tokenize } from "./orchestrator-scope.mjs";
 
@@ -34,7 +33,7 @@ export const OPERATOR_REFUSED_FLAGS = Object.freeze([
 
 const ANY_SUBCOMMAND = "*";
 
-// The nightqueue commands a read-only subagent (triage, reviewer) may run, each with the subcommands that only read.
+// The nightqueue commands a subagent of the operator may run with no consent, each with the subcommands that only read.
 export const READONLY_SUBAGENT_COMMANDS = new Map([
   ["queue", Object.freeze(["status", "log"])],
   ["project", Object.freeze(["list"])],
@@ -42,19 +41,19 @@ export const READONLY_SUBAGENT_COMMANDS = new Map([
   ["connection", Object.freeze(["list"])],
   ["memory", Object.freeze(["stats"])],
   ["doctor", ANY_SUBCOMMAND],
+  ["libs", ANY_SUBCOMMAND],
   ["version", ANY_SUBCOMMAND],
 ]);
 
-export const OPERATOR_ROLES = Object.freeze(["triage", "qa", "reviewer"]);
+// The plugin agents the operator may launch: every one but the operator itself.
+export const PIPELINE_AGENTS = Object.freeze([
+  "architect", "coder", "explore", "merger", "qa-guardian", "reflector", "reviewer", "triager", "verifier",
+]);
 
 const PLUGIN_NAME = "nightqueue";
-const NIGHTQUEUE_PROGRAMS = new Set([SHIM_NAME, ...SHORTCUT_SHIM_NAMES]);
+export const NIGHTQUEUE_PROGRAMS = new Set([SHIM_NAME, ...SHORTCUT_SHIM_NAMES]);
 const BLOCKING_FLAGS = ["--follow", "--foreground"];
-const SCRIPT_EXTENSION = /\.m?js$/;
-const QA_GIT_REFUSED = new Set(["push", "remote", "config"]);
-const GIT_VALUE_OPTIONS = new Set(["-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path"]);
-const QA_WORD_SEPARATORS = /[\s;&|()<>]+/;
-const GIT_READ_SUBCOMMANDS = new Set(["log", "show", "diff", "blame", "ls-tree", "ls-files", "rev-parse", "branch", "status"]);
+export const GIT_READ_SUBCOMMANDS = new Set(["log", "show", "diff", "blame", "ls-tree", "ls-files", "rev-parse", "branch", "status"]);
 const GIT_DENIED_FLAGS = ["--output", "--ext-diff", "--no-index", "--exec"];
 const BRANCH_DENIED_FLAGS = [
   "-d", "-D", "-m", "-M", "-c", "-C", "--delete", "--move", "--copy", "-u", "--set-upstream-to", "--unset-upstream",
@@ -64,26 +63,12 @@ const GH_READS = new Map([
   ["pr", ["view", "diff", "checks", "list", "status"]],
   ["issue", ["view", "list"]],
 ]);
-const QA_ANCHOR = /^cd\s+("[^"]*"|'[^']*'|[^\s"'&;|]+)\s*&&\s*(\S[\s\S]*)$/;
-const QA_RAW_ESCAPES = [/\\/, /\$['"]/];
-const QA_ESCAPES = [
-  /[\n\r`]/,
-  /\$[A-Za-z_({]/,
-  /(^|[\s=<>(){}|&;,:])~/,
-  /(^|[\s;&|(){}])(cd|pushd|popd)(?=$|[\s;&|()])/,
-  /(^|[\s/=<>(){}|&;,:])\.\.(?=$|[\s/<>(){}|&;,:])/,
-  /(^|[\s/=<>(){}|&;,:])(\.[^\s/]*[*?[]|\[)/,
-  /[{}]\.|\.[{},]/,
-];
-const ABSOLUTE_PATH = /(?:^|[\s=<>(){}|&;,])(\/[^\s<>|&;(){},]*)/g;
-const OPTION_ABSOLUTE_PATH = /(?:^|\s)-[A-Za-z]+(\/[^\s<>|&;(){},]*)/g;
-const NULL_DEVICE = "/dev/null";
 
-// The role of a subagent type the operator may delegate to, under any of the spellings the host gives a plugin agent, or null.
-export function agentRole(agentType) {
+// The pipeline agent a subagent type names under a plugin-scoped spelling (`nightqueue:<name>`, `plugin_nightqueue_<name>`), or null.
+export function pipelineAgent(agentType) {
   const type = typeof agentType === "string" ? agentType.trim() : "";
-  const spellings = (role) => [role, `${PLUGIN_NAME}:${role}`, `plugin_${PLUGIN_NAME}_${role}`];
-  return OPERATOR_ROLES.find((role) => spellings(role).includes(type)) ?? null;
+  const spellings = (name) => [`${PLUGIN_NAME}:${name}`, `plugin_${PLUGIN_NAME}_${name}`];
+  return PIPELINE_AGENTS.find((name) => spellings(name).includes(type)) ?? null;
 }
 
 // The canonical checkout of every registered project, with the registry's error message when it could not be read.
@@ -96,7 +81,7 @@ export function checkoutRoots(env = process.env) {
 }
 
 // The file names the operator never reads wherever they lie: `.env` and its variants (`.env.local`, `.env.production`).
-const DOTENV_NAME = /^\.env(\..+)?$/;
+export const DOTENV_NAME = /^\.env(\..+)?$/;
 
 // Why the operator and its subagents may not read a path, or null when they may: everything on disk is readable but the home's
 // secrets file and every `.env*` file. A path that cannot be resolved is refused too.
@@ -126,13 +111,21 @@ function refusedFlagUsed(tokens) {
   return tokens.some((token) => rule.flags.some((flag) => token === flag || token.startsWith(`${flag}=`)));
 }
 
+// Tells whether nightqueue tokens (`nightqueue <command> …`) spell a refused subcommand or carry a refused or blocking flag.
+export function refusedNightqueueForm(tokens) {
+  const [, command, subcommand] = tokens;
+  const family = Object.hasOwn(OPERATOR_SUBCOMMANDS, command) ? OPERATOR_SUBCOMMANDS[command] : null;
+  if (family?.refused.includes(subcommand)) return true;
+  return tokens.some(isBlockingFlag) || refusedFlagUsed(tokens);
+}
+
 // The subcommands the main thread may run under an allowed command: the classified ones of a family, else any; undefined when the command is refused.
 function mainSubcommands(command) {
   if (!OPERATOR_CLI_COMMANDS.allowed.includes(command)) return undefined;
   return Object.hasOwn(OPERATOR_SUBCOMMANDS, command) ? OPERATOR_SUBCOMMANDS[command].allowed : ANY_SUBCOMMAND;
 }
 
-// The subcommands a read-only subagent may run under a command; undefined when the command is refused.
+// The subcommands a subagent may run under a command with no consent; undefined when the command is refused.
 function readonlySubcommands(command) {
   return READONLY_SUBAGENT_COMMANDS.get(command);
 }
@@ -159,7 +152,7 @@ function branchListOnly(args) {
 }
 
 // Tells whether the tokens are a read-only git command on a registered checkout: `git -C <checkout> [--no-optional-locks] <read> …`.
-function gitReadAllowed(tokens, checkouts) {
+export function gitReadAllowed(tokens, checkouts) {
   const [program, option, dir, ...rest] = tokens;
   if (program !== "git" || option !== "-C" || typeof dir !== "string" || !isAbsolute(dir)) return false;
   if (!insideRoots(dir, checkouts)) return false;
@@ -172,7 +165,7 @@ function gitReadAllowed(tokens, checkouts) {
 }
 
 // The tokens of a single bare command, or null when it carries a shell operator or a backslash, or is not a string.
-function bareTokens(command) {
+export function bareTokens(command) {
   if (typeof command !== "string" || FORBIDDEN_SHELL_CHARS.test(command) || command.includes("\\")) return null;
   return tokenize(command.trim());
 }
@@ -182,13 +175,13 @@ function ghReadAllowed(args) {
   return GH_READS.get(args[0])?.includes(args[1]) === true;
 }
 
-// Tells whether a Bash command is one the operator's main thread may run under the operator guard.
+// Tells whether a Bash command is one the operator's main thread may run with no consent.
 export function mainBashAllowed(command, checkouts = []) {
   const tokens = bareTokens(command);
   return tokens !== null && (nightqueueAllowed(tokens, mainSubcommands) || gitReadAllowed(tokens, checkouts));
 }
 
-// Tells whether a Bash command is one a read-only subagent (triage, reviewer) may run: nightqueue reads, git reads of a checkout, gh reads.
+// Tells whether a Bash command is one a subagent of the operator may run with no consent: nightqueue reads, git reads of a checkout, gh reads.
 export function readonlySubagentBashAllowed(command, checkouts = []) {
   const tokens = bareTokens(command);
   if (tokens === null) return false;
@@ -196,111 +189,9 @@ export function readonlySubagentBashAllowed(command, checkouts = []) {
   return nightqueueAllowed(tokens, readonlySubcommands) || gitReadAllowed(tokens, checkouts);
 }
 
-// The canonical root `<qa>/<project id>/<id>` of the qa worktree an absolute path lies in, or null when it lies in none.
-export function qaWorktreeOf(path, env = process.env) {
-  if (typeof path !== "string" || !isAbsolute(path)) return null;
-  const root = canonicalPath(qaDir(env));
-  const rest = relative(root, canonicalPath(path));
-  if (rest === "" || isAbsolute(rest)) return null;
-  const [projectId, id] = rest.split(sep);
-  return isId(projectId) && isId(id) ? join(root, projectId, id) : null;
-}
-
-// Tells whether a path lies inside a qa worktree of this home, the only place the qa subagent writes.
-export function qaPathAllowed(path, env = process.env) {
-  return qaWorktreeOf(path, env) !== null;
-}
-
-// Tells whether a command is the bare `nightqueue sandbox worktree <project>` or `… --drop <qa worktree>`.
-function sandboxWorktreeCommand(command, env) {
-  const tokens = bareTokens(command);
-  if (tokens === null) return false;
-  const [program, sandbox, worktree, ...rest] = tokens;
-  if (!NIGHTQUEUE_PROGRAMS.has(program) || sandbox !== "sandbox" || worktree !== "worktree") return false;
-  if (rest.length === 1) return !rest[0].startsWith("-");
-  return rest.length === 2 && rest[0] === "--drop" && qaPathAllowed(rest[1], env);
-}
-
-// Every absolute path a quote-stripped command names, an option glued to one (`-C/etc`) included.
-function absolutePaths(plain) {
-  return [...plain.matchAll(ABSOLUTE_PATH), ...plain.matchAll(OPTION_ABSOLUTE_PATH)].map((match) => match[1]);
-}
-
-// Tells whether a command text stays in one worktree: no escape construct, and every absolute path inside it or the null device.
-function staysInside(text, worktree) {
-  if (QA_RAW_ESCAPES.some((pattern) => pattern.test(text))) return false;
-  const plain = text.replace(/["']/g, "");
-  if (QA_ESCAPES.some((pattern) => pattern.test(plain))) return false;
-  return absolutePaths(plain).every((path) => path === NULL_DEVICE || insideRoots(path, [worktree]));
-}
-
-// The program a word names, its directory and a script extension dropped (`bin/nightqueue.mjs` names nightqueue).
-function programName(word) {
-  return basename(word).replace(SCRIPT_EXTENSION, "");
-}
-
-// The git subcommand among the arguments after `git`, its global options and their values skipped.
-function gitSubcommand(args) {
-  for (let index = 0; index < args.length; index += 1) {
-    if (GIT_VALUE_OPTIONS.has(args[index])) index += 1;
-    else if (!args[index].startsWith("-")) return args[index];
-  }
-  return null;
-}
-
-// Tells whether the word at an index is a nightqueue program run inside `nightqueue sandbox`, against its throwaway home.
-function insideSandbox(words, index) {
-  return words[index - 1] === "sandbox" && NIGHTQUEUE_PROGRAMS.has(programName(words[index - 2] ?? ""));
-}
-
-// Tells whether the qa subagent may run the program a word names: nightqueue only through `sandbox`, gh only to read, git never to push or reconfigure.
-function qaProgramAllowed(words, index) {
-  const program = programName(words[index]);
-  const rest = words.slice(index + 1);
-  if (NIGHTQUEUE_PROGRAMS.has(program)) return rest[0] === "sandbox" || insideSandbox(words, index);
-  if (program === "gh") return ghReadAllowed(rest);
-  if (program === "git") return !QA_GIT_REFUSED.has(gitSubcommand(rest));
-  return true;
-}
-
-// Tells whether every program a quote-stripped command names, in any segment of its chain, is one the qa subagent may run.
-function qaProgramsAllowed(text) {
-  const words = text.replace(/["']/g, "").split(QA_WORD_SEPARATORS).filter(Boolean);
-  return words.every((_, index) => qaProgramAllowed(words, index));
-}
-
-// Tells whether a command is `cd <qa worktree path> && …` with nothing that leaves that worktree.
-function anchoredCommand(command, env) {
-  const match = QA_ANCHOR.exec(command);
-  if (!match) return false;
-  const anchor = match[1].replace(/^(["'])(.*)\1$/, "$2");
-  const worktree = qaWorktreeOf(anchor, env);
-  return worktree !== null && staysInside(`${match[1]} ${match[2]}`, worktree) && qaProgramsAllowed(match[2]);
-}
-
-// Tells whether a Bash command is one the qa subagent may run: anchored in its qa worktree, or the bare sandbox worktree command.
-export function qaBashAllowed(command, env = process.env) {
-  if (typeof command !== "string") return false;
-  const trimmed = command.trim();
-  return sandboxWorktreeCommand(trimmed, env) || anchoredCommand(trimmed, env);
-}
-
-// The qa worktree pattern as a reason shows it, with this home's qa directory.
-function qaShown(env) {
-  return `${qaDir(env)}/<project_id>/<id>`;
-}
-
 // The note a reason carries when the registry could not be read, so no checkout is in scope.
-function registryNote(error) {
+export function registryNote(error) {
   return error ? `; the registry could not be read (${error}), so no checkout is in scope: run \`nightqueue doctor\`` : "";
-}
-
-// Reason of a main-thread edit: the operator never edits.
-export function describeMainWriteDenial(toolName) {
-  return (
-    `${OPERATOR_GUARD}: the operator never edits - ${toolName} is refused on its main thread; ` +
-    "queue the change with queue_add after the person's go, or hand a reproduction to nightqueue:qa"
-  );
 }
 
 // Reason of a read the operator may not make: the secrets file, a `.env*` file, a Grep that would sweep the secrets file, or an unresolvable path.
@@ -322,60 +213,33 @@ function describeMainRefusals() {
   return [...subcommands, ...flags].map((shown) => `\`${shown}\``).join(", ");
 }
 
-// The nightqueue reads of a read-only subagent, as a reason shows them (`queue status|log`, `project list`, …).
+// The nightqueue reads of a subagent, as a reason shows them (`queue status|log`, `project list`, …).
 function describeReadonlyCommands() {
   return [...READONLY_SUBAGENT_COMMANDS]
     .map(([command, subcommands]) => (subcommands === ANY_SUBCOMMAND ? command : `${command} ${subcommands.join("|")}`))
     .join(", ");
 }
 
-// Reason of a main-thread Bash command outside the operator's list.
-export function describeMainBashDenial(registryError = null) {
+// The free Bash list of the operator's main thread, as a reason shows it.
+export function describeMainBashList() {
   return (
-    `${OPERATOR_GUARD}: the operator runs only \`nightqueue|nq ${OPERATOR_CLI_COMMANDS.allowed.join("|")} …\` ` +
-    `(never ${describeMainRefusals()}, \`--follow\` or \`--foreground\`) and ` +
+    `\`nightqueue|nq ${OPERATOR_CLI_COMMANDS.allowed.join("|")} …\` (never ${describeMainRefusals()}, \`--follow\` or \`--foreground\`) and ` +
     "`git -C <registered checkout> [--no-optional-locks] log|show|diff|blame|ls-tree|ls-files|rev-parse|branch --list|status` " +
-    "(status only after --no-optional-locks; never --output, --ext-diff, --no-index or --exec), " +
-    `each one bare command with no shell operator or backslash; hand anything else to nightqueue:triage or nightqueue:qa${registryNote(registryError)}`
+    "(status only after --no-optional-locks; never --output, --ext-diff, --no-index or --exec)"
+  );
+}
+
+// The free Bash list of a subagent of the operator, as a reason shows it.
+export function describeSubagentBashList() {
+  return (
+    `\`nightqueue|nq ${describeReadonlyCommands()}\` (never \`doctor --fix\`, \`--follow\` or \`--foreground\`), the operator's \`git -C <registered checkout>\` reads, ` +
+    "`gh pr view|diff|checks|list|status` and `gh issue view|list`"
   );
 }
 
 // Reason of a main-thread subagent launch of a type the operator does not delegate to.
 export function describeAgentDenial(subagentType) {
   const shown = typeof subagentType === "string" && subagentType.trim() ? subagentType : "a subagent with no type";
-  return `${OPERATOR_GUARD}: the operator delegates only to nightqueue:triage, nightqueue:qa and nightqueue:reviewer; ${shown} is refused`;
-}
-
-// Reason of an edit by a subagent other than qa.
-export function describeSubagentWriteDenial(agentType) {
-  const shown = typeof agentType === "string" && agentType.trim() ? agentType : "this";
-  return `${OPERATOR_GUARD}: the ${shown} subagent never edits; only nightqueue:qa writes, inside its qa worktree`;
-}
-
-// Reason of a read-only subagent's Bash command outside its list.
-export function describeReadonlySubagentBashDenial(agentType, registryError = null) {
-  const shown = typeof agentType === "string" && agentType.trim() ? agentType : "this";
-  return (
-    `${OPERATOR_GUARD}: the ${shown} subagent runs only read-only commands: \`nightqueue|nq ${describeReadonlyCommands()}\` ` +
-    "(never `doctor --fix`, `--follow` or `--foreground`), the operator's `git -C <registered checkout>` reads, " +
-    "`gh pr view|diff|checks|list|status` and `gh issue view|list`, " +
-    `each one bare command with no shell operator or backslash${registryNote(registryError)}`
-  );
-}
-
-// Reason of a qa subagent edit outside its qa worktree.
-export function describeQaWriteDenial(path, env = process.env) {
-  const shown = typeof path === "string" && path ? path : "a path that cannot be resolved";
-  return `${OPERATOR_GUARD}: the qa subagent writes only inside its qa worktree (${qaShown(env)}), and ${shown} is outside it`;
-}
-
-// Reason of a qa subagent Bash command outside its anchor.
-export function describeQaBashDenial(env = process.env) {
-  return (
-    `${OPERATOR_GUARD}: the qa subagent runs every command as \`cd <qa worktree> && …\` (${qaShown(env)}), with no cd/pushd/popd after it, ` +
-    "no `..`, no `$(…)`, `$'…'`, backtick, backslash or variable, no `~`, no glob or brace next to a dot, " +
-    "and no absolute path outside that worktree but /dev/null (`-C/x` included); after it nightqueue runs only as `nightqueue sandbox <command>`, " +
-    "gh only as `gh pr view|diff|checks|list|status` or `gh issue view|list`, and git never as push, remote or config; " +
-    "only `nightqueue sandbox worktree <project>` and `nightqueue sandbox worktree --drop <path>` run bare"
-  );
+  const names = PIPELINE_AGENTS.map((name) => `${PLUGIN_NAME}:${name}`).join(", ");
+  return `${OPERATOR_GUARD}: the operator delegates only to the pipeline agents (${names}); ${shown} is refused`;
 }

@@ -52,6 +52,17 @@ test("each pipeline-independent agent file names nothing of the pipeline", () =>
   }
 });
 
+const EVIDENCE_CAP = "When the request forbids writing or running, the evidence level is capped at 2 and the verdict says so.";
+
+// A request that forbids writing or running (the operator's read-only delegation) caps every independent agent's evidence at 2.
+test("each pipeline-independent agent caps its evidence at 2 under a request that forbids writing or running", () => {
+  for (const agent of INDEPENDENT) {
+    const text = readFileSync(join(ROOT, `plugin/agents/${agent}.md`), "utf8");
+    const section = text.split("\n## How you operate\n")[1]?.split("\n## ")[0] ?? "";
+    assert.ok(section.replace(/\s+/g, " ").includes(EVIDENCE_CAP), `${agent}'s ## How you operate does not cap the evidence at 2`);
+  }
+});
+
 // The `## Deliver` block of a request is inline, or comes from every shared deliverable it includes.
 function carriesDeliver(request, name) {
   if (request.includes("## Deliver")) return true;

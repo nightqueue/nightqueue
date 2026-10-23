@@ -1,9 +1,11 @@
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { UserError } from "../config/errors.mjs";
+import { newId } from "../config/ids.mjs";
 import { registeredCheckouts } from "../memory/registry-access.mjs";
 import { PLUGIN_DIR_ENV } from "../queue/orchestrator-scope.mjs";
 import { sweepQaWorktrees } from "../queue/qa-worktree.mjs";
+import { OPERATOR_SESSION_ENV } from "../queue/operator-consent.mjs";
 import { killProcess } from "../queue/registry.mjs";
 import { CLAUDE_MISSING_MESSAGE, mcpConfigArg, pluginDir, resolveClaudeBin } from "../queue/spawn.mjs";
 import { isSessionIdSafe } from "../queue/stream.mjs";
@@ -55,15 +57,18 @@ export const CLAUDE_COMMAND_NAMES = new Set([
 // The prompt that opens a fresh operator session: the agent answers with its opening message (its contract says what it holds).
 export const OPERATOR_OPENING_PROMPT = "The session just opened. Give your opening message.";
 
-// The argv that makes the operator the main thread: the agent (or its body as a fallback), the plugin, the nightqueue MCP server, the jobs' own hooks, and the first prompt (the request given, else the opening prompt on a fresh session).
-export function operatorArgs({ env, mode, resumeSession = null, prompt = null }) {
+// The argv that makes the operator the main thread: the agent (or its body as a fallback), the plugin, the nightqueue MCP server pinned to the session, the jobs' own hooks, the host's default permission mode, and the first prompt (the request given, else the opening prompt on a fresh session).
+export function operatorArgs({ env, mode, resumeSession = null, prompt = null, session = null }) {
   const agent = mode === OPERATOR_MODE_AGENT ? ["--agent", OPERATOR_AGENT] : ["--append-system-prompt", operatorAgentBody()];
+  const operator = session ? { mode: "operator", session, pid: String(process.pid) } : null;
   return [
     ...agent,
     "--plugin-dir",
     pluginDir(),
     "--mcp-config",
-    mcpConfigArg(env, null),
+    mcpConfigArg(env, null, { operator }),
+    "--permission-mode",
+    "default",
     "--setting-sources",
     "project,local",
     "--settings",
@@ -89,12 +94,13 @@ export function operatorPrompt(value, usage) {
   return value;
 }
 
-// Environment of the operator session: the mode the guard reads, the launcher's pid, the preselected project when one is, and the plugin copy its reads are scoped to.
-export function operatorEnv(env, { projectId = null } = {}) {
+// Environment of the operator session: the mode the guard reads, the launcher's pid, the session id its consents live under, the preselected project when one is, and the plugin copy its reads are scoped to.
+export function operatorEnv(env, { projectId = null, session = null } = {}) {
   return {
     ...withoutOperatorSession(env),
     NIGHTQUEUE_MODE: "operator",
     NIGHTQUEUE_OPERATOR_PID: String(process.pid),
+    ...(session ? { [OPERATOR_SESSION_ENV]: session } : {}),
     ...(projectId ? { NIGHTQUEUE_PROJECT: projectId } : {}),
     [PLUGIN_DIR_ENV]: pluginDir(),
   };
@@ -150,10 +156,11 @@ export function operatorLaunch({ cwd, resumeSession = null, prompt = null, proje
   const bin = (ctx.resolveBinImpl ?? resolveClaudeBin)(ctx.env);
   if (!bin?.bin) throw new UserError(CLAUDE_MISSING_MESSAGE);
   const launchMode = mode ?? probeOperatorLaunch({ bin: bin.bin, ctx }).mode;
+  const session = newId();
   return {
     bin: bin.bin,
-    args: operatorArgs({ env: ctx.env, mode: launchMode, resumeSession, prompt }),
-    env: operatorEnv(ctx.env, { projectId: project?.id ?? null }),
+    args: operatorArgs({ env: ctx.env, mode: launchMode, resumeSession, prompt, session }),
+    env: operatorEnv(ctx.env, { projectId: project?.id ?? null, session }),
     mode: launchMode,
     line: launchLine({ cwd, project, mode: launchMode }),
   };

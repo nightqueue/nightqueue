@@ -5,7 +5,6 @@ import { test } from "node:test";
 import { defaultContext, run } from "../../src/cli/index.mjs";
 import { newId } from "../../src/config/ids.mjs";
 import { qaDir, qaWorktreePath } from "../../src/config/paths.mjs";
-import { runSubagentStop } from "../../src/hooks/subagent-stop.mjs";
 import { operatorSettings } from "../../src/host/settings.mjs";
 import {
   QA_WORKTREE_TTL_MS,
@@ -169,24 +168,6 @@ test("nightqueue sandbox worktree --drop refuses a worktree another live session
   }
 });
 
-test("the SubagentStop hook drops the qa worktree its own session announced and keeps one another live session holds", (t) => {
-  const { env, project } = qaFixture(t);
-  const session = { ...env, NIGHTQUEUE_MODE: "operator", NIGHTQUEUE_OPERATOR_PID: "999999" };
-  const own = createQaWorktree({ project, env: session });
-  const other = createQaWorktree({ project, env: { ...env, NIGHTQUEUE_OPERATOR_PID: String(process.pid) } });
-  const stop = (path, agentType = "nightqueue:qa", hookEnv = session) =>
-    runSubagentStop({ input: { hook_event_name: "SubagentStop", agent_type: agentType, last_assistant_message: `QA_WORKTREE: ${path}\nreproduced` }, env: hookEnv });
-  assert.equal(stop(own, "nightqueue:triage"), "");
-  assert.ok(existsSync(own));
-  assert.equal(stop(own, "nightqueue:qa", { ...session, NIGHTQUEUE_JOB_ID: "3" }), "");
-  assert.ok(existsSync(own));
-  assert.equal(stop(own), "");
-  assert.equal(existsSync(own), false);
-  assert.equal(stop(other), "");
-  assert.ok(existsSync(other));
-  assert.equal(runSubagentStop({ input: { hook_event_name: "SubagentStop", agent_type: "qa", last_assistant_message: 42 }, env: session }), "");
-});
-
 // The checks of `nightqueue doctor --json` over a home, gh answered by a fake so nothing leaves the machine.
 async function doctorChecks(env, args = []) {
   const out = [];
@@ -212,8 +193,7 @@ test("doctor lists the qa worktrees without writing, and doctor --fix drops the 
   assert.ok(existsSync(live));
 });
 
-test("operatorSettings wires the SubagentStop hook", (t) => {
+test("operatorSettings wires no SubagentStop hook: no agent announces a qa worktree any more", (t) => {
   const env = makeHome(t, "qa-settings");
-  const [group] = operatorSettings(env).hooks.SubagentStop;
-  assert.match(group.hooks[0].command, / hook subagent-stop$/);
+  assert.equal(operatorSettings(env).hooks.SubagentStop, undefined);
 });

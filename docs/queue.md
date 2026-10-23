@@ -732,10 +732,10 @@ tracked `.gitignore` (an operator commit; nightqueue never writes it). The
 `/.claude/worktrees/` and `/.claude/settings.local.json` lines an older nightqueue wrote into
 a checkout's `.git/info/exclude` are harmless, but they hide interactive worktrees from the
 dirty check too; delete them by hand once no job that started before the upgrade is open, and
-from then on an interactive worktree gates as above. The operator's QA worktrees live
+from then on an interactive worktree gates as above. QA worktrees live
 apart from every job's, at `<NIGHTQUEUE_HOME>/qa/<project_id>/<id>`: outside the checkout, so
 they never gate a job, and ephemeral - `nightqueue sandbox worktree` creates and drops them, and
-`nightqueue open`, `nightqueue doctor --fix` and the operator's SubagentStop hook sweep them (see
+`nightqueue open` and `nightqueue doctor --fix` sweep them (see
 [the CLI](cli.md#sandbox)). An operator before the generalist operator left its own under
 `<NIGHTQUEUE_HOME>/operator-qa/`, which `nightqueue doctor` reports as legacy leftovers.
 Two same-project jobs whose slugs collide on one branch name fail safely, one job at a

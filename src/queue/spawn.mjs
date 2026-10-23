@@ -67,20 +67,30 @@ function jobIdentity(env, jobId) {
   };
 }
 
-// Environment of the MCP server of the child: the home it answers for and, inside an unattended run, the job it is allowed to act on.
-function mcpServerEnv(env, jobId) {
-  const home = { NIGHTQUEUE_HOME: homeDir(env) };
-  return jobId === null || jobId === undefined ? home : { ...home, ...jobIdentity(env, jobId) };
+// Identity of an operator session, pinned on its MCP server only when the launcher passes it explicitly.
+function operatorIdentity(operator) {
+  return {
+    NIGHTQUEUE_MODE: String(operator.mode ?? "operator"),
+    NIGHTQUEUE_OPERATOR_SESSION: String(operator.session),
+    NIGHTQUEUE_OPERATOR_PID: String(operator.pid ?? process.pid),
+  };
 }
 
-// Inline --mcp-config value: one single argv string, no shell and no temporary file; the job identity is pinned here, never inherited from the parent process.
-export function mcpConfigArg(env = process.env, jobId = null) {
+// Environment of the MCP server of the child: the home it answers for and, inside an unattended run, the job it is allowed to act on, or the operator session it serves.
+function mcpServerEnv(env, jobId, operator) {
+  const home = { NIGHTQUEUE_HOME: homeDir(env) };
+  if (jobId !== null && jobId !== undefined) return { ...home, ...jobIdentity(env, jobId) };
+  return operator?.session ? { ...home, ...operatorIdentity(operator) } : home;
+}
+
+// Inline --mcp-config value: one single argv string, no shell and no temporary file; the job or operator identity is pinned here, never inherited from the parent process.
+export function mcpConfigArg(env = process.env, jobId = null, { operator = null } = {}) {
   return JSON.stringify({
     mcpServers: {
       nightqueue: {
         command: process.execPath,
         args: [cliEntrypoint(), "mcp"],
-        env: mcpServerEnv(env, jobId),
+        env: mcpServerEnv(env, jobId, operator),
       },
     },
   });
