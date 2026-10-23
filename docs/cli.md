@@ -34,27 +34,31 @@ nightqueue run log --json     # the same table as the only thing on stdout
 nightqueue run commit --message-file msg.txt   # stage what the implementation listed, and commit it
 nightqueue run pr --template                   # print and record the PR template in effect
 nightqueue run pr --body-file body.md          # check the body, push and open the pull request
-nightqueue run start --tier simple --type bug/error --commit-type fix   # the run's routing row, phases and tasks, as JSON
+nightqueue run start --tier simple             # the run's routing row, phases and tasks, as JSON
 nightqueue run start --routing                 # the whole routing table, every tier, as markdown
 nightqueue run publish --message-file msg.txt --body-file body.md      # check the body, commit once, push and open the PR
 nightqueue run report                          # the tables of the final report, from the run's own records
 ```
 
-`run start --tier <t> --type <bug/error|feature/refactor> --commit-type <c>
-[--expect-slug <slug>]` is Phase 0's mechanics in one call. It refuses a tier, a
+`run start --tier <t> [--type <bug/error|feature/refactor>] [--commit-type <c>]
+[--expect-slug <slug>]` is Phase 0's mechanics in one call. `--type` and
+`--commit-type` are optional (the shipped plugin passes neither: `run check 01` records
+both from the triager's Brief) and validated only when given. It refuses a tier, a
 type or a commit type outside the pipeline's own (naming the accepted values),
-records `type` and `tier` in `state.json` (the same write as `run_set`) and the
-pull request template in effect (the same as `run pr --template`), and prints one
-JSON line: `project`, `slug`, `runDir`, the `worktree` and `branch` the runtime
-recorded (it never creates a worktree), `tier`, `type`, `commitType`, the ONE
-`routing` row of the tier (from `src/queue/routing.mjs`), the `phases` and `tasks`
-of the tier and type, `prTemplate`, `commitConvention` and `commitTemplate`
+records the `tier`, and the `type` when given, in `state.json` (the same write as
+`run_set`) and the pull request template in effect (the same as `run pr --template`),
+and prints one JSON line: `project`, `slug`, `runDir`, the `worktree` and `branch` the
+runtime recorded (it never creates a worktree), `tier`, `type` (the recorded one, else
+the requested one, else null), `commitType` (the requested one, else the recorded one,
+else null), the ONE `routing` row of the tier (from `src/queue/routing.mjs`), the
+`phases` and `tasks` of the tier (the triager runs in every tier, so they never depend
+on the type), `prTemplate`, `commitConvention` and `commitTemplate`
 (`{source, path, label}`: the commit message template in effect, first match wins - `config`,
 git's own `commit.template` read in the run's checkout when it names an existing file; `repo`,
 the repository's convention file (`.gitmessage` gives `path`); else `nightqueue`, the fallback
 of `plugin/skills/resolve/references/commit-template.md`, `path` null). With `--expect-slug`,
 inside a job, it waits up to 10 seconds for the runner to bind the slug the
-orchestrator just declared (`SLUG: <slug> TYPE: <type>`) and answers `slugDeclared`
+orchestrator of an older plugin just declared (`SLUG: <slug> TYPE: <type>`) and answers `slugDeclared`
 and `slugBound`; it never renames anything itself. Calling it again answers the
 same JSON. `run start --routing` takes no other option: it prints the whole routing
 table of `src/queue/routing.mjs` as markdown, one row per line, and resolves no run
@@ -93,7 +97,7 @@ as `phase_prompt`; the orchestrator never reads that file, it pastes the output.
 
 `run check <NN>` is the artifact gate of a phase: it reads
 `<RUN_DIR>/<NN-phase>.md` and prints `OK` or `MISSING: <sections>` - the
-sections required are `## Brief` (`00`, the `00-brief.md` the orchestrator writes in Phase 0), `## Verdict` (with `Evidence level: <1|2|3|4>` as its first line), `## Validated brief`, `## Out of scope` and `## Request gaps` (`01`), `## File map`, `## Access map` and
+sections required are `## Brief` (`00`, the `00-brief.md` written by `run check 01`; an older plugin writes it by hand), `## Verdict` (with `Evidence level: <1|2|3|4>` as its first line), `## Validated brief`, `## Out of scope` and `## Request gaps` (`01`), `## File map`, `## Access map` and
 `## Third-party libraries` (`02`), the four sections of the plan (`03`),
 `## Modified files` (`04`), `## Proven breaks`, `## Break hypotheses`, `## Test recipe`,
 `## Validated risks`, `## Invalidated assumptions` and `## Verdict` (`05a`), `## Proven breaks`,
@@ -124,9 +128,14 @@ by prefix, outside fenced code and HTML comments; round artifacts are read on th
 `## Round`. The check acts on what it found: on a complete phase it records
 `phase_done` itself (`recorded: phase_done <phase> <verdict>`, with the reason of a re-run),
 `02` saves the File map into the project index (`index: saved N files, M libs` or
-`index: not saved (<reason>)`, which never changes `OK`), `01` records a missing Type
-(`recorded: type <type>`) and the termination of a terminal verdict
-(`recorded: run_terminate triage <VERDICT>`), and `05a` records the stage A marker
+`index: not saved (<reason>)`, which never changes `OK`), `01` gates the triage's
+`## Brief` (`brief-missing`, `brief-field-empty`, `brief-type-invalid`,
+`brief-commit-type-invalid`), records the Type (`recorded: type <type>`), writes the Brief
+into `<RUN_DIR>/00-brief.md` (`recorded: brief 00-brief.md`), records the commit type
+(`recorded: commit type <c>`), the termination of a terminal verdict, `PROPOSE-ALTERNATIVE`
+included (`recorded: run_terminate triage <VERDICT>`), and, last, the slug
+(`recorded: slug <slug>`, or `(renamed from <old>; run dir <path>)` when a job run still on
+its provisional slug takes the Brief's `**Slug:**`), and `05a` records the stage A marker
 (`recorded: qa_stage_a <verdict>`). Every gate code, the completion rule and the record
 semantics are in [Runtime contract](runtime-contract.md) ("The artifact check answers the gates").
 

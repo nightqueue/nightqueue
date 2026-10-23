@@ -457,9 +457,9 @@ test("liveState counts the runtime lane as slot 7 and publish as commit · PR, o
   const runtime = live([agentToolUseEvent({ subagentType: "nightqueue:verifier", prompt: RUNTIME_PROMPT, timestamp: secondsIntoAttempt(2) })]);
   assert.deepEqual([runtime.agent, runtime.phase, runtime.phases], ["verifier", 8, 9]);
   const verifier = live([agentToolUseEvent({ subagentType: "nightqueue:verifier", timestamp: secondsIntoAttempt(2) })], "trivial");
-  assert.deepEqual([verifier.phase, verifier.phases], [3, 4]);
+  assert.deepEqual([verifier.phase, verifier.phases], [4, 5]);
   const publish = live([toolUseEvent({ input: { command: "nightqueue run publish --slug x" }, timestamp: secondsIntoAttempt(3) })], "trivial");
-  assert.deepEqual([publish.phase, publish.phases], [4, 4]);
+  assert.deepEqual([publish.phase, publish.phases], [5, 5]);
 });
 
 test("liveState of a lane opened before the window has no identity but keeps its last event", () => {

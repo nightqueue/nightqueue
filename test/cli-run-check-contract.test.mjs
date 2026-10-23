@@ -1,15 +1,18 @@
 import assert from "node:assert/strict";
-import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { runDir } from "../src/config/paths.mjs";
 import { run } from "../src/cli/index.mjs";
+import { phasePrompt } from "../src/mcp/phase-prompt.mjs";
 import { openDb } from "../src/memory/db.mjs";
-import { addJob } from "../src/memory/jobs.mjs";
+import { addJob, getJob } from "../src/memory/jobs.mjs";
 import { evaluateCheck } from "../src/queue/check-contract.mjs";
 import { composeGateNotice } from "../src/queue/gate-notice.mjs";
 import { decideResume, readRunState } from "../src/queue/resume.mjs";
+import { applyRetry } from "../src/queue/retry.mjs";
+import { provisionalSlug } from "../src/queue/run-slug.mjs";
 import { recordPhaseDone, recordRunFields, recordTermination } from "../src/queue/run-state.mjs";
 import { ensureProject, makeHome, makeProject } from "../test-support/memory.mjs";
 
@@ -75,6 +78,10 @@ test("every gate code and fact of the check contract has a fixture", () => {
     "usage-coverage-held-on-pipeline",
     "runtime-not-met",
     "runtime-no-attempt",
+    "brief-missing",
+    "brief-field-empty",
+    "brief-type-invalid",
+    "brief-commit-type-invalid",
   ];
   for (const code of codes) {
     assert.ok(names.includes(code), `no fixture for ${code}`);
@@ -219,9 +226,14 @@ test("a completed check 05a records the QA stage A marker and no phase", async (
 
 // ---- Fix round 1.
 
+// A complete `## Brief` of a bug triage, with the extra field lines given.
+function briefOf(extra = "") {
+  return `## Brief\n**Affected area:** src/a.mjs\n**Context:** the listing\n**Objective:** list the jobs\n**Expected outcome:** the archived jobs are listed\n**Type:** bug/error\n**Commit type:** fix\n${extra}\n`;
+}
+
 // A triage of the given verdict whose open item asks the user one question.
-function triageWith(verdict, openItems = "## Open items\n- Which listing is meant?\n") {
-  return `# Triage\n\n## Verdict: ${verdict}\n\nEvidence level: 3\n\n## Diagnosis\n- Confirmed root cause: y (src/a.mjs:1)\n- Symptom proof: a.mjs:1 calls b\n\n## Validated brief\nFix the thing.\n\n## Out of scope\n- None.\n\n## Request gaps\n- None.\n\n${openItems}`;
+function triageWith(verdict, openItems = "## Open items\n- Which listing is meant?\n", brief = briefOf()) {
+  return `# Triage\n\n${brief}## Verdict: ${verdict}\n\nEvidence level: 3\n\n## Diagnosis\n- Confirmed root cause: y (src/a.mjs:1)\n- Symptom proof: a.mjs:1 calls b\n\n## Validated brief\nFix the thing.\n\n## Out of scope\n- None.\n\n## Request gaps\n- None.\n\n${openItems}`;
 }
 
 test("a clarification triage without an open item is MISSING, so nothing completes and nothing terminates", async (t) => {
@@ -241,10 +253,10 @@ test("an open item written as prose counts, and a deeper `### Open items` headin
 
 test("a PROCEED re-triage lifts the runtime's clarification stop, and the answered run resumes", async (t) => {
   const seeded = seedRun(t, "lift-termination", { fixture: { type: "bug/error" }, texts: { "01-triage.md": triageWith("NEEDS-CLARIFICATION") } });
-  assert.equal((await runCheck(seeded.env, "01")).out.at(-1), "recorded: run_terminate triage NEEDS-CLARIFICATION");
+  assert.equal((await runCheck(seeded.env, "01")).out.at(-2), "recorded: run_terminate triage NEEDS-CLARIFICATION");
   assert.equal(stateOf(seeded).termination.by, "runtime");
   writeFileSync(join(seeded.dir, "01-triage.md"), triageWith("PROCEED"));
-  assert.equal((await runCheck(seeded.env, "01")).out.at(-1), "recorded: termination cleared");
+  assert.deepEqual((await runCheck(seeded.env, "01")).out.slice(-2), ["recorded: termination cleared", `recorded: slug ${SLUG}`]);
   recordPhaseDone({ projectId: seeded.projectId, slug: SLUG, phase: "explore", env: seeded.env });
   recordPhaseDone({ projectId: seeded.projectId, slug: SLUG, phase: "architecture", env: seeded.env });
   const decision = decideResume({ state: stateOf(seeded) });
@@ -290,4 +302,112 @@ test("a refused record prints `recorded: not recorded` and never changes the fir
   assert.equal(code, 0);
   assert.deepEqual(out.slice(0, 2), ["OK", "VERDICT: PASSED"]);
   assert.match(out[2], /^recorded: not recorded \(.+\)$/);
+});
+
+// ---- The triager writes the Brief: check 01 copies it, records its facts and binds its slug.
+
+// The job id a seeded run's environment names.
+function jobIdOf(seeded) {
+  return Number(seeded.env.NIGHTQUEUE_JOB_ID);
+}
+
+// A run still on the provisional slug the runtime derived for its job, held by a worker, with a triage written into it.
+function seedProvisional(t, name, triage) {
+  const env = makeHome(t, `check-contract-${name}`);
+  makeProject(t, env, "alpha");
+  const projectId = ensureProject(env, "alpha");
+  const id = addJob({ projectId, prompt: "check the contract" }, env).id;
+  const slug = provisionalSlug(getJob(id, env));
+  openDb(env).prepare("UPDATE jobs SET slug = ?, worker = 'w1' WHERE id = ?").run(slug, id);
+  const dir = runDir(projectId, slug, env);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "01-triage.md"), triage);
+  return { env: { ...env, NIGHTQUEUE_JOB_ID: String(id) }, projectId, slug, dir, id };
+}
+
+test("a PROPOSE-ALTERNATIVE triage terminates the run, the gate answer lifts it, and a PROCEED re-triage records the phase", async (t) => {
+  const seeded = seedRun(t, "propose-alternative", readFixture("triage-propose-alternative"));
+  const proposed = await runCheck(seeded.env, "01");
+  assert.ok(proposed.out.includes("recorded: run_terminate triage PROPOSE-ALTERNATIVE"), proposed.out.join("\n"));
+  assert.equal(decideResume({ state: stateOf(seeded) }).reason, "terminated-by-verdict");
+  const notice = composeGateNotice({ runDir: seeded.dir, fromArtifact: { file: "01-triage.md", section: "## Open items" } });
+  assert.match(notice, /Alternative: filter the existing `queue list`/);
+  openDb(seeded.env).prepare("UPDATE jobs SET status = 'gate' WHERE id = ?").run(jobIdOf(seeded));
+  await applyRetry({ id: jobIdOf(seeded), note: "go with the alternative", env: seeded.env });
+  assert.equal(stateOf(seeded).termination, undefined);
+  writeFileSync(join(seeded.dir, "01-triage.md"), triageWith("PROCEED"));
+  const proceeded = await runCheck(seeded.env, "01");
+  assert.ok(proceeded.out.some((line) => line.startsWith("recorded: phase_done triage PROCEED")), proceeded.out.join("\n"));
+  const reTriaged = decideResume({ state: stateOf(seeded) });
+  assert.deepEqual([reTriaged.resume, reTriaged.fromPhase], [true, "explore"]);
+  recordPhaseDone({ projectId: seeded.projectId, slug: SLUG, phase: "explore", env: seeded.env });
+  const decision = decideResume({ state: stateOf(seeded) });
+  assert.deepEqual([decision.resume, decision.fromPhase], [true, "architecture"]);
+});
+
+test("a terminal triage with a partial Brief fires no field gate and still terminates", async (t) => {
+  const partial = "## Brief\n**Affected area:** src/a.mjs\n**Commit type:**\n\n";
+  const seeded = seedRun(t, "terminal-partial-brief", { fixture: { type: "bug/error" }, texts: { "01-triage.md": triageWith("NEEDS-CLARIFICATION", undefined, partial) } });
+  const { out } = await runCheck(seeded.env, "01");
+  assert.ok(!out.some((line) => line.startsWith("GATE: ")), out.join("\n"));
+  assert.ok(out.includes("recorded: run_terminate triage NEEDS-CLARIFICATION"), out.join("\n"));
+});
+
+test("check 01 writes the Brief the phase prompts read and records the type and the commit type", async (t) => {
+  const seeded = seedRun(t, "writes-brief", { fixture: {}, texts: { "01-triage.md": triageWith("PROCEED") } });
+  recordRunFields({ projectId: seeded.projectId, slug: SLUG, fields: { tier: "simple" }, env: seeded.env });
+  const { out } = await runCheck(seeded.env, "01");
+  assert.deepEqual(out, [
+    "OK",
+    "VERDICT: PROCEED",
+    "recorded: type bug/error",
+    "recorded: brief 00-brief.md",
+    "recorded: commit type fix",
+    "recorded: phase_done triage PROCEED",
+    `recorded: slug ${SLUG}`,
+  ]);
+  const brief = readFileSync(join(seeded.dir, "00-brief.md"), "utf8");
+  assert.ok(brief.startsWith("## Brief\n"), brief);
+  assert.match(brief, /^\*\*Context:\*\* the listing$/m);
+  assert.match(brief, /^\*\*Expected outcome:\*\* the archived jobs are listed$/m);
+  const state = stateOf(seeded);
+  assert.deepEqual([state.type, state.commitType], ["bug/error", "fix"]);
+  const run = { project: "alpha", projectId: seeded.projectId, slug: SLUG };
+  const { prompt } = await phasePrompt({ target: "explore" }, { run, env: seeded.env });
+  assert.ok(prompt.includes("Find the files related to: src/a.mjs"), prompt);
+  assert.ok(prompt.includes("Task objective: list the jobs"), prompt);
+});
+
+test("a valid Brief Type overrides a different recorded type, and says what it replaced", async (t) => {
+  const seeded = seedRun(t, "type-override", { fixture: { type: "feature/refactor" }, texts: { "01-triage.md": triageWith("PROCEED") } });
+  const { out } = await runCheck(seeded.env, "01");
+  assert.ok(out.includes("recorded: type bug/error (was feature/refactor)"), out.join("\n"));
+  assert.equal(stateOf(seeded).type, "bug/error");
+});
+
+test("check 01 renames a provisional run onto the Brief's slug, last, leaving no directory at the old slug", async (t) => {
+  const seeded = seedProvisional(t, "slug-rename", triageWith("PROCEED", undefined, briefOf("**Slug:** active-jobs-filter\n")));
+  const { out } = await runCheck(seeded.env, "01");
+  const newDir = runDir(seeded.projectId, "active-jobs-filter", seeded.env);
+  assert.equal(out.at(-1), `recorded: slug active-jobs-filter (renamed from ${seeded.slug}; run dir ${newDir})`);
+  assert.equal(existsSync(seeded.dir), false, "a ghost directory was left at the provisional slug");
+  assert.ok(existsSync(join(newDir, "00-brief.md")));
+  assert.equal(readRunState({ projectId: seeded.projectId, slug: "active-jobs-filter", env: seeded.env }).phases[0].phase, "triage");
+  assert.equal(getJob(seeded.id, seeded.env).slug, "active-jobs-filter");
+});
+
+test("a provisional run keeps its slug when the Brief's slug is taken, missing or invalid", async (t) => {
+  const taken = seedProvisional(t, "slug-taken", triageWith("PROCEED", undefined, briefOf("**Slug:** active-jobs-filter\n")));
+  const other = addJob({ projectId: taken.projectId, prompt: "another job" }, taken.env).id;
+  openDb(taken.env).prepare("UPDATE jobs SET slug = 'active-jobs-filter' WHERE id = ?").run(other);
+  const takenOut = (await runCheck(taken.env, "01")).out;
+  assert.match(takenOut.at(-1), new RegExp(`^recorded: slug ${taken.slug} \\(kept: .+ holds it\\)$`));
+  assert.ok(existsSync(taken.dir));
+  assert.equal(getJob(taken.id, taken.env).slug, taken.slug);
+
+  const missing = seedProvisional(t, "slug-missing", triageWith("PROCEED"));
+  assert.equal((await runCheck(missing.env, "01")).out.at(-1), `recorded: slug ${missing.slug} (kept: the Brief names no **Slug:**)`);
+
+  const invalid = seedProvisional(t, "slug-invalid", triageWith("PROCEED", undefined, briefOf("**Slug:** ../escape\n")));
+  assert.equal((await runCheck(invalid.env, "01")).out.at(-1), `recorded: slug ${invalid.slug} (kept: \`../escape\` is not a valid run slug)`);
 });

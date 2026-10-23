@@ -97,6 +97,15 @@ test("a deliberate termination closes the run, whether it came as an object or a
   assert.deepEqual({ reason: stopped.reason, lastPhase: stopped.lastPhase }, { reason: "terminated-by-verdict", lastPhase: "triage" });
 });
 
+test("the latest entry of a repeated phase decides the resume, so a re-triage after a gate answer counts", () => {
+  const triages = (...verdicts) => ({ schemaVersion: 1, slug: "s", resumeCount: 0, phases: verdicts.map((verdict) => ({ phase: "triage", verdict })) });
+  const reTriaged = decideResume({ state: triages("PROPOSE-ALTERNATIVE", "PROCEED") });
+  assert.deepEqual({ resume: reTriaged.resume, fromPhase: reTriaged.fromPhase }, { resume: true, fromPhase: "explore" });
+  assert.equal(decideResume({ state: triages("PROCEED", "NEEDS-CLARIFICATION") }).reason, "terminated-by-verdict");
+  const explored = decideResume({ state: state({ phases: ["triage", "explore", "explore"] }) });
+  assert.deepEqual({ resume: explored.resume, fromPhase: explored.fromPhase }, { resume: true, fromPhase: "architecture" });
+});
+
 test("the resume budget is spent once: the second stop of the same run stays stopped", () => {
   assert.equal(decideResume({ state: state({ resumeCount: 0 }) }).resumeCount, 1);
   assert.equal(decideResume({ state: state({ resumeCount: 1 }) }).reason, "resume-cap");

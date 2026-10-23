@@ -564,7 +564,7 @@ is never sent to the origins. The kind is the row's own marker (`result.resoluti
 "no-change"`, written only from that record), never the missing pull request alone: a PR-less
 `done` written by a repair, a reclassify or a recovery without the record is still refused
 with `nothing to close: the job has no pull request`. The record is the
-only way in: a `NOT-REPRODUCIBLE` or `NEEDS-CLARIFICATION` run, and a `no_commit` exit without
+only way in: a `NOT-REPRODUCIBLE`, `NEEDS-CLARIFICATION` or `PROPOSE-ALTERNATIVE` run, and a `no_commit` exit without
 it, still end `cancelled`; the same record on an exit that failed, timed out or was stopped
 still ends `failed` or `cancelled`, and one without a notice is `failed`.
 
@@ -991,8 +991,9 @@ hangs off the project's id, not its name, so a `nightqueue project rename`
 never moves it, while `Project:` carries the current name. A session that has
 no `RUN_DIR:` line asks for it with `nightqueue run dir` (inside a job) or
 `nightqueue run dir --project <name> --slug <slug>`, and never builds the path
-from the name. The pipeline renames the run once, by printing
-`SLUG: <slug> TYPE: <type>` on a line of its own, and the runtime moves the
+from the name. The run is renamed once, by `nightqueue run check 01` when the triager's
+Brief names a `**Slug:**` for a run still on its provisional slug (an older plugin prints
+`SLUG: <slug> TYPE: <type>` on a line of its own instead), and the runtime moves the
 directory with the artifacts already inside it. Everything the run records lands in
 the `state.json` of that directory, written by the runtime alone (see
 [Runtime contract](runtime-contract.md)).
@@ -1412,8 +1413,10 @@ resumes on the next run.
 One job is one self-contained deliverable that can be reviewed and merged on its
 own. Large work is ONE job with numbered stages written in the prompt — never
 several jobs that depend on each other. A job that needs another job's pull
-request merged first is cut wrong: fold it into that job. Independent jobs may
-run in parallel and merge in any order.
+request merged first is cut wrong: fold it into that job. `queue add` (like the MCP
+`queue_add`) refuses a prompt that conditions the work on another job (`after J-12 …`), with
+the same message; a bare `J-12` mention, or one inside fenced code, is accepted. Independent
+jobs may run in parallel and merge in any order.
 
 ```sh
 nightqueue queue add "Self-contained install. Stages: 1) runtime under ~/.nightqueue; 2) shim + PATH prompt; 3) embedding opt-in; 4) rename bin to ns. Each stage verified before the next; one PR."

@@ -63,6 +63,7 @@ const COMPLEX_CLEAN = [
 test("a clean simple run prints the compact line and `Happy: yes`, with no execution table", async (t) => {
   const { env, id, run: target } = makeRun(t, "report-simple-happy", { tier: "simple" });
   recordPhases(target, [
+    ["triage", "PROCEED", "confirmed the missing helper"],
     ["implementation", "ok", "slugify added"],
     ["verification", "PASSED", "suite green"],
   ]);
@@ -188,7 +189,7 @@ test("a note with `|` or a line break stays inside its table cell and on the Hap
 
 test("a run with no delivery recorded is not happy", async (t) => {
   const { env, id, run: target } = makeRun(t, "report-no-delivery", { tier: "simple" });
-  recordPhases(target, [["implementation", "ok", "done"], ["verification", "PASSED", "green"]]);
+  recordPhases(target, [["triage", "PROCEED", "confirmed"], ["implementation", "ok", "done"], ["verification", "PASSED", "green"]]);
   const lines = await report(env, id);
   assert.ok(lines.includes("Happy: no — 7 Commit/PR ⚠️ no pull request recorded"), lines.join("\n"));
 });
@@ -200,7 +201,7 @@ test("the report carries no lesson audit, even when the stream has `lesson_save`
   ]);
   for (const tier of ["simple", "complex"]) {
     const { env, id, run: target } = makeRun(t, `report-no-lessons-${tier}`, { tier });
-    recordPhases(target, tier === "simple" ? [["implementation", "ok", "done"], ["verification", "PASSED", "green"]] : COMPLEX_CLEAN);
+    recordPhases(target, tier === "simple" ? [["triage", "PROCEED", "confirmed"], ["implementation", "ok", "done"], ["verification", "PASSED", "green"]] : COMPLEX_CLEAN);
     recordDelivery(target);
     mkdirSync(logsDir(env), { recursive: true });
     writeFileSync(jobLogPath(id, env), log);

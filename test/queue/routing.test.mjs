@@ -39,7 +39,7 @@ test("the routing rationale moved verbatim into the header of the module", () =>
 
 test("the row of each tier answers the models, the limits and the rules the phases act on", () => {
   assert.deepEqual(routingRow("trivial").models, {
-    triager: null,
+    triager: "sonnet",
     explore: null,
     architect: null,
     coder: "sonnet",
@@ -47,7 +47,7 @@ test("the row of each tier answers the models, the limits and the rules the phas
     verifier: "haiku",
   });
   assert.deepEqual(routingRow("simple").models, {
-    triager: "haiku",
+    triager: "sonnet",
     explore: null,
     architect: null,
     coder: "sonnet",
@@ -62,8 +62,8 @@ test("the row of each tier answers the models, the limits and the rules the phas
     qaGuardian: "sonnet",
     verifier: "sonnet",
   });
-  assert.equal(routingRow("simple").triagerBugOnly, true);
-  assert.equal(routingRow("complex").triagerBugOnly, false);
+  for (const tier of ["trivial", "simple", "complex"]) assert.equal(routingRow(tier).triagerBugOnly, false);
+  assert.equal("requestCritique" in routingRow("simple"), false);
   assert.deepEqual(
     ["trivial", "simple", "complex"].map((tier) => routingRow(tier).maxFixIterations),
     [1, 2, 2],
@@ -80,10 +80,13 @@ test("the row of each tier answers the models, the limits and the rules the phas
   assert.equal(routingRow("complex").track, "Standard");
 });
 
-test("the phases of a run follow its tier, and the simple tier triages a bug only", () => {
-  assert.deepEqual(phasesFor("trivial", "bug/error"), ["implementation", "verification", "commit"]);
-  assert.deepEqual(phasesFor("simple", "feature/refactor"), ["implementation", "verification", "commit"]);
-  assert.deepEqual(phasesFor("simple", "bug/error"), ["triage", "implementation", "verification", "commit"]);
+test("the phases of a run follow its tier alone, and every tier triages", () => {
+  const fast = ["triage", "implementation", "verification", "commit"];
+  assert.deepEqual(phasesFor("trivial", "bug/error"), fast);
+  assert.deepEqual(phasesFor("simple", "feature/refactor"), fast);
+  assert.deepEqual(phasesFor("simple", "bug/error"), fast);
+  assert.deepEqual(phasesFor("simple", null), fast);
+  assert.deepEqual(phasesFor("trivial"), fast);
   assert.deepEqual(phasesFor("complex", "feature/refactor"), [
     "triage",
     "explore",
@@ -103,7 +106,7 @@ test("an unknown tier or type is refused with the accepted values", () => {
 });
 
 test("the slot numbers of a track follow its tier's phases, and the glyph of an agent is read from the routing table", () => {
-  assert.deepEqual(trackPhaseNumbers("trivial"), [0, 4, 6, 8]);
+  assert.deepEqual(trackPhaseNumbers("trivial"), [0, 1, 4, 6, 8]);
   assert.deepEqual(trackPhaseNumbers("simple"), [0, 1, 4, 6, 8]);
   assert.deepEqual(trackPhaseNumbers("complex"), [0, 1, 2, 3, 4, 5, 6, 7, 8]);
   assert.equal(trackPhaseNumbers("nope"), null);
@@ -134,11 +137,11 @@ test("the studio track has nine slots in order, each with its routing agent key 
   for (const slot of TRACK_SLOTS.filter((candidate) => candidate.agent)) assert.ok(slot.agent in routingRow("complex").models, `${slot.agent} is a routing agent`);
 });
 
-test("the off-tier phases follow the tier and type, the tier alone while the type is unknown", () => {
-  assert.deepEqual(offTierPhases("trivial", "bug/error"), ["triage", "explore", "architecture", "qa", "runtime"]);
-  assert.deepEqual(offTierPhases("trivial", null), ["triage", "explore", "architecture", "qa", "runtime"]);
+test("the off-tier phases follow the tier alone, whatever the type", () => {
+  assert.deepEqual(offTierPhases("trivial", "bug/error"), ["explore", "architecture", "qa", "runtime"]);
+  assert.deepEqual(offTierPhases("trivial", null), ["explore", "architecture", "qa", "runtime"]);
   assert.deepEqual(offTierPhases("simple", "bug/error"), ["explore", "architecture", "qa", "runtime"]);
-  assert.deepEqual(offTierPhases("simple", "feature/refactor"), ["triage", "explore", "architecture", "qa", "runtime"]);
+  assert.deepEqual(offTierPhases("simple", "feature/refactor"), ["explore", "architecture", "qa", "runtime"]);
   assert.deepEqual(offTierPhases("simple", null), ["explore", "architecture", "qa", "runtime"]);
   assert.deepEqual(offTierPhases("simple", "chore"), ["explore", "architecture", "qa", "runtime"]);
   assert.deepEqual(offTierPhases("complex", "feature/refactor"), []);

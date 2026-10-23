@@ -121,18 +121,18 @@ test("a simple bug hatches explore, architect, qa-guardian and runtime by tier, 
   assert.deepEqual(phaseOf(recorded, 2).skipped, { by: "tier", reason: null, at: "2026-10-09T10:00:00.000Z" });
 });
 
-test("a simple feature also hatches the triager by tier: five skipped", () => {
+test("a simple feature keeps the triager in the track too: four skipped", () => {
   const timeline = phaseTimeline([], { tier: "simple", type: "feature/refactor", status: "pending" });
-  assert.deepEqual(skippedNumbers(timeline), [1, 2, 3, 5, 7]);
-  assert.deepEqual(phaseOf(timeline, 1).skipped, { by: "tier", reason: null, at: null });
-  assert.equal(phaseOf(timeline, 1).model, null, "a skipped slot names no routing model");
+  assert.deepEqual(skippedNumbers(timeline), [2, 3, 5, 7]);
+  assert.equal(phaseOf(timeline, 1).state, "pending");
+  assert.equal(phaseOf(timeline, 2).model, null, "a skipped slot names no routing model");
 });
 
-test("a simple run of unknown type hatches four and leaves the triager pending; trivial hatches five and complex none", () => {
+test("a simple run of unknown type and a trivial run hatch four and leave the triager pending; complex hatches none", () => {
   const unknownType = phaseTimeline([], { tier: "simple", type: "not-a-type", status: "pending" });
   assert.deepEqual(skippedNumbers(unknownType), [2, 3, 5, 7]);
   assert.equal(phaseOf(unknownType, 1).state, "pending");
-  assert.deepEqual(skippedNumbers(phaseTimeline([], { tier: "trivial", status: "pending" })), [1, 2, 3, 5, 7]);
+  assert.deepEqual(skippedNumbers(phaseTimeline([], { tier: "trivial", status: "pending" })), [2, 3, 5, 7]);
   assert.deepEqual(skippedNumbers(phaseTimeline([], { tier: "complex", type: "feature/refactor", status: "pending" })), []);
 });
 

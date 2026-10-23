@@ -387,6 +387,11 @@ export function sectionOf(text, heading) {
   return sectionWhere(text, (line) => line.trimEnd().startsWith(heading));
 }
 
+// The section whose heading line is exactly the heading (trailing spaces allowed, never a prefix), read outside a fence; null when absent.
+export function wholeHeadingSectionOf(text, heading) {
+  return sectionWhere(text, (line) => line.trimEnd() === heading);
+}
+
 // The section whose heading, at any level from `#` to `######`, starts with the heading's title, read outside a fence; null when absent.
 export function sectionOfAnyLevel(text, heading) {
   const title = String(heading ?? "").replace(/^#+\s*/, "");

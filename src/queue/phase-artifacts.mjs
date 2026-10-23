@@ -13,13 +13,13 @@ function verdictSpec({ heading, from, values }) {
   return { heading, from, values, label: `${heading}: <${values.join("|")}>${suffix}` };
 }
 
-const TRIAGE_VERDICT = verdictSpec({ heading: "## Verdict", from: "heading-suffix", values: ["PROCEED", "NO-CHANGE-NEEDED", "NOT-REPRODUCIBLE", "NEEDS-CLARIFICATION"] });
+const TRIAGE_VERDICT = verdictSpec({ heading: "## Verdict", from: "heading-suffix", values: ["PROCEED", "NO-CHANGE-NEEDED", "NOT-REPRODUCIBLE", "NEEDS-CLARIFICATION", "PROPOSE-ALTERNATIVE"] });
 const QA_VERDICT = verdictSpec({ heading: "## Verdict", from: "first-line", values: ["APPROVED", "NEEDS FIX", "NEEDS DISCUSSION"] });
 const VERIFICATION_VERDICT = verdictSpec({ heading: "## Verification", from: "heading-suffix", values: ["PASSED", "PASSED-STATIC", "FAILED"] });
 const RUNTIME_VERDICT = verdictSpec({ heading: "## Runtime verdict", from: "first-line", values: ["CONFIRMED", "NOT-MET", "SYMPTOM-PERSISTS", "NEEDS-DEVICE", "UNAVAILABLE"] });
 
 // The sections a triage verdict's next step reads, so the check requires them filled on that verdict alone.
-const TRIAGE_SECTIONS_BY_VERDICT = { "NEEDS-CLARIFICATION": ["## Open items"], "NOT-REPRODUCIBLE": ["## Open items"] };
+const TRIAGE_SECTIONS_BY_VERDICT = { "NEEDS-CLARIFICATION": ["## Open items"], "NOT-REPRODUCIBLE": ["## Open items"], "PROPOSE-ALTERNATIVE": ["## Open items"] };
 
 // The artifact of each phase, the canonical phase it completes, the sections its gate requires (some only on a verdict) and where its verdict is read; a phase with no required section is checked for existence alone.
 export const PHASE_ARTIFACTS = new Map([

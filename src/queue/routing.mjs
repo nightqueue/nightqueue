@@ -15,8 +15,8 @@
  *
  * Exceptions: **QA** does not edit source (it only writes PoCs) and its core is adversarial
  * reasoning + regression analysis → `sonnet`, not `opus`. **Triager** does not edit,
- * but reproduces the bug by running/instrumenting the
- * code → `haiku` (simple) / `sonnet` (complex). Phases 0/7/8 run in the orchestrator
+ * but it writes the Brief every later phase reads, critiques the request and reproduces the
+ * bug → `sonnet` in every tier, and it runs in every tier. Phases 0/7/8 run in the orchestrator
  * (the skill's model, without routing).
  *
  * The `simple` tier has no architect and no qa-guardian: its safety net is the verifier's full
@@ -29,7 +29,6 @@ import { PIPELINE_TASK_TYPES, PIPELINE_TIERS } from "../memory/runs.mjs";
 import { RESUME_PHASE_ORDER } from "./resume.mjs";
 
 const NOT_RUN = "—";
-const BUG = "bug/error";
 const QA_METHODS =
   "automated; + api for an API change; + emulator for a UI change in an Expo repo; + browser for a UI change in a web repo";
 const IMPLEMENTATION_GATE = "written by the coder, gate `nightqueue run check 04`";
@@ -37,8 +36,8 @@ const IMPLEMENTATION_GATE = "written by the coder, gate `nightqueue run check 04
 // The routing table, one row per line of the old skill table, each cell with its text for trivial, simple and complex.
 export const TRACK_ROUTING = [
   ["Track", ["Fast Lite", "Fast", "Standard"]],
-  ["Phases that run", ["0 · 4 · 6 · 7 · 8", "0 · 1 (bug only) · 4 · 6 · 7 · 8", "every phase, 0 to 8"]],
-  ["🔍 triager", [NOT_RUN, "haiku (bug only)", "sonnet"]],
+  ["Phases that run", ["0 · 1 · 4 · 6 · 7 · 8", "0 · 1 · 4 · 6 · 7 · 8", "every phase, 0 to 8"]],
+  ["🔍 triager", ["sonnet", "sonnet", "sonnet"]],
   ["🧭 Explore", [NOT_RUN, NOT_RUN, "sonnet"]],
   ["📐 architect", [NOT_RUN, NOT_RUN, "opus"]],
   ["⚙️ coder", ["sonnet", "sonnet", "opus"]],
@@ -54,7 +53,6 @@ export const TRACK_ROUTING = [
   ],
   ["QA methods of the PR", [QA_METHODS, QA_METHODS, QA_METHODS]],
   ["Max fix iterations", ["1", "2", "2"]],
-  ["Request critique (step 2.5)", ["skipped", "mandatory", "mandatory"]],
   ["`<CWD>/CLAUDE.md`", ["not named to the coder", "named to the coder when it exists", "named to the coder (Phase 4)"]],
   ["`index_recall`", ["no", "yes, to locate the affected files", "yes, in Phase 2 before the Explore"]],
   ["`context_for_phase` for the coder", ["no", "yes", "yes"]],
@@ -72,10 +70,10 @@ const AGENT_ROWS = {
   verifier: "✅ verifier",
 };
 
-// The pipeline phases each tier runs, in the canonical order; the simple tier adds the triage on a bug only.
+// The pipeline phases each tier runs, in the canonical order; the triage runs in every tier.
 const TIER_PHASES = {
-  trivial: ["implementation", "verification", "commit"],
-  simple: ["implementation", "verification", "commit"],
+  trivial: ["triage", "implementation", "verification", "commit"],
+  simple: ["triage", "implementation", "verification", "commit"],
   complex: [...RESUME_PHASE_ORDER],
 };
 
@@ -116,7 +114,6 @@ export function routingRow(tier) {
     verifierScope: cells["Verifier scope"],
     qaMethods: cells["QA methods of the PR"],
     maxFixIterations: Number(cells["Max fix iterations"]),
-    requestCritique: cells["Request critique (step 2.5)"],
     claudeMd: cells["`<CWD>/CLAUDE.md`"] !== "not named to the coder",
     indexRecall: cells["`index_recall`"] !== "no",
     contextForCoder: cells["`context_for_phase` for the coder"] === "yes",
@@ -131,12 +128,10 @@ export function routingTable() {
   return ["| Routing | trivial | simple | complex |", "| --- | --- | --- | --- |", ...rows].join("\n");
 }
 
-// The canonical phases a run of this tier and type goes through, in order.
+// The canonical phases a run of this tier goes through, in order; a type, when given, must be one of the pipeline's.
 export function phasesFor(tier, type) {
-  requireType(type);
-  const phases = TIER_PHASES[requireTier(tier)];
-  if (tier === "simple" && type === BUG) return ["triage", ...phases];
-  return [...phases];
+  if (type !== undefined && type !== null && type !== "") requireType(type);
+  return [...TIER_PHASES[requireTier(tier)]];
 }
 
 // The nine slots of the studio track, in order: the number, the label, the routing agent key and the canonical phase of each.
@@ -161,21 +156,17 @@ export function slotNumberOf(phase) {
   return slot.number;
 }
 
-// The phases of the phase slots (1 to 8) the run does not go through: from its tier and type, from the tier alone while the type is unknown, none for an unknown tier.
-export function offTierPhases(tier, type) {
+// The phases of the phase slots (1 to 8) the run does not go through, from its tier alone (the type no longer changes them); none for an unknown tier.
+export function offTierPhases(tier) {
   if (!PIPELINE_TIERS.includes(tier)) return [];
-  if (PIPELINE_TASK_TYPES.includes(type)) {
-    const phases = phasesFor(tier, type);
-    return PHASE_SLOTS.filter((slot) => !phases.includes(slot.phase)).map((slot) => slot.phase);
-  }
-  const numbers = trackPhaseNumbers(tier);
-  return PHASE_SLOTS.filter((slot) => !numbers.includes(slot.number)).map((slot) => slot.phase);
+  const phases = TIER_PHASES[tier];
+  return PHASE_SLOTS.filter((slot) => !phases.includes(slot.phase)).map((slot) => slot.phase);
 }
 
-// The track slot numbers the tier's track runs, the brief's 0 first, derived from the tier's phases (the triager kept on simple); null for a tier outside the pipeline.
+// The track slot numbers the tier's track runs, the brief's 0 first, derived from the tier's phases; null for a tier outside the pipeline.
 export function trackPhaseNumbers(tier) {
   if (!PIPELINE_TIERS.includes(tier)) return null;
-  const phases = tier === "simple" ? ["triage", ...TIER_PHASES.simple] : TIER_PHASES[tier];
+  const phases = TIER_PHASES[tier];
   return [0, ...PHASE_SLOTS.filter((slot) => phases.includes(slot.phase)).map((slot) => slot.number)];
 }
 

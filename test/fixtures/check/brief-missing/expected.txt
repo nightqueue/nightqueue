@@ -1,0 +1,4 @@
+OK
+VERDICT: PROCEED
+GATE: brief-missing — ## Brief absent
+recorded: none (GATE: brief-missing — ## Brief absent)

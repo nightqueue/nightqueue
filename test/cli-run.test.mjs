@@ -253,7 +253,7 @@ function gateLines(out) {
   return out.filter((line) => !/^(?:index|recorded): /.test(line));
 }
 
-const TRIAGE_TAIL = "\n## Validated brief\nok\n\n## Out of scope\n- No item excluded from the scope.\n\n## Request gaps\n- None.\n";
+const TRIAGE_TAIL = "\n## Brief\n**Affected area:** src/a.mjs\n**Context:** the listing\n**Objective:** list the jobs\n**Expected outcome:** the jobs are listed\n**Commit type:** feat\n\n## Validated brief\nok\n\n## Out of scope\n- No item excluded from the scope.\n\n## Request gaps\n- None.\n";
 const OPEN_ITEMS = "\n## Open items\n- Which listing is meant?\n";
 const EXPLORE_OK = "# Explore\n\n## File map\n- /a.mjs — a\n\n## Access map\n- **No entry point:** text · grep\n\n## Third-party libraries\n- None\n";
 
@@ -366,7 +366,7 @@ test("`run check 01` requires `Evidence level: <1-4>` as the first line under ##
     ["# Triage\n\n## Verdict: PROCEED\n\nEvidence level: 3\n", "MISSING: ## Validated brief, ## Out of scope, ## Request gaps"],
     ["# Triage\n\n## Verdict: PROCEED\n\nEvidence level: 3\n" + TRIAGE_TAIL.replace("\n## Request gaps\n- None.\n", ""), "MISSING: ## Request gaps"],
     ["# Triage\n\n## Diagnosis\n\n- cause\n", "MISSING: ## Verdict, ## Validated brief, ## Out of scope, ## Request gaps"],
-    ["# Triage\n\n## Verdict: MAYBE\n\nEvidence level: 2\n" + TRIAGE_TAIL, "MISSING: ## Verdict: <PROCEED|NO-CHANGE-NEEDED|NOT-REPRODUCIBLE|NEEDS-CLARIFICATION>"],
+    ["# Triage\n\n## Verdict: MAYBE\n\nEvidence level: 2\n" + TRIAGE_TAIL, "MISSING: ## Verdict: <PROCEED|NO-CHANGE-NEEDED|NOT-REPRODUCIBLE|NEEDS-CLARIFICATION|PROPOSE-ALTERNATIVE>"],
   ];
   for (const [body, expected] of cases) {
     writeArtifact(env, "01-triage.md", body);

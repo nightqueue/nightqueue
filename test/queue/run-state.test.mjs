@@ -345,7 +345,7 @@ test("a tier and type write records the tier skips the routing implies, recomput
   assert.equal("reason" in readState(env).skips.explore, false);
 
   assert.equal(recordRunFields({ ...RUN, fields: { type: "feature/refactor" }, env }).status, "written");
-  assert.deepEqual(skipAuthors(env), { explore: "tier", architecture: "tier", qa: "tier", runtime: "tier", triage: "tier" });
+  assert.deepEqual(skipAuthors(env), { explore: "tier", architecture: "tier", qa: "tier", runtime: "tier" });
   assert.equal(readState(env).skips.explore.at, firstAt, "an existing tier entry keeps its time");
 
   assert.equal(recordRunFields({ ...RUN, fields: { type: "bug/error" }, env }).status, "written");
@@ -357,7 +357,7 @@ test("a type written before the tier records nothing until the tier is known, th
   assert.equal(recordRunFields({ ...RUN, fields: { type: "feature/refactor" }, env }).status, "written");
   assert.equal("skips" in readState(env), false);
   assert.equal(recordRunFields({ ...RUN, fields: { tier: "trivial" }, env }).status, "written");
-  assert.deepEqual(skipAuthors(env), { triage: "tier", explore: "tier", architecture: "tier", qa: "tier", runtime: "tier" });
+  assert.deepEqual(skipAuthors(env), { explore: "tier", architecture: "tier", qa: "tier", runtime: "tier" });
 });
 
 test("a raise to complex drops the tier skips and keeps an agent's", (t) => {

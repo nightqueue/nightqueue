@@ -1,3 +1,4 @@
+import { UserError } from "../config/errors.mjs";
 import { withoutCommentThreads } from "../integrations/origin.mjs";
 import { unfencedLines } from "./stream.mjs";
 
@@ -12,7 +13,7 @@ export const DEPENDENT_PROMPT_PATTERNS = [
   /\bwhen\s+(?:PR\s+)?#\d+\s+lands\b/i,
 ];
 
-// The refusal of a prompt that depends on another job, worded as the resolve skill's step 2.5.
+// The refusal of a prompt that depends on another job, worded as the triager's fixed alternative.
 export const DEPENDENT_PROMPT_REFUSAL =
   "This brief depends on another job's pull request. A job must be self-contained: fold this work into that job (as a stage) or make it independent. Nothing was changed.";
 
@@ -28,4 +29,10 @@ export function dependentPromptMatch(prompt) {
   const found = DEPENDENT_PROMPT_PATTERNS.map((pattern) => pattern.exec(text)).filter(Boolean);
   if (found.length === 0) return null;
   return found.sort((a, b) => a.index - b.index)[0][0].replace(/\s+/g, " ");
+}
+
+// Refuses a prompt that conditions the work on another job or pull request, before anything is registered or queued.
+export function refuseDependentPrompt(prompt) {
+  const phrase = dependentPromptMatch(prompt);
+  if (phrase !== null) throw new UserError(`${DEPENDENT_PROMPT_REFUSAL} Matched: \`${phrase}\`.`);
 }

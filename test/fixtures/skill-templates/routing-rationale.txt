@@ -9,8 +9,8 @@ Claude model by these 3 questions — the **dominant** capability of the phase w
 
 Exceptions: **QA** does not edit source (it only writes PoCs) and its core is adversarial
 reasoning + regression analysis → `sonnet`, not `opus`. **Triager** does not edit,
-but reproduces the bug by running/instrumenting the
-code → `haiku` (simple) / `sonnet` (complex). Phases 0/7/8 run in the orchestrator
+but it writes the Brief every later phase reads, critiques the request and reproduces the
+bug → `sonnet` in every tier, and it runs in every tier. Phases 0/7/8 run in the orchestrator
 (the skill's model, without routing).
 
 The `simple` tier has no architect and no qa-guardian: its safety net is the verifier's full

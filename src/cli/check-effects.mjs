@@ -1,16 +1,23 @@
 import { createHash } from "node:crypto";
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { PIPELINE_TASK_TYPES } from "../memory/runs.mjs";
 import { derivedType, firstItem } from "../queue/check-contract.mjs";
 import { PHASE_ARTIFACTS } from "../queue/phase-artifacts.mjs";
-import { TERMINAL_VERDICT_LABELS } from "../queue/resume.mjs";
+import { isSafeSegment, TERMINAL_VERDICT_LABELS } from "../queue/resume.mjs";
+import { adoptRunSlug, isProvisionalSlug } from "../queue/run-slug.mjs";
 import { clearTermination, recordCheck, recordRunFields, recordTermination, RUNTIME_AUTHOR } from "../queue/run-state.mjs";
+import { briefCommitType, briefSection, briefSlug, briefType } from "../queue/triage-brief.mjs";
+import { openStore } from "../store/open.mjs";
 import { saveIndexFromText } from "./index-save.mjs";
 import { worktreeOf } from "./run-context.mjs";
 
-// The effects `run check` chains after printing its contract lines: the index of 02, the Type and the termination of 01,
-// the QA stage A marker of 05a, the phase record of a completed check and the check memo. None of them changes the first line.
+// The effects `run check` chains after printing its contract lines: the index of 02; the Type, the Brief, the commit type,
+// the termination and the slug of 01; the QA stage A marker of 05a; the phase record of a completed check and the check memo.
+// None of them changes the first line.
 
 const TERMINATION_MAX = 200;
+const BRIEF_FILE = PHASE_ARTIFACTS.get("00").file;
 const PASSING_LINES = new Set(["OK", "GENERATED"]);
 
 // The first line of an error's message.
@@ -48,13 +55,72 @@ async function indexLine({ run, result, ctx }) {
   }
 }
 
-// The `recorded: type` line of check 01: the Type the triage implies, written only when the run has none yet.
+// The `recorded: type` line of check 01: the Brief's Type when it states a valid one, else the Type the triage implies when the run has none yet.
 function typeLines({ run, result, state, ctx }) {
-  if (PIPELINE_TASK_TYPES.includes(state?.type) || result.first.startsWith("MISSING")) return [];
-  const type = derivedType(result.evaluated);
-  if (type === null) return [];
+  if (result.first.startsWith("MISSING")) return [];
+  const recorded = PIPELINE_TASK_TYPES.includes(state?.type) ? state.type : null;
+  const type = briefType(result.evaluated) ?? (recorded === null ? derivedType(result.evaluated) : null);
+  if (type === null || type === recorded) return [];
   const written = recordRunFields({ projectId: run.projectId, slug: run.slug, fields: { type }, env: ctx.env });
-  return [written.status === "written" ? `recorded: type ${type}` : notRecorded(written)];
+  if (written.status !== "written") return [notRecorded(written)];
+  return [recorded === null ? `recorded: type ${type}` : `recorded: type ${type} (was ${recorded})`];
+}
+
+// The `recorded: brief` line of a completed check 01: the triage's `## Brief` copied into `00-brief.md`, the Brief every later phase reads.
+function briefLines({ run, result }) {
+  const section = briefSection(result.evaluated);
+  if (section === null) return [notRecorded({ reason: "the triage has no ## Brief" })];
+  try {
+    writeFileSync(join(run.runDir, BRIEF_FILE), `${section.trim()}\n`);
+  } catch (err) {
+    return [notRecorded({ reason: `${BRIEF_FILE} could not be written: ${firstLine(err)}` })];
+  }
+  return [`recorded: brief ${BRIEF_FILE}`];
+}
+
+// The `recorded: commit type` line of a completed check 01, when the Brief states an accepted commit type.
+function commitTypeLines({ run, result, ctx }) {
+  const commitType = briefCommitType(result.evaluated);
+  if (commitType === null) return [];
+  const written = recordRunFields({ projectId: run.projectId, slug: run.slug, fields: { commitType }, env: ctx.env });
+  return [written.status === "written" ? `recorded: commit type ${commitType}` : notRecorded(written)];
+}
+
+// The caller's own job row, or null outside a job or when the store cannot read it.
+async function ownJobRow(run, env) {
+  if (run.jobId === null) return null;
+  try {
+    return await openStore(env).jobs.getJob(run.jobId);
+  } catch {
+    return null;
+  }
+}
+
+// Why the run keeps its provisional slug although the Brief was asked for one, or null when the named slug can be adopted.
+function slugUnusable(named, current) {
+  if (named === null) return "the Brief names no **Slug:**";
+  if (!isSafeSegment(named)) return `\`${named}\` is not a valid run slug`;
+  return named === current ? "the Brief names the same slug" : null;
+}
+
+// The `recorded: slug` line of a completed check 01, run last: a provisional run takes the Brief's slug (the row rebound, the run dir renamed), any other keeps its own.
+async function slugLines({ run, result, ctx }) {
+  const named = briefSlug(result.evaluated);
+  const row = await ownJobRow(run, ctx.env);
+  if (!isProvisionalSlug(row, run.slug)) {
+    const note = named !== null && named !== run.slug ? " (kept: the run already has its slug)" : "";
+    return [`recorded: slug ${run.slug}${note}`];
+  }
+  const unusable = slugUnusable(named, run.slug);
+  if (unusable !== null) return [`recorded: slug ${run.slug} (kept: ${unusable})`];
+  const job = { id: row.id, worker: row.worker, project_id: row.project_id };
+  try {
+    const adopted = await adoptRunSlug({ job, from: run.slug, to: named, store: openStore(ctx.env), env: ctx.env });
+    if (adopted.status === "kept") return [`recorded: slug ${run.slug} (kept: ${[adopted.reason, adopted.warning].filter(Boolean).join("; ")})`];
+    return [`recorded: slug ${named} (renamed from ${run.slug}; run dir ${adopted.dir})`];
+  } catch (err) {
+    return [`recorded: slug ${run.slug} (kept: ${firstLine(err)})`];
+  }
 }
 
 // Why the triage stopped the run on purpose: its verdict and the first open item, else the first line of the validated brief.
@@ -108,11 +174,15 @@ function memoAndPhaseLines({ run, check, result, ctx }) {
 // Runs the effects of a check in order and answers the lines they print: `index:` first, then every `recorded:` line.
 export async function checkEffectLines({ run, check, result, state, ctx }) {
   const args = { run, check, result, state, ctx };
+  const triageDone = check === "01" && result.completes;
   const index = check === "02" ? await indexLine(args) : [];
   const type = check === "01" ? typeLines(args) : [];
+  const brief = triageDone ? briefLines(args) : [];
+  const commitType = triageDone ? commitTypeLines(args) : [];
   const recorded = memoAndPhaseLines(args);
   const qaStageA = check === "05a" && result.completes ? qaStageALines(args) : [];
-  const termination = check === "01" && result.completes ? terminationLines(args) : [];
-  const lifted = check === "01" && result.completes ? liftedTerminationLines(args) : [];
-  return [...index, ...type, ...recorded, ...qaStageA, ...termination, ...lifted];
+  const termination = triageDone ? terminationLines(args) : [];
+  const lifted = triageDone ? liftedTerminationLines(args) : [];
+  const slug = triageDone ? await slugLines(args) : [];
+  return [...index, ...type, ...brief, ...commitType, ...recorded, ...qaStageA, ...termination, ...lifted, ...slug];
 }

@@ -95,9 +95,11 @@ What a runtime has to provide, and what it can rely on:
   - `prTemplate{source, path?, headings, at}`: `nightqueue run pr` (both the
     `--template` query and the publishing call), the template the body is checked
     against - `repo` with its path, or `nightqueue`.
+  - `commitType`: `nightqueue run check 01` only, from the Brief's `**Commit type:**`
+    (`run_set` does not take it).
   - `type`, `tier`, `tierRaiseReason`, `branch`, `worktree` and
-    `qaStageA{artifact, verdict?, at}`: `run_set`; `nightqueue run check 01` also records a
-    missing `type` (derived from the triage) and `run check 05a` the `qaStageA` marker; the runner also records
+    `qaStageA{artifact, verdict?, at}`: `run_set`; `nightqueue run check 01` also records
+    the `type` (the Brief's, else derived from the triage when missing) and `run check 05a` the `qaStageA` marker; the runner also records
     `tier`/`tierRaiseReason` from the `Tier raised:` line and `type` from the `TYPE:`
     half of the slug declaration. Inside a queued job the runner records `branch` and
     `worktree` itself, before the spawn, when it creates the job's worktree; the pipeline
@@ -109,7 +111,7 @@ What a runtime has to provide, and what it can rely on:
     right after it creates the run directory and before it creates the worktree - so a job
     the worktree step gates still has it. `ref` is `J-<id>`, `projectKey` the project's key. A later attempt of
     the same job keeps the first block, a block of another job refuses the write, and a
-    `SLUG:` rename carries it along with the directory. `job` is runtime-only: `run_set`
+    rename (`run check 01` or `SLUG:`) carries it along with the directory. `job` is runtime-only: `run_set`
     refuses `job` and every `job.*` name (``kept("`job` is written by the runtime only")``),
     and no pipeline write can change it. It is how a run knows itself without the database:
     the `run_*` tools and `nightqueue run` resolve a job's run from it when the row cannot be
@@ -171,7 +173,9 @@ What a runtime has to provide, and what it can rely on:
     row. A slug that is not a safe path segment, or one another run of the project
     already holds, is refused - the job keeps the slug the runtime gave it and the
     reason goes to the job log. `TYPE:` is optional and is recorded as the run's
-    `type`.
+    `type`. The shipped plugin no longer prints it - `run check 01` binds the slug
+    from the triager's `**Slug:**` - and the runtime keeps parsing it for an older
+    plugin.
   - `QUEUE_SLUG:` - the LAST standalone line wins. It is kept for a plugin older
     than the named prompt, which has no other way to bind its slug, and the runtime
     still asks for it in the prompt of a job whose row carries no run yet.
@@ -481,7 +485,7 @@ dropped is answered with the older-definitions line):
 |---|---|
 | `lesson_recall` | `query?`, `project?`, `target?`, `exclude_ids?` |
 | `context_for_phase` | `target` (`triager`, `architect`, `coder`, `qa`, `verifier`, `explore`), `query?`, `project?`, `repo_root?`, `exclude_ids?` |
-| `phase_prompt` | `target` (`triager`, `explore`, `architect`, `coder`, `coder-fix`, `verifier`, `runtime`, `qa-lite`, `qa-analyst`, `qa-prover`, `reflector` - no artifact, `check` null), `query?`, `stage?`, `delivery_constraints?`, `raw_evidence?`, `group?` (required for `qa-prover`), `note?`, `artifact?` (`runtime` only), `project?`, `slug?` |
+| `phase_prompt` | `target` (`triager`, `explore`, `architect`, `coder`, `coder-fix`, `verifier`, `runtime`, `qa-lite`, `qa-analyst`, `qa-prover`, `reflector` - no artifact, `check` null), `query?`, `stage?`, `delivery_constraints?`, `request?` (`triager` only, required outside a job), `raw_evidence?` (accepted and ignored), `group?` (required for `qa-prover`), `note?`, `artifact?` (`runtime` only), `project?`, `slug?` |
 | `lesson_save` | `title`, `root_cause`, `solution`, `prevention`, `attempts?`, `project?`, `target?` (a title the owner already has bumps its `attempts`; answers `deduped` and `violated` - `true` only inside a queue job, on a dedup onto a lesson this run was given, which also bumps the lesson's `violated`) |
 | `memory_recall` | `query?`, `project?` |
 | `lesson_delete` | `id` (`L344` or the plain number), `project` (name or key): deletes one lesson and its search entry; an unknown id or another project's is refused; refused inside a queue job; answers `{id, ref, title, project}` |
@@ -557,10 +561,17 @@ whole prompt of one /resolve subagent, rendered from the templates under
 `plugin/skills/resolve/references/prompts/` (a `{{>deliverables/<name>}}` partial is read from
 the sibling `references/deliverables/`, where the shared `## Deliver` blocks of the
 implementation, QA report and verification live). It resolves the run like the `run_*` tools and reads
-every value from it: the tier and type `nightqueue run start` recorded, the `## Brief` of
-`<RUN_DIR>/00-brief.md` (refused, naming the path, when it is missing), the routing row of
-`src/queue/routing.mjs`, the same context block `context_for_phase` answers (with the same
-per-run lesson exclusion). `coder` and
+every value from it: the tier `nightqueue run start` recorded and the type `run check 01`
+recorded, the `## Brief` of `<RUN_DIR>/00-brief.md` (refused, naming the path and
+`run check 01`, when it is missing), the routing row of `src/queue/routing.mjs`, the same
+context block `context_for_phase` answers (with the same per-run lesson exclusion). The
+`triager` is the one target rendered without the Brief and without a type: `RAW_REQUEST` is
+the job's own prompt inside a job (plus `Operator answer to the gate: <note>` when the row
+carries one; a `request` sent there is ignored with an `open_items` line), and the `request`
+input outside a job; `ORIGIN` is the run's `origin/*.md` files (its context block then
+carries no `## Job origin`, so the origin is never twice in the prompt); `NEEDS_SLUG` asks
+for a `**Slug:**` field only while the run holds the provisional slug the runtime derived.
+`request` on any other target is refused. `coder` and
 `verifier` render the fast-track prompt on `trivial`/`simple`. A placeholder the run cannot
 fill is an error, never a half prompt; a target the tier does not route is rendered with
 an `open_items` line.
@@ -760,11 +771,11 @@ artifact (and, where a rule needs them, `00-brief.md`, `01-triage.md`, `02-explo
 
 1. `OK` | `MISSING: <sections>` | `GENERATED` (`04`), unchanged. After `MISSING:` nothing
    else is printed: no gate is evaluated and nothing is recorded but the check memo. `01`
-   with `NEEDS-CLARIFICATION` or `NOT-REPRODUCIBLE` also requires `## Open items` with an item
+   with `NEEDS-CLARIFICATION`, `NOT-REPRODUCIBLE` or `PROPOSE-ALTERNATIVE` also requires `## Open items` with an item
    (`MISSING: ## Open items`, or `## Open items (empty)` when it holds only blank lines or
    `None`), because the next step reads it.
 2. `VERDICT: <value>`: `01` the suffix of `## Verdict:` (`PROCEED`, `NO-CHANGE-NEEDED`,
-   `NOT-REPRODUCIBLE`, `NEEDS-CLARIFICATION`); `05a` and `05` the first non-blank line of
+   `NOT-REPRODUCIBLE`, `NEEDS-CLARIFICATION`, `PROPOSE-ALTERNATIVE`); `05a` and `05` the first non-blank line of
    `## Verdict` (`APPROVED`, `NEEDS FIX`, `NEEDS DISCUSSION`); `06` the suffix of
    `## Verification:` (`PASSED`, `PASSED-STATIC`, `FAILED`); `06.5` the first non-blank line of
    `## Runtime verdict` (`CONFIRMED`, `NOT-MET`, `SYMPTOM-PERSISTS`, `NEEDS-DEVICE`,
@@ -796,6 +807,15 @@ dropped, `\|` is a literal pipe, a pipe inside a code span (a backtick run close
 the same length on the line) is cell text, and an unmatched backtick is plain text. The gate
 codes, in output order per phase:
 
+- `01`, the `## Brief` of the triage, matched as a whole unfenced heading line (never a prefix):
+  - `brief-missing` — `## Brief absent`, on every verdict (a later phase prompt needs it even
+    on a terminated run);
+  - only on `PROCEED`: `brief-field-empty` — `<field>`, for `Affected area`, `Context`,
+    `Objective`, `Expected outcome` and `Commit type`, in that order, when the field is absent,
+    blank, `n/a` or wholly a `<…>`/`[…]` placeholder; `brief-type-invalid` — `<value>` when a
+    `**Type:**` is present but not `bug/error`/`feature/refactor` (an absent Type is no gate:
+    the `## Diagnosis` rule below applies); `brief-commit-type-invalid` — `<value>` when the
+    Commit type is not one of the accepted commit types.
 - `01` `symptom-proof-missing` — a `PROCEED` on a `bug/error` run whose `## Diagnosis` is
   absent, has no `Symptom proof:` line, or leaves it empty, `n/a` or a `<…>` placeholder.
 - `03`, `bug/error` only and only when the plan has no `**Type mismatch:**` line with evidence
@@ -851,12 +871,25 @@ completes. On completion it records the phase (`recorded: phase_done <phase> <ve
 ` — reason: <reason>` on a re-run: the line the same check failed with, else
 `re-run after <check> <line>` of the newest failure, else `re-run`; ` (already)` when the same
 text was already recorded); otherwise it prints `recorded: none (<line>)`, and a write the
-state refuses prints `recorded: not recorded (<reason>)`. `01` records the derived Type when
-`state.type` has none (`recorded: type <type>`, even on a gate) and, on a completed terminal
-verdict, the termination (`recorded: run_terminate triage <VERDICT>`, reason
-`<VERDICT>: <first item of ## Open items, else of ## Validated brief>`, `by: "runtime"`); a
-completed `PROCEED` lifts a triage termination the runtime wrote (`recorded: termination
-cleared`, printed last among the `recorded:` lines). `02` on `OK` saves the
+state refuses prints `recorded: not recorded (<reason>)`. `01` records the Type, even on a
+gate: the Brief's valid `**Type:**` wins over a recorded one (`recorded: type <type>`, or
+`(was <old>)` when it replaces one); without it the Type the triage implies, only when
+`state.type` has none. On completion `01` also writes the triage's `## Brief` section
+verbatim into `<RUN_DIR>/00-brief.md` (`recorded: brief 00-brief.md`), records the
+`commitType` (`recorded: commit type <c>`), on a terminal verdict (`NOT-REPRODUCIBLE`,
+`NEEDS-CLARIFICATION`, `PROPOSE-ALTERNATIVE`, `NO-CHANGE-NEEDED`) the termination
+(`recorded: run_terminate triage <VERDICT>`, reason
+`<VERDICT>: <first item of ## Open items, else of ## Validated brief>`, `by: "runtime"`), and
+on a `PROCEED` lifts a triage termination the runtime wrote (`recorded: termination
+cleared`). The slug comes last, after every other write to the run dir: a job run that still
+holds the provisional slug the runtime derived takes the Brief's `**Slug:**` (the row
+rebound and the run dir renamed, as a `SLUG:` declaration does: `recorded: slug <new>
+(renamed from <old>; run dir <path>)`, the path the orchestrator uses as `RUN_DIR` from then
+on); any other run keeps its slug (`recorded: slug <slug>`, with `(kept: <reason>)` when the
+Brief named one it cannot take: absent, not a safe segment, already taken, or the run already
+has its slug). The runner re-reads the row's slug after the session, so it finishes on the
+renamed run. The `recorded:` order of `01` is: type, brief, commit type, phase_done,
+run_terminate, termination cleared, slug. `02` on `OK` saves the
 File map and the libraries into the project index, the same as `run index-save`; a store that
 is unavailable inside a job queues the write (`index: not saved (store unavailable; queued at <path>)`)
 and any failure prints `index: not saved (<first line of the error>)`. `05a` records

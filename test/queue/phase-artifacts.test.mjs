@@ -36,7 +36,7 @@ test("each artifact names the canonical phase it completes, and only the brief a
 test("the triage, QA, verification and runtime artifacts declare where their verdict is read and the values it takes", () => {
   const verdicts = [...PHASE_ARTIFACTS].filter(([, artifact]) => artifact.verdict).map(([check, artifact]) => [check, artifact.verdict.label]);
   assert.deepEqual(verdicts, [
-    ["01", "## Verdict: <PROCEED|NO-CHANGE-NEEDED|NOT-REPRODUCIBLE|NEEDS-CLARIFICATION>"],
+    ["01", "## Verdict: <PROCEED|NO-CHANGE-NEEDED|NOT-REPRODUCIBLE|NEEDS-CLARIFICATION|PROPOSE-ALTERNATIVE>"],
     ["05a", "## Verdict: <APPROVED|NEEDS FIX|NEEDS DISCUSSION> as the first line"],
     ["05", "## Verdict: <APPROVED|NEEDS FIX|NEEDS DISCUSSION> as the first line"],
     ["06", "## Verification: <PASSED|PASSED-STATIC|FAILED>"],

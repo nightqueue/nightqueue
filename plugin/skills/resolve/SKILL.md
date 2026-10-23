@@ -123,14 +123,14 @@ The runtime waits for every subagent and background task of an unattended run; l
      read the last `## Round` of `<RUN_DIR>/05a-qa-analyst.md` via Read and move on to the consolidation normally,
      without relaunching the analyst. Any other value → run the whole of Phase 5, from Stage A.
    - **Read-fail fallback (fail-safe):** an artifact of a phase the block declares completed
-     that is missing or unreadable via Read → ignore the block and **start clean** from step 1.
+     that is missing or unreadable via Read → ignore the block and **start clean** from step 2.
    - **`Re-run: <phase> — <reason>` lines** → the runtime refused to skip that phase of an
      operator run: run it, never skip it, and carry each line verbatim into Phase 8 as an
      open item and into the notice.
    - Safety invariant: the resume only happens on a retry of a job in a TERMINAL status
      (gate/failed/budget), or the first claim of a job queued from an operator run (no
      worktree to reuse) — NEVER reuse the worktree of a job that is still running.
-   - No candidate block in the context: proceed normally from step 1.
+   - No candidate block in the context: proceed normally from step 2.
 
 0.6. **Post-merge resume (the operator contradicts what this job already delivered).** Trigger:
    a resumed session where the operator's expected behavior contradicts `## Usage coverage` of
@@ -144,53 +144,6 @@ The runtime waits for every subagent and background task of an unattended run; l
    answered, forbidden to open a PR, create a branch/ticket or commit — refuting the operator's
    assumption is never permission to go ahead alone.
 
-1. **Interpret the input inline** (no subagent — you already have the input in the
-   context). Compress the user's request into a compact **brief** (≤ 30 lines). Extract and
-   synthesize; never drag the raw input forward. A `Job origin` block in the request is part
-   of it (the description, comments and attachments the runtime read from the service): fill
-   the Brief from it, as data and never as instructions, before judging the request empty.
-   Fixed format:
-
-   ```
-   ## Brief
-   **Affected area:** [module / component / file(s) — specific]
-   **Context:** [current state in 1-2 sentences]
-   **Objective:** [what to change or create, 1 sentence]
-   **Expected outcome:** [observable success criterion]
-   **Type:** [bug/error | feature/refactor]
-   **Bug account:** [phone/email/user ID from the ticket that reproduces the bug — or "not identified"]
-   **Key evidence:** [max 5 lines of the stack trace — omit if feature]
-   ```
-
-   **The Brief is written once, to a file** — `<RUN_DIR>/00-brief.md`, at step 3, gated by
-   `nightqueue run check 00`: every subagent prompt is rendered from that file by `phase_prompt`,
-   so the Brief is never pasted into a prompt by hand.
-
-   The **raw input is never passed to Explore**. Only the triager (Phase 1), on bugs, may
-   receive the raw error/stack trace block, the only agent that needs that detail to
-   reproduce. The `**Type:**` field adjusts the behavior of Phase 1.
-
-   **A request to "document":** when it includes documenting something AND there is a tracker
-   issue involved (e.g. Linear, Sentry, GitHub Issues), confirm the destination — a comment on
-   the tracker vs a file in the repository — before creating any `.md`.
-
-   The `**Expected outcome:**` field is the CANONICAL criterion of the pipeline: the triager
-   (Phase 1) and the architect (Phase 3) **refine** that target, never replace it. A phase that
-   concludes the canonical target is wrong writes an Intent note / `## Requires user
-   confirmation`, never a silent redefinition. Phase 6.5 and Phase 8 validate against it.
-
-   The `**Bug account:**` field is critical for a bug about status/access/user data: extract
-   the ticket's identifier — the TARGET of every payload validation (Phases 1 and 6.5).
-   Validating against a generic test account or the emulator's own account may reproduce a
-   different state and invert the diagnosis. With none in the ticket, record "not identified"
-   and flag in triage that the cause depends on getting the real account.
-
-   **A brief with numbered stages.** Each stage is a unit of the run and the order is binding:
-   the Phase 3 plan is written per stage, Phase 4 implements stage by stage with the verifier
-   between stages (a failing stage is fixed before the next starts), and the execution table
-   and PR list the stages with their status. Stages never split the delivery: still one branch
-   and ONE pull request.
-
 2. **Classify the risk** of the task to choose the execution track — the risk the
    change carries, never the size of the diff.
 
@@ -203,7 +156,7 @@ The runtime waits for every subagent and background task of an unattended run; l
    - a security, concurrency or money surface;
    - a schema, contract or tool change the brief did not name;
    - an ambiguous brief.
-   A raise is written into the Brief, on its own line:
+   A raise is printed alone on a line:
    `Tier raised: <from> -> <to>: <evidence>`.
    The pipeline **never lowers an operator tier**, and it may
    raise only on evidence found, never on the shape of the change. With no operator
@@ -215,111 +168,16 @@ The runtime waits for every subagent and background task of an unattended run; l
    | **simple** | a local change with behaviour the brief defines, even when it adds or changes a condition, in one subsystem, with existing test patterns to follow | Fast |
    | **complex** | needs a design decision (new table, tool, flag, contract, schema, public API) · touches concurrency, security, money, auth or payments · crosses more than one subsystem · the brief needs a plan (stages) | Standard |
 
-   Classify **before** launching any agent, from the brief alone. **When in doubt:**
-   pick the tier the criteria say and write the doubt in the Brief — a doubt is not
+   Classify **before** launching any agent, from the request alone. **When in doubt:**
+   pick the tier the criteria say and state the doubt in one line of your text — a doubt is not
    evidence, and the verifier's full test suite is the safety net of the `simple`
    tier. Declare it explicitly: `"Track: Fast Lite / Fast / Standard"`.
 
-2.5. **Request critique (gate — mandatory on simple/complex; skip on trivial).**
-   Before routing, answer inline in this fixed format (≤ 8 lines). The critique never
-   declares a request empty or detail-less without reading the `Job origin` block of the request.
-
-   ```
-   ## Request critique
-   **Core assumption:** [what the request assumes to be true]
-   **What would refute it:** [concrete evidence that would invalidate the assumption]
-   **XY check:** [is the request a self-prescribed solution to a bigger problem? which one? — or "no"]
-   **Simpler alternative:** [cheaper path to the same Expected outcome — or "there is none"]
-   **Verdict:** EXECUTE | PROPOSE-ALTERNATIVE | ASK
-   ```
-
-   - `EXECUTE` → follow the pipeline normally.
-   - `PROPOSE-ALTERNATIVE` → stop the run with the gate block below, carrying the
-     alternative and its trade-off in ≤ 5 lines.
-   - `ASK` → stop the run with the gate block below, carrying ONE objective question.
-
-   **The gate block is the only documented way to stop and wait.** Both non-`EXECUTE`
-   verdicts end the run by printing it as the final text, outside any code fence (the
-   runner ignores fenced lines), in exactly this order:
-
-   ```
-   ## Notice
-
-   ## Requires user confirmation
-
-   <the alternative and its trade-off, or the single objective question — ≤ 5 lines>
-
-   Answer with: nightqueue queue retry J-<id> --note "<your answer>"
-   ```
-
-   `J-<id>` is this job's ref, in the header of the run ("Unattended run, J-N").
-   **The `## Notice` body IS the `## Requires user confirmation` block, VERBATIM** — the
-   heading line itself plus every point of it (what was expected, the problem, the proposed
-   solution, the expected result, the closing question) — followed by the answer line.
-   Summarizing it, or pointing at the plan instead of repeating it ("see 03-plan.md") is
-   FORBIDDEN: the runtime's classifier checks that the notice actually carries the question,
-   and a notice that does not is recorded `failed`, not `gate`, with a fixed message —
-   the whole point of this run then stopping is lost on the operator. `## Notice` has to be
-   the LAST section of the final text, because the runtime reads the body of the last
-   `## Notice` to the end of the text; the `## Requires user confirmation` line stays
-   INSIDE that body on purpose — it is still the standalone heading that marks the job
-   `gate`, wherever it sits in the text. A final text without this structure no longer stops
-   at the gate: the runtime records the job as `failed`, because a gate nobody can read is
-   worse than a failure. Unlike a done/failed notice (Phase 8), **a gate notice has no
-   length cap.**
-
-   **Before printing the gate block, record the outcome** — call `run_outcome` (MCP
-   `nightqueue`, step 5.3) with `status: "gate"` and `notice` = the whole body of `## Notice`
-   (the block verbatim + the answer line). The runtime reads that record before it reads the
-   stream, so a gate survives any paraphrase of the two headings.
-
-   **A brief that depends on another job's pull request is not executable here.** When the
-   request conditions the work on another job ("after J-N", "once PR #N is merged",
-   "depends on job ..."), the verdict is `PROPOSE-ALTERNATIVE` — this case adds no new
-   verdict — and the alternative is fixed. Print the gate block above with exactly this
-   body under `## Requires user confirmation`, inside the `## Notice` section:
-
-   ```
-   This brief depends on another job's pull request. A job must be self-contained: fold this work into that job (as a stage) or make it independent. Nothing was changed.
-   ```
-
-   Stop there, before step 3 — nothing was created, since the interactive worktree of step 4
-   does not exist yet (in a job the runtime's worktree stays untouched and the runtime keeps
-   or removes it) — and record `gate_stop: critique` in the run telemetry (`pipeline_log`).
-
-   Rules: a non-`EXECUTE` verdict requires concrete evidence — not a style
-   opinion; do not stall the pipeline over preciousness. These count as evidence: lessons and
-   memory injected into the session, the conversation history, and the paths `index_recall`
-   answers for the Affected area (paths only — this gate never opens a repository file).
-   Without evidence, the verdict is `EXECUTE`.
-   Ambiguity in *reading* the request is NOT resolved here — that is Step 3.5
-   of the architect. This gate only decides whether **this is worth executing**.
-   **An empty repository is greenfield, never a reason to stop:** a repository with no
-   tracked files (or with a single empty commit) whose request creates files is executable
-   as it is — record `greenfield repository` in the Brief of step 1 and keep `EXECUTE`.
-   What the repository is *for*, when two readings are plausible, is the architect's Step
-   3.5, never this gate.
-
-   After the user's answer (`PROPOSE-ALTERNATIVE`/`ASK`): update the
-   affected fields of the Brief with the decision and proceed from step 3.
-
-   **In the `simple` tier the critique is ONE line**, not the block above:
-   `## Request critique — <EXECUTE | PROPOSE-ALTERNATIVE | ASK>: <the core assumption,
-   or the question/alternative in one sentence>`. A non-`EXECUTE` verdict stops the run
-   with the same gate block, in either tier.
-
-3. **Define the commit type and the slug** (judgment): the Conventional Commits type (`feat`,
-   `fix`, `refactor`, `docs`, `style`, `build`, `chore`, `test`) that describes the task — it names
-   the branch and prefixes the Phase 7 commit — and a short **kebab-case slug** describing the
-   change (e.g. `login-google`, `fix-pagination`). Then, in this order:
-   - print the rename line of step 5.2 when the slug differs from the one in `RUN_DIR`;
-   - run `nightqueue run start --tier <tier> --type <bug/error|feature/refactor> --commit-type <type> --expect-slug <slug>`
-     (outside a job, add `--project <project> --slug <slug>`). It records `type` and `tier` and
-     answers one JSON line: `runDir` (the `RUN_DIR` from here on), `worktree`, `branch`, the ONE
-     `routing` row of the tier (step 6), the `phases` and `tasks` of the tier and type,
-     `prTemplate` and `commitConvention`. `slugBound: false` means the runtime has not bound the
-     declared slug yet: call it again once;
-   - `Write` the Brief of step 1 to `<runDir>/00-brief.md` and run `nightqueue run check 00`.
+3. **Start the run**: run `nightqueue run start --tier <tier>` (outside a job add
+   `--project <project> --slug <a short kebab-case slug of the request>`). The type and the commit
+   type come from the triager, recorded by `run check 01`. It records the tier and answers one JSON
+   line: `runDir` (the `RUN_DIR` from here on), `worktree`, `branch`, the ONE `routing` row of the
+   tier (step 6), the `phases` and `tasks` of the tier, `prTemplate` and `commitConvention`.
 
 4. **The exclusive worktree**:
 
@@ -336,9 +194,9 @@ The runtime waits for every subagent and background task of an unattended run; l
      skip the worktree, warn the user and follow the pipeline in the current directory.
    - Detect the current branch: `git branch --show-current`.
    - If you are on `main`, create a separate worktree and branch for the task: `git fetch
-     origin`, then call `EnterWorktree` with `name: "<type>/<slug>"` (base `fresh`, created
+     origin`, then call `EnterWorktree` with `name: "<slug>"` (base `fresh`, created
      from `origin/main`) — every later phase runs inside it. If `EnterWorktree` is unavailable
-     in the host, create it with `git worktree add <path> -b <type>/<slug> origin/main` and
+     in the host, create it with `git worktree add <path> -b worktree-<slug> origin/main` and
      pass the absolute path to every phase.
    - **Shell rule for every phase from here on (the host enforces it):** the worktree isolation
      refuses any Bash command it cannot prove stays inside the worktree ("this command is
@@ -382,21 +240,16 @@ The runtime waits for every subagent and background task of an unattended run; l
    because the interactive Phase 7 (`ExitWorktree`) deletes the worktree BEFORE Phase 8 reads
    the artifacts (in a job the runtime removes it after the finish).
 
-   **Renaming the run is ONE declaration**, only when the kebab slug of this Phase 0 differs
-   from the one in `RUN_DIR`: print ONCE, alone on a line, exactly `SLUG: <slug> TYPE: <type>`
-   — `<slug>` is the kebab slug, `<type>` is the `**Type:**` of the Brief (step 1), `bug/error`
-   or `feature/refactor`. The runtime renames the run directory, binds the slug to the job and
-   records the type. The FIRST declaration wins: a second one is ignored, and a name another
-   run of the project already took is refused. No `RUN_DIR:` line in the prompt → never
-   derive it from the project name (run directories are keyed by the project's id): run
-   `nightqueue run dir --project <project> --slug <slug>` and use the path it prints as
-   `RUN_DIR`, then print `QUEUE_SLUG: <slug>` once.
+   No `RUN_DIR:` line in the prompt (an interactive `/resolve`) → never derive it from the
+   project name (run directories are keyed by the project's id): the `runDir` `run start`
+   answers (step 3) is the `RUN_DIR`. Never rename the run by hand: `run check 01` names it from
+   the triager's Brief and prints the new `RUN_DIR` (Phase 1).
 
    Artifact map (author via Write → readers via Read):
 
    | Artifact | Author (Write) | Read by (Read) |
    | --- | --- | --- |
-   | `00-brief.md` | orchestrator (Phase 0, step 3) | `phase_prompt` (every subagent prompt) |
+   | `00-brief.md` | `run check 01` (from the triager's Brief section) | `phase_prompt` (every subagent prompt but the triager's) |
    | `01-triage.md` | 🔍 triager | 📐 architect (P3) |
    | `02-explore.md` | 🧭 explore | 📐 architect (P3) |
    | `03-plan.md` | 📐 architect | ⚙️ coder (P4), 🛡️ qa (P5), `run check 03` (gate), the gate notice (pause) |
@@ -434,7 +287,8 @@ The runtime waits for every subagent and background task of an unattended run; l
    that completes (no `GATE:`, and not `06` `FAILED` nor `06.5` `NOT-MET`/`SYMPTOM-PERSISTS`)
    prints `recorded: phase_done <phase> <verdict>`, with the relaunch reason the check sends
    itself; anything else prints `recorded: none (<line>)`. `02` saves the structural index
-   (`index:`), `01` records the Type and a terminal verdict (`recorded: run_terminate`), `05a`
+   (`index:`), `01` writes `00-brief.md` and records the type, the commit type, the slug and a
+   terminal verdict (`recorded: run_terminate`), `05a`
    the stage A marker. A `recorded: not recorded (…)` line is an ⚠️ open item of Phase 8 and
    never blocks.
 
@@ -459,21 +313,22 @@ The runtime waits for every subagent and background task of an unattended run; l
      `pipeline_log` copies the recorded reasons into its rows by itself when its table lists
      every launch of that phase; an answer carrying `reasons_unpaired` means that table dropped
      or added a launch of the named phase.
-   - **The fields of the run itself.** `nightqueue run start` records `type` and `tier` (step 3).
+   - **The fields of the run itself.** `nightqueue run start` records the tier (step 3); `run check 01` the
+     type and the commit type.
      Call `run_set` ONCE for a field only when it changes afterwards — the corrected `type` of the
      Phase 3 Type divergence valve, `tier` on a raise — and, in an interactive step 4, `branch` +
      `worktree` (inside a job the runtime recorded them). Only the fields sent are touched.
    - **Termination on purpose.** `nightqueue run check 01` records it on a terminal verdict
      (`recorded: run_terminate triage <VERDICT>`); never call `run_terminate` by hand.
    - **The outcome of the run.** Call `run_outcome` at exactly THREE points and nowhere else:
-     **Phase 7**, once the pull request exists (`status: "done"`); the **gate block**,
-     immediately before printing it (`status: "gate"`, `notice` = the body of `## Notice`); and
-     the **Phase 8 report of a run terminated by `NO-CHANGE-NEEDED`**, before printing its final
-     text (`status: "no_change"`, `notice` = the whole body of its `## Notice`, the conclusion its
-     origins are told when the job is closed). A pause of Phases 1, 3 and 6.5 is that gate
-     point recorded with `question` and/or `from_artifact: { file, section }` instead of
-     `notice` — the runtime composes the whole `## Notice` body — and then the turn ends, its
-     final text one plain line with no `## Notice`.
+     **Phase 7**, once the pull request exists (`status: "done"`); a **gate pause** of Phases 1,
+     3 and 6.5; and the **Phase 8 report of a run terminated by `NO-CHANGE-NEEDED`**, before
+     printing its final text (`status: "no_change"`, `notice` = the whole body of its `## Notice`,
+     the conclusion its origins are told when the job is closed).
+     **A gate pause records the outcome before the turn ends** — `run_outcome` with
+     `status: "gate"` and `question` and/or `from_artifact: { file, section }`: the runtime
+     composes the whole `## Notice` body, with no length cap — and then the turn ends, its final
+     text one plain line with no `## Notice`.
      `status` accepts ONLY `done`, `gate` and `no_change` — a failure, a cancellation and a timeout are read
      from how the process ended, never from a record. The pull request URL is not a parameter:
      the runtime writes it from what the session really published.
@@ -486,9 +341,8 @@ The runtime waits for every subagent and background task of an unattended run; l
 6. **Track routing** — the whole pipeline runs on Claude agents via `Agent` (every call MUST
    pass `model`); there is no external engine. The three tracks execute the SAME pipeline and
    differ ONLY in the `routing` row `nightqueue run start` answers for the tier (step 3): the
-   `model` of each agent (`null` = the agent does not run in that tier; `triagerBugOnly` = in
-   `simple` the triager runs only when the request is a bug), the verifier scope, the QA methods
-   of the PR, the `Max fix iterations`, the request critique, the `<CWD>/CLAUDE.md` and
+   `model` of each agent (`null` = the agent does not run in that tier), the verifier scope, the
+   QA methods of the PR, the `Max fix iterations`, the `<CWD>/CLAUDE.md` and
    `index_recall` rules, the context block of the coder and the time target. Its single source
    is `src/queue/routing.mjs`, with the rationale in its header; `nightqueue run start --routing`
    prints the whole table. Every `phase_prompt` answer
@@ -504,8 +358,7 @@ The runtime waits for every subagent and background task of an unattended run; l
 
    The pipeline only **stops to ask the user for input** at these points (each rule lives in
    full in its own phase — this is only the index):
-   - **Phase 0 (gate 2.5):** verdict `PROPOSE-ALTERNATIVE` or `ASK`.
-   - **Phase 1 (gate):** verdict `NOT-REPRODUCIBLE` or `NEEDS-CLARIFICATION`.
+   - **Phase 1 (gate):** verdict `NOT-REPRODUCIBLE`, `NEEDS-CLARIFICATION` or `PROPOSE-ALTERNATIVE`.
    - **Phase 3:** an insufficient brief, `## Requires user confirmation`, or the Type divergence
      valve with no confirmed `feature/refactor`.
    - **Phase 6.5 (native/device-gated capability):** the emulator/CI cannot reproduce it — not a
@@ -525,15 +378,15 @@ The runtime waits for every subagent and background task of an unattended run; l
 > once done, go straight to Phase 7.
 
 1. **Locate the affected files** — not yourself: `phase_prompt` hands the coder the
-   `**Affected area:**` of the Brief plus, in the tier whose row allows it, the PATHS the
+   `**Affected area:**` of the Brief (`00-brief.md`, written by `run check 01`) plus, in the tier whose row allows it, the PATHS the
    project index answers — paths only, never content. The coder locates the rest itself and
    lists what it touched in `04-implementation.md`.
    The coder receives the LIST of paths, never their content pasted inline: it has Read.
 
-2. **Triager — only when `Type = bug/error` and the row gives the triager a `model`** (a
-   feature/refactor, and the whole `trivial` tier, goes straight to step 3): run **Phase 1**
-   exactly as written. The bug is reproduced before a line is changed;
-   `NO-CHANGE-NEEDED`/`NOT-REPRODUCIBLE`/`NEEDS-CLARIFICATION` stops the run there, as the Phase 1 table says.
+2. **Triager — always**: run **Phase 1** exactly as written. It writes the Brief every later
+   prompt reads, and on a bug the bug is reproduced before a line is changed;
+   `NO-CHANGE-NEEDED`/`NOT-REPRODUCIBLE`/`NEEDS-CLARIFICATION`/`PROPOSE-ALTERNATIVE` stops the run
+   there, as the Phase 1 table says.
 
 3. **Launch 1 coder agent**: `phase_prompt` with `target: "coder"`, then `Agent` with the
    answered `subagent_type` (`nightqueue:coder`), `model` and `prompt` passed verbatim.
@@ -554,7 +407,7 @@ The runtime waits for every subagent and background task of an unattended run; l
      report the failures.
 
 The run is recorded by step 5.3 as in any other run, with the canonical phase names
-(`triage` when the triager ran, `implementation`, `verification`, `commit`) — the phase
+(`triage`, `implementation`, `verification`, `commit`) — the phase
 order never changes.
 
 ---
@@ -572,8 +425,8 @@ unless it is all this run has to give, in which case it comes back anyway.
 Pass `prompt` to `Agent` exactly as it came, with the answered `subagent_type` and `model` —
 never rewrite a line of it, never add one; relaunch context goes in the `note` argument only.
 Then gate the answered `artifact` with `nightqueue run check <check>`. Each `open_items` line of
-the answer becomes an open item of Phase 8. `phase_prompt` refuses a run whose Brief is not
-in `<RUN_DIR>/00-brief.md` yet: write it (step 3) and call again.
+the answer becomes an open item of Phase 8. `phase_prompt` refuses every target but the triager
+until `run check 01` wrote `<RUN_DIR>/00-brief.md`.
 
 A host that answers `unknown` for `phase_prompt` is a runtime older than this plugin: fill the
 target's template under `references/prompts/` of this skill by hand (`coder-fast.md`/`verifier-fast.md` on
@@ -582,40 +435,44 @@ an open item of Phase 8.
 
 ### Phase 1 — Triage-Gate
 
-> Tier scoping: the 🔍 triager `model` of the `routing` row (step 6) — a `null` there
-> means this phase does not run, and in the fast tracks it is the block above that launches
-> it, on the same artifact and the same gates.
+> Tier scoping: the 🔍 triager `model` of the `routing` row (step 6) — in the fast tracks it
+> is the block above that launches it, on the same artifact and the same gates.
 
-It always runs, both for bug/error and for feature/refactor, validating before exploration,
-architecture and implementation are spent.
+It always runs, in every tier, both for bug/error and for feature/refactor: it turns the request
+into the Brief and critiques it, validating before exploration, architecture and implementation
+are spent.
 
-Prompt: `phase_prompt` with `target: "triager"` — on a bug, pass the raw error block of the
-user (below) as `raw_evidence`; the triager is the only agent that receives it.
+Prompt: `phase_prompt` with `target: "triager"`; outside a job pass `request` = the user's
+request verbatim (after a gate answer in an interactive run: the request plus the answer). Inside
+a job the runtime reads the job's own prompt.
 
 Launch **1 triager agent** with the answered `subagent_type` (`nightqueue:triager`), `model`
-(`sonnet` if the tier is simple, `sonnet` if the tier is complex) and `prompt` verbatim — read
-mode, it does not edit files. It writes the output to `01-triage.md`; run
-`nightqueue run check 01` (the artifact gate, step 5.2) and act on its answer.
-
-**Bug from a crash reporter:** when an MCP for it is available, pull ≥3 events (stack +
-breadcrumbs + tags) before launching the triager and include them in the `Raw evidence` —
-never only the ticket's title/culprit.
+(`sonnet`) and `prompt` verbatim — read mode, it does not edit files. It writes the output to
+`01-triage.md`; run `nightqueue run check 01` (the artifact gate, step 5.2) and act on its answer.
 
 **Gate:**
 
 | `run check 01` answers | Action |
 | --- | --- |
-| `MISSING` / `GATE: symptom-proof-missing` | relaunch the triager once with the line as `note`; still → terminate (⚠️ open item) |
+| `MISSING` / `GATE: symptom-proof-missing` / `GATE: brief-*` | relaunch the triager once with the line as `note`; still → terminate (⚠️ open item) |
 | `VERDICT: PROCEED` | Phase 2 |
 | `VERDICT: NO-CHANGE-NEEDED` | Phase 8 — its report records `run_outcome` with `status: "no_change"` (step 5.3); the job ends `done` with no pull request |
 | `VERDICT: NOT-REPRODUCIBLE` | terminate; `## Open items` go to Phase 8 (the job ends `cancelled`) |
 | `VERDICT: NEEDS-CLARIFICATION` | `run_outcome` with `status: "gate"` and `from_artifact: { file: "01-triage.md", section: "## Open items" }`, then end the turn |
+| `VERDICT: PROPOSE-ALTERNATIVE` | the same action as `NEEDS-CLARIFICATION` |
+| `recorded: slug … (renamed …; run dir <path>)` | use that path as `RUN_DIR` from here on |
 
 A PROCEED that concludes the system behaves correctly, or rests the cause on a guess about data
 the environment could confirm, is invalid: relaunch the triager with that as `note` — a run
 proven to need no change is `NO-CHANGE-NEEDED`.
 
 An `## Intent note` or `## Depth note` never blocks the advance.
+
+**A Brief with numbered stages** (its `**Stages:**` field). Each stage is a unit of the run and
+the order is binding: the Phase 3 plan is written per stage, Phase 4 implements stage by stage
+with the verifier between stages (a failing stage is fixed before the next starts), and the
+execution table and PR list the stages with their status. Stages never split the delivery:
+still one branch and ONE pull request.
 
 ### Phase 2 — Exploration
 
@@ -937,7 +794,7 @@ returned by each phase (not by the icon of the summary table, which may not capt
 nuance) — any deviation, a verdict different from the one listed, or a doubt about any
 of them already makes the run **not happy**:
 
-- Triager: verdict `PROCEED` (not `NO-CHANGE-NEEDED`, `NOT-REPRODUCIBLE` nor `NEEDS-CLARIFICATION`).
+- Triager: verdict `PROCEED` (not `NO-CHANGE-NEEDED`, `NOT-REPRODUCIBLE`, `NEEDS-CLARIFICATION` nor `PROPOSE-ALTERNATIVE`).
 - Architect: no `## Requires user confirmation` in the plan.
 - QA-Guardian: verdict `APPROVED` (not `NEEDS FIX` nor `NEEDS DISCUSSION`).
 - Verifier: verdict `## Verification: PASSED` (not `PASSED-STATIC` nor `FAILED`).
@@ -949,8 +806,7 @@ of them already makes the run **not happy**:
 - Pipeline: `outcome` is `pr_opened` or `local_commit` (not `no_commit`) **and**
   no `gate_stop` was triggered.
 - A gate of a phase that does not run in this tier counts as satisfied (it is `⏭️`, never a
-  deviation): in `trivial`/`simple` that covers the triager when the request is not a bug,
-  the architect, the QA and 6.5.
+  deviation): in `trivial`/`simple` that covers the architect, the QA and 6.5.
 
 **Golden rule:** when in doubt about any of the points above, treat it as
 **not happy** — the complete detail is the safe behavior; hiding is the risk.
@@ -961,9 +817,9 @@ notice and the closing gets stuck. The header is exactly `## Notice`, with no em
 suffix, as a level-2 section of the report, and it does **not** count towards the cap of
 ~30 lines of the happy path. **Everything below — the character cap, the "no line may start
 with `# `/`## `" rule and the writing/shape checks — governs a `done`/`failed` notice of THIS
-phase only.** A gate notice (step 2.5, the Confirmation pause and the usage-coverage gate of
-Phase 3) is never written here: it follows its own rule above — the `## Requires user
-confirmation` block verbatim, followed by the answer line, with NO length cap.
+phase only.** A gate notice (the pauses of Phase 1, the Confirmation pause and the
+usage-coverage gate of Phase 3) is never written here: the runtime composes it from the
+`run_outcome` record of the gate pause (step 5.3), with NO length cap.
 
 - The body goes as direct text under the header. **Never** inside a code
   block (` ``` `): this text is read by machine.
@@ -1138,7 +994,7 @@ On both paths, proceed to the Telemetry below.
 **Telemetry (mandatory — one call per run, any outcome):** after
 assembling the tables, persist the run via `pipeline_log` (MCP `nightqueue`). Send only what is
 judgment: `task_type`, `outcome` (`pr_opened` | `local_commit` | `no_commit`; `investigated`/`queued` belong to the operator and are refused inside a job), `gate_stop` when
-there was no delivery (which gate ended it: `critique` | `triage` | `architect` | `qa` |
+there was no delivery (which gate ended it: `triage` | `architect` | `qa` |
 `verification` | `runtime` | `user`), `tier_operator` (the tier of the `Tier:` line of the
 prompt, when the operator set one; omit it when there was none), and `phases` = one entry per
 line of the complete table, in order (phase, status `ok`/`failed`/`skipped`, `retry: true` on
@@ -1148,7 +1004,7 @@ The rest of the record is the runtime's, not yours:
 - `project` and `slug` come from the job's own row and are ignored here; send them only on a run
   started outside the queue.
 - `tier` and `tier_raise_reason` are left out: the tier was recorded with `run_set` and the
-  raise was read from the Brief's `Tier raised: <from> -> <to>: <evidence>` line.
+  raise was read from the printed `Tier raised: <from> -> <to>: <evidence>` line.
 - **No duration and no model is sent.** They are measured from the session stream and fill the
   record afterwards; a `duration_s` assembled here would only be overwritten.
 
@@ -1159,7 +1015,7 @@ A failure in `pipeline_log` does not block the report: record the ⚠️ open it
 It runs ONCE per attempt, after `nightqueue run report` and the `pipeline_log` Telemetry (so the
 run timeline has this attempt's rows), and BEFORE the final text. It runs on a delivered run, a
 `no_commit` run and a terminated run (`run_terminate`, a `gate_stop`, an artifact `MISSING`, the
-loop limits). It does NOT run at a gate-block pause (step 2.5, the Confirmation pause, the
+loop limits). It does NOT run at a gate pause (Phase 1, the Confirmation pause, the
 usage-coverage gate, NEEDS-DEVICE): the resumed run reflects at its end.
 
 Launch:

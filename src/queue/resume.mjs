@@ -17,7 +17,7 @@ export const RESUME_PHASE_ORDER = [
 ];
 
 export const RESUME_SCHEMA_VERSION = 1;
-export const TERMINAL_VERDICT_LABELS = ["NO-CHANGE-NEEDED", "NOT-REPRODUCIBLE", "NEEDS-CLARIFICATION"];
+export const TERMINAL_VERDICT_LABELS = ["NO-CHANGE-NEEDED", "NOT-REPRODUCIBLE", "NEEDS-CLARIFICATION", "PROPOSE-ALTERNATIVE"];
 export const DEFAULT_MAX_RESUMES = 1;
 
 const SEGMENT_RE = /^[A-Za-z0-9][A-Za-z0-9._+-]{0,79}$/;
@@ -71,7 +71,7 @@ function lastCompletedPhase(phases) {
   for (const candidate of phases) {
     const position = RESUME_PHASE_ORDER.indexOf(candidate?.phase);
     if (position < 0) return null;
-    if (position > index) {
+    if (position >= index) {
       index = position;
       entry = candidate;
     }
