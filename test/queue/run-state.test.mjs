@@ -2,9 +2,12 @@ import assert from "node:assert/strict";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
+import { withLockSync } from "../../src/config/lock.mjs";
 import { runDir } from "../../src/config/paths.mjs";
 import { decideResume } from "../../src/queue/resume.mjs";
 import {
+  clearTermination,
+  recordCheck,
   recordOutcome,
   recordPhaseDone,
   recordPrTemplate,
@@ -14,6 +17,7 @@ import {
   recordSkip,
   recordTermination,
   RUN_OUTCOME_STATUSES,
+  RUNTIME_AUTHOR,
 } from "../../src/queue/run-state.mjs";
 import { FIXED_PROJECT_ID, makeHome } from "../../test-support/memory.mjs";
 
@@ -31,6 +35,25 @@ function writeState(env, content) {
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, "state.json"), JSON.stringify(content));
 }
+
+test("only the runtime's own termination is cleared, of the named phase, and a held lock keeps the file as it was", (t) => {
+  const env = makeHome(t, "run-state-clear-termination");
+  recordTermination({ ...RUN, phase: "triage", reason: "NEEDS-CLARIFICATION: by hand", env });
+  assert.equal(clearTermination({ ...RUN, env }).status, "absent");
+  assert.equal(readState(env).termination.reason, "NEEDS-CLARIFICATION: by hand");
+
+  recordTermination({ ...RUN, phase: "triage", reason: "NEEDS-CLARIFICATION: which one?", by: RUNTIME_AUTHOR, env });
+  assert.equal(readState(env).termination.by, RUNTIME_AUTHOR);
+  assert.equal(clearTermination({ ...RUN, phase: "explore", env }).status, "absent");
+
+  const before = readFileSync(join(runDir(RUN.projectId, RUN.slug, env), "state.json"), "utf8");
+  const held = withLockSync(`${runDir(RUN.projectId, RUN.slug, env)}.lock`, () => clearTermination({ ...RUN, phase: "triage", env }));
+  assert.equal(held.status, "kept");
+  assert.equal(readFileSync(join(runDir(RUN.projectId, RUN.slug, env), "state.json"), "utf8"), before);
+
+  assert.equal(clearTermination({ ...RUN, phase: "triage", env }).status, "written");
+  assert.equal(readState(env).termination, undefined);
+});
 
 test("a completed phase is appended with the fixed fields of the contract and a real UTC stamp", (t) => {
   const env = makeHome(t, "run-state-phase");
@@ -62,6 +85,38 @@ test("the reason a phase ran again is recorded trimmed, a blank one is dropped, 
   assert.deepEqual(Object.keys(first), ["phase", "at", "artifact", "verdict"], "an entry with no reason changed shape");
   assert.equal(second.reason, "fix loop 1: lint failed");
   assert.deepEqual(Object.keys(blank), ["phase", "at"], "a blank reason was recorded as a key");
+});
+
+test("a plain `run_phase_done` repeating the runtime's last entry merges into it; a reason, another phase or another artifact appends", (t) => {
+  const env = makeHome(t, "run-state-phase-merge");
+  recordPhaseDone({ ...RUN, phase: "implementation", artifact: "04-implementation.md", verdict: "OK", by: "runtime", env });
+
+  recordPhaseDone({ ...RUN, phase: "implementation", artifact: "04-implementation.md", verdict: "done", note: "by hand", env });
+  recordPhaseDone({ ...RUN, phase: "implementation", verdict: "done again", env });
+  assert.equal(readState(env).phases.length, 1, "an older SKILL's repeat of the runtime's record doubled the row");
+  assert.deepEqual([readState(env).phases[0].verdict, readState(env).phases[0].note, readState(env).phases[0].by], ["done again", "by hand", "runtime"]);
+
+  recordPhaseDone({ ...RUN, phase: "implementation", artifact: "04-implementation.md", reason: "fix loop 1", env });
+  recordPhaseDone({ ...RUN, phase: "implementation", artifact: "04-implementation.md", verdict: "x", by: "runtime", env });
+  recordPhaseDone({ ...RUN, phase: "implementation", artifact: "other.md", env });
+  recordPhaseDone({ ...RUN, phase: "qa", env });
+  assert.deepEqual(readState(env).phases.map((entry) => entry.phase), ["implementation", "implementation", "implementation", "implementation", "qa"]);
+});
+
+test("a check memo replaces the check's previous one, and only a memo that did not pass becomes the run's last failure", (t) => {
+  const env = makeHome(t, "run-state-check-memo");
+  const failing = { line: "GATE: runtime-not-met — x", ok: false, completed: false, digest: "a" };
+  assert.equal(recordCheck({ ...RUN, check: "06.5", memo: failing, env }).phase, null);
+  const passing = { line: "OK", ok: true, completed: true, digest: "b" };
+  const written = recordCheck({ ...RUN, check: "06.5", memo: passing, done: { phase: "runtime", artifact: "06-runtime.md", verdict: "CONFIRMED" }, env });
+  assert.deepEqual(written.phase, { status: "appended", reason: "GATE: runtime-not-met — x" });
+  const state = readState(env);
+  assert.deepEqual([state.checks["06.5"].line, state.checks["06.5"].ok, state.checks.lastFailure.line], ["OK", true, "GATE: runtime-not-met — x"]);
+  assert.equal(state.phases[0].by, "runtime");
+  const again = recordCheck({ ...RUN, check: "06.5", memo: passing, done: { phase: "runtime", artifact: "06-runtime.md", verdict: "CONFIRMED" }, env });
+  assert.deepEqual(again.phase, { status: "already", reason: null });
+  assert.equal(readState(env).phases.length, 1);
+  assert.equal(recordCheck({ ...RUN, check: "06.5", memo: passing, done: { phase: "nope" }, env }).status, "kept");
 });
 
 test("an unknown phase is refused with the accepted list and writes nothing", (t) => {

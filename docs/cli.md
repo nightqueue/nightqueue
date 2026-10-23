@@ -48,7 +48,11 @@ pull request template in effect (the same as `run pr --template`), and prints on
 JSON line: `project`, `slug`, `runDir`, the `worktree` and `branch` the runtime
 recorded (it never creates a worktree), `tier`, `type`, `commitType`, the ONE
 `routing` row of the tier (from `src/queue/routing.mjs`), the `phases` and `tasks`
-of the tier and type, `prTemplate` and `commitConvention`. With `--expect-slug`,
+of the tier and type, `prTemplate`, `commitConvention` and `commitTemplate`
+(`{source, path, label}`: the commit message template in effect, first match wins - `config`,
+git's own `commit.template` read in the run's checkout when it names an existing file; `repo`,
+the repository's convention file (`.gitmessage` gives `path`); else `nightqueue`, the fallback
+of `plugin/skills/resolve/references/commit-template.md`, `path` null). With `--expect-slug`,
 inside a job, it waits up to 10 seconds for the runner to bind the slug the
 orchestrator just declared (`SLUG: <slug> TYPE: <type>`) and answers `slugDeclared`
 and `slugBound`; it never renames anything itself. Calling it again answers the
@@ -58,10 +62,19 @@ and writes nothing, inside a job or outside.
 
 `run publish --message-file <p> --body-file <p> [--files-from <p>] [--extra
 <pathspec>]... [--title <t>] [--remove-worktree]` is `run commit` then `run pr` in
-one call, in the safe order: the body is checked against the template in effect
-first, then the list is checked for refused paths and scratch files, and only then
-is anything committed - any problem prints its `MISSING:`/`REJECTED:`/`REFUSED:`
-lines and `nothing was committed or pushed`, and exits `1`. A retry after the commit
+one call, in the safe order: the commit message is checked against the commit template
+in effect (the `commitTemplate` of `run start`), then the body against the pull request
+template in effect, then the list is checked for refused paths and scratch files, and only
+then is anything committed - any problem prints its `MISSING:`/`REJECTED:`/`REFUSED:`
+lines and `nothing was committed or pushed`, and exits `1`. Each message violation is one
+`REJECTED: commit message — <reason>` line, printed first. Under every template: an empty
+subject or one starting with `#`, a body whose line 2 is not blank, a line starting with
+`Co-Authored-By:` (any case; prose that mentions it passes) and a `Refs:` line are rejected;
+under the `nightqueue` fallback only, a subject that is not Conventional Commits
+(`<type>(<scope>): <subject>`) is rejected too. Under a `config` or `repo` template the
+repository's own hooks judge the rest on `git commit`. Once the pull request is open, the
+command records the `commit` phase (`verdict: "PR opened"`, `by: "runtime"`) in
+`state.json`; `run pr` does the same. A retry after the commit
 already happened (every listed path clean and the branch ahead of its base) prints
 `COMMITTED: <sha> (already committed)` instead of committing again. The title is
 `--title`, else the body's `# <title>` line, else the subject of the commit message.
@@ -99,6 +112,23 @@ artifact and prints `GENERATED` - and a worktree with no change at all prints
 three answers exit `0`: they are findings the agent judges (relaunch the phase
 or terminate), not failures of the command; only an unknown `<NN>` or a run that
 cannot be resolved exits `1`.
+
+The first line keeps that meaning; the check also answers the phase's verdict and gates, one
+fact per line under a stable prefix, in this order: `VERDICT: <value>` (`01`, `05a`, `05`,
+`06`, `06.5`; a verdict outside the phase's values is a `MISSING:` of the verdict line),
+`GATE: <code> — <evidence>`, `OPEN: <text>`, `TYPE-MISMATCH: …`,
+`CONFIRM: requires-user-confirmation`, `INVALIDATED: <item>`, `DIFF-APPLIES: yes|no`,
+`NEEDS-DEVICE`, `index: …` (`02`), the `recorded: …` lines, and `SCRIPT:` followed by the
+device script, always last. A `MISSING:` first line prints nothing else. Headings are matched
+by prefix, outside fenced code and HTML comments; round artifacts are read on their last
+`## Round`. The check acts on what it found: on a complete phase it records
+`phase_done` itself (`recorded: phase_done <phase> <verdict>`, with the reason of a re-run),
+`02` saves the File map into the project index (`index: saved N files, M libs` or
+`index: not saved (<reason>)`, which never changes `OK`), `01` records a missing Type
+(`recorded: type <type>`) and the termination of a terminal verdict
+(`recorded: run_terminate triage <VERDICT>`), and `05a` records the stage A marker
+(`recorded: qa_stage_a <verdict>`). Every gate code, the completion rule and the record
+semantics are in [Runtime contract](runtime-contract.md) ("The artifact check answers the gates").
 
 `run log` prints one tab-separated line per phase recorded in `state.json` -
 `<phase>  <model>  <status>  <duration>` - and closes with `total  <duration>`.
@@ -430,6 +460,13 @@ the tail of the job logs no run explains, which cannot be rebuilt. A recovered r
 disk, so `queue retry` (and `queue_retry`) refuses it with ``J-<n> was rebuilt from disk by
 `nightqueue queue repair --from-disk` and its prompt was not kept, so it cannot run again; queue
 the task anew with `nightqueue queue add` ``.
+
+`queue retry` (and `queue_retry`) refuses a finished job before writing anything: a `closed`
+job answers ``J-<n> is closed: a finished job does not resume; queue a new one``, and a `done`
+job whose pull request gh reads as merged answers ``J-<n> is done and its pull request is
+merged: a finished job does not resume; queue a new one``. When gh cannot answer, or
+`NIGHTQUEUE_NO_PR_CHECK=1` is set, the merge is not proven and a `done` job gets the store's
+usual ``cannot be retried from status `done` `` refusal.
 
 A session that could not reach the nightqueue MCP server - its `init` lists `nightqueue` as
 `failed`, or its first nightqueue tool call fails (`is_error`) with nothing but

@@ -419,6 +419,13 @@ test("the architect prompt runs on opus and carries the delivery constraints", a
   assert.ok(prompt.includes("Delivery constraints (the limit of what may be delivered — NEVER design; omit the line if there is none):\nit must not touch native code\n"));
 });
 
+test("the architect prompt's `Type:` follows the Type recorded on the run, also after a correction", async (t) => {
+  const { env, home, run } = makeRun(t, "phase-prompt-type", { tier: "complex", type: "bug/error" });
+  assert.ok((await phasePrompt({ target: "architect" }, { run, env })).prompt.includes("\nType: bug/error\n"));
+  recordRunFields({ projectId: run.projectId, slug: SLUG, fields: { type: "feature/refactor" }, env: home });
+  assert.ok((await phasePrompt({ target: "architect" }, { run, env })).prompt.includes("\nType: feature/refactor\n"));
+});
+
 test("a run with no worktree recorded gets the registered checkout as its Repository, named in an open item", async (t) => {
   const { env, home, run } = makeRun(t, "phase-prompt-no-worktree", { worktree: false });
   const checkout = projectPathOf(home, "alpha");

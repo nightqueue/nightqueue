@@ -8,6 +8,7 @@ import { phasesFor, routingRow, routingTable, tasksFor } from "../queue/routing.
 import { recordPrTemplate, recordRunFields } from "../queue/run-state.mjs";
 import { openStore } from "../store/open.mjs";
 import { checkArgs, parseCommand } from "./args.mjs";
+import { findCommitTemplate } from "./commit-template.mjs";
 import { findPrTemplate } from "./pr-template.mjs";
 import { commitConvention } from "./run-publish.mjs";
 import { resolveRun, RUN_OPTIONS, worktreeOf } from "./run-context.mjs";
@@ -123,6 +124,7 @@ export async function runStart(argv, ctx) {
     tasks: tasksFor(tier, type),
     prTemplate,
     commitConvention: commitConvention(cwd, ctx.env),
+    commitTemplate: findCommitTemplate(cwd, ctx.env),
   };
   ctx.out(JSON.stringify(answer));
   return 0;

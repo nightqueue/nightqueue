@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
@@ -289,6 +289,38 @@ test("a phase, a status or a call with nothing to record is refused with the acc
   assert.match(textOf(empty), /nothing was recorded in the state.json of `alpha\/fix-the-worker`: no field to record/);
 
   assert.equal(existsSync(join(runDir(ensureProject(env, "alpha"), SLUG, env), "state.json")), false, "a refused call created the file");
+});
+
+test("`run_outcome` composes a gate notice from the run's artifact and question, and refuses what it cannot compose", async (t) => {
+  const { env, job } = makeRunningJob(t, "mcp-run-tools-gate-notice");
+  const dir = runDir(ensureProject(env, "alpha"), SLUG, env);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "03-plan.md"), "## Implementation plan\nx\n\n## Requires user confirmation\n1. Approve C1?\n\n## Assumptions\n- none\n");
+  const client = await connect(t, { ...env, NIGHTQUEUE_JOB_ID: String(job.id) });
+
+  const refusals = [
+    [{ status: "gate", from_artifact: { file: "../03-plan.md", section: "## Requires user confirmation" } }, /bare name of a run artifact/],
+    [{ status: "gate", from_artifact: { file: "03-plan.md", section: "## Nope" } }, /03-plan.md has no `## Nope` section: nothing was recorded/],
+    [{ status: "done", question: "why?" }, /only compose a `gate` notice/],
+    [{ status: "gate", notice: "hand-written", question: "why?" }, /either `notice` or `question`\/`from_artifact`, never both/],
+  ];
+  for (const [args, message] of refusals) {
+    const refused = await client.callTool({ name: "run_outcome", arguments: args });
+    assert.equal(refused.isError, true, JSON.stringify(args));
+    assert.match(textOf(refused), message);
+  }
+  assert.equal(existsSync(join(dir, "state.json")), false, "a refused call wrote state.json");
+
+  const composed = payloadOf(
+    await client.callTool({
+      name: "run_outcome",
+      arguments: { status: "gate", question: "Approve?", from_artifact: { file: "03-plan.md", section: "## Requires user confirmation" } },
+    }),
+  );
+  const expected = `## Requires user confirmation\n1. Approve C1?\n\nApprove?\n\nAnswer with: nightqueue queue retry J-${job.id} --note "<your answer>"`;
+  assert.equal(composed.notice, expected);
+  assert.deepEqual(readState(env, "alpha", SLUG).outcome.notice, expected);
+  assert.equal(readState(env, "alpha", SLUG).outcome.status, "gate");
 });
 
 test("inside a job the recall drops what the run already saw, and gives it back when it is all there is", async (t) => {

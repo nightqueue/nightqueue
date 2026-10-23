@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { parseExploreArtifact } from "../../src/cli/explore-artifact.mjs";
 import { lastRound, nextFixLoop, nextRound, PHASE_ARTIFACTS } from "../../src/queue/phase-artifacts.mjs";
+import { RESUME_PHASE_ORDER } from "../../src/queue/resume.mjs";
 
 const EXPLORE_HEADINGS = ["## File map", "## Access map", "## Third-party libraries"];
 
@@ -24,6 +25,23 @@ test("the plan, implementation, QA and verification gates require the mandatory 
 test("the verifier, runtime and QA artifacts are round artifacts; the others are not", () => {
   const rounds = [...PHASE_ARTIFACTS].filter(([, artifact]) => artifact.rounds).map(([phase]) => phase);
   assert.deepEqual(rounds, ["05a", "05", "06", "06.5"]);
+});
+
+test("each artifact names the canonical phase it completes, and only the brief and the QA stage A complete none", () => {
+  const phases = Object.fromEntries([...PHASE_ARTIFACTS].map(([check, artifact]) => [check, artifact.phase]));
+  assert.deepEqual(phases, { "00": null, "01": "triage", "02": "explore", "03": "architecture", "04": "implementation", "05a": null, "05": "qa", "06": "verification", "06.5": "runtime" });
+  for (const phase of Object.values(phases).filter(Boolean)) assert.ok(RESUME_PHASE_ORDER.includes(phase), phase);
+});
+
+test("the triage, QA, verification and runtime artifacts declare where their verdict is read and the values it takes", () => {
+  const verdicts = [...PHASE_ARTIFACTS].filter(([, artifact]) => artifact.verdict).map(([check, artifact]) => [check, artifact.verdict.label]);
+  assert.deepEqual(verdicts, [
+    ["01", "## Verdict: <PROCEED|NO-CHANGE-NEEDED|NOT-REPRODUCIBLE|NEEDS-CLARIFICATION>"],
+    ["05a", "## Verdict: <APPROVED|NEEDS FIX|NEEDS DISCUSSION> as the first line"],
+    ["05", "## Verdict: <APPROVED|NEEDS FIX|NEEDS DISCUSSION> as the first line"],
+    ["06", "## Verification: <PASSED|PASSED-STATIC|FAILED>"],
+    ["06.5", "## Runtime verdict: <CONFIRMED|NOT-MET|SYMPTOM-PERSISTS|NEEDS-DEVICE|UNAVAILABLE> as the first line"],
+  ]);
 });
 
 test("`lastRound` is the last `## Round` up to the end, or the whole text with no round", () => {

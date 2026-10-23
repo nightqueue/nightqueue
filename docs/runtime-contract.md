@@ -51,7 +51,8 @@ What a runtime has to provide, and what it can rely on:
 - `state.json` in the same directory carries the resumable state, and **the runtime
   is its only writer**: every key goes through `src/queue/run-state.mjs`, which the
   MCP tools `run_phase_done`, `run_terminate`, `run_skip`, `run_outcome` and `run_set`, the
-  command `nightqueue run pr` and the runner itself call. The pipeline never writes
+  commands `nightqueue run check`, `nightqueue run pr` and `nightqueue run publish`, and the
+  runner itself call. The pipeline never writes
   the file, and an `updatedAt` an older plugin hand-wrote is overwritten by the
   runtime's clock and never read. Every key, and who writes it:
   - `schemaVersion` (always `1`), `projectId` and `slug`: every write, as fixed
@@ -59,10 +60,21 @@ What a runtime has to provide, and what it can rely on:
     rewritten and never read to find the run.
   - `updatedAt` and the `at` of every record: the runtime's UTC clock, one stamp per
     write.
-  - `phases[{phase, at, artifact?, verdict?, note?, reason?}]`: `run_phase_done`, append-only,
-    so a phase recorded twice never erases the first record.
-  - `termination{phase, reason, at}`: `run_terminate`; a run terminated this way is
-    never resumed by a retry.
+  - `phases[{phase, at, artifact?, verdict?, note?, reason?, by?}]`: `nightqueue run check` on
+    a complete phase and `run publish`/`run pr` for `commit` (both `by: "runtime"`), and
+    `run_phase_done`; append-only, so a phase recorded twice never erases the first record.
+    One merge keeps an older plugin from doubling a row: a `run_phase_done` with no `reason`
+    whose phase is the one of the LAST entry, written `by: "runtime"` with the same artifact
+    (or the call sent none), merges its `verdict`/`note` into that entry instead of appending.
+  - `checks{<NN>: {line, ok, completed, digest, at}, lastFailure?{check, line, at}}`:
+    `nightqueue run check` alone, the memo of the last check of each artifact (its first
+    notable line and the sha256 of the text it read); it supplies the reason of a re-run and
+    keeps a check run twice on the same text from appending twice. It is not a `run_set` field.
+  - `termination{phase, reason, at, by?}`: `run_terminate`, and `nightqueue run check 01` on a
+    terminal triage verdict (`by: "runtime"`); a run terminated this way is never resumed by a
+    retry. A runtime-written termination lasts one attempt: a completed `run check 01` that
+    proceeds lifts it (`recorded: termination cleared`), and so does a `queue retry` of a `gate`
+    job. One written by hand (no `by`) is never lifted.
   - `skips{<phase>:{by, reason?, at}}`: why a slot of the studio track did not run,
     for display only. The `tier` entries (`by: "tier"`, no reason) are written by the
     runtime on every `tier`/`type` write, from `phasesFor(tier, type)`, and from the
@@ -73,7 +85,8 @@ What a runtime has to provide, and what it can rely on:
     a phase that still runs shows as run. `pipeline_phases.status` is post-run
     telemetry only: it is written by `pipeline_log` after the run and is never a
     source of the live track.
-  - `outcome{status, at, notice?, prUrl?}`: `run_outcome` (`status`, `notice`),
+  - `outcome{status, at, notice?, prUrl?}`: `run_outcome` (`status`, and `notice` or, for a
+    gate, the notice it composes from `question`/`from_artifact`),
     `nightqueue run pr` (`status: "done"`) and the runner, which writes `prUrl` at
     finalize from what the session really published - it is never a parameter.
     `status: "no_change"` is the run's deliberate conclusion that no code change is
@@ -83,7 +96,8 @@ What a runtime has to provide, and what it can rely on:
     `--template` query and the publishing call), the template the body is checked
     against - `repo` with its path, or `nightqueue`.
   - `type`, `tier`, `tierRaiseReason`, `branch`, `worktree` and
-    `qaStageA{artifact, verdict?, at}`: `run_set`; the runner also records
+    `qaStageA{artifact, verdict?, at}`: `run_set`; `nightqueue run check 01` also records a
+    missing `type` (derived from the triage) and `run check 05a` the `qaStageA` marker; the runner also records
     `tier`/`tierRaiseReason` from the `Tier raised:` line and `type` from the `TYPE:`
     half of the slug declaration. Inside a queued job the runner records `branch` and
     `worktree` itself, before the spawn, when it creates the job's worktree; the pipeline
@@ -203,7 +217,10 @@ What a runtime has to provide, and what it can rely on:
   `03-plan.md` is readable and has its own `## Requires user confirmation` section (heading
   to the next level-2 heading, outside fences), a notice shorter than that section by more
   than `GATE_NOTICE_MARGIN_CP` (200 code points, `src/queue/classify.mjs`) is read the same
-  way - a gate whose notice does not carry the question is `failed`, with the
+  way (except a notice recorded through `run_outcome` that nests another artifact's section:
+  its first non-blank line after the gate heading is another heading, the shape
+  `from_artifact` composes; that notice is another gate and is not measured against the
+  plan's section; a `## Notice` in the final text is always measured) - a gate whose notice does not carry the question is `failed`, with the
   fixed notice `the run stopped at a gate but its notice does not carry the question - see
   <plan path>` (`<plan path>` unknown when the classifier was given none); a clean run
   reaching neither reading is `failed` otherwise, keeping its final text as the reason.
@@ -473,7 +490,7 @@ dropped is answered with the older-definitions line):
 | `index_save` | `project`, `repo_root`, `files[{path, responsibility}]`, `libs?[{lib, version}]` |
 | `index_recall` | `project`, `repo_root?`, `query?` |
 | `pipeline_log` | `outcome`, `project?`, `slug?`, `tier?`, `tier_operator?`, `tier_raise_reason?`, `task_type?`, `gate_stop?`, `duration_s?`, `phases?[{phase, model?, status?, retry?, duration_s?, note?, reason?}]` (a phase sent with no `reason` takes the one `run_phase_done` recorded for it, paired by phase name in order, only when `phases` lists exactly as many rows of that phase as the run recorded; otherwise none of that phase's reasons are copied and the answer's `reasons_unpaired` names it) |
-| `queue_add` | `project?`, `prompt`, `cwd?`, `register?`, `key?` (with `register`), `title?` (one line, at most 120 characters; blank is none), `priority?` (1-9), `max_attempts?` (1-10), `timeout_s?` (60-86400), `tier?` (`trivial`, `simple`, `complex`), `origin?` (a list of `{kind, ref}`; omitted or null detects every recognised link of the prompt, `[]` is none; the old `{kind, ref}` or `false` is refused as an older client, contract 6) |
+| `queue_add` | `project?`, `prompt`, `cwd?`, `register?`, `key?` (with `register`), `title?` (one line, at most 120 characters; blank is none), `priority?` (1-9), `max_attempts?` (1-10), `timeout_s?` (60-86400), `tier?` (`trivial`, `simple`, `complex`), `origin?` (a list of `{kind, ref}`; omitted or null detects every recognised link of the prompt, `[]` is none; the old `{kind, ref}` or `false` is refused as an older client, contract 6) (a prompt that depends on another job or pull request is refused before anything is registered or queued; see "A job is self-contained" below) |
 | `project_register` | `cwd`, `name?`, `key?`, `org?` (registers the repository of `cwd`, a linked worktree as its main checkout, only after the person said yes; answers `{registered, project, key, org, path, hint}`; nothing is queued) |
 | `project_integrations` | `project`, `action` (`show`, `set`, `unset`), `key?` (`<kind>.<setting>`, required by `set`/`unset`), `value?` (text, required by `set`) (answers `{project, integrations, providers: [{kind, keys}]}` with the settings each provider of the build declares; `set` validates against the provider, `unset` of the last key leaves the project without integrations; `set`/`unset` refused from inside a job; never a secret) |
 | `tracker_issues` | `team?` (the tracker's team key), `project?` (the tracker's project name), `state?` (`open` default, `closed`, `all`), `limit?` (1-50, default 25), `include_filters?`, `text?` (title or description contains it, case-insensitive, at most 200), `label?` (one label name, exact, case-insensitive) (read-only, the home's Linear connection, no nightqueue project; answers `{ok: true, provider, items, truncated, filters?}` or the normal answer `{ok: false, error: "no-connection" \| "provider-unavailable", hint, provider}`; filters cached five minutes) |
@@ -488,11 +505,11 @@ dropped is answered with the older-definitions line):
 | `queue_session` | `job_id` |
 | `queue_cancel` | `job_id`, `reason?`, `stop?`, `release_worktree?` |
 | `queue_close` | `job_id`, `force?` |
-| `queue_retry` | `job_id`, `note?`, `fresh?`, `run?` |
+| `queue_retry` | `job_id`, `note?`, `fresh?`, `run?` (a `closed` job, or a `done` job whose pull request is merged, is refused: a finished job does not resume) |
 | `run_phase_done` | `phase`, `artifact?`, `verdict?`, `note?`, `reason?` (why the phase ran again; omitted on its first run), `project?`, `slug?` |
 | `run_terminate` | `phase`, `reason`, `project?`, `slug?` |
 | `run_skip` | `phase`, `by`, `reason`, `project?`, `slug?` |
-| `run_outcome` | `status` (`done`, `gate`, `no_change`), `notice?` (required with `no_change`), `project?`, `slug?` |
+| `run_outcome` | `status` (`done`, `gate`, `no_change`), `notice?` (required with `no_change`), `question?` and `from_artifact?{file, section}` (`gate` only, never with `notice`: the runtime composes the whole `## Notice`; see "A gate notice is composed from the record" below), `project?`, `slug?` |
 | `run_set` | `type?`, `tier?`, `tier_raise_reason?`, `branch?`, `worktree?`, `qa_stage_a?{artifact, verdict?}`, `project?`, `slug?` |
 
 The five `run_*` tools are the only way the pipeline records its run (see the
@@ -736,6 +753,153 @@ ended stays the runtime's call),
 `feature/refactor`), `outcome` (`pr_opened`, `local_commit`, `no_commit`),
 `gate_stop` (`critique`, `triage`, `architect`, `qa`, `verification`, `runtime`,
 `user`), the phase `status` (`ok`, `failed`, `skipped`). A value outside them comes back as an error message, never as a stack.
+
+**The artifact check answers the gates.** `nightqueue run check <NN>` reads the phase's
+artifact (and, where a rule needs them, `00-brief.md`, `01-triage.md`, `02-explore.md`,
+`03-plan.md` and `state.json`) and prints one fact per line, in this fixed order:
+
+1. `OK` | `MISSING: <sections>` | `GENERATED` (`04`), unchanged. After `MISSING:` nothing
+   else is printed: no gate is evaluated and nothing is recorded but the check memo. `01`
+   with `NEEDS-CLARIFICATION` or `NOT-REPRODUCIBLE` also requires `## Open items` with an item
+   (`MISSING: ## Open items`, or `## Open items (empty)` when it holds only blank lines or
+   `None`), because the next step reads it.
+2. `VERDICT: <value>`: `01` the suffix of `## Verdict:` (`PROCEED`, `NO-CHANGE-NEEDED`,
+   `NOT-REPRODUCIBLE`, `NEEDS-CLARIFICATION`); `05a` and `05` the first non-blank line of
+   `## Verdict` (`APPROVED`, `NEEDS FIX`, `NEEDS DISCUSSION`); `06` the suffix of
+   `## Verification:` (`PASSED`, `PASSED-STATIC`, `FAILED`); `06.5` the first non-blank line of
+   `## Runtime verdict` (`CONFIRMED`, `NOT-MET`, `SYMPTOM-PERSISTS`, `NEEDS-DEVICE`,
+   `UNAVAILABLE`). A verdict outside the values is a `MISSING:` naming the expected line.
+3. `GATE: <code> — <evidence>`, one per firing item, the evidence one trimmed line of at most
+   160 code points.
+4. `OPEN: <text>`: `05` `unconfirmed decisions — <value>` when the QA's value is not `none`;
+   `06.5` `<scenario> — to confirm` per `NOT MET / to confirm` row. Never a gate.
+5. `TYPE-MISMATCH: <evidence> — triage: <bug/error|feature/refactor> (<## Diagnosis filled|## Diagnosis absent or empty>)` (`03`).
+6. `CONFIRM: requires-user-confirmation` (`03`, the plan has a `## Requires user confirmation`
+   heading).
+7. `INVALIDATED: <item>`, one per item of `## Invalidated assumptions` other than `None` (`05`).
+8. `DIFF-APPLIES: yes|no` (`06.5`, from `Diff applies plan:`; omitted on `n/a` or absent).
+9. `NEEDS-DEVICE` (`06.5`).
+10. `index: saved N files, M libs` | `index: not saved (<reason>)` (`02`).
+11. `recorded: …` lines.
+12. `SCRIPT:` and the device script verbatim to the end of the output (`06.5` `NEEDS-DEVICE`:
+    the lines of `## Runtime verdict` after the verdict, up to `Diff applies plan:`).
+
+Every section read is fence-aware: a heading matches by prefix, never inside fenced code, and
+HTML comments are stripped first, also mid-line; a section ends at the next `## ` outside a
+fence. Round artifacts (`05a`, `05`, `06`, `06.5`) are read on their last `## Round`. The Type
+every rule uses is `state.type`; without one, the triage's (a `## Diagnosis` with a filled
+`Confirmed root cause:` or `Symptom proof:` is `bug/error`, else `feature/refactor`); without a
+triage, `bug/error`. A method "names a re-runnable search" when it carries a backtick span or
+one of the words `grep`, `rg`, `glob`, `ast-grep`, `git `, `find `, `ls `, `sed `, `awk `,
+`node `, `npm `. Table cells are split the GFM way: one leading and one trailing `|` are
+dropped, `\|` is a literal pipe, a pipe inside a code span (a backtick run closed by a run of
+the same length on the line) is cell text, and an unmatched backtick is plain text. The gate
+codes, in output order per phase:
+
+- `01` `symptom-proof-missing` — a `PROCEED` on a `bug/error` run whose `## Diagnosis` is
+  absent, has no `Symptom proof:` line, or leaves it empty, `n/a` or a `<…>` placeholder.
+- `03`, `bug/error` only and only when the plan has no `**Type mismatch:**` line with evidence
+  (such a line prints `TYPE-MISMATCH` instead and skips these three); the plan must then also
+  carry `## Symptom coverage` (`MISSING: ## Symptom coverage`, or `(empty)` with no table row):
+  - `coverage-vector-no-reason` — a row whose Status is not `covered`/`not-covered`, or whose
+    Reason is empty, `-`, `n/a` or `not applicable`;
+  - `coverage-enumeration-no-method` — `**How I enumerated:**` absent from the section, or its
+    value names no re-runnable search;
+  - `coverage-not-covered-without-confirmation` — a `not-covered` row in a plan without
+    `## Requires user confirmation`.
+- `03`, any Type, only while the plan has no `## Requires user confirmation`:
+  - `usage-coverage-cond-1` — a `- ` line of `## Usage coverage` containing
+    `changed=yes · source=pipeline`;
+  - `usage-coverage-cond-2` — a `**Always-gate class:** yes` line in that section;
+  - `usage-coverage-cond-3` — a line of `02-explore.md` matching
+    `unimplemented intent: <param> · governs <axis>` whose axis is the first word of the plan's
+    `**Diff axis:**`, EXCEPT when `<param>` is the ticket's own deliverable: its code token
+    (the first backtick span, else the first code-shaped identifier: a path holding `/`,
+    dotted, camelCase or PascalCase with an inner capital, snake_case, or a `name()` call)
+    is found as a whole token, case-sensitive (not preceded by `[\w$.]`, not followed by
+    `[\w$]`), in the `## Validated brief` of `01-triage.md` or the `**Objective:**` line of
+    `00-brief.md`. A prose-only `<param>` never holds the exception: the gate fires and the
+    user answers it. Without `02-explore.md` it never fires;
+  - `usage-coverage-cond-4` — a line of `00-brief.md` or `01-triage.md` starting `- `, with
+    ` · ` fields, one of which is exactly `to confirm`.
+- `05`, read on the last round's `## Validated risks`; the symptom codes only for a
+  `bug/error` plan without a Type mismatch:
+  - `symptom-coverage-n-mismatch` — no `Symptom coverage: <N> · <method> · omitted: <value>`
+    line, or `N` is not the number of rows of the plan's `## Symptom coverage` table;
+  - `symptom-coverage-omitted-empty` — the `omitted:` field absent or empty;
+  - `symptom-coverage-method-generic` — the method names no re-runnable search, or reads
+    `reviewed|read|analyzed the plan`;
+  - the usage codes only when the plan has `## Usage coverage` or `**Always-gate class:** yes`:
+    `usage-coverage-nm-mismatch` — no `Usage coverage: <N> · <M> · divergences: … · unconfirmed decisions: …`
+    line, no `## Access map (QA)`, or `N` differs from the plan's `- ` scenario lines or `M`
+    from the access map's `- ` lines other than `partial:` and `unimplemented intent:`;
+    `usage-coverage-divergences-empty` — `divergences:` or `unconfirmed decisions:` absent or
+    empty; `usage-coverage-held-on-pipeline` — a risk line with the standalone word `HELD`
+    (`UPHELD` never counts) that names `source=pipeline`, `What to avoid`, the scenario name of a
+    plan scenario carrying `source=pipeline`, or an item of the plan's `What to avoid`
+    (case-insensitive).
+- `06.5`, on the first table of the last round with a `Result` column:
+  `runtime-not-met` — a row whose Result starts `NOT MET` without `to confirm`;
+  `runtime-no-attempt` — a row whose Result is none of `MET`/`NOT MET…`, or whose Evidence is
+  empty, `-`, `none` or `not run`.
+
+The check then acts on what it found, and no effect ever changes the first line or the exit
+code. A check **completes** its phase when the first line is `OK` or `GENERATED`, no `GATE:`
+fired and the verdict does not loop back (`06` `FAILED`, `06.5` `NOT-MET` and
+`SYMPTOM-PERSISTS`); a pause (`CONFIRM`, `TYPE-MISMATCH`, `NEEDS-DEVICE`, `UNAVAILABLE`)
+completes. On completion it records the phase (`recorded: phase_done <phase> <verdict>`, plus
+` — reason: <reason>` on a re-run: the line the same check failed with, else
+`re-run after <check> <line>` of the newest failure, else `re-run`; ` (already)` when the same
+text was already recorded); otherwise it prints `recorded: none (<line>)`, and a write the
+state refuses prints `recorded: not recorded (<reason>)`. `01` records the derived Type when
+`state.type` has none (`recorded: type <type>`, even on a gate) and, on a completed terminal
+verdict, the termination (`recorded: run_terminate triage <VERDICT>`, reason
+`<VERDICT>: <first item of ## Open items, else of ## Validated brief>`, `by: "runtime"`); a
+completed `PROCEED` lifts a triage termination the runtime wrote (`recorded: termination
+cleared`, printed last among the `recorded:` lines). `02` on `OK` saves the
+File map and the libraries into the project index, the same as `run index-save`; a store that
+is unavailable inside a job queues the write (`index: not saved (store unavailable; queued at <path>)`)
+and any failure prints `index: not saved (<first line of the error>)`. `05a` records
+`qaStageA` (`recorded: qa_stage_a <verdict>`) and no phase. `run_phase_done` and
+`run_terminate` still work for an older plugin.
+
+**A gate notice is composed from the record.** `run_outcome` with `status: "gate"` takes
+`question`, `from_artifact: {file, section}`, or both, and composes the whole `## Notice`:
+`file` is a bare artifact name of the run directory (`^[A-Za-z0-9][A-Za-z0-9._-]*\.md$`, read
+on its last `## Round` when it is a round artifact) and `section` a heading found by prefix,
+outside fences, at its exact level first and then by the same title at any level (`#` to
+`######`), so every section `run check` requires or announces (`CONFIRM`, `## Open items`,
+`## Runtime verdict`, `## Usage coverage`) is found. A confirmation section, at any heading level, is carried verbatim; any other is
+nested under that heading; the question follows; inside a job the body ends with
+`Answer with: nightqueue queue retry J-<id> --note "<your answer>"`. A missing file or section,
+a path, `question`/`from_artifact` with another status, or either one together with `notice`
+is refused, and nothing is recorded. The answer echoes the composed `notice`. The pipeline
+then ends its turn with one plain line: a job whose final text has no `## Notice` still ends
+at `gate` with the recorded notice, and a `## Notice` in the text still wins over the record.
+
+**A job is self-contained, and a finished job does not resume.** `queue_add` refuses, before
+anything is registered or queued, a prompt that conditions the work on another job or pull
+request, answering "This brief depends on another job's pull request. A job must be
+self-contained: fold this work into that job (as a stage) or make it independent. Nothing was
+changed. Matched: `<phrase>`." The patterns (`src/queue/dependent-prompt.mjs`) are matched
+case-insensitively, anywhere, on the prompt without its fenced code and `<comment-thread>`
+blocks: `after [job] J-<n>`, `once PR|pull request #<n> is|has been|gets merged`,
+`depends on J-<n>` / `depends on job`, `when [PR] #<n> lands`. The CLI `queue add` and the
+studio do not apply it. `queue_retry` and `queue retry` refuse a `closed` job
+(``J-<n> is closed: a finished job does not resume; queue a new one``) and a `done` job whose
+pull request gh reads as merged (``J-<n> is done and its pull request is merged: …``), before
+writing anything; an unreadable answer or `NIGHTQUEUE_NO_PR_CHECK=1` proves no merge.
+
+**The commit message follows the template in effect.** `run start` answers
+`commitTemplate{source, path, label}`, first match wins: `config` (git's `commit.template` read
+in the run's checkout, `~` and relative paths resolved, a missing file falls through), `repo`
+(the repository's commit convention file; `.gitmessage` gives `path`), `nightqueue` (the
+fallback, `plugin/skills/resolve/references/commit-template.md`). `run publish --message-file`
+checks the message before staging anything and prints one
+`REJECTED: commit message — <reason>` per violation: an empty subject or one starting with `#`,
+a body whose line 2 is not blank, a `Co-Authored-By:` line (any case, at line start) or a
+`Refs:` line; under the fallback, a subject that is not Conventional Commits. Once the pull
+request is open, `run publish` and `run pr` record the `commit` phase (`by: "runtime"`).
 
 **A lockfile is published only when it is proved reproducible.** `run publish` (and
 `run commit`) refuse every lockfile (`package-lock.json`, `yarn.lock`, `pnpm-lock.yaml`,

@@ -49,6 +49,9 @@ export const SKIP_AGENTS = ["orchestrator", "triager", "explore", "architect", "
 // The author of the skips the runtime derives from the run's tier and type.
 const TIER_SKIP = "tier";
 
+// The author of the phase entries the runtime writes itself (`run check`, `run publish`).
+export const RUNTIME_AUTHOR = "runtime";
+
 // Refusal to record, always with the same shape as a write.
 function kept(reason) {
   return { status: "kept", path: null, reason };
@@ -112,24 +115,122 @@ function record({ projectId, slug, env, change }) {
   });
 }
 
+// The phase entries a state holds, as a list.
+function phaseEntries(state) {
+  return Array.isArray(state?.phases) ? state.phases : [];
+}
+
+// The last entry `phases` holds for one phase, or null when the phase was never recorded.
+function lastEntryOf(phases, phase) {
+  return [...phases].reverse().find((entry) => isStateObject(entry) && entry.phase === phase) ?? null;
+}
+
+// The index of the runtime's entry a plain `run_phase_done` call repeats (same phase, last entry, same or no artifact), or -1 when the call appends.
+function repeatedRuntimeEntry(phases, { phase, artifact, by, reason }) {
+  if (trimmedText(by) !== null || trimmedText(reason) !== null) return -1;
+  const index = phases.length - 1;
+  const last = phases[index];
+  if (!isStateObject(last) || last.phase !== phase || last.by !== RUNTIME_AUTHOR) return -1;
+  const sent = trimmedText(artifact);
+  return sent === null || sent === last.artifact ? index : -1;
+}
+
+// The phases after one phase record: a repeat of the runtime's own entry merges into it, anything else is appended.
+function phasesWithRecord(phases, { phase, artifact, verdict, note, reason, by }, at) {
+  const repeated = repeatedRuntimeEntry(phases, { phase, artifact, by, reason });
+  if (repeated >= 0) return phases.map((entry, index) => (index === repeated ? withText(entry, { verdict, note }) : entry));
+  return [...phases, withText({ phase, at }, { artifact, verdict, note, reason, by })];
+}
+
 // Records a phase the pipeline completed; the list is append-only, so a phase recorded twice never erases the first record.
-export function recordPhaseDone({ projectId, slug, phase, artifact, verdict, note, reason, env = process.env } = {}) {
+export function recordPhaseDone({ projectId, slug, phase, artifact, verdict, note, reason, by, env = process.env } = {}) {
   if (!RESUME_PHASE_ORDER.includes(phase)) return refuseEnum("phase", phase, RESUME_PHASE_ORDER);
   return record({
     projectId,
     slug,
     env,
-    change: (state, at) => ({
-      phases: [...(Array.isArray(state.phases) ? state.phases : []), withText({ phase, at }, { artifact, verdict, note, reason })],
-    }),
+    change: (state, at) => ({ phases: phasesWithRecord(phaseEntries(state), { phase, artifact, verdict, note, reason, by }, at) }),
   });
 }
 
+// The check memos a state holds, keyed by check.
+function checkMemos(state) {
+  return isStateObject(state?.checks) ? state.checks : {};
+}
+
+// The memos after one check: its own entry replaced and, when it did not pass, the run's last failure.
+function memosWithCheck(checks, check, memo, at) {
+  const entry = { line: String(memo.line ?? ""), ok: memo.ok === true, completed: memo.completed === true, digest: String(memo.digest ?? ""), at };
+  return { ...checks, [check]: entry, ...(entry.ok ? {} : { lastFailure: { check, line: entry.line, at } }) };
+}
+
+// Why a phase a check completes is recorded again: the failure the same check answered before, else what failed since the phase's last record.
+function reRunReason({ previous, phases, phase, lastFailure }) {
+  if (isStateObject(previous) && previous.ok === false && trimmedText(previous.line) !== null) return previous.line;
+  const last = lastEntryOf(phases, phase);
+  if (last === null) return null;
+  const failedSince = isStateObject(lastFailure) && String(lastFailure.at ?? "") > String(last.at ?? "");
+  return failedSince ? `re-run after ${lastFailure.check} ${lastFailure.line}` : "re-run";
+}
+
+// The phases after a completed check, and what was decided: `already` when the runtime recorded this same artifact last, else `appended` with its reason.
+function phasesAfterCheck({ state, check, memo, done, at }) {
+  const phases = phaseEntries(state);
+  const checks = checkMemos(state);
+  const previous = checks[check];
+  const same = isStateObject(previous) && previous.completed === true && previous.digest === memo.digest;
+  if (same && lastEntryOf(phases, done.phase)?.by === RUNTIME_AUTHOR) return { phases, decided: { status: "already", reason: null } };
+  const reason = reRunReason({ previous, phases, phase: done.phase, lastFailure: checks.lastFailure });
+  const entry = withText({ phase: done.phase, at }, { artifact: done.artifact, verdict: done.verdict, reason, by: RUNTIME_AUTHOR });
+  return { phases: [...phases, entry], decided: { status: "appended", reason } };
+}
+
+// Records the answer of one `run check` and, when it completed a phase, the phase itself, in one write so the reason reads the memo it replaces.
+export function recordCheck({ projectId, slug, check, memo, done = null, env = process.env } = {}) {
+  if (trimmedText(check) === null || !isStateObject(memo)) return kept("a check record needs its check and its memo");
+  if (done !== null && !RESUME_PHASE_ORDER.includes(done?.phase)) return refuseEnum("phase", done?.phase, RESUME_PHASE_ORDER);
+  let decided = null;
+  const written = record({
+    projectId,
+    slug,
+    env,
+    change: (state, at) => {
+      const checks = memosWithCheck(checkMemos(state), check, memo, at);
+      if (done === null) return { checks };
+      const after = phasesAfterCheck({ state, check, memo, done, at });
+      decided = after.decided;
+      return { checks, phases: after.phases };
+    },
+  });
+  return { ...written, phase: written.status === "written" ? decided : null };
+}
+
 // Records that the run stopped on purpose at a phase, which is what keeps a retry from resuming it.
-export function recordTermination({ projectId, slug, phase, reason, env = process.env } = {}) {
+export function recordTermination({ projectId, slug, phase, reason, by, env = process.env } = {}) {
   if (!RESUME_PHASE_ORDER.includes(phase)) return refuseEnum("phase", phase, RESUME_PHASE_ORDER);
   if (trimmedText(reason) === null) return kept("a termination needs a reason: it is what the operator reads in the queue");
-  return record({ projectId, slug, env, change: (_state, at) => ({ termination: { phase, reason: trimmedText(reason), at } }) });
+  return record({ projectId, slug, env, change: (_state, at) => ({ termination: withText({ phase, reason: trimmedText(reason), at }, { by }) }) });
+}
+
+// Whether the state holds a termination of that author (and of that phase, when one is named).
+function holdsTermination(state, { phase, onlyBy }) {
+  const termination = isStateObject(state) ? state.termination : null;
+  return isStateObject(termination) && termination.by === onlyBy && (phase === null || termination.phase === phase);
+}
+
+// Lifts a termination the given author wrote (the runtime's by default), so a stop answered or contradicted later no longer refuses the resume.
+export function clearTermination({ projectId, slug, phase = null, onlyBy = RUNTIME_AUTHOR, env = process.env } = {}) {
+  return underRunLock({
+    projectId,
+    slug,
+    env,
+    write: () => {
+      const state = readRunState({ projectId, slug, env });
+      if (!holdsTermination(state, { phase, onlyBy })) return { status: "absent", path: null, reason: null };
+      const { termination: _lifted, ...rest } = state;
+      return saveRunState({ projectId, slug, env, state: { ...rest, updatedAt: new Date().toISOString() } });
+    },
+  });
 }
 
 // Records how the run ended; the pull request URL is the runtime's to write, so an outcome already carrying one keeps it.

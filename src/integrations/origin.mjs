@@ -56,7 +56,7 @@ function closerEnd(text, from) {
 }
 
 // Removes the quoted comment threads of a prompt, an unclosed one up to the end of the text, in one pass over it.
-function withoutCommentThreads(prompt) {
+export function withoutCommentThreads(prompt) {
   let kept = "";
   let at = 0;
   while (at < prompt.length) {

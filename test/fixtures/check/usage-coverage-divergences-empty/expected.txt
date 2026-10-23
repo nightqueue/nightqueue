@@ -1,0 +1,4 @@
+OK
+VERDICT: APPROVED
+GATE: usage-coverage-divergences-empty — divergences: (empty)
+recorded: none (GATE: usage-coverage-divergences-empty — divergences: (empty))

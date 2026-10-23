@@ -158,7 +158,7 @@ test("the verifier owns the runtime method and its request the verdict the skill
   assert.match(request, /^Mode: RUNTIME$/m, "the runtime request lost its `Mode: RUNTIME` line");
   for (const verdict of ["CONFIRMED", "NOT-MET", "SYMPTOM-PERSISTS", "NEEDS-DEVICE", "UNAVAILABLE"]) {
     assert.ok(request.includes(`\`${verdict}\``), `the runtime request does not name the \`${verdict}\` verdict`);
-    assert.ok(skill.includes(`\`${verdict}\``), `the skill does not route the \`${verdict}\` verdict`);
+    assert.ok(skill.includes(`\`${verdict}\``) || skill.includes(`\`VERDICT: ${verdict}`), `the skill does not route the \`${verdict}\` verdict`);
   }
   assert.ok(
     readFileSync(join(DELIVERABLES, "verification.md"), "utf8").includes("evidence/automated-verification.md"),

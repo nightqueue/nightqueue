@@ -6,7 +6,66 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ## Unreleased
 
+### Added
+
+- **`nightqueue run check` answers the verdict and the gates.** The first line is unchanged
+  (`OK`, `MISSING: <sections>`, `GENERATED`); after it come stable-prefix lines, one fact each,
+  in a fixed order: `VERDICT:`, `GATE: <code> — <evidence>`, `OPEN:`, `TYPE-MISMATCH:`,
+  `CONFIRM:`, `INVALIDATED:`, `DIFF-APPLIES:`, `NEEDS-DEVICE`, `index:`, `recorded:`, and
+  `SCRIPT:` last. The gate codes are `symptom-proof-missing` (01); `coverage-vector-no-reason`,
+  `coverage-enumeration-no-method`, `coverage-not-covered-without-confirmation` and
+  `usage-coverage-cond-1` to `-cond-4` (03, the condition-3 exception included);
+  `symptom-coverage-n-mismatch`, `symptom-coverage-omitted-empty`,
+  `symptom-coverage-method-generic`, `usage-coverage-nm-mismatch`,
+  `usage-coverage-divergences-empty` and `usage-coverage-held-on-pipeline` (05); and
+  `runtime-not-met` and `runtime-no-attempt` (06.5). Each is defined mechanically in
+  `docs/runtime-contract.md`. Round artifacts are read on their last `## Round`, and headings
+  inside fenced code or HTML comments never count. Table cells are split the markdown way, so a
+  pipe inside a code span or written `\|` stays in its cell. The condition-3 exception holds
+  only when the parameter's code token is named whole in the validated brief; a prose-only
+  parameter fires the gate. A `NEEDS-CLARIFICATION` or `NOT-REPRODUCIBLE` triage must carry an
+  `## Open items` with an item. One fixture per code lives under `test/fixtures/check/`.
+- **The check carries out its own effects.** On a complete phase it records `phase_done`
+  itself, with the reason of a re-run (`recorded: phase_done <phase> <verdict>`), and never on a
+  gate, `06` `FAILED` or `06.5` `NOT-MET`/`SYMPTOM-PERSISTS`. `run check 02` saves the index
+  (`index: saved …` / `index: not saved (…)`, which never changes `OK`). `run check 01` records a
+  missing Type and the termination of a terminal verdict, and `run check 05a` records the QA
+  stage A marker. That termination lasts one attempt: a later `PROCEED` triage or a
+  `queue retry` of the gate lifts it, so an answered clarification resumes later pauses
+  normally. A termination written by hand with `run_terminate` is never lifted. A `checks` memo in `state.json` keeps a repeated check from adding a second row.
+  `run publish` and `run pr` record the `commit` phase.
+- **`run_outcome` composes the gate notice.** With `status: "gate"`, `question` and/or
+  `from_artifact: {file, section}` make the runtime write the whole `## Notice` (the section,
+  the question and the `queue retry` answer line). A job whose final text has no `## Notice`
+  still ends at `gate` with that notice, and the `## Notice`-in-text path still works. The
+  section is found at any heading level, as the check reads it. A composed notice that nests
+  another artifact's section (a device script, open items) is not measured against the plan's
+  older confirmation section.
+- **Commit template.** `run start` answers `commitTemplate {source, path, label}`, chosen in
+  this order: git's `commit.template`, then the repository's convention, then the nightqueue
+  fallback in the new `references/commit-template.md`. `run publish --message-file` checks the
+  message before committing and prints one `REJECTED: commit message — <reason>` per violation:
+  a bad subject, a missing blank line 2, a `Co-Authored-By:` or `Refs:` trailer, and, under the
+  fallback, a subject that is not Conventional Commits.
+
 ### Changed
+
+- **`queue_add` refuses a dependent prompt, and `queue_retry` refuses a finished job.** A prompt
+  that conditions the work on another job or pull request (`after J-<n>`,
+  `once PR #<n> is merged`, `depends on J-<n>`/`depends on job`, `when #<n> lands`, outside
+  fenced code and comment threads) is refused with the `/resolve` step 2.5 wording, and nothing
+  is queued. A `closed` job, or a `done` job whose pull request is merged, answers "a finished
+  job does not resume; queue a new one", for the MCP tool and the CLI alike.
+- **`/resolve` reads the check, not the artifacts.** Phases 1, 2, 3, 5, 6 and 6.5 and steps
+  5.2/5.3 are now tables that map each `run check` answer to an action. The orchestrator no
+  longer reads a run artifact to judge a gate, never calls `run_phase_done`, and no longer runs
+  `run index-save` or `run_terminate` by hand. Every pause (the Phase 1 clarification, the
+  Phase 3 confirmation and usage coverage, and Phase 6.5 `NEEDS-DEVICE`) is a `run_outcome` gate
+  followed by the end of the turn. A Phase 1 `NEEDS-CLARIFICATION` now ends the job at `gate`
+  instead of `cancelled`. The QA stage A gate reads `recorded: qa_stage_a`.
+- **`run check` reads sections fence-aware.** The first line and the gates use the same section
+  reader (prefix match, outside fences and HTML comments), so a heading quoted inside a code
+  block no longer satisfies the check.
 
 - **The triager and the explore are pipeline-independent.** `plugin/agents/triager.md` holds who
   it is, how it thinks, its method, resources and evidence standard — no phase, run artifact,

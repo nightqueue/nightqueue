@@ -166,7 +166,6 @@ const SKILL_PRESCRIBED = [
     "nightqueue run start --tier <tier> --type <bug/error|feature/refactor> --commit-type <type> --expect-slug <slug>",
     "nightqueue run start --tier simple --type bug/error --commit-type fix --expect-slug fix-the-worker",
   ],
-  ["nightqueue run index-save <RUN_DIR>/02-explore.md --project <PROJECT> --repo-root <CWD>", "nightqueue run index-save /runs/p/s/02-explore.md --project p --repo-root /work/wt"],
   [
     "nightqueue run publish --message-file <RUN_DIR>/commit-message.txt --body-file <RUN_DIR>/pr-body.md",
     "nightqueue run publish --message-file /runs/p/s/commit-message.txt --body-file /runs/p/s/pr-body.md --extra test/x.regression.test.mjs",

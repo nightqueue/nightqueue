@@ -140,7 +140,7 @@ Tier: <trivial|simple|complex> (set by the operator - the pipeline may only rais
    `prompt`, `tier` and `title`, and always with `project`. The `title` is the short
    outcome sentence of the summary in product language (one line, at most 120
    characters), the one the queue lists the job by. On `needs_registration`, ask the person,
-   then call again with `register: true`.
+   then call again with `register: true`. A prompt conditioned on another job or pull request (`after J-<n>`, `once PR #<n> is merged`, `depends on J-<n>`, `when #<n> lands`) is refused: fold that work into the other job as a stage, or make it independent.
 5. Report the job ref (`J-<n>`), its tier, and whether a runner is online (`runnersOnline` of
    `queue_status`). Start a job with `queue_run` only when the person asks for it now.
 
@@ -151,7 +151,7 @@ Tier: <trivial|simple|complex> (set by the operator - the pipeline may only rais
   `blocked_code` is a preflight block: fix the cause with the person, then `queue_retry` with
   no note.
 - **A done job:** offer a review by `nightqueue:reviewer`. When the pull request is merged,
-  close the job with `queue_close`.
+  close the job with `queue_close`. A closed job, or a done one whose pull request merged, never resumes: `queue_retry` refuses it, so more work is a new job.
 - **A running job that must stop:** confirm with `queue_status` that it is `running`, and say
   that the runner holding it stops too. On a yes, call `queue_cancel` with `job_id`, `reason`
   and `stop: true`. The corrected work is a new job. Call `queue_stop` without `pid` only when

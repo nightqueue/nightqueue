@@ -21,10 +21,9 @@ verbatim — header `🛡️ QA-GUARDIAN · complex · ANALYST · ...`.
 `MISSING`, relaunch the analyst (🔁) once; if it persists, terminate and inform the user. Zero
 runtime hypotheses → skip stage B and go straight to the consolidation.
 
-As soon as that gate closes, call `run_set` with `qa_stage_a` = `{ "artifact":
-"05a-qa-analyst.md", "verdict": "<the analyst's verdict>" }` — BEFORE launching stage B,
-never by writing the file: this is what makes a resume skip the analyst if the provers die
-halfway.
+When that gate closes, the check records the marker itself (`recorded: qa_stage_a <verdict>`,
+over `05a-qa-analyst.md`) BEFORE launching stage B — never by writing the file: this is what
+makes a resume skip the analyst if the provers die halfway.
 
 **Stage B — Provers (complex):** launch **N qa-guardian in parallel, all in a single message**
 (the `subagent_type` and `model` `phase_prompt` answers, `mode: "bypassPermissions"`) — one

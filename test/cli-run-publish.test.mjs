@@ -131,6 +131,8 @@ test("`run publish` commits the list, renames the branch, pushes it, opens the p
   assert.ok(git(["-C", remote, "for-each-ref", "--format=%(refname:short)", "refs/heads"]).includes(`feat/${SLUG}`));
   const state = readRunState({ projectId, slug: SLUG, env });
   assert.deepEqual({ status: state.outcome.status, prUrl: state.outcome.prUrl }, { status: "done", prUrl: FAKE_GH_PR_URL });
+  const commit = state.phases.filter((entry) => entry.phase === "commit");
+  assert.deepEqual(commit.map((entry) => [entry.verdict, entry.by]), [["PR opened", "runtime"]], "the commit phase was not recorded by the runtime");
   assert.deepEqual(JSON.parse(ghCalls(env)[0]).slice(0, 4), ["pr", "create", "--title", "feat(text): add slugify"], "the title is not the commit subject");
 });
 
@@ -145,6 +147,22 @@ test("an invalid body commits nothing and pushes nothing", async (t) => {
   assert.ok(out.some((line) => line.startsWith("MISSING: ") || line.startsWith("REJECTED: ")), out.join("\n"));
   assert.equal(out.at(-1), "nothing was committed or pushed: fix the problems above and call `nightqueue run publish` again");
   assert.equal(commitCount(worktree), before, "an invalid body still committed");
+  assert.deepEqual(ghCalls(env), []);
+});
+
+test("a message with a `Co-Authored-By:` trailer is rejected before anything is committed or pushed", async (t) => {
+  const { env, id, worktree, dir } = makeRun(t, "publish-bad-message");
+  writeFileSync(join(dir, "commit-message.txt"), `${MESSAGE}\nCo-Authored-By: Someone <someone@example.invalid>\n`);
+  const before = commitCount(worktree);
+
+  const { code, out } = await runCli(env, id, publishArgs(dir));
+
+  assert.equal(code, 1);
+  assert.deepEqual(out, [
+    "REJECTED: commit message — line 5 is a `Co-Authored-By:` trailer, which a pipeline commit never carries",
+    "nothing was committed or pushed: fix the problems above and call `nightqueue run publish` again",
+  ]);
+  assert.equal(commitCount(worktree), before, "a rejected message still committed");
   assert.deepEqual(ghCalls(env), []);
 });
 

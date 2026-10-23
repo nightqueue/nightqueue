@@ -50,7 +50,7 @@ function answerOf(result) {
 }
 
 test("`run start` answers the run, the ONE routing row of its tier, the phases and the tasks, and records type and tier", async (t) => {
-  const env = makeQueue(t, "run-start-happy");
+  const env = { ...makeQueue(t, "run-start-happy"), GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_SYSTEM: "/dev/null" };
   const id = boundJob(env);
 
   const answer = answerOf(await runCli(env, START, { jobId: id }));
@@ -71,6 +71,7 @@ test("`run start` answers the run, the ONE routing row of its tier, the phases a
     "tasks",
     "prTemplate",
     "commitConvention",
+    "commitTemplate",
   ]);
   assert.equal(answer.project, "alpha");
   assert.equal(answer.slug, SLUG);
@@ -81,6 +82,7 @@ test("`run start` answers the run, the ONE routing row of its tier, the phases a
   assert.deepEqual(answer.tasks, ["implementation", "verification", "commit"]);
   assert.deepEqual(answer.prTemplate, { source: "nightqueue", label: "nightqueue (fallback)", headings: ["## Report", "## Cause", "## Changes", "## QA"] });
   assert.equal(typeof answer.commitConvention, "string");
+  assert.deepEqual(answer.commitTemplate, { source: "nightqueue", path: null, label: "nightqueue (fallback)" });
   const state = readRunState({ projectId: ensureProject(env, "alpha"), slug: SLUG, env });
   assert.equal(state.type, "feature/refactor");
   assert.equal(state.tier, "simple");

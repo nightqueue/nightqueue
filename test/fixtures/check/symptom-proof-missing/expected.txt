@@ -1,0 +1,4 @@
+OK
+VERDICT: PROCEED
+GATE: symptom-proof-missing — Symptom proof: <line-by-line path that produces the target symptom>
+recorded: none (GATE: symptom-proof-missing — Symptom proof: <line-by-line path that produces the target symptom>)
