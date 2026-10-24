@@ -60,9 +60,10 @@ import { runtimeLabel } from "./runtime-versions.mjs";
 import { jobRef, parseJobRef } from "../memory/refs.mjs";
 import { coverageLabel, jobOriginCoverage } from "../integrations/coverage.mjs";
 import { originsLabel } from "../integrations/origin.mjs";
+import { TIER_REMOVED_LINE } from "../mcp/tool-contract.mjs";
 
 export const USAGE = {
-  add: "nightqueue queue add [project] <prompt...> [--project <name>] [--run] [--foreground] [--priority <n>] [--max-attempts <n>] [--timeout <s>] [--yes] [--key <KEY>] [--tier <trivial|simple|complex>] [--title <text>] [--origin <kind>:<ref>]... [--branch <name> | --worktree <path>]",
+  add: "nightqueue queue add [project] <prompt...> [--project <name>] [--run] [--foreground] [--priority <n>] [--max-attempts <n>] [--timeout <s>] [--yes] [--key <KEY>] [--title <text>] [--origin <kind>:<ref>]... [--branch <name> | --worktree <path>]",
   status: "nightqueue queue status [J-<id>|<id>|<PR URL>] [--limit <n>] [--json] [--follow [seconds]] [--until-idle] [--blocked]",
   run: "nightqueue queue run [--job <id> | --watch [seconds] [--from HH:MM] --until HH:MM] [--max <jobs>] [--stop] [--foreground] [--dry] [--json]",
   cancel: "nightqueue queue cancel <id> [--reason <text>] [--json]",
@@ -305,13 +306,12 @@ function originOption(values) {
   return (Array.isArray(values) ? values : [values]).map(originValue);
 }
 
-// The knobs of a `queue add` that reach the job: priority, attempts, timeout, the operator's tier and the origin.
+// The knobs of a `queue add` that reach the job: priority, attempts, timeout, the title and the origin.
 function addLimits(values) {
   return {
     priority: requireInt("--priority", values.priority),
     maxAttempts: requireInt("--max-attempts", values["max-attempts"]),
     timeoutS: requireInt("--timeout", values.timeout),
-    tier: values.tier,
     title: values.title,
     origin: originOption(values.origin),
   };
@@ -421,6 +421,7 @@ function parseAdd(argv) {
   const { optionTokens, words } = splitAddArgv(argv);
   const { values } = parseCommand(optionTokens, ADD_OPTIONS);
   if (values["run-dir"] !== undefined) throw new UserError(RUN_DIR_RETIRED);
+  if (values.tier !== undefined) throw new UserError(TIER_REMOVED_LINE);
   checkArgs(words, { min: 1, max: Number.POSITIVE_INFINITY, usage: USAGE.add });
   return { values, positionals: words };
 }

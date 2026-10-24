@@ -166,7 +166,7 @@ export function pipelineRunsDdl(name) {
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   ${PROJECT_ID},
   slug TEXT NOT NULL,
-  tier TEXT NOT NULL,
+  tier TEXT NOT NULL, -- deprecated: no longer read, written as the constant 'complex' because the column is NOT NULL, until a later schema bump drops it
   task_type TEXT,
   outcome TEXT NOT NULL,
   gate_stop TEXT,
@@ -175,8 +175,8 @@ export function pipelineRunsDdl(name) {
   session_id TEXT,
   job_id INTEGER REFERENCES jobs(id) ON DELETE SET NULL,
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
-  tier_operator TEXT,
-  tier_raise_reason TEXT
+  tier_operator TEXT, -- deprecated: no longer read, a later schema bump drops it
+  tier_raise_reason TEXT -- deprecated: no longer read, a later schema bump drops it
 );`;
 }
 
@@ -208,7 +208,7 @@ export function jobsDdl(name) {
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   started_at TEXT,
   finished_at TEXT,
-  tier TEXT,
+  tier TEXT, -- deprecated: no longer read, a later schema bump drops it
   not_before TEXT,
   blocked_code TEXT,
   last_session_id TEXT,

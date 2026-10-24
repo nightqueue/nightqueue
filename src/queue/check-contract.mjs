@@ -4,7 +4,7 @@ import { hasGateMarker, sectionOf, unfencedLines } from "./stream.mjs";
 import { briefGates, briefType } from "./triage-brief.mjs";
 
 // The contract of `nightqueue run check`: one fact per line, in this order, each with a stable prefix.
-// OK | MISSING: <sections> | GENERATED, then VERDICT:, GATE:, OPEN:, TYPE-MISMATCH:, CONFIRM:, INVALIDATED:, DIFF-APPLIES:,
+// OK | MISSING: <sections> | GENERATED, then VERDICT:, GATE:, OPEN:, TYPE-MISMATCH:, CONFIRM:, QA:, INVALIDATED:, DIFF-APPLIES:,
 // NEEDS-DEVICE, and last of all SCRIPT: with the device script verbatim. A MISSING first line prints nothing else.
 
 const BUG = "bug/error";
@@ -27,6 +27,11 @@ const SEPARATOR_CELL_RE = /^:?-+:?$/;
 const BLANK_REASONS = new Set(["", "-", "n/a", "not applicable"]);
 const BLANK_EVIDENCE = new Set(["", "-", "none", "not run"]);
 const CONFIRM_LINE = "CONFIRM: requires-user-confirmation";
+const ALWAYS_GATE_YES = "**Always-gate class:** yes";
+const HIGH_RISK = "🔴";
+const LIST_ITEM_RE = /^(?:[-*+]|\d+[.)])\s/;
+const RISK_ID_RE = /^(?:\*\*)?(?:\[R\d+\]|\(R\d+\))/;
+const SEVERITY_RE = /🔴|🟡|🟢/u;
 // The verdicts that send the pipeline back instead of completing the phase.
 const LOOP_BACK = { "06": ["FAILED"], "06.5": ["NOT-MET", "SYMPTOM-PERSISTS"] };
 // The verdicts a check memo keeps as its notable line when nothing else fired.
@@ -366,7 +371,7 @@ function triageFacts(ctx) {
   return { gates: [...briefGates(ctx.text, ctx.verdict), ...symptomProofGates(ctx)] };
 }
 
-// The facts of the plan: its gates, its Type mismatch and its pause for confirmation.
+// The facts of the plan: its gates, its Type mismatch, its pause for confirmation and its QA mode.
 function planFacts(ctx) {
   const mismatch = typeMismatchOf(ctx.plan);
   const triage = diagnosisFilled(ctx.triage) ? `${BUG} (## Diagnosis filled)` : `${FEATURE} (## Diagnosis absent or empty)`;
@@ -374,7 +379,58 @@ function planFacts(ctx) {
     gates: [...coverageGates(ctx), ...usageCoverageGates(ctx)],
     typeMismatch: mismatch === null ? null : `${evidenceLine(mismatch)} — triage: ${triage}`,
     confirm: hasGateMarker(ctx.plan),
+    qaMode: qaModeOf(ctx.plan),
   };
+}
+
+// Whether the plan declares the always-gate class: an unfenced line opening with `**Always-gate class:** yes`.
+function declaresAlwaysGate(plan) {
+  return unfencedLines(plan).some((line) => line.trim().startsWith(ALWAYS_GATE_YES));
+}
+
+// Whether a line opens a risk item: a top-level list item or a line starting with a risk id.
+function opensRiskItem(line) {
+  const indent = line.length - line.trimStart().length;
+  const trimmed = line.trim();
+  return indent < 2 && (LIST_ITEM_RE.test(trimmed) || RISK_ID_RE.test(trimmed));
+}
+
+// Whether a line continues the open item: an indented line, or a non-blank line right after the item's last line.
+function continuesRiskItem(line, previous) {
+  if (line.trim() === "") return false;
+  return /^\s{2,}/.test(line) || (previous !== undefined && previous.trim() !== "");
+}
+
+// The list-style risk items of the lines, each the text of its opener with its continuation and nested lines.
+function riskListItems(lines) {
+  const items = [];
+  let current = null;
+  lines.forEach((line, at) => {
+    if (line.trim().startsWith("|")) current = null;
+    else if (opensRiskItem(line)) items.push((current = [line]));
+    else if (current !== null && continuesRiskItem(line, lines[at - 1])) current.push(line);
+    else if (line.trim() !== "") current = null;
+  });
+  return items.map((item) => item.join("\n"));
+}
+
+// The severity of a risk item: the first 🔴/🟡/🟢 marker in its text, or null when it carries none.
+function severityOf(text) {
+  return text.match(SEVERITY_RE)?.[0] ?? null;
+}
+
+// The risk items of `## Identified risks` whose severity is 🔴: list items and table body rows, fenced code left out.
+function highRisks(plan) {
+  const lines = bodyLines(plan, "## Identified risks") ?? [];
+  const items = riskListItems(lines).filter((item) => severityOf(item) === HIGH_RISK);
+  const rows = tablesOf(lines).flatMap(({ rows: body }) => body.filter((cells) => severityOf(cells.join("\n")) === HIGH_RISK));
+  return [...items, ...rows];
+}
+
+// The QA mode a plan asks: `full` with an always-gate class or two or more 🔴 risks, else `lite`.
+export function qaModeOf(plan) {
+  const text = normalize(plan);
+  return declaresAlwaysGate(text) || highRisks(text).length >= 2 ? "full" : "lite";
 }
 
 // The three gates of the QA's `Symptom coverage:` line against the plan's table.
@@ -451,7 +507,7 @@ function heldOnPipelineGates(ctx, { risks, scenarios }) {
 
 // Whether the plan asks the usage coverage audit: a `## Usage coverage` section or an always-gate class.
 function auditsUsage(plan) {
-  return sectionOf(plan, "## Usage coverage") !== null || unfencedLines(plan).some((line) => line.trim().startsWith("**Always-gate class:** yes"));
+  return sectionOf(plan, "## Usage coverage") !== null || declaresAlwaysGate(plan);
 }
 
 // The usage-coverage gates of the QA and its open unconfirmed decisions.
@@ -570,6 +626,7 @@ function contractLines(first, facts) {
     ...(facts.open ?? []).map((text) => `OPEN: ${flatLine(text)}`),
     ...(facts.typeMismatch ? [`TYPE-MISMATCH: ${facts.typeMismatch}`] : []),
     ...(facts.confirm ? [CONFIRM_LINE] : []),
+    ...(facts.qaMode ? [`QA: ${facts.qaMode}`] : []),
     ...(facts.invalidated ?? []).map((text) => `INVALIDATED: ${flatLine(text)}`),
     ...(facts.diffApplies ? [`DIFF-APPLIES: ${facts.diffApplies}`] : []),
     ...(facts.needsDevice ? ["NEEDS-DEVICE"] : []),

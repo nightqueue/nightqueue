@@ -33,7 +33,6 @@ export interface Job {
   project_id: string;
   status: JobStatus;
   priority: number;
-  tier: string | null;
   attempts: number;
   max_attempts: number;
   timeout_s: number;
@@ -192,8 +191,6 @@ export interface PhaseAttempt {
 }
 
 export interface Timeline {
-  track: string | null;
-  tier: string | null;
   phases: TimelinePhase[];
   clockMs: number | null;
 }
@@ -204,8 +201,6 @@ export interface JobMeta {
   log_path: string;
   artifacts: string[];
   files: string[] | null;
-  tier: string | null;
-  baseline:{ n: number; turns: number | null; ctx: number | null; cost: number | null } | null;
 }
 
 export interface DiffstatFile {

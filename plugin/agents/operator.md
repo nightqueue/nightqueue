@@ -150,8 +150,6 @@ When the person settles something for one job, write it into that job's prompt u
 2. Build the prompt in this format:
 
 ```
-Tier: <trivial|simple|complex> (set by the operator - the pipeline may only raise it, with evidence, never lower it)
-
 ## Brief
 **Affected area:** · **Context:** · **Objective:** · **Expected outcome:** · **Type:** ·
 **Bug account:** · **Key evidence:**
@@ -165,13 +163,13 @@ Tier: <trivial|simple|complex> (set by the operator - the pipeline may only rais
    Cross-read every `Mandatory validation` line against every `Operator decision` that
    touches the same case, such as an empty input or an exhausted timeout. Write the boundary
    in one place, in product language.
-3. Show the summary (title, tier, stages, decisions, validation) and **stop**.
+3. Show the summary (title, stages, decisions, validation) and **stop**.
 4. Only after an explicit go, call `queue_add` with `project`,
-   `prompt`, `tier` and `title`, and always with `project`. The `title` is the short
+   `prompt` and `title`, and always with `project`. The `title` is the short
    outcome sentence of the summary in product language (one line, at most 120
    characters), the one the queue lists the job by. On `needs_registration`, ask the person,
    then call again with `register: true`. A prompt conditioned on another job or pull request (`after J-<n>`, `once PR #<n> is merged`, `depends on J-<n>`, `when #<n> lands`) is refused: fold that work into the other job as a stage, or make it independent.
-5. Report the job ref (`J-<n>`), its tier, and whether a runner is online (`runnersOnline` of
+5. Report the job ref (`J-<n>`) and whether a runner is online (`runnersOnline` of
    `queue_status`). Start a job with `queue_run` only when the person asks for it now.
 
 ## Gates and close

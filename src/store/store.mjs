@@ -60,7 +60,6 @@
  * @property {() => Promise<object[]>} listNamedJobs every job, closed or not, that already named its run, the owners `nightqueue doctor --fix` checks a leftover worktree against
  * @property {() => Promise<object[]>} recentHostCommandCounts the host-command counters of the most recently finished jobs, the sample `nightqueue doctor` sums
  * @property {() => Promise<object[]>} recentOrchestratorCounts the orchestrator counters of the most recently finished jobs, the sample `nightqueue doctor` sums
- * @property {(tier: string, options?: {limit?: number}) => Promise<{n: number, turns: number|null, ctx: number|null, cost: number|null}>} tierBaseline the medians of turns, last context and cost of the newest delivered jobs of a tier, read-only
  * @property {(id: number) => Promise<string|null>} status the status column of one job, or null when the row is gone
  * @property {(id: number, spec: object) => Promise<object|null>} acquireClose takes the close lease of a job in one compare-and-swap and re-arms its checklist; null means refused, nothing written
  * @property {(id: number, spec: object) => Promise<boolean>} adoptClose confirms the close lease is this worker's and renews it
@@ -141,6 +140,8 @@
  * @property {(id: string) => Promise<object|null>} byId
  * @property {(id: string) => Promise<object|null>} integrations the project's `integrations` (schema v21 column) as an object; null when it has none or the column is not there yet
  * @property {(id: string, value: object|null) => Promise<object|null>} setIntegrations writes the project's `integrations`; null or an empty object stores NULL, the project without integrations again
+ * @property {(id: string) => Promise<object|null>} agents the project's agent model overrides (`{ <agent>: { model } }`, kept under `agents` in the same JSON, never shown by `integrations`); null when it has none
+ * @property {(id: string, value: object|null) => Promise<object|null>} setAgents writes the project's agent model overrides, keeping its integrations; null or an empty object removes them
  * @property {(cwd: string) => Promise<object|null>} at the project whose checkout contains the directory
  * @property {(orgId: string) => Promise<object[]>} ofOrg
  * @property {(spec: {name: string, path: string|null, orgId: string, key?: string|null}) => Promise<object>} add the key asked for, or a free one derived from the name
@@ -244,7 +245,6 @@ export const STORE_CONTRACT = Object.freeze({
     "listNamedJobs",
     "recentHostCommandCounts",
     "recentOrchestratorCounts",
-    "tierBaseline",
     "status",
     "acquireClose",
     "adoptClose",
@@ -277,7 +277,7 @@ export const STORE_CONTRACT = Object.freeze({
   memory: ["saveMemory", "saveMemoryDeduped", "deleteMemory","recentMemories", "searchMemories", "memoryByKey", "recallMemories"],
   index: ["saveProjectIndex", "fillProjectIndex", "recallProjectIndex"],
   orgs: ["list", "byName", "byId", "add", "rename", "setKey", "suggestKey", "keyAliases", "remove"],
-  projects: ["list", "byName", "byId", "integrations", "setIntegrations", "at", "ofOrg", "add", "rename", "setKey", "suggestKey", "keyAliases", "move", "remove", "footprint", "purge"],
+  projects: ["list", "byName", "byId", "integrations", "setIntegrations", "agents", "setAgents", "at", "ofOrg", "add", "rename", "setKey", "suggestKey", "keyAliases", "move", "remove", "footprint", "purge"],
   db: ["files", "quickCheck", "quickCheckMainAlone", "integrityCheck", "checkpointTruncate"],
   "": ["health", "connect", "close", "checkpoint", "requireCurrentSchema"],
 });
@@ -305,7 +305,6 @@ export const READ_ONLY_METHODS = Object.freeze([
   "jobs.countActiveJobsByProject",
   "jobs.recentHostCommandCounts",
   "jobs.recentOrchestratorCounts",
-  "jobs.tierBaseline",
   "jobs.listCloses",
   "jobs.jobsWithPrNumber",
   "jobs.lastLogResults",
@@ -318,6 +317,7 @@ export const READ_ONLY_METHODS = Object.freeze([
   "projects.byName",
   "projects.byId",
   "projects.integrations",
+  "projects.agents",
   "projects.at",
   "projects.ofOrg",
   "projects.keyAliases",

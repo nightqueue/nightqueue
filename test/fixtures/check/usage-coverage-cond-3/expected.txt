@@ -1,3 +1,4 @@
 OK
 GATE: usage-coverage-cond-3 — - unimplemented intent: `archived` param of listJobs · governs filter — read and ignored
+QA: lite
 recorded: none (GATE: usage-coverage-cond-3 — - unimplemented intent: `archived` param of listJobs · governs filter — read and ignored)

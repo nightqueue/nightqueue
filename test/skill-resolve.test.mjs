@@ -3,12 +3,10 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { test } from "node:test";
 import { PHASE_TARGETS } from "../src/mcp/phase-context.mjs";
 import { LESSON_TARGET_OF, PROMPT_TARGETS } from "../src/mcp/phase-prompt.mjs";
-import { PIPELINE_TIERS } from "../src/memory/runs.mjs";
 import { RESUME_PHASE_ORDER } from "../src/queue/resume.mjs";
-import { TRACK_ROUTING } from "../src/queue/routing.mjs";
+import { AGENT_MODELS, PIPELINE_CONSTANTS } from "../src/queue/routing.mjs";
 import { RUN_OUTCOME_STATUSES } from "../src/queue/run-state.mjs";
 import { buildPrompt } from "../src/queue/spawn.mjs";
-import { parseTierRaiseLine } from "../src/queue/stream.mjs";
 
 const SKILL = readFileSync(new URL("../plugin/skills/resolve/SKILL.md", import.meta.url), "utf8");
 const QA_PHASE = readFileSync(new URL("../plugin/skills/resolve/references/qa-phase.md", import.meta.url), "utf8");
@@ -18,12 +16,11 @@ const TOOLS = readFileSync(new URL("../src/mcp/tools.mjs", import.meta.url), "ut
 const CLI_RUN = ["cli/run.mjs", "cli/run-publish.mjs", "cli/run-start.mjs", "cli/run-report.mjs", "queue/phase-artifacts.mjs"].map((file) => readFileSync(new URL(`../src/${file}`, import.meta.url), "utf8")).join("\n");
 const REPORT_LAYOUT = readFileSync(new URL("../plugin/skills/resolve/references/report.md", import.meta.url), "utf8");
 const QA_AGENT = readFileSync(new URL("../plugin/agents/qa-guardian.md", import.meta.url), "utf8");
-const OPERATOR_TIER_LITERAL = "(set by the operator - the pipeline may only raise it, with evidence, never lower it)";
 
 // The arguments the skill tells the pipeline to send to each run tool, checked against the real schemas.
 const RUN_TOOL_ARGS = {
   run_outcome: ["status", "notice", "question", "from_artifact"],
-  run_set: ["type", "tier", "branch", "worktree", "qa_stage_a"],
+  run_set: ["type", "branch", "worktree", "qa_stage_a"],
 };
 
 // The three places the skill tells the pipeline to record the outcome: its contract and its two call points.
@@ -39,21 +36,14 @@ function contextTargets(text) {
   return [...text.matchAll(/`context_for_phase` \(target: "([a-z]+)"\)/g)].map((match) => match[1]);
 }
 
-// The row of the routing table (src/queue/routing.mjs) whose label ends with the given one, as [label, trivial, simple, complex].
-function routingRow(label) {
-  const row = TRACK_ROUTING.find(([name]) => name.endsWith(label));
-  assert.ok(row, `the routing table has no row for ${label}`);
-  return [row[0], ...row[1]];
-}
-
 // A prompt template of the resolve skill, as the runtime renders it from.
 function promptTemplate(name) {
   return readFileSync(new URL(`../plugin/skills/resolve/references/prompts/${name}.md`, import.meta.url), "utf8");
 }
 
 test("every subagent prompt takes its context from one context block, in the old placeholder order", () => {
-  const skillOrder = ["coder-fast", "triager", "explore", "architect", "coder", "verifier"];
-  assert.deepEqual(skillOrder.map((template) => LESSON_TARGET_OF[template]), ["coder", "triager", "explore", "architect", "coder", "verifier"]);
+  const skillOrder = ["triager", "explore", "architect", "coder", "verifier"];
+  assert.deepEqual(skillOrder.map((template) => LESSON_TARGET_OF[template]), ["triager", "explore", "architect", "coder", "verifier"]);
   assert.deepEqual(["qa-lite", "qa-analyst"].map((template) => LESSON_TARGET_OF[template]), ["qa", "qa"]);
   for (const target of Object.values(LESSON_TARGET_OF)) {
     assert.ok(PHASE_TARGETS.includes(target), `a prompt names \`${target}\`, which the context block does not accept`);
@@ -82,75 +72,74 @@ test("the per-phase section hands the prompt, the context block and the exclusio
   assert.ok(TOOLS.includes('name: "context_for_phase"'), "the degraded path names a tool src/mcp/tools.mjs does not register");
 });
 
-test("a tier is raised only on evidence, never lowered, and the mandatory escalation block is gone", () => {
+test("every run executes the one pipeline: the skill names no tier, no raise and no risk classification", () => {
   assert.equal(/[Mm]andatory escalation/.test(SKILL), false, "the mandatory escalation block survived");
-  assert.ok(SKILL.includes("raise only on evidence found, never on the shape of the change"), SKILL);
-  assert.ok(SKILL.includes("Tier raised: <from> -> <to>: <evidence>"), SKILL);
-  assert.ok(SKILL.includes("never lowers an operator tier"), SKILL);
+  assert.equal(/tier/i.test(SKILL), false, "the skill still names a tier");
+  assert.equal(SKILL.includes("Tier raised:"), false, "the skill still prints a tier raise");
+  assert.equal(SKILL.includes("run start --tier"), false, "the skill still passes a tier to run start");
+  assert.equal(/Classify the risk/.test(SKILL), false, "the risk classification step survived");
+  assert.match(passageAt("2. **One pipeline**"), /every run executes every phase \(Phases 1–8\)/);
+  assert.equal(/routing/i.test(SKILL.slice(0, SKILL.indexOf("\n---\n"))), false, "the frontmatter description still names a routing step");
 });
 
-test("the operator-tier line of the prompt is the same literal in the skill and in the runtime", () => {
-  assert.ok(SKILL.includes(OPERATOR_TIER_LITERAL), SKILL);
+test("the runtime prompt carries no tier line, and a caller that brings no pull request answer gets no open pull requests block", () => {
   const prompt = buildPrompt({ job: { id: 1, prompt: "p", tier: "simple" } });
-  assert.ok(prompt.includes(`Tier: simple ${OPERATOR_TIER_LITERAL}`), prompt);
+  assert.equal(/^Tier:/m.test(prompt), false, prompt);
   assert.ok(!prompt.includes("Open pull requests"), "a caller that brings no pull request answer gets the prompt it has today");
 });
 
-test("the three tracks are one routing table, one value per tier", () => {
-  assert.deepEqual(PIPELINE_TIERS, ["trivial", "simple", "complex"], "the tier columns moved");
+test("the agent models live in one module, never copied into the skill", () => {
   assert.equal(SKILL.includes("| Routing | trivial | simple | complex |"), false, "the skill still carries a copy of the routing table");
+  assert.equal(SKILL.includes("| Agent | Model |"), false, "the skill carries a copy of the agent model table");
   assert.equal(SKILL.includes("## Appendix A"), false, "the skill still carries the routing rationale");
-  assert.ok(SKILL.includes("is `src/queue/routing.mjs`, with the rationale in its header"), "step 6 no longer names the source of the routing");
-  assert.deepEqual(routingRow("Track"), ["Track", "Fast Lite", "Fast", "Standard"]);
-  assert.deepEqual(routingRow("triager").slice(1), ["sonnet", "sonnet", "sonnet"]);
-  assert.deepEqual(routingRow("Explore").slice(1), ["—", "—", "sonnet"]);
-  assert.deepEqual(routingRow("architect").slice(1), ["—", "—", "opus"]);
-  assert.deepEqual(routingRow("coder").slice(1), ["sonnet", "sonnet", "opus"]);
-  assert.deepEqual(routingRow("qa-guardian").slice(1), ["—", "—", "sonnet"]);
-  assert.deepEqual(routingRow("verifier").slice(1), ["haiku", "haiku", "sonnet"]);
-  assert.deepEqual(routingRow("Max fix iterations").slice(1), ["1", "2", "2"]);
-  assert.equal(TRACK_ROUTING.some(([name]) => name.startsWith("Request critique")), false, "the routing table still carries the request critique row");
-  assert.deepEqual(routingRow("`index_recall`").slice(1), ["no", "yes, to locate the affected files", "yes, in Phase 2 before the Explore"]);
-  assert.deepEqual(routingRow("`context_for_phase` for the coder").slice(1), ["no", "yes", "yes"]);
-  const [, ...qaMethods] = routingRow("QA methods of the PR");
-  assert.equal(new Set(qaMethods).size, 1, "the tiers no longer share one QA method mapping");
-  for (const method of ["automated", "api", "emulator", "browser"]) assert.match(qaMethods[0], new RegExp(`\\b${method}\\b`));
+  const models = passageAt("6. **Agent models**");
+  assert.match(models, /the `model` `phase_prompt` answered/, "step 6 no longer passes the answered model");
+  assert.match(models, /`src\/queue\/routing\.mjs`, `nightqueue run start --routing` prints the table/, "step 6 no longer names the source of the models");
+  assert.match(models, /`nightqueue project models <name>`/, "step 6 no longer names the project's override");
+  assert.match(models, /the relaunched coder of a fix loop\s+keeps the Phase 4 model/);
+  assert.deepEqual(
+    [AGENT_MODELS.triager, AGENT_MODELS.explore, AGENT_MODELS.architect, AGENT_MODELS.coder, AGENT_MODELS.verifier],
+    ["sonnet", "haiku", "opus", "opus", "haiku"],
+  );
+  assert.equal(PIPELINE_CONSTANTS.maxFixIterations, 2);
+  for (const method of ["automated", "api", "emulator", "browser"]) assert.match(PIPELINE_CONSTANTS.qaMethods, new RegExp(`\\b${method}\\b`));
 });
 
-test("every tier keeps the verifier scope, the CLAUDE.md rule and the time target of its old block", () => {
-  const [, trivial, simple, complex] = routingRow("Verifier scope");
-  assert.match(trivial, /tsc \+ lint \+ the tests of the files that were touched \(no build, no full suite\)/);
-  assert.match(simple, /tsc \+ lint \+ the project's FULL test suite \(no QA PoCs in this tier\)/);
-  assert.match(complex, /typecheck, lint, build, tests\) \+ the QA's PoCs/);
-  assert.deepEqual(routingRow("Time target").slice(1), ["under 5 minutes", "under 15 minutes", "none — the depth is the target"]);
-  assert.equal(routingRow("`<CWD>/CLAUDE.md`")[1], "not named to the coder", "the trivial tier started reading CLAUDE.md");
-  assert.match(routingRow("`<CWD>/CLAUDE.md`")[2], /when it exists/);
-  const scopeLine = "Run: {{VERIFIER_SCOPE}}.";
-  for (const template of ["verifier-fast", "verifier"]) {
-    assert.ok(promptTemplate(template).includes(scopeLine), `the ${template} prompt no longer reads the scope cell of the row`);
-  }
+test("every run shares the full verifier scope, and the verifier prompt reads it from the constants", () => {
+  assert.match(PIPELINE_CONSTANTS.verifierScope, /typecheck, lint, build, tests\) \+ the QA's PoCs/);
+  assert.ok(promptTemplate("verifier").includes("Run: {{VERIFIER_SCOPE}}."), "the verifier prompt no longer reads the scope constant");
 });
 
-test("the two track headings are gone and every phase reads its tier from the routing row", () => {
-  assert.equal(/### Fast Lite Track/.test(SKILL), false, "the Fast Lite block survived");
-  assert.equal(/### Fast Track/.test(SKILL), false, "the Fast Track block survived");
-  assert.ok(SKILL.includes('### Fast tracks — execute this block if the tier is "trivial" or "simple"'), SKILL);
-  assert.equal(/\*\*trivial\*\* → does not execute/.test(SKILL), false, "a phase still restates the tier scoping the table carries");
-  for (const phase of ["### Phase 1 —", "### Phase 2 —", "### Phase 3 —", "### Phase 4 —", "### Phase 5 —", "### Phase 6.5 —"]) {
-    assert.match(passageAt(phase).slice(0, 400), /`routing` row \(step 6\)/, `${phase} does not read its tier from the routing row`);
-  }
-  const loop = passageAt("- **Maximum of iterations**:");
-  assert.match(loop, /`Max fix iterations` of this tier's `routing` row/, "the fix loop still hard-codes the iterations per tier");
-  assert.match(passageAt("### Phase 6 — Verification"), /the ✅ verifier of the `routing` row, step 6/);
+test("the fast tracks are gone: no fast block, no tier scoping note, and the fix loop has a fixed limit", () => {
+  assert.equal(/fast track|fast-track|Fast Lite|coder-fast|verifier-fast/i.test(SKILL), false, "a fast track survived in the skill");
+  assert.equal(/`routing` row/.test(SKILL), false, "a phase still reads a routing row");
+  assert.equal(/Tier scoping/.test(SKILL), false, "a tier scoping note survived");
+  assert.match(passageAt("- **Maximum of iterations**:"), /\*\*max 2 fix iterations\*\*/, "the fix loop no longer states its limit");
+  assert.match(passageAt("| `VERDICT: PASSED` |"), /Phase 6\.5 first unless the change is purely static/);
+  assert.match(
+    passageAt("### Phase 6.5 —").slice(0, 300).replace(/\n> /g, " "),
+    /A purely static change \(typo, config, rename, types, pure logic already covered by a test\) → does not execute: the Phase 6 checks are enough\./,
+    "Phase 6.5 lost its static-change rule",
+  );
 });
 
-test("the fast tracks hand the coder the file list, never the pasted content", () => {
-  for (const text of [SKILL, promptTemplate("coder-fast")]) {
-    assert.equal(text.includes("[CONTENT READ INLINE]"), false, "a fast track still pastes file content into the coder prompt");
-    assert.equal(text.includes("Content of the affected files:"), false, "a fast track still pastes file content into the coder prompt");
+test("Phase 5 takes the QA mode from the `QA: lite|full` line of run check 03, and nothing else", () => {
+  const mode = passageAt("**Mode:** read the `QA: lite|full` line of the last `nightqueue run check 03` answer");
+  assert.match(mode, /`lite` → one qa-guardian with `qa-lite`/);
+  assert.match(mode, /`full` → Stage A analyst then\s+N provers/);
+  assert.match(mode, /Nothing else decides the mode\./);
+  assert.ok(passageAt("### Phase 5 —").includes("**Mode:**"), "the mode rule is not in Phase 5");
+  assert.match(SKILL, /`CONFIRM:`,\s+`QA: lite\|full` \(`03` only\), `INVALIDATED:`/, "the check line list does not carry the QA line after CONFIRM");
+});
+
+test("the coder prompts never carry pasted file content, and no fast variant ships", () => {
+  for (const text of [SKILL, promptTemplate("coder"), promptTemplate("coder-fix")]) {
+    assert.equal(text.includes("[CONTENT READ INLINE]"), false, "a coder prompt still pastes file content");
+    assert.equal(text.includes("Content of the affected files:"), false, "a coder prompt still pastes file content");
   }
-  assert.ok(promptTemplate("coder-fast").includes("Affected files (read them yourself, via Read):"), "the fast coder prompt lost its file list");
-  assert.match(passageAt("1. **Locate the affected files**"), /never their content pasted inline: it has Read/);
+  for (const name of ["coder-fast", "verifier-fast"]) {
+    assert.equal(existsSync(new URL(`../plugin/skills/resolve/references/prompts/${name}.md`, import.meta.url)), false, `${name}.md still ships`);
+  }
 });
 
 // The passage of the skill (or of another plugin text) that starts at an anchor, long enough to carry the whole instruction under it.
@@ -294,24 +283,15 @@ function telemetryStep() {
   return SKILL.slice(start, end > start ? end : SKILL.length);
 }
 
-// The `Tier raised:` line as step 2 tells the orchestrator to print it, read from the skill instead of copied.
-function tierRaiseTemplate() {
-  const line = SKILL.split("\n").find((text) => text.includes("`Tier raised:"));
-  assert.ok(line, "the skill no longer tells the orchestrator to print the raise line");
-  const quoted = /`([^`]+)`/.exec(line);
-  assert.ok(quoted, `the raise line lost its literal delimiters: ${line}`);
-  return quoted[1];
-}
-
 test("the telemetry call sends only judgment, under the names the real pipeline_log schema accepts", () => {
   const schema = toolSource("pipeline_log");
   const step = telemetryStep();
-  for (const arg of ["task_type", "outcome", "gate_stop", "tier_operator", "phases"]) {
+  for (const arg of ["task_type", "outcome", "gate_stop", "phases"]) {
     assert.ok(step.includes(`\`${arg}\``), `the telemetry step no longer sends \`${arg}\``);
     assert.ok(schema.includes(`${arg}:`), `the telemetry step sends \`${arg}\`, whose schema has no such argument`);
   }
-  assert.ok(step.includes("`tier` and `tier_raise_reason` are left out"), "the agent is told to assemble the tier again");
-  assert.ok(schema.includes("tier_raise_reason:"), "the runtime lost the argument an older plugin still sends");
+  assert.equal(/tier/i.test(step), false, "the telemetry step still names a tier");
+  for (const old of ["tier:", "tier_operator:", "tier_raise_reason:"]) assert.ok(schema.includes(old), `the runtime lost \`${old}\` an older plugin still sends`);
   assert.ok(step.includes("No duration and no model is sent"), "the telemetry step no longer says who measures the time");
   assert.equal(SKILL.includes("operator_tier"), false, "the old column name came back");
 });
@@ -403,7 +383,7 @@ function handoffStep() {
 // The text of Phase 0, from its heading to the fast tracks block.
 function phaseZero() {
   const start = SKILL.indexOf("### Phase 0");
-  const end = SKILL.indexOf("### Fast tracks", start);
+  const end = SKILL.indexOf("### Context per phase", start);
   assert.ok(start >= 0 && end > start, "the skill no longer documents Phase 0");
   return SKILL.slice(start, end);
 }
@@ -429,19 +409,6 @@ test("Phase 1 maps the triager's alternative, the Brief gates and the rename to 
   assert.ok(table.includes("`GATE: brief-*`"), "Phase 1 no longer relaunches the triager on a Brief gate");
   assert.ok(table.includes("`recorded: slug … (renamed …; run dir <path>)`"), "Phase 1 no longer follows the run dir the check renamed");
   assert.equal(table.includes("raw_evidence"), false, "Phase 1 still passes the raw evidence the triager no longer receives");
-});
-
-test("the raise line the Brief prints is the line the runtime parses", () => {
-  assert.equal(tierRaiseTemplate(), "Tier raised: <from> -> <to>: <evidence>");
-  const printed = tierRaiseTemplate()
-    .replace("<from>", "simple")
-    .replace("<to>", "complex")
-    .replace("<evidence>", "the brief did not name the money surface");
-  assert.deepEqual(parseTierRaiseLine(printed), {
-    from: "simple",
-    to: "complex",
-    reason: "the brief did not name the money surface",
-  });
 });
 
 test("the QA methodology lives in references/qa-phase.md and its prompts in references/prompts/, and both readers point there", () => {
@@ -495,7 +462,7 @@ test("the round artifacts are append-only and read by their last round, and no t
   assert.ok(promptTemplate("coder-fix").includes("{{>deliverables/implementation}}"));
   assert.ok(promptTemplate("../deliverables/implementation").includes("### Fix loop {{FIX_LOOP}} — what was wrong / what changed"));
   assert.ok(promptTemplate("_round").includes("Never edit an earlier round"));
-  for (const name of ["verifier", "verifier-fast", "runtime", "qa-lite", "qa-analyst"]) {
+  for (const name of ["verifier", "runtime", "qa-lite", "qa-analyst"]) {
     assert.ok(promptTemplate(name).includes("{{>_round}}"), `${name} misses the round rule`);
   }
   const prompts = readdirSync(new URL("../plugin/skills/resolve/references/prompts/", import.meta.url)).map((file) => promptTemplate(file.replace(/\.md$/, "")));

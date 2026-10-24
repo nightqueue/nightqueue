@@ -156,7 +156,7 @@ test("a pipeline run that vanished after the commit is inserted once more; one t
   openDb(dropped).exec(
     "CREATE TRIGGER drop_first AFTER INSERT ON pipeline_runs WHEN NEW.id = 1 BEGIN DELETE FROM pipeline_runs WHERE id = NEW.id; END",
   );
-  const reinserted = logPipelineRun({ projectId: projectIdOf(dropped, "alpha"), slug: "fix-worker", tier: "simple", outcome: "pr_opened" }, dropped);
+  const reinserted = logPipelineRun({ projectId: projectIdOf(dropped, "alpha"), slug: "fix-worker", outcome: "pr_opened" }, dropped);
   assert.equal(reinserted.runId, 2, "the absent row was not inserted again");
   assert.equal(openDb(dropped).prepare("SELECT COUNT(*) AS total FROM pipeline_runs").get().total, 1);
   assert.equal(occurrences(stderr(), FAILURE), 1, "the lost run was not reported exactly once");
@@ -165,7 +165,7 @@ test("a pipeline run that vanished after the commit is inserted once more; one t
   openDb(mutated).exec(
     "CREATE TRIGGER mutate AFTER INSERT ON pipeline_runs BEGIN UPDATE pipeline_runs SET outcome = 'no_commit' WHERE id = NEW.id; END",
   );
-  const logged = logPipelineRun({ projectId: projectIdOf(mutated, "alpha"), slug: "fix-worker", tier: "simple", outcome: "pr_opened" }, mutated);
+  const logged = logPipelineRun({ projectId: projectIdOf(mutated, "alpha"), slug: "fix-worker", outcome: "pr_opened" }, mutated);
   assert.equal(logged.runId, 1);
   assert.equal(
     openDb(mutated).prepare("SELECT COUNT(*) AS total FROM pipeline_runs").get().total,

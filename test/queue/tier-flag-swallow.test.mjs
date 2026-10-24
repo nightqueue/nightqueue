@@ -29,9 +29,8 @@ function makeCliHome(t, name) {
   return { env, repo };
 }
 
-// H1: `--tier` immediately followed by another recognized flag, with no real tier value typed in between.
-// node:util's `parseArgs` refuses this as an ambiguous option argument instead of swallowing `--run` as the tier's
-// value — the CLI names `--tier` as the culprit and suggests `--tier=-XYZ` to disambiguate, and queues nothing.
+// H1: the retired `--tier` immediately followed by another recognized flag; node:util's `parseArgs` refuses it as an
+// ambiguous option argument instead of swallowing `--run`, and queues nothing.
 test("`queue add --tier --run \"...\"` refuses instead of swallowing `--run` as the tier value", (t) => {
   const { env, repo } = makeCliHome(t, "tier-swallow-h1");
 

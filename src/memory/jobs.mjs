@@ -19,7 +19,6 @@ import { ACTIVE_JOB_PREDICATE, LEASE_GRACE_S, RESULT_OBJECT_BASE } from "./schem
 import { startPoint } from "./start-point.mjs";
 import { isSafeSegment } from "../queue/resume.mjs";
 import { jobTitle, storableTitle } from "../queue/job-title.mjs";
-import { PIPELINE_TIERS } from "./runs.mjs";
 
 export const JOB_STATUSES = ["pending", "running", "done", "gate", "failed", "cancelled", "closed"];
 export const PRIORITY_RANGE = { min: 1, max: 9, fallback: 5 };
@@ -43,7 +42,6 @@ const JOB_VIEW_COLUMNS = [
   "project_path",
   "status",
   "priority",
-  "tier",
   "attempts",
   "max_attempts",
   "timeout_s",
@@ -115,15 +113,6 @@ function requireStatus(status) {
 function requireWritableStatus(status) {
   if (status === "closed") throw new UserError("status `closed` is written only by the closing pipeline; run nightqueue queue close <id>");
   return requireStatus(status);
-}
-
-// Requires the operator's tier when one was informed; nothing informed stays null.
-function optionalTier(value) {
-  if (value === undefined || value === null) return null;
-  const text = String(value).trim();
-  if (!text) return null;
-  if (PIPELINE_TIERS.includes(text)) return text;
-  throw new UserError(`invalid \`tier\`: \`${text}\`; expected one of ${PIPELINE_TIERS.join("|")}`);
 }
 
 // Returns the trimmed string, or null when there is nothing to store.
@@ -222,7 +211,7 @@ function optionalRunSlug(value) {
 }
 
 const INSERT_JOB =
-  "INSERT INTO jobs (project_id, prompt, priority, max_attempts, timeout_s, tier, slug, operator_note, origin, title, start_branch, start_worktree) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+  "INSERT INTO jobs (project_id, prompt, priority, max_attempts, timeout_s, slug, operator_note, origin, title, start_branch, start_worktree) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
 
 // Requires the id of the project a job is queued for; a name never reaches the jobs table.
 function requireProjectId(projectId) {
@@ -256,7 +245,7 @@ function insertJob(db, values) {
 
 // Inserts a job bound to a run in the same transaction that proves no open job is bound to it already.
 function insertRunJob(db, { values, project }, env) {
-  const slug = values[6];
+  const slug = values[5];
   return inTransaction(db, () => {
     const bound = openJobForRun(db, { projectId: project.id, slug });
     if (bound) throw new UserError(`${jobRef(bound.id)} already runs from ${runDir(project.id, slug, env)}`);
@@ -265,7 +254,7 @@ function insertRunJob(db, { values, project }, env) {
 }
 
 // Enqueues a job for a project id, validating every range before the write; a run slug is refused while an open job is bound to it.
-export function addJob({ projectId, prompt, priority, maxAttempts, timeoutS, tier, slug, operatorNote, origin, title, startBranch, startWorktree } = {}, env = process.env) {
+export function addJob({ projectId, prompt, priority, maxAttempts, timeoutS, slug, operatorNote, origin, title, startBranch, startWorktree } = {}, env = process.env) {
   const origins = resolveOrigins({ origin, prompt });
   const start = startPoint({ startBranch, startWorktree });
   const values = [
@@ -274,7 +263,6 @@ export function addJob({ projectId, prompt, priority, maxAttempts, timeoutS, tie
     optionalRangedInt("priority", priority, PRIORITY_RANGE),
     optionalRangedInt("max_attempts", maxAttempts, MAX_ATTEMPTS_RANGE),
     optionalRangedInt("timeout_s", timeoutS, TIMEOUT_RANGE),
-    optionalTier(tier),
     optionalRunSlug(slug),
     optionalNote(operatorNote),
     origins.length ? JSON.stringify(origins) : null,
@@ -284,7 +272,7 @@ export function addJob({ projectId, prompt, priority, maxAttempts, timeoutS, tie
   ];
   const db = openDb(env);
   const project = requireJobProject(db, values[0]);
-  const inserted = values[6] === null ? insertJob(db, values) : insertRunJob(db, { values, project }, env);
+  const inserted = values[5] === null ? insertJob(db, values) : insertRunJob(db, { values, project }, env);
   return {
     id: Number(inserted.lastInsertRowid),
     projectId: project.id,
@@ -292,7 +280,6 @@ export function addJob({ projectId, prompt, priority, maxAttempts, timeoutS, tie
     priority: values[2],
     maxAttempts: values[3],
     timeoutS: values[4],
-    tier: values[5],
     origin: origins,
     startBranch: start.startBranch,
     startWorktree: start.startWorktree,
@@ -1363,32 +1350,6 @@ export function recentOrchestratorCounts(env = process.env, db = openDb(env)) {
         ORDER BY id DESC LIMIT ${HOST_COMMANDS_SAMPLE_SIZE}`,
     )
     .all(...TERMINAL_STATUSES);
-}
-
-// The median of a list of finite numbers, null when the list is empty.
-function median(values) {
-  const sorted = values.filter(Number.isFinite).sort((a, b) => a - b);
-  if (!sorted.length) return null;
-  const middle = Math.floor(sorted.length / 2);
-  return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
-}
-
-// The medians of the orchestrator turns, last context and cost of the newest delivered jobs of a tier, the baseline a job's cost card compares against.
-export function tierBaseline(tier, { limit = HOST_COMMANDS_SAMPLE_SIZE } = {}, env = process.env, db = openDb(env)) {
-  const size = Number.isInteger(limit) && limit > 0 ? limit : HOST_COMMANDS_SAMPLE_SIZE;
-  const rows = db
-    .prepare(
-      `SELECT orch_turns, orch_ctx_last, cost_usd FROM jobs
-        WHERE tier = ? AND status IN ('done', 'closed') AND orch_turns IS NOT NULL
-        ORDER BY id DESC LIMIT ${size}`,
-    )
-    .all(String(tier ?? ""));
-  return {
-    n: rows.length,
-    turns: median(rows.map((row) => row.orch_turns)),
-    ctx: median(rows.map((row) => row.orch_ctx_last)),
-    cost: median(rows.map((row) => row.cost_usd)),
-  };
 }
 
 // Counts the gated jobs a preflight block stopped, the number the queue view shows next to `gate`.

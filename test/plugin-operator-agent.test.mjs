@@ -72,7 +72,7 @@ test("operator.md states the three bands, never the old never-edits contract, an
   assert.ok(flat.includes("The runtime record is the audit and the guard; the host's permission prompt is the barrier for Edit, Write and Bash only"));
   assert.ok(flat.includes("`operator_consent` and `connection_call` are pre-approved: for them the guard's record is the only control"));
   assert.ok(flat.includes("`git push origin` covers every ref, so the ask shows that reach"), "operator.md does not state the prefix semantics");
-  assert.ok(OPERATOR.includes("Tier: <trivial|simple|complex>"));
+  assert.equal(/tier/i.test(OPERATOR), false, "operator.md still queues a tier");
 });
 
 test("operator.md delegates to the seven pipeline agents with an inline request, and lists the direct-change steps", () => {
@@ -101,7 +101,6 @@ test("the operator opens naming itself and the projects, and asks for project an
     "`lesson_recall` once, with that `project`",
     "1. Queue from the brief.",
     "call `queue_add` with `project`",
-    "(set by the operator - the pipeline may only raise it, with evidence, never lower it)",
     "`nightqueue memory unavailable: run nightqueue doctor --fix and retry`",
   ]) {
     assert.ok(OPERATOR.replace(/\s+/g, " ").includes(named), `operator.md does not name ${named}`);

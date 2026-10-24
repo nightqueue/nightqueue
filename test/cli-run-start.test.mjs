@@ -6,12 +6,13 @@ import { runDir } from "../src/config/paths.mjs";
 import { openDb } from "../src/memory/db.mjs";
 import { addJob } from "../src/memory/jobs.mjs";
 import { readRunState } from "../src/queue/resume.mjs";
-import { routingRow, routingTable } from "../src/queue/routing.mjs";
+import { setProjectAgents } from "../src/memory/registry.mjs";
+import { AGENT_MODELS, modelTable } from "../src/queue/routing.mjs";
 import { recordRunFields } from "../src/queue/run-state.mjs";
 import { ensureProject, makeHome, makeProject, projectPathOf } from "../test-support/memory.mjs";
 
 const SLUG = "add-slugify";
-const START = ["run", "start", "--tier", "simple", "--type", "feature/refactor", "--commit-type", "feat"];
+const START = ["run", "start", "--type", "feature/refactor", "--commit-type", "feat"];
 
 // A home with one registered project.
 function makeQueue(t, name) {
@@ -49,7 +50,9 @@ function answerOf(result) {
   return JSON.parse(result.out[0]);
 }
 
-test("`run start` answers the run, the ONE routing row of its tier, the phases and the tasks, and records type and tier", async (t) => {
+const EVERY_PHASE = ["triage", "explore", "architecture", "implementation", "qa", "verification", "runtime", "commit"];
+
+test("`run start` answers the run, its agent models, every phase and the tasks, and records the type and no tier", async (t) => {
   const env = { ...makeQueue(t, "run-start-happy"), GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_SYSTEM: "/dev/null" };
   const id = boundJob(env);
 
@@ -63,10 +66,9 @@ test("`run start` answers the run, the ONE routing row of its tier, the phases a
     "runDir",
     "worktree",
     "branch",
-    "tier",
     "type",
     "commitType",
-    "routing",
+    "models",
     "phases",
     "tasks",
     "prTemplate",
@@ -77,15 +79,15 @@ test("`run start` answers the run, the ONE routing row of its tier, the phases a
   assert.equal(answer.slug, SLUG);
   assert.equal(answer.runDir, runDir(ensureProject(env, "alpha"), SLUG, env));
   assert.equal(answer.commitType, "feat");
-  assert.deepEqual(answer.routing, routingRow("simple"));
-  assert.deepEqual(answer.phases, ["triage", "implementation", "verification", "commit"]);
-  assert.deepEqual(answer.tasks, ["triage", "implementation", "verification", "commit"]);
+  assert.deepEqual(answer.models, { ...AGENT_MODELS });
+  assert.deepEqual(answer.phases, EVERY_PHASE);
+  assert.deepEqual(answer.tasks, EVERY_PHASE);
   assert.deepEqual(answer.prTemplate, { source: "nightqueue", label: "nightqueue (fallback)", headings: ["## Report", "## Cause", "## Changes", "## QA"] });
   assert.equal(typeof answer.commitConvention, "string");
   assert.deepEqual(answer.commitTemplate, { source: "nightqueue", path: null, label: "nightqueue (fallback)" });
   const state = readRunState({ projectId: ensureProject(env, "alpha"), slug: SLUG, env });
   assert.equal(state.type, "feature/refactor");
-  assert.equal(state.tier, "simple");
+  assert.equal("tier" in state, false, "run start recorded a tier");
   assert.equal(state.prTemplate.source, "nightqueue");
 });
 
@@ -110,14 +112,15 @@ test("`run start` without a recorded worktree answers null and reads the project
   assert.equal(answer.branch, null);
 });
 
-test("`run start` refuses a tier, a type or a commit type outside the pipeline's own, naming the accepted values", async (t) => {
+test("`run start` refuses a type or a commit type outside the pipeline's own, naming the accepted values, and refuses any `--tier`", async (t) => {
   const env = makeQueue(t, "run-start-enums");
   const id = boundJob(env);
+  const tierRemoved = /`--tier` was removed: every run executes the one pipeline; run `nightqueue run start` without it/;
   const cases = [
-    [["--tier", "huge", "--type", "bug/error", "--commit-type", "fix"], /unknown tier `huge`; accepted: trivial, simple, complex/],
-    [["--tier", "simple", "--type", "chore", "--commit-type", "fix"], /unknown type `chore`; accepted: bug\/error, feature\/refactor/],
-    [["--tier", "simple", "--type", "bug/error", "--commit-type", "wip"], /unknown commit type `wip`; accepted: feat, fix, refactor, docs, style, build, chore, test/],
-    [["--type", "bug/error"], /unknown tier ``/],
+    [["--type", "chore", "--commit-type", "fix"], /unknown type `chore`; accepted: bug\/error, feature\/refactor/],
+    [["--type", "bug/error", "--commit-type", "wip"], /unknown commit type `wip`; accepted: feat, fix, refactor, docs, style, build, chore, test/],
+    [["--tier", "simple", "--type", "bug/error"], tierRemoved],
+    [["--tier", "complex"], tierRemoved],
   ];
   for (const [flags, message] of cases) {
     const result = await runCli(env, ["run", "start", ...flags], { jobId: id });
@@ -127,50 +130,63 @@ test("`run start` refuses a tier, a type or a commit type outside the pipeline's
   assert.equal(readRunState({ projectId: ensureProject(env, "alpha"), slug: SLUG, env }), null, "a refused call recorded something");
 });
 
-test("`run start --tier` alone answers the tier's phases with no type nor commit type, and records only the tier", async (t) => {
-  const env = makeQueue(t, "run-start-tier-only");
+test("a bare `run start` answers every phase with no type nor commit type, and records neither", async (t) => {
+  const env = makeQueue(t, "run-start-bare");
   const id = boundJob(env);
 
-  const answer = answerOf(await runCli(env, ["run", "start", "--tier", "simple"], { jobId: id }));
+  const answer = answerOf(await runCli(env, ["run", "start"], { jobId: id }));
 
   assert.equal(answer.type, null);
   assert.equal(answer.commitType, null);
-  assert.deepEqual(answer.phases, ["triage", "implementation", "verification", "commit"]);
-  assert.deepEqual(answer.tasks, ["triage", "implementation", "verification", "commit"]);
+  assert.deepEqual(answer.models, { ...AGENT_MODELS });
+  assert.deepEqual(answer.phases, EVERY_PHASE);
+  assert.deepEqual(answer.tasks, EVERY_PHASE);
   const state = readRunState({ projectId: ensureProject(env, "alpha"), slug: SLUG, env });
-  assert.equal(state.tier, "simple");
+  assert.equal("tier" in state, false, "run start recorded a tier");
   assert.equal("type" in state, false, "run start recorded a type it was never given");
   assert.equal("commitType" in state, false, "run start recorded a commit type");
 });
 
-test("`run start --tier` alone answers the type and the commit type `run check 01` already recorded", async (t) => {
-  const env = makeQueue(t, "run-start-tier-recorded");
+test("a bare `run start` answers the type and the commit type `run check 01` already recorded", async (t) => {
+  const env = makeQueue(t, "run-start-recorded");
   const id = boundJob(env);
   recordRunFields({ projectId: ensureProject(env, "alpha"), slug: SLUG, fields: { type: "bug/error", commitType: "fix" }, env });
 
-  const answer = answerOf(await runCli(env, ["run", "start", "--tier", "complex"], { jobId: id }));
+  const answer = answerOf(await runCli(env, ["run", "start"], { jobId: id }));
 
   assert.equal(answer.type, "bug/error");
   assert.equal(answer.commitType, "fix");
-  assert.deepEqual(answer.routing, routingRow("complex"));
+  assert.deepEqual(answer.models, { ...AGENT_MODELS });
 });
 
-test("`run start --routing` prints the whole routing table and resolves no run, inside a job or outside", async (t) => {
+test("`run start` answers the project's agent model overrides over the defaults", async (t) => {
+  const env = makeQueue(t, "run-start-models");
+  const id = boundJob(env);
+  setProjectAgents(openDb(env), { id: ensureProject(env, "alpha"), value: { coder: { model: "sonnet" } } });
+
+  const answer = answerOf(await runCli(env, START, { jobId: id }));
+
+  assert.equal(answer.models.coder, "sonnet");
+  assert.equal(answer.models.architect, "opus");
+});
+
+test("`run start --routing` prints the agent model table and resolves no run, inside a job or outside", async (t) => {
   const env = makeQueue(t, "run-start-routing");
   const outside = await runCli(env, ["run", "start", "--routing"]);
   assert.equal(outside.code, 0, outside.errText);
-  assert.equal(outside.text, routingTable());
+  assert.equal(outside.text, modelTable());
+  assert.match(outside.text, /^\| Agent \| Model \|/);
   const id = boundJob(env);
   const inside = await runCli(env, ["run", "start", "--routing"], { jobId: id });
   assert.equal(inside.code, 0, inside.errText);
-  assert.equal(inside.text, routingTable());
+  assert.equal(inside.text, modelTable());
   assert.equal(readRunState({ projectId: ensureProject(env, "alpha"), slug: SLUG, env }), null, "--routing recorded a run state");
   assert.equal(existsSync(runDir(ensureProject(env, "alpha"), SLUG, env)), false, "--routing created a run directory");
 });
 
 test("`run start --routing` combined with any other option is refused with the usage", async (t) => {
   const env = makeQueue(t, "run-start-routing-mixed");
-  const result = await runCli(env, ["run", "start", "--routing", "--tier", "simple"]);
+  const result = await runCli(env, ["run", "start", "--routing", "--type", "bug/error"]);
   assert.equal(result.code, 1);
   assert.match(result.errText, /`--routing` takes no other option or argument; usage: nightqueue run start/);
 });
@@ -208,40 +224,41 @@ test("`run start` is idempotent: a resume asking again gets the same answer", as
   assert.deepEqual(second, first);
 });
 
-test("a second `run start` never lowers a raised tier nor overrides the recorded type, and answers the run's own", async (t) => {
-  const env = makeQueue(t, "run-start-raised-tier");
+test("a second `run start` never overrides the recorded type, and answers the run's own", async (t) => {
+  const env = makeQueue(t, "run-start-recorded-type");
   const id = boundJob(env);
   const projectId = ensureProject(env, "alpha");
   answerOf(await runCli(env, START, { jobId: id }));
-  recordRunFields({ projectId, slug: SLUG, fields: { tier: "complex", type: "bug/error" }, env });
+  recordRunFields({ projectId, slug: SLUG, fields: { type: "bug/error" }, env });
 
   const answer = answerOf(await runCli(env, START, { jobId: id }));
 
   const state = readRunState({ projectId, slug: SLUG, env });
-  assert.equal(state.tier, "complex");
   assert.equal(state.type, "bug/error");
-  assert.equal(answer.tier, "complex");
   assert.equal(answer.type, "bug/error");
-  assert.deepEqual(answer.routing, routingRow("complex"));
+  assert.equal("tier" in answer, false, "run start answered a tier");
+  assert.deepEqual(answer.phases, EVERY_PHASE);
 });
 
-test("a second `run start` may still raise the recorded tier", async (t) => {
-  const env = makeQueue(t, "run-start-raise-again");
+test("`run start --tier` on a run that already started is refused and changes nothing", async (t) => {
+  const env = makeQueue(t, "run-start-tier-refused");
   const id = boundJob(env);
+  const projectId = ensureProject(env, "alpha");
   answerOf(await runCli(env, START, { jobId: id }));
-  const raise = ["run", "start", "--tier", "complex", "--type", "feature/refactor", "--commit-type", "feat"];
+  const before = readRunState({ projectId, slug: SLUG, env });
 
-  const answer = answerOf(await runCli(env, raise, { jobId: id }));
+  const result = await runCli(env, ["run", "start", "--tier", "simple", "--type", "feature/refactor"], { jobId: id });
 
-  assert.equal(answer.tier, "complex");
-  assert.equal(readRunState({ projectId: ensureProject(env, "alpha"), slug: SLUG, env }).tier, "complex");
+  assert.equal(result.code, 1);
+  assert.match(result.errText, /`--tier` was removed/);
+  assert.deepEqual(readRunState({ projectId, slug: SLUG, env }), before);
 });
 
 test("outside a job `run start` works on the run the operator names, creating its state", async (t) => {
   const env = makeQueue(t, "run-start-operator");
   const answer = answerOf(await runCli(env, [...START, "--project", "alpha", "--slug", SLUG]));
   assert.equal(answer.slug, SLUG);
-  assert.equal(readRunState({ projectId: ensureProject(env, "alpha"), slug: SLUG, env }).tier, "simple");
+  assert.equal(readRunState({ projectId: ensureProject(env, "alpha"), slug: SLUG, env }).type, "feature/refactor");
 
   const named = await runCli(env, [...START, "--project", "alpha", "--slug", SLUG], { jobId: boundJob(env) });
   assert.equal(named.code, 1);

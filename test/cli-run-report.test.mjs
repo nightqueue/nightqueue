@@ -6,6 +6,7 @@ import { run } from "../src/cli/index.mjs";
 import { jobLogPath, logsDir, runDir } from "../src/config/paths.mjs";
 import { openDb } from "../src/memory/db.mjs";
 import { addJob } from "../src/memory/jobs.mjs";
+import { saveRunState } from "../src/queue/resume.mjs";
 import { recordOutcome, recordPhaseDone, recordPrUrl, recordRunFields, recordTermination } from "../src/queue/run-state.mjs";
 import { ensureProject, makeHome, makeProject } from "../test-support/memory.mjs";
 import { toNdjson, toolResultEvent, toolUseEvent } from "../test-support/streams.mjs";
@@ -13,14 +14,14 @@ import { toNdjson, toolResultEvent, toolUseEvent } from "../test-support/streams
 const SLUG = "add-slugify";
 const PR = "https://github.com/acme/api/pull/7";
 
-// A home, a job bound to its run and the tier and type the run recorded.
-function makeRun(t, name, { tier, type = "feature/refactor" }) {
+// A home, a job bound to its run and the type the run recorded.
+function makeRun(t, name, { type = "feature/refactor" } = {}) {
   const env = makeHome(t, name);
   makeProject(t, env, "alpha");
   const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: "add slugify" }, env).id;
   openDb(env).prepare("UPDATE jobs SET slug = ? WHERE id = ?").run(SLUG, id);
   const run = { projectId: ensureProject(env, "alpha"), slug: SLUG, env };
-  recordRunFields({ ...run, fields: { tier, type } });
+  recordRunFields({ ...run, fields: { type } });
   return { env, id, run };
 }
 
@@ -60,8 +61,9 @@ const COMPLEX_CLEAN = [
   ["commit", "ok", "committed"],
 ];
 
-test("a clean simple run prints the compact line and `Happy: yes`, with no execution table", async (t) => {
-  const { env, id, run: target } = makeRun(t, "report-simple-happy", { tier: "simple" });
+test("a legacy fast-track run is read as the one pipeline: the full step table, its never-recorded exploration ⚠️, so it is not happy", async (t) => {
+  const { env, id, run: target } = makeRun(t, "report-simple-legacy");
+  saveRunState({ projectId: target.projectId, slug: SLUG, env, state: { tier: "simple", type: "feature/refactor" } });
   recordPhases(target, [
     ["triage", "PROCEED", "confirmed the missing helper"],
     ["implementation", "ok", "slugify added"],
@@ -69,17 +71,16 @@ test("a clean simple run prints the compact line and `Happy: yes`, with no execu
   ]);
   recordDelivery(target);
 
-  assert.deepEqual(await report(env, id), [
-    `## 🗂️ Report — ${SLUG}`,
-    "",
-    `Verification ✅ · PR ${PR}`,
-    "",
-    "Happy: yes",
-  ]);
+  const lines = await report(env, id);
+
+  assert.deepEqual(lines.slice(2, 4), ["| Step | Agent | Status | Highlight |", "|-------|--------|--------|----------|"], lines.join("\n"));
+  assert.equal(lines.some((line) => line.startsWith("Verification ")), false, "the compact fast-track line is still printed");
+  assert.ok(lines.includes("Happy: no — 2 Exploration ⚠️ not recorded"), lines.join("\n"));
+  assert.equal("tier" in JSON.parse((await report(env, id, ["--json"]))[0]), false, "the json report carries a tier");
 });
 
-test("a clean complex run prints the step table, every step ✅", async (t) => {
-  const { env, id, run: target } = makeRun(t, "report-complex-happy", { tier: "complex" });
+test("a clean run prints the step table, every step ✅", async (t) => {
+  const { env, id, run: target } = makeRun(t, "report-complex-happy");
   recordPhases(target, COMPLEX_CLEAN);
   recordDelivery(target);
 
@@ -92,8 +93,8 @@ test("a clean complex run prints the step table, every step ✅", async (t) => {
   assert.equal(lines.at(-1), "Happy: yes");
 });
 
-test("the steps a tier does not run are ⏭️, and a planned step never recorded is ⚠️", async (t) => {
-  const { env, id, run: target } = makeRun(t, "report-skips", { tier: "simple", type: "bug/error" });
+test("every step is planned: a step never recorded is ⚠️, and the runtime is ⏭️ only after a PASSED verification", async (t) => {
+  const { env, id, run: target } = makeRun(t, "report-skips", { type: "bug/error" });
   recordPhases(target, [["implementation", "ok", "fixed"], ["verification", "PASSED", "green"]]);
   recordDelivery(target);
 
@@ -102,10 +103,10 @@ test("the steps a tier does not run are ⏭️, and a planned step never recorde
 
   assert.deepEqual(icons, {
     triage: "⚠️",
-    explore: "⏭️",
-    architecture: "⏭️",
+    explore: "⚠️",
+    architecture: "⚠️",
     implementation: "✅",
-    qa: "⏭️",
+    qa: "⚠️",
     verification: "✅",
     runtime: "⏭️",
     commit: "✅",
@@ -115,7 +116,7 @@ test("the steps a tier does not run are ⏭️, and a planned step never recorde
 });
 
 test("a phase recorded twice is a 🔁 re-run: not happy, with the execution table and its total", async (t) => {
-  const { env, id, run: target } = makeRun(t, "report-rerun", { tier: "simple" });
+  const { env, id, run: target } = makeRun(t, "report-rerun");
   recordPhases(target, [
     ["implementation", "ok", "first try"],
     ["implementation", "ok", "fixed the failures"],
@@ -155,7 +156,7 @@ test("every failing gate of the fail-safe rule makes the run not happy", async (
     }, /^Happy: no — terminated at triage: NOT-REPRODUCIBLE$/],
   ];
   for (const [name, arrange, expected] of cases) {
-    const { env, id, run: target } = makeRun(t, `report-gate-${name.replace(/\W+/g, "-")}`, { tier: "complex" });
+    const { env, id, run: target } = makeRun(t, `report-gate-${name.replace(/\W+/g, "-")}`);
     arrange(target);
     recordDelivery(target);
     const lines = await report(env, id);
@@ -163,8 +164,8 @@ test("every failing gate of the fail-safe rule makes the run not happy", async (
   }
 });
 
-test("a PASSED complex run that recorded no runtime lane skips 6.5 as a static change", async (t) => {
-  const { env, id, run: target } = makeRun(t, "report-static", { tier: "complex" });
+test("a PASSED run that recorded no runtime lane skips 6.5 as a static change", async (t) => {
+  const { env, id, run: target } = makeRun(t, "report-static");
   recordPhases(target, COMPLEX_CLEAN.filter(([phase]) => phase !== "runtime"));
   recordDelivery(target);
   const lines = await report(env, id);
@@ -173,7 +174,7 @@ test("a PASSED complex run that recorded no runtime lane skips 6.5 as a static c
 });
 
 test("a note with `|` or a line break stays inside its table cell and on the Happy line", async (t) => {
-  const { env, id, run: target } = makeRun(t, "report-cell-escape", { tier: "complex" });
+  const { env, id, run: target } = makeRun(t, "report-cell-escape");
   recordPhases(target, COMPLEX_CLEAN.map((row) => (row[0] === "qa" ? ["qa", "APPROVED", "3 risks | 1 red"] : row)));
   recordPhases(target, [["implementation", "ok", "a | b\nsecond line"]]);
   recordDelivery(target);
@@ -188,8 +189,8 @@ test("a note with `|` or a line break stays inside its table cell and on the Hap
 });
 
 test("a run with no delivery recorded is not happy", async (t) => {
-  const { env, id, run: target } = makeRun(t, "report-no-delivery", { tier: "simple" });
-  recordPhases(target, [["triage", "PROCEED", "confirmed"], ["implementation", "ok", "done"], ["verification", "PASSED", "green"]]);
+  const { env, id, run: target } = makeRun(t, "report-no-delivery");
+  recordPhases(target, COMPLEX_CLEAN.filter(([phase]) => phase !== "commit"));
   const lines = await report(env, id);
   assert.ok(lines.includes("Happy: no — 7 Commit/PR ⚠️ no pull request recorded"), lines.join("\n"));
 });
@@ -199,14 +200,14 @@ test("the report carries no lesson audit, even when the stream has `lesson_save`
     toolUseEvent({ name: "mcp__nightqueue__lesson_save", id: "toolu_1", input: { title: "x", target: "coder" } }),
     toolResultEvent({ toolUseId: "toolu_1" }),
   ]);
-  for (const tier of ["simple", "complex"]) {
-    const { env, id, run: target } = makeRun(t, `report-no-lessons-${tier}`, { tier });
-    recordPhases(target, tier === "simple" ? [["triage", "PROCEED", "confirmed"], ["implementation", "ok", "done"], ["verification", "PASSED", "green"]] : COMPLEX_CLEAN);
+  for (const type of ["bug/error", "feature/refactor"]) {
+    const { env, id, run: target } = makeRun(t, `report-no-lessons-${type.replace("/", "-")}`, { type });
+    recordPhases(target, COMPLEX_CLEAN);
     recordDelivery(target);
     mkdirSync(logsDir(env), { recursive: true });
     writeFileSync(jobLogPath(id, env), log);
     const lines = await report(env, id);
     assert.equal(lines.some((line) => line.includes("Lessons saved")), false, lines.join("\n"));
-    assert.equal(lines.at(-1), "Happy: yes", tier);
+    assert.equal(lines.at(-1), "Happy: yes", type);
   }
 });

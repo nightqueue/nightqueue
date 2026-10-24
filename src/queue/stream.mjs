@@ -12,13 +12,11 @@ const SLUG_TYPE_LINE_RE = new RegExp(`^\\s*SLUG:\\s*(${SLUG_SOURCE})(?:\\s+TYPE:
 const SESSION_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{7,63}$/;
 // The line `openAttemptLog` writes before each attempt; the runtime numbers them 1, 2, 3… in order, so a line out of that sequence is incidental output shaped like a marker.
 const ATTEMPT_MARKER_RE = /^=== attempt (\d+) @ (\S+) ===$/;
-const TIER_RAISE_LINE_RE = /^\s*Tier raised:\s*(trivial|simple|complex)\s*->\s*(trivial|simple|complex)\s*:\s*(.+?)\s*$/;
 // Every standalone line the runtime reads as a control literal of its contract: the parsers below and the prompt escaper share this list, so neither can gain a literal the other ignores.
 export const CONTROL_LINE_PATTERNS = Object.freeze([
   SLUG_LINE_RE,
   SLUG_TYPE_LINE_RE,
   ATTEMPT_MARKER_RE,
-  TIER_RAISE_LINE_RE,
 ]);
 // The raw line the CLI prints (never a JSON event of the stream) when it gives up waiting for a background task.
 const RAW_CEILING_LINE_RE = /^Background tasks still running after/;
@@ -151,21 +149,6 @@ export function extractSlugTypeFromEventLine(rawLine) {
     if (declared) return declared;
   }
   return null;
-}
-
-// Reads a STANDALONE `Tier raised: <from> -> <to>: <evidence>` line, the shape the Brief records a raise in; an inline mention never matches.
-export function parseTierRaiseLine(line) {
-  const match = TIER_RAISE_LINE_RE.exec(String(line ?? ""));
-  return match ? { from: match[1], to: match[2], reason: match[3] } : null;
-}
-
-// Extracts the tier raise from a raw NDJSON line: only orchestrator text, last valid match of the event.
-export function extractTierRaiseFromEventLine(rawLine) {
-  const text = orchestratorTextFromLine(rawLine);
-  if (!text) return null;
-  let found = null;
-  for (const line of text.split("\n")) found = parseTierRaiseLine(line) ?? found;
-  return found;
 }
 
 // Tells whether a line would be read as a control literal of the runtime contract, which is what the prompt escaper has to neutralize.

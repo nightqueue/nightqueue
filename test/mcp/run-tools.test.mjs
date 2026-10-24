@@ -62,7 +62,7 @@ test("inside a job the run tools resolve the run from the job's own row", async 
   assert.deepEqual({ ok: done.ok, project: done.project, slug: done.slug }, { ok: true, project: "alpha", slug: SLUG });
   assert.equal(done.path, join(runDir(ensureProject(env, "alpha"), SLUG, env), "state.json"));
 
-  payloadOf(await client.callTool({ name: "run_set", arguments: { tier: "complex", tier_raise_reason: "a native SDK is involved" } }));
+  payloadOf(await client.callTool({ name: "run_set", arguments: { type: "bug/error" } }));
   payloadOf(await client.callTool({ name: "run_outcome", arguments: { status: "gate", notice: "the operator has to choose" } }));
 
   const state = readState(env, "alpha", SLUG);
@@ -71,8 +71,8 @@ test("inside a job the run tools resolve the run from the job's own row", async 
     { schemaVersion: 1, projectId: projectIdOf(env, "alpha"), slug: SLUG, resumeCount: 0 },
   );
   assert.deepEqual(state.phases.map((entry) => entry.phase), ["triage"]);
-  assert.equal(state.tier, "complex");
-  assert.equal(state.tierRaiseReason, "a native SDK is involved");
+  assert.equal(state.type, "bug/error");
+  assert.equal("tier" in state, false, "run_set recorded a tier");
   assert.equal(state.outcome.status, "gate");
   assert.match(state.updatedAt, UTC_ISO);
   assert.match(state.phases[0].at, UTC_ISO);
@@ -175,7 +175,7 @@ test("inside a job `pipeline_log` records the run of its own row and the fields 
   payloadOf(
     await client.callTool({
       name: "run_set",
-      arguments: { tier: "complex", type: "bug/error", tier_raise_reason: "a stack trace in the claim path" },
+      arguments: { type: "bug/error" },
     }),
   );
 
@@ -189,8 +189,8 @@ test("inside a job `pipeline_log` records the run of its own row and the fields 
 
   const row = openDb(env).prepare("SELECT * FROM pipeline_runs ORDER BY id DESC LIMIT 1").get();
   assert.deepEqual(
-    { projectId: row.project_id, slug: row.slug, tier: row.tier, taskType: row.task_type, reason: row.tier_raise_reason },
-    { projectId: projectIdOf(env, "alpha"), slug: SLUG, tier: "complex", taskType: "bug/error", reason: "a stack trace in the claim path" },
+    { projectId: row.project_id, slug: row.slug, taskType: row.task_type },
+    { projectId: projectIdOf(env, "alpha"), slug: SLUG, taskType: "bug/error" },
     "the run named from the outside was recorded instead of the job's own",
   );
 });
@@ -200,7 +200,7 @@ test("`run_phase_done` records the reason a phase ran again, and `pipeline_log` 
   const client = await connect(t, { ...env, NIGHTQUEUE_JOB_ID: String(job.id) });
   const reason = "fix loop 1: the lint check failed";
 
-  payloadOf(await client.callTool({ name: "run_set", arguments: { tier: "simple" } }));
+  payloadOf(await client.callTool({ name: "run_set", arguments: { type: "feature/refactor" } }));
   payloadOf(await client.callTool({ name: "run_phase_done", arguments: { phase: "verification", verdict: "FAILED" } }));
   payloadOf(await client.callTool({ name: "run_phase_done", arguments: { phase: "verification", verdict: "PASSED", reason } }));
   payloadOf(await client.callTool({ name: "run_phase_done", arguments: { phase: "qa", verdict: "PASSED" } }));
@@ -242,14 +242,14 @@ test("outside a job `pipeline_log` records the operator's outcomes, and inside a
   const outside = await connect(t, env);
   for (const outcome of ["investigated", "queued"]) {
     const logged = payloadOf(
-      await outside.callTool({ name: "pipeline_log", arguments: { project: "alpha", slug: `hunt-${outcome}`, tier: "complex", outcome } }),
+      await outside.callTool({ name: "pipeline_log", arguments: { project: "alpha", slug: `hunt-${outcome}`, outcome } }),
     );
     const row = openDb(env).prepare("SELECT slug, outcome FROM pipeline_runs WHERE id = ?").get(logged.runId);
     assert.deepEqual({ slug: row.slug, outcome: row.outcome }, { slug: `hunt-${outcome}`, outcome });
   }
 
   const inside = await connect(t, { ...env, NIGHTQUEUE_JOB_ID: String(job.id) });
-  const refused = await inside.callTool({ name: "pipeline_log", arguments: { tier: "complex", outcome: "investigated" } });
+  const refused = await inside.callTool({ name: "pipeline_log", arguments: { outcome: "investigated" } });
   assert.equal(refused.isError, true);
   assert.match(textOf(refused), /outcome `investigated` is the operator's/);
 });

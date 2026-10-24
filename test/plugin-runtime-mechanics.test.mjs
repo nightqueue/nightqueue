@@ -21,9 +21,9 @@ const REQUESTS = {
   triager: ["triager"],
   explore: ["explore"],
   architect: ["architect"],
-  coder: ["coder", "coder-fast", "coder-fix"],
+  coder: ["coder", "coder-fix"],
   "qa-guardian": ["qa-lite", "qa-analyst", "qa-prover"],
-  verifier: ["verifier", "verifier-fast", "runtime"],
+  verifier: ["verifier", "runtime"],
 };
 const INDEPENDENT = Object.keys(REQUESTS);
 const DELIVERABLES = join(ROOT, "plugin/skills/resolve/references/deliverables");
@@ -89,7 +89,7 @@ test("each Repository template of the skill carries a Project line", () => {
   assert.ok(at >= 0, "the shared footer lost its Repository line");
   assert.equal(footer[at + 1], PROJECT_LINE, "the Repository line of the footer is not followed by its Project line");
   const templates = promptTemplates();
-  assert.ok(templates.length >= 12, "the skill lost its prompt templates");
+  assert.ok(templates.length >= 11, "the skill lost its prompt templates");
   for (const name of templates) {
     const text = readFileSync(join(PROMPTS, name), "utf8");
     const named = text.includes("{{>_footer}}") || (text.includes("project: {{PROJECT}}") && text.includes("repo_root: {{REPOSITORY}}"));

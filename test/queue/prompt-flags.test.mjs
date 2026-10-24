@@ -76,23 +76,19 @@ test("a prompt that only mentions --priority without the -- escape keeps the def
   );
 });
 
-test("a prompt that mentions --tier mid-sentence keeps every word and stays tier-less, while the leading flag sets it", (t) => {
+test("a prompt that mentions --tier mid-sentence keeps every word, while a leading `--tier` is refused and queues nothing", (t) => {
   const { env, repo } = makeCliHome(t, "flag-swallow-tier");
   const words = ["remember", "to", "send", "--tier", "simple", "next", "time"];
 
   const added = runCli(env, ["queue", "add", ...words], { cwd: repo });
 
   assert.equal(added.status, 0, added.stderr);
-  const job = getJob(1, env);
-  assert.equal(job.prompt, words.join(" "), "the persisted prompt lost the words the operator actually typed");
-  assert.equal(job.tier, null, "a --tier in the middle of the prompt silently set the tier of the job");
+  assert.equal(getJob(1, env).prompt, words.join(" "), "the persisted prompt lost the words the operator actually typed");
 
   const flagged = runCli(env, ["queue", "add", "--tier", "trivial", "fix", "the", "worker"], { cwd: repo });
-  assert.equal(flagged.status, 0, flagged.stderr);
-  assert.deepEqual(
-    { prompt: getJob(2, env).prompt, tier: getJob(2, env).tier },
-    { prompt: "fix the worker", tier: "trivial" },
-  );
+  assert.equal(flagged.status, 1, flagged.stdout);
+  assert.match(flagged.stderr, /`tier` was removed: every job runs the one \/resolve pipeline/);
+  assert.equal(getJob(2, env), null, "a refused `--tier` still queued a job");
 });
 
 test("--help is help only as the single argument of queue add; every other shape keeps today's meaning", (t) => {

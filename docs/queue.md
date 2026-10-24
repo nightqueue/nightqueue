@@ -13,7 +13,6 @@ nightqueue queue add api "fix the flaky worker" --priority 2   # enqueue a job
 nightqueue queue add "fix the flaky worker"                    # same, for the project of the current directory
 nightqueue queue add fix the flaky worker --run                # enqueue and start the runner on it, detached
 nightqueue queue add "fix the flaky worker" --yes              # register the repository of the current directory without asking
-nightqueue queue add "fix the flaky worker" --tier simple      # declare the risk tier; the pipeline may only raise it
 nightqueue queue add "fix it" --origin <kind>:<ref>...         # name the services the job came from (repeatable) instead of detecting them
 nightqueue queue status [--limit 10] [--json]                  # the state of the runner, the table of the queue and the counts
 nightqueue queue status --follow [2] [--until-idle]            # the same table, redrawn in place until Ctrl-C (or until the queue is idle)
@@ -208,26 +207,18 @@ resolved without change has no pull request: its reply and its log carry `Resolv
 code change.` followed by the run's conclusion, with no PR field, no link and the footer
 `resolved without a code change`.
 
-**`--tier` declares the risk of the job.** `queue add --tier trivial|simple|complex`
-(and the `tier` parameter of `queue_add`) records the tier on
-the job, and the unattended prompt carries it into the run as
-`Tier: <tier> (set by the operator - the pipeline may only raise it, with evidence,
-never lower it)`. Each tier is a track: `trivial` is a coder plus a verifier that runs
-tsc, lint and the tests of the touched files, **under 5 minutes**, for a result the
-prompt fully describes (docs, copy, config values, a rename, a test-only change);
-`simple` is a triager only when the request is a bug, then a coder and a verifier that
-runs the FULL test suite, **under 15 minutes**, for a local change whose behaviour the
-prompt defines, in one subsystem; `complex` is the whole pipeline (triager, exploration,
-architect, coder, QA and verifier), for a design decision, a concurrency/security/money
-surface, more than one subsystem or a brief that needs stages. The pipeline **raises** a
-tier only on evidence it finds — a stack trace, a security/concurrency/money surface, a
-schema/contract/tool change the brief did not name, or an ambiguous brief — and writes
-the raise into the Brief as `Tier raised: <from> -> <to>: <evidence>`. It never lowers
-one, and it never raises on the shape of the change. A value that is not one of the
-three is a usage error naming the three accepted values, and nothing is queued.
-A job with no tier keeps the pipeline's
-own classification. The tier shows up in `nightqueue queue status <id>` and in the
-`--json` of both the list and the detail; a job with no tier simply has no `tier` line.
+**Every job runs the one pipeline.** There is no risk tier: every run executes every
+phase (triager, exploration, architect, coder, QA and verifier), each agent on its own
+model (the defaults of `src/queue/routing.mjs`, overridable per project with
+`nightqueue project models`, see [CLI](cli.md)). How deep the QA goes is decided by the
+plan, not by the operator: `run check 03` answers `QA: full` when the plan holds two or
+more 🔴 risks or declares an always-gate class, else `QA: lite`. `queue add --tier` and
+the `tier` parameter of `queue_add` were removed: a value is refused with
+``\`tier\` was removed: every job runs the one /resolve pipeline (one model per agent, QA
+mode chosen by `run check 03`); drop it - a client still sending it is an older
+nightqueue plugin, update it``, and nothing is registered or queued. A prompt queued by an
+older runtime may still carry a `Tier:` line; the title ignores it and the run does not
+read it.
 
 ### Running the queue
 
@@ -1434,11 +1425,6 @@ never sees is merged.
 
 **Branch chains are v1.1**, and only for work that genuinely does not fit in one
 run. Until then, the answer to "this depends on that" is one job with stages.
-
-**The tier is yours to set.** `--tier trivial|simple|complex` on `queue add` (or the
-`tier` parameter of `queue_add`) tells the pipeline how much risk the job carries, and
-the run executes the track of that tier. The criteria of each one, their time targets
-and what raises a tier are in [Queue](queue.md).
 
 `nightqueue queue add --help` prints this rule and the example.
 

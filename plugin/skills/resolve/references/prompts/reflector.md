@@ -6,7 +6,6 @@ Read via Read, each one that exists (a missing file is skipped): `00-brief.md`, 
 `06-verification.md`, `06-runtime.md` and `state.json` (`termination`, `resumeCount`).
 Read every round and every fix-loop block; never the job's stream/log.
 
-Tier: {{TIER}}
 Type: {{TYPE}}
 
 ## Run timeline

@@ -1,5 +1,5 @@
 import { compactTokens } from "./last-cell.mjs";
-import { offTierPhases, routingRow, TRACK_SLOTS, trackPhaseNumbers } from "./routing.mjs";
+import { agentModels, TRACK_SLOTS } from "./routing.mjs";
 
 const ALL_SLOT_NUMBERS = TRACK_SLOTS.map((slot) => slot.number);
 
@@ -152,11 +152,11 @@ function pushEvent(state, event) {
   else if (isMarker(event)) onMarker(state, event, atMs);
 }
 
-// The model a phase runs on: the one its lane was opened with, else the routing row's for the tier, null for the orchestrator phases and a skipped slot.
+// The model a phase runs on: the one its lane was opened with, else its agent's model, null for the orchestrator phases and a skipped slot.
 function phaseModel(slot, { entry, models, skipped }) {
   if (entry?.model) return entry.model;
-  if (skipped || !slot.agent) return null;
-  return models[slot.agent] ?? null;
+  if (skipped || !slot.modelAgent) return null;
+  return models[slot.modelAgent] ?? null;
 }
 
 // The clock reading since which a phase is still accruing time, null when nothing of it is open.
@@ -182,12 +182,9 @@ function reachedState(number, { state, status, gatePhase }) {
   return state.phases.has(number) ? "done" : null;
 }
 
-// The skip record of a slot: an agent's, else the tier's while the slot is off the run's routing, recorded or derived; null for any other slot.
-function skipRecordOf(slot, { skips, offTier }) {
-  const recorded = slot.phase ? (skips[slot.phase] ?? null) : null;
-  if (recorded && recorded.by !== "tier") return recorded;
-  if (!offTier.includes(slot.phase)) return null;
-  return recorded ?? { by: "tier", reason: null, at: null };
+// The skip record the run holds for a slot's phase, or null.
+function skipRecordOf(slot, { skips }) {
+  return slot.phase ? (skips[slot.phase] ?? null) : null;
 }
 
 // The state of one slot and its skip record: reached wins, then a skip record, then an in-track slot passed over, else pending.
@@ -255,29 +252,27 @@ function readSkips(skips) {
 }
 
 // The phase track of a job as it stands: all nine slots, each with what every attempt so far reached or why it is skipped.
-function snapshotOf(state, { tier, type, status, skips }) {
-  const numbers = trackPhaseNumbers(tier);
-  const { track, models } = numbers ? routingRow(tier) : { track: null, models: {} };
-  const inTrack = numbers ?? ALL_SLOT_NUMBERS;
+function snapshotOf(state, { status, skips, models }) {
+  const inTrack = ALL_SLOT_NUMBERS;
   const lastReachedIndex = Math.max(-1, ...inTrack.map((number, index) => (state.phases.has(number) ? index : -1)));
   const gatePhase = state.current ?? inTrack[0];
-  const context = { state, status, models, inTrack, lastReachedIndex, gatePhase, skips: readSkips(skips), offTier: offTierPhases(tier, type) };
+  const context = { state, status, models: models ?? agentModels(null), inTrack, lastReachedIndex, gatePhase, skips: readSkips(skips) };
   const phases = TRACK_SLOTS.map((slot) => phaseWire(slot, context));
-  return { track, tier: numbers ? tier : null, phases, clockMs: clockOf(state) };
+  return { phases, clockMs: clockOf(state) };
 }
 
 // An accumulator of a job's phase track: narration events of every attempt go in one by one, a snapshot comes out at any time.
-export function createTimeline({ tier = null } = {}) {
+export function createTimeline({ models = null } = {}) {
   const state = freshState();
   return {
     push: (event) => pushEvent(state, event),
-    snapshot: ({ status, tier: snapshotTier = tier, type = null, skips = null } = {}) => snapshotOf(state, { tier: snapshotTier, type, status, skips }),
+    snapshot: ({ status, skips = null, models: snapshotModels = models } = {}) => snapshotOf(state, { status, skips, models: snapshotModels }),
   };
 }
 
-// The phase track of a job from a list of its narration events, every attempt included, with the run's recorded skips and type when given.
-export function phaseTimeline(events, { tier, type = null, status, skips = null }) {
-  const timeline = createTimeline({ tier });
+// The phase track of a job from a list of its narration events, every attempt included, with the run's recorded skips and its agent models when given.
+export function phaseTimeline(events, { status, skips = null, models = null }) {
+  const timeline = createTimeline({ models });
   for (const event of Array.isArray(events) ? events : []) timeline.push(event);
-  return timeline.snapshot({ status, type, skips });
+  return timeline.snapshot({ status, skips });
 }

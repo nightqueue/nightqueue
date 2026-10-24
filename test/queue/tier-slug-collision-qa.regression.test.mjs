@@ -12,17 +12,17 @@ import { useFakeClaude } from "../../test-support/queue-fake.mjs";
 import { doneStream, PR_URL } from "../../test-support/streams.mjs";
 import { fakeJobWorktree } from "../../test-support/job-worktree.mjs";
 
-// The exact header the operator's Step 8 stamps onto a tiered job, verbatim.
+// The exact header an older operator's Step 8 stamped onto a job, verbatim; a legacy pending prompt may still carry it.
 const TIER_HEADER = "Tier: complex (set by the operator - the pipeline may only raise it, with evidence, never lower it)";
 
-// The prompt shape a tiered job is queued with: the runtime header first, the brief after it.
+// The prompt shape a legacy job was queued with: the old runtime header first, the brief after it.
 function operatorPrompt(brief) {
   return `${TIER_HEADER}\n\n## Brief\n${brief}`;
 }
 
-// Queues one tiered job the way the operator does.
+// Queues one job whose prompt still carries the legacy tier header.
 function queueTiered(env, brief) {
-  return addJob({ projectId: ensureProject(env, "alpha"), prompt: operatorPrompt(brief), tier: "complex" }, env).id;
+  return addJob({ projectId: ensureProject(env, "alpha"), prompt: operatorPrompt(brief) }, env).id;
 }
 
 // A home with the project `alpha` registered and the fake `claude` playing the given attempts in order.

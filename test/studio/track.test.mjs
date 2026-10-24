@@ -56,9 +56,9 @@ test("the gate is no longer a segment: format.ts drops its approximations and th
   assert.match(track, /gate at phase/);
 });
 
-test("the four captions of a skipped slot say who skipped it and why", () => {
-  const clocks = { runElapsedMs: null, clockMs: null, tier: "simple" };
-  assert.equal(phaseCaption(phase({ state: "skipped", skipped: { by: "tier", reason: null, at: null } }), clocks), "skipped · simple tier");
+test("the captions of a skipped slot say who skipped it and why, a legacy tier skip included", () => {
+  const clocks = { runElapsedMs: null, clockMs: null };
+  assert.equal(phaseCaption(phase({ state: "skipped", skipped: { by: "tier", reason: null, at: null } }), clocks), "skipped · tier");
   assert.equal(phaseCaption(phase({ state: "skipped", skipped: { by: "architect", reason: "docs only", at: null } }), clocks), "skipped · architect: docs only");
   assert.equal(phaseCaption(phase({ state: "skipped", skipped: { by: "architect", reason: null, at: null } }), clocks), "skipped · architect");
   assert.equal(phaseCaption(phase({ state: "skipped", skipped: null }), clocks), "skipped");

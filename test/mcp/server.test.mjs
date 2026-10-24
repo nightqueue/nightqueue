@@ -370,7 +370,7 @@ test("the lesson, memory, index, phase and pipeline tools refuse an unknown proj
     ["index_recall", { project: "ghost" }],
     ["context_for_phase", { target: "coder", project: "ghost" }],
     ["phase_prompt", { target: "coder", project: "ghost", slug: "a-run" }],
-    ["pipeline_log", { project: "ghost", slug: "a-run", tier: "simple", outcome: "investigated" }],
+    ["pipeline_log", { project: "ghost", slug: "a-run", outcome: "investigated" }],
   ]) {
     const refused = await client.callTool({ name, arguments: args });
     assert.equal(refused.isError, true, name);
@@ -485,7 +485,6 @@ test("an explicit null in any optional field of the memory tools is accepted, ne
       arguments: {
         project: null,
         slug: "null-tolerance",
-        tier: "simple",
         outcome: "no_commit",
         task_type: null,
         gate_stop: null,
@@ -493,7 +492,7 @@ test("an explicit null in any optional field of the memory tools is accepted, ne
         phases: [{ phase: "coder", model: null, status: null, retry: null, duration_s: null, note: null }],
       },
     },
-    { name: "pipeline_log", arguments: { slug: "null-phases", tier: "simple", outcome: "no_commit", phases: null } },
+    { name: "pipeline_log", arguments: { slug: "null-phases", outcome: "no_commit", phases: null } },
   ];
   for (const call of calls) {
     const result = await client.callTool(call);
@@ -562,7 +561,6 @@ test("memory_recall answers empty and pipeline_log holds the contract of its enu
       arguments: {
         project: "alpha",
         slug: "fix-the-worker",
-        tier: "simple",
         task_type: "bug/error",
         outcome: "no_commit",
         gate_stop: "triage",
@@ -580,39 +578,40 @@ test("memory_recall answers empty and pipeline_log holds the contract of its enu
 
   const rejected = await client.callTool({
     name: "pipeline_log",
-    arguments: { project: "alpha", slug: "fix-the-worker", tier: "simple", outcome: "pr_aberto" },
+    arguments: { project: "alpha", slug: "fix-the-worker", outcome: "pr_aberto" },
   });
   assert.equal(rejected.isError, true);
   assert.doesNotMatch(textOf(rejected), /\.mjs:\d+/);
+});
 
-  const raised = payloadOf(
+test("`pipeline_log` accepts and ignores the tier fields an older plugin still sends, and writes nothing from them", async (t) => {
+  const env = makeHome(t, "mcp-runs-old-tier");
+  makeProject(t, env, "alpha");
+  const client = await connect(t, env);
+
+  const logged = payloadOf(
     await client.callTool({
       name: "pipeline_log",
       arguments: {
         project: "alpha",
         slug: "raise-the-tier",
-        tier: "complex",
-        tier_operator: "simple",
+        tier: "simple",
+        tier_operator: "urgent",
         tier_raise_reason: "stack trace in the claim path",
         outcome: "pr_opened",
       },
     }),
   );
-  const rows = openDb(env).prepare("SELECT * FROM pipeline_runs ORDER BY id").all();
-  const stored = rows.find((row) => row.id === raised.runId);
+  assert.equal(logged.ok, true);
+  const stored = openDb(env).prepare("SELECT * FROM pipeline_runs WHERE id = ?").get(logged.runId);
   assert.deepEqual(
     { tier: stored.tier, operator: stored.tier_operator, reason: stored.tier_raise_reason },
-    { tier: "complex", operator: "simple", reason: "stack trace in the claim path" },
+    { tier: "complex", operator: null, reason: null },
+    "a tier field sent by an older plugin reached the row",
   );
-  const plain = rows.find((row) => row.slug === "fix-the-worker");
-  assert.deepEqual({ operator: plain.tier_operator, reason: plain.tier_raise_reason }, { operator: null, reason: null });
 
-  const badTier = await client.callTool({
-    name: "pipeline_log",
-    arguments: { project: "alpha", slug: "fix-the-worker", tier: "simple", tier_operator: "urgent", outcome: "pr_opened" },
-  });
-  assert.equal(badTier.isError, true);
-  assert.doesNotMatch(textOf(badTier), /\.mjs:\d+/);
+  const plain = payloadOf(await client.callTool({ name: "pipeline_log", arguments: { project: "alpha", slug: "no-tier-anywhere", outcome: "pr_opened" } }));
+  assert.equal(plain.ok, true, "a run with no tier anywhere was refused");
 });
 
 test("outside a job, a `pipeline_log` that names no run is refused by both fields and records nothing", async (t) => {
@@ -620,20 +619,15 @@ test("outside a job, a `pipeline_log` that names no run is refused by both field
   makeProject(t, env, "alpha");
   const client = await connect(t, env);
 
-  const orphan = await client.callTool({ name: "pipeline_log", arguments: { tier: "simple", outcome: "pr_opened" } });
+  const orphan = await client.callTool({ name: "pipeline_log", arguments: { outcome: "pr_opened" } });
   assert.equal(orphan.isError, true);
   assert.match(textOf(orphan), /`project`/);
   assert.match(textOf(orphan), /`slug`/);
   assert.doesNotMatch(textOf(orphan), /\.mjs:\d+/);
 
-  const noTier = await client.callTool({ name: "pipeline_log", arguments: { project: "alpha", slug: "no-tier-anywhere", outcome: "pr_opened" } });
-  assert.equal(noTier.isError, true);
-  assert.match(textOf(noTier), /`tier` is required/);
-  assert.match(textOf(noTier), /run_set/);
-
   assert.deepEqual(openDb(env).prepare("SELECT id FROM pipeline_runs").all(), [], "a refused call left an orphan row behind");
 
-  const named = payloadOf(await client.callTool({ name: "pipeline_log", arguments: { slug: "no-project-at-all", tier: "simple", outcome: "no_commit" } }));
+  const named = payloadOf(await client.callTool({ name: "pipeline_log", arguments: { slug: "no-project-at-all", outcome: "no_commit" } }));
   assert.ok(Number.isInteger(named.runId), "a call naming only the slug still records its run");
 });
 
@@ -711,7 +705,6 @@ test("queue_add enqueues by project NAME and refuses a path or a project nobody 
     "register",
     "start_branch",
     "start_worktree",
-    "tier",
     "timeout_s",
     "title",
   ]);
@@ -765,24 +758,24 @@ test("queue_retry refuses a closed job as finished and writes nothing", async (t
   assert.deepEqual(getJob(id, env), before, "a refused retry wrote to the closed job");
 });
 
-test("queue_add carries the operator's tier, echoes it only when there is one, and refuses an unknown value", async (t) => {
+test("queue_add refuses a `tier` with the line naming its removal and queues nothing; a null or blank one is ignored", async (t) => {
   const env = makeQueueHome(t, "mcp-queue-add-tier");
   const client = await connect(t, env);
 
-  const tiered = payloadOf(
-    await client.callTool({ name: "queue_add", arguments: { project: "alpha", prompt: "fix the worker", tier: "complex" } }),
-  );
-  assert.equal(tiered.tier, "complex");
-  assert.equal(getJob(tiered.id, env).tier, "complex");
+  for (const tier of ["simple", "complex", "urgent"]) {
+    const refused = await client.callTool({ name: "queue_add", arguments: { project: "alpha", prompt: "fix the worker", tier } });
+    assert.equal(refused.isError, true, tier);
+    assert.match(textOf(refused), /`tier` was removed: every job runs the one \/resolve pipeline \(one model per agent, QA mode chosen by `run check 03`\)/);
+    assert.match(textOf(refused), /older nightqueue plugin, update it/);
+    assert.doesNotMatch(textOf(refused), /\.mjs:\d+/);
+  }
+  assert.equal(getJob(1, env), null, "a refused tier still queued a job");
 
-  const plain = payloadOf(await client.callTool({ name: "queue_add", arguments: { project: "alpha", prompt: "fix the parser" } }));
-  assert.equal("tier" in plain, false, "a job with no tier echoed a `tier` key");
-  assert.equal(getJob(plain.id, env).tier, null);
-
-  const unknown = await client.callTool({ name: "queue_add", arguments: { project: "alpha", prompt: "fix it", tier: "urgent" } });
-  assert.equal(unknown.isError, true);
-  assert.doesNotMatch(textOf(unknown), /\.mjs:\d+/);
-  assert.equal(getJob(3, env), null, "the refused tier still queued a job");
+  for (const tier of [null, "  "]) {
+    const queued = payloadOf(await client.callTool({ name: "queue_add", arguments: { project: "alpha", prompt: "fix the parser", tier } }));
+    assert.equal(queued.ok, true);
+    assert.equal("tier" in queued, false, "the answer echoed a `tier` key");
+  }
 });
 
 test("queue_add carries a starting point, echoes it, and refuses both at once without queueing", async (t) => {

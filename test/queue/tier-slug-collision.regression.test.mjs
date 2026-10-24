@@ -34,14 +34,14 @@ function makeRunnerHome(t, name, attempts) {
   return env;
 }
 
-// The prompt the operator queues at its Step 8: the tier header first, then the brief.
+// The prompt an older operator queued at its Step 8: the legacy tier header first, then the brief.
 function operatorPrompt(brief) {
   return `${TIER_HEADER}\n\n## Brief\n${brief}\n\n## Success criteria\n- the job ends with a pull request`;
 }
 
-// Queues one tiered job the way the operator does.
+// Queues one job whose prompt still carries the legacy tier header.
 function queueTiered(env, brief) {
-  return addJob({ projectId: ensureProject(env, "alpha"), prompt: operatorPrompt(brief), tier: "complex" }, env).id;
+  return addJob({ projectId: ensureProject(env, "alpha"), prompt: operatorPrompt(brief) }, env).id;
 }
 
 // A run that opens a pull request without ever naming its run, so the job keeps the slug the runtime bound.
@@ -63,7 +63,7 @@ function writeTerminal(env, slug, terminal) {
   return text;
 }
 
-test("two jobs queued with --tier complex get distinct slugs from their own briefs and distinct run dirs", async (t) => {
+test("two jobs whose prompts carry the legacy tier header get distinct slugs from their own briefs and distinct run dirs", async (t) => {
   const env = makeRunnerHome(t, "tier-slug-distinct", [
     { stdout: unnamedDoneStream(), exitCode: 0 },
     { stdout: unnamedDoneStream(), exitCode: 0 },

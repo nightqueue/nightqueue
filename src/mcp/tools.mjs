@@ -60,7 +60,6 @@ import {
   PIPELINE_OUTCOMES,
   PIPELINE_PHASE_STATUSES,
   PIPELINE_TASK_TYPES,
-  PIPELINE_TIERS,
 } from "../memory/runs.mjs";
 import { ensureStoreExists, openStore, withReadOnlyStore } from "../store/open.mjs";
 import { coverageField, coverageLabel, jobOriginCoverage } from "../integrations/coverage.mjs";
@@ -133,6 +132,7 @@ const serverPrStates = createPrStateCache();
 
 const target = z.enum(LESSON_TARGETS).nullable().optional();
 const optionalText = z.string().nullable().optional();
+const ignoredOldField = z.unknown().optional().describe("ignored: accepted from an older plugin");
 const jobRefInput = z.union([z.number().int().min(1), z.string()]);
 const jobIdField = jobRefInput.describe("The job's ref (`J-77`) or its plain id.");
 
@@ -240,9 +240,7 @@ async function pipelineLogRun(args, env) {
 function runFacts({ projectId, slug }, env) {
   const state = readRunState({ projectId, slug, env });
   return {
-    tier: state?.tier ?? null,
     taskType: state?.type ?? null,
-    tierRaiseReason: state?.tierRaiseReason ?? null,
     phases: Array.isArray(state?.phases) ? state.phases : [],
   };
 }
@@ -298,13 +296,6 @@ function queuedPipelineLog(err, spec, env) {
   return { ok: true, queued: true, warning: `recorded in ${queued.path}; replayed once the database is back`, pending: queued.path };
 }
 
-// Requires a field neither the call nor the run resolved, saying which tool would have recorded it during the run.
-function requireLogged(field, value) {
-  if (value !== null && value !== undefined && value !== "") return value;
-  throw new UserError(
-    `\`${field}\` is required: send it, or record it during the run with \`run_set\` so this call can leave it out`,
-  );
-}
 
 // Refuses an operator outcome sent from inside a job, whose run always ends on one of the pipeline's own.
 function refuseOperatorOutcomeInsideJob(outcome, env) {
@@ -347,8 +338,6 @@ function composedGateNotice(args, run, env) {
 // The fields of state.json `run_set` writes, in the argument names the plugin sends.
 const RUN_SET_FIELDS = {
   type: "type",
-  tier: "tier",
-  tier_raise_reason: "tierRaiseReason",
   branch: "branch",
   worktree: "worktree",
 };
@@ -524,7 +513,6 @@ async function queuedAnswer({ job, registered = null }, env) {
     project: job.project,
     priority: job.priority,
     timeoutS: job.timeoutS,
-    ...(job.tier ? { tier: job.tier } : {}),
     ...(job.startBranch ? { start_branch: job.startBranch } : {}),
     ...(job.startWorktree ? { start_worktree: job.startWorktree } : {}),
     origin: coverages.map(coverageField),
@@ -946,7 +934,7 @@ function toolDefinitions(env, state) {
       name: "phase_prompt",
       config: {
         description:
-          "The complete prompt of one /resolve subagent for THIS run, rendered by the runtime from the plugin's templates: the handoff contract, the routing of the run's tier and the context block. " +
+          "The complete prompt of one /resolve subagent for THIS run, rendered by the runtime from the plugin's templates: the handoff contract, the model of its agent (the default or the project's override) and the context block. " +
           "`triager` renders from the request: inside a job the job's own prompt (plus the operator's gate answer), outside a job the `request` argument, required there. Every other target reads the Brief of `<RUN_DIR>/00-brief.md`, written by `nightqueue run check 01`, and refuses `request`. " +
           "Pass `prompt` to the `Agent` tool verbatim, with the answered `subagent_type` and `model`, then gate the answered `artifact` with `nightqueue run check <check>`. " +
           "`reflector` (Phase 9) renders with no artifact and `check` null: launch it and gate nothing. " +
@@ -1112,16 +1100,15 @@ function toolDefinitions(env, state) {
         description:
           "Records the telemetry of one /resolve run, gate terminations included. One call per run. " +
           "Inside a job, `project` and `slug` come from the job's own row and are ignored here; outside one, both name the run. " +
-          "`tier` is the FINAL tier the run executed, `tier_operator` is the tier the operator declared (omit it when there was none) and `tier_raise_reason` carries the evidence of a raise. " +
-          "`tier`, `task_type` and `tier_raise_reason` may be left out when the run already recorded them with `run_set`; the durations and the models the runtime measured in the stream are filled in afterwards and always win over the ones sent here. " +
+          "`task_type` may be left out when the run already recorded it with `run_set`; the durations and the models the runtime measured in the stream are filled in afterwards and always win over the ones sent here. " +
           "`investigated` and `queued` are the operator's outcomes (a session that investigated only, or queued a job): outside a job they are recorded, inside a job they are refused. " +
           "A `reason` recorded with `run_phase_done` is copied onto the rows of the same phase only when `phases` lists exactly as many rows of that phase as the run recorded. Otherwise none of that phase's reasons are copied and `reasons_unpaired` names the phase. Send `reason` on those rows yourself.",
         inputSchema: {
           project: optionalText,
           slug: optionalText,
-          tier: z.enum(PIPELINE_TIERS).nullable().optional(),
-          tier_operator: z.enum(PIPELINE_TIERS).nullable().optional(),
-          tier_raise_reason: z.string().nullable().optional(),
+          tier: ignoredOldField,
+          tier_operator: ignoredOldField,
+          tier_raise_reason: ignoredOldField,
           task_type: z.enum(PIPELINE_TASK_TYPES).nullable().optional(),
           outcome: z.enum(PIPELINE_OUTCOMES),
           gate_stop: z.enum(PIPELINE_GATE_STOPS).nullable().optional(),
@@ -1138,9 +1125,6 @@ function toolDefinitions(env, state) {
         const spec = {
           projectId: run.projectId,
           slug: run.slug,
-          tier: requireLogged("tier", args.tier ?? recorded.tier),
-          tierOperator: args.tier_operator,
-          tierRaiseReason: args.tier_raise_reason ?? recorded.tierRaiseReason,
           taskType: args.task_type ?? recorded.taskType,
           outcome: args.outcome,
           gateStop: args.gate_stop,
@@ -1191,11 +1175,6 @@ function toolDefinitions(env, state) {
           priority: z.number().int().min(PRIORITY_RANGE.min).max(PRIORITY_RANGE.max).nullable().optional(),
           max_attempts: z.number().int().min(MAX_ATTEMPTS_RANGE.min).max(MAX_ATTEMPTS_RANGE.max).nullable().optional(),
           timeout_s: z.number().int().min(TIMEOUT_RANGE.min).max(TIMEOUT_RANGE.max).nullable().optional(),
-          tier: z
-            .enum(PIPELINE_TIERS)
-            .nullable()
-            .optional()
-            .describe("Risk tier of the job, set by the operator. The pipeline may only raise it, with evidence, never lower it."),
           origin: z
             .array(z.object({ kind: z.string(), ref: z.string() }))
             .nullable()
@@ -1224,7 +1203,6 @@ function toolDefinitions(env, state) {
           priority: args.priority,
           maxAttempts: args.max_attempts,
           timeoutS: args.timeout_s,
-          tier: args.tier,
           origin: args.origin,
           title: args.title,
           startBranch: args.start_branch,
@@ -1522,13 +1500,11 @@ function toolDefinitions(env, state) {
       name: "run_set",
       config: {
         description:
-          "Records the fields of the run itself in `state.json` as the pipeline discovers them: its `type`, its `tier`, the evidence of a tier raise, and the branch and worktree the code lives in. Only the fields sent are touched. " +
+          "Records the fields of the run itself in `state.json` as the pipeline discovers them: its `type` and the branch and worktree the code lives in. Only the fields sent are touched. " +
           "`qa_stage_a` records the one sub-phase with a marker of its own — sent when the QA stage A gate closes, it is what makes a resume re-enter the QA phase straight at stage B instead of paying the analyst again. " +
           "Inside a job the run is resolved from the job's own row — passing `project` or `slug` there is refused; outside a job both are required.",
         inputSchema: {
           type: z.enum(PIPELINE_TASK_TYPES).nullable().optional(),
-          tier: z.enum(PIPELINE_TIERS).nullable().optional(),
-          tier_raise_reason: optionalText,
           branch: optionalText,
           worktree: optionalText,
           qa_stage_a: z.object({ artifact: z.string(), verdict: optionalText }).optional(),

@@ -14,7 +14,6 @@ function state({ phases = ["triage", "explore"], resumeCount = 0, ...extra } = {
     schemaVersion: 1,
     slug: "fix-the-worker",
     project: "alpha",
-    tier: "simple",
     type: "bug/error",
     branch: "fix/the-worker",
     worktree: "/tmp/worktrees/fix-the-worker",

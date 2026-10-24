@@ -16,7 +16,7 @@ function telemetry(env) {
 
 // Minimal valid run, overridable field by field.
 function run(env, overrides = {}) {
-  return { projectId: projectIdOf(env, "alpha"), slug: "fix-the-worker", tier: "simple", outcome: "pr_opened", ...overrides };
+  return { projectId: projectIdOf(env, "alpha"), slug: "fix-the-worker", outcome: "pr_opened", ...overrides };
 }
 
 test("a run and its phases are stored with the sequence of the call", (t) => {
@@ -85,32 +85,19 @@ test("a database whose phases table lacks `reason` gains the column on open, and
   assert.deepEqual(columns(openDb(env)).filter((name) => name === "reason"), ["reason"]);
 });
 
-test("the operator tier and the reason of a raise are stored beside the final tier, and the raise is derived from them", (t) => {
-  const env = makeHome(t, "runs-tier-operator");
+test("every run stores the constant legacy tier and leaves the operator tier and the raise reason empty, whatever a replayed spec carries", (t) => {
+  const env = makeHome(t, "runs-tier-deprecated");
   makeProject(t, env, "alpha");
 
-  logPipelineRun(
-    run(env, { tier: "complex", tierOperator: "simple", tierRaiseReason: "  stack trace in the claim path  " }),
-    env,
-  );
-  logPipelineRun(run(env, { tier: "simple", tierOperator: "simple" }), env);
-  logPipelineRun(run(env, { tier: "simple", tierRaiseReason: "   " }), env);
-  logPipelineRun(run(env, { tier: "trivial", tierRaiseReason: "a reason with no raise" }), env);
+  logPipelineRun(run(env), env);
+  logPipelineRun(run(env, { tier: "trivial", tierOperator: "urgent", tierRaiseReason: "stack trace in the claim path" }), env);
 
-  const [raised, matched, bare, reasonOnly] = telemetry(env).runs;
-  assert.deepEqual(
-    { tier: raised.tier, operator: raised.tier_operator, reason: raised.tier_raise_reason },
-    { tier: "complex", operator: "simple", reason: "stack trace in the claim path" },
-  );
-  assert.equal(raised.tier_operator !== null && raised.tier_operator !== raised.tier, true, "a raised run reads as raised");
-  assert.equal(matched.tier_operator !== null && matched.tier_operator !== matched.tier, false, "a run that kept the operator's tier reads as raised");
-  assert.deepEqual({ operator: bare.tier_operator, reason: bare.tier_raise_reason }, { operator: null, reason: null });
-  assert.equal(reasonOnly.tier_raise_reason, "a reason with no raise", "a reason without a raise is stored as given");
-
-  assert.throws(
-    () => logPipelineRun(run(env, { tierOperator: "urgent" }), env),
-    /invalid `tier_operator`.*trivial\|simple\|complex/,
-  );
+  for (const row of telemetry(env).runs) {
+    assert.deepEqual(
+      { tier: row.tier, operator: row.tier_operator, reason: row.tier_raise_reason },
+      { tier: "complex", operator: null, reason: null },
+    );
+  }
 });
 
 test("an outcome outside the contract is refused and stores nothing at all", (t) => {
@@ -130,7 +117,6 @@ test("an outcome outside the contract is refused and stores nothing at all", (t)
 test("every enum names the values it accepts when it refuses one", (t) => {
   const env = makeHome(t, "runs-enums");
   makeProject(t, env, "alpha");
-  assert.throws(() => logPipelineRun(run(env, { tier: "complexo" }), env), /invalid `tier`.*trivial\|simple\|complex/);
   assert.throws(
     () => logPipelineRun(run(env, { gateStop: "triagem" }), env),
     /invalid `gate_stop`.*critique\|triage\|architect\|qa\|verification\|runtime\|user/,

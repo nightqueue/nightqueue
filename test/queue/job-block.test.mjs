@@ -162,14 +162,14 @@ test("two concurrent `run_set` writes and one job block write lose no field", as
 
   const results = await Promise.all([
     childWrite(env, ["set", projectId, SLUG, "type", "bug/error"]),
-    childWrite(env, ["set", projectId, SLUG, "tier", "complex"]),
+    childWrite(env, ["set", projectId, SLUG, "branch", "fix/the-worker"]),
     childWrite(env, ["block", projectId, SLUG, "11", "2026-01-01T00:00:00.000Z"]),
   ]);
 
   assert.deepEqual(results.map((result) => result.status), ["written", "written", "written"]);
   const state = stateAt(join(runDir(projectId, SLUG, env), "state.json"));
   assert.equal(state.type, "bug/error");
-  assert.equal(state.tier, "complex");
+  assert.equal(state.branch, "fix/the-worker");
   assert.equal(state.job.id, 11);
 });
 

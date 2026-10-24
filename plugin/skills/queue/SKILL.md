@@ -51,17 +51,12 @@ runs unattended, with no access to this conversation:
   by `cwd` (absolute) when no project is registered for the current directory.
 - `prompt` is the text of step 3.
 - `title` is always sent: a short outcome sentence in product language (one line, 120 characters at most).
-- `tier` is your reading of the risk: `trivial` (the prompt fully describes the
-  result — docs, copy, config, a rename), `simple` (a local change whose
-  behaviour the prompt defines, one subsystem), `complex` (a design decision,
-  concurrency/security/money, more than one subsystem, or stages). In doubt
-  propose the lower one: the pipeline may raise it with evidence, never lower it.
-- Ask ONCE before the call, naming the project, the job `title` and the tier:
-  `Queue "<title>" for <project> as <tier>? [Y/n]` — or, when step 2 matched no
-  project, `Queue "<title>" for <cwd> (register as <name>) as <tier>? [Y/n]`,
+- Ask ONCE before the call, naming the project and the job `title`:
+  `Queue "<title>" for <project>? [Y/n]` — or, when step 2 matched no
+  project, `Queue "<title>" for <cwd> (register as <name>)? [Y/n]`,
   which is the registration question too and, on yes, sends `register: true`.
-- One question, never more. Yes or an empty answer queues it as proposed; an
-  answer naming another tier queues it with that tier; no queues nothing.
+- One question, never more. Yes or an empty answer queues it as proposed; no
+  queues nothing.
 - There is no `run` parameter: recording the job is all this tool does. A prompt that conditions the work on another job or pull request (`after J-<n>`, `once PR #<n> is merged`, `depends on J-<n>`, `when #<n> lands`) is refused and nothing is queued: fold it into that job as a stage, or make it independent.
 - Never start the job. Only when the user explicitly asks for that one job now
   do you call `queue_run` with its `job_id`; otherwise the whole batch is
@@ -71,7 +66,7 @@ runs unattended, with no access to this conversation:
 
 Three short lines, no more:
 
-- the job ref (`J-<id>`) `queue_add` returned and the `tier` it was queued as;
+- the job ref (`J-<id>`) `queue_add` returned;
 - how many jobs are pending;
 - the one-line hint the tool itself returned in `hint`, reused as it came
   (``queued J-<id> for `<project>` (<pending> pending). 0 runners online -

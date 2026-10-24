@@ -375,32 +375,24 @@ test("queue close takes one id and refuses every job that is not done, and --for
   assert.match(runCli(env, ["queue", "close", String(pending), String(noPr)]).stderr, /unexpected argument/);
 });
 
-test("`queue add --tier` records the tier, `queue status` shows it, and an unknown value queues nothing", (t) => {
+test("`queue add --tier` is refused with the line naming its removal and queues nothing; `queue status` shows no tier", (t) => {
   const env = makeCliHome(t, "cli-add-tier");
   const repo = projectPath(env);
 
-  const added = runCli(env, ["queue", "add", "--tier", "simple", "fix the worker"], { cwd: repo });
-  assert.equal(added.status, 0, added.stderr);
-  assert.equal(getJob(1, env).tier, "simple");
-  assert.equal(JSON.parse(runCli(env, ["queue", "status", "1", "--json"]).stdout).job.tier, "simple");
-  assert.match(runCli(env, ["queue", "status", "1"]).stdout, /tier\s+simple/);
-
-  runCli(env, ["queue", "add", "fix the parser"], { cwd: repo });
-  assert.equal(JSON.parse(runCli(env, ["queue", "status", "2", "--json"]).stdout).job.tier, null);
-  assert.equal(
-    runCli(env, ["queue", "status", "2"]).stdout.includes("tier"),
-    false,
-    "the detail of a job with no tier printed a tier line",
-  );
-
-  const unknown = runCli(env, ["queue", "add", "--tier", "urgent", "fix the uploader"], { cwd: repo });
-  assert.equal(unknown.status, 1);
-  assert.match(unknown.stderr, /invalid `tier`: `urgent`; expected one of trivial\|simple\|complex/);
-  assert.equal(getJob(3, env), null, "the refused tier still queued a job");
+  for (const tier of ["simple", "urgent"]) {
+    const refused = runCli(env, ["queue", "add", "--tier", tier, "fix the worker"], { cwd: repo });
+    assert.equal(refused.status, 1, refused.stdout);
+    assert.match(refused.stderr, /`tier` was removed: every job runs the one \/resolve pipeline \(one model per agent, QA mode chosen by `run check 03`\)/);
+  }
+  assert.equal(getJob(1, env), null, "a refused `--tier` still queued a job");
 
   const dangling = runCli(env, ["queue", "add", "fix the uploader", "--tier"], { cwd: repo });
   assert.equal(dangling.status, 1);
-  assert.equal(getJob(3, env), null, "a `--tier` with no value still queued a job");
+  assert.equal(getJob(1, env), null, "a `--tier` with no value still queued a job");
+
+  runCli(env, ["queue", "add", "fix the parser"], { cwd: repo });
+  assert.equal("tier" in JSON.parse(runCli(env, ["queue", "status", "1", "--json"]).stdout).job, false);
+  assert.equal(runCli(env, ["queue", "status", "1"]).stdout.includes("tier"), false, "the detail of a job printed a tier line");
 });
 
 test("`queue add --title` lists the pending job by that title in the table and in the json, and a blank title is none", (t) => {

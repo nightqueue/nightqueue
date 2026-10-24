@@ -20,7 +20,6 @@ function operatorState({ phases, resumeCount = 0, ...extra } = {}) {
     schemaVersion: 1,
     slug: "fix-the-worker",
     project: "alpha",
-    tier: "simple",
     type: "bug/error",
     resumeCount,
     updatedAt: "2026-09-06T00:00:00Z",

@@ -20,7 +20,7 @@ export const OPERATOR_SUBCOMMANDS = Object.freeze({
     refused: Object.freeze(["session"]),
   }),
   project: Object.freeze({
-    allowed: Object.freeze(["list", "rename", "key", "remove", "integrations"]),
+    allowed: Object.freeze(["list", "rename", "key", "remove", "integrations", "models"]),
     refused: Object.freeze(["add", "move"]),
   }),
 });

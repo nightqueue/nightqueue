@@ -39,7 +39,7 @@ function LiveTimeline({ job, row, stream }: { job: JobDetail; row: Job | undefin
   const now = useNow();
   const started = isoMs(job.attempt_started_at ?? job.started_at);
   const runElapsedMs = job.status === "running" && started !== null ? now - started : null;
-  return <PhaseTimeline job={job} row={row} baseline={stream.meta?.baseline} tier={stream.meta?.tier ?? job.tier} timeline={stream.timeline} runElapsedMs={runElapsedMs} />;
+  return <PhaseTimeline job={job} row={row} timeline={stream.timeline} runElapsedMs={runElapsedMs} />;
 }
 
 // The right column: notice (unless the gate card shows it), pull request, attempts, note, files, memory and run paths.
@@ -80,7 +80,7 @@ function JobScreen({ job, row, runnersOnline }: { job: JobDetail; row: Job | und
   return (
     <>
       <Breadcrumb jobRefText={jobRef(job.id)} />
-      <JobHeader job={job} statusLabel={row?.studio.status_label || job.status} closeState={row?.studio.close_state ?? null} runTier={stream.meta?.tier ?? null} actions={actions} onCancel={() => setCancelling(true)} />
+      <JobHeader job={job} statusLabel={row?.studio.status_label || job.status} closeState={row?.studio.close_state ?? null} actions={actions} onCancel={() => setCancelling(true)} />
       <LiveTimeline job={job} row={row} stream={stream} />
       {job.status === "gate" && <GateCard job={job} runnersOnline={runnersOnline} gatePhase={gatePhase} />}
       <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_360px]">
