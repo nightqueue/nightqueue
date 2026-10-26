@@ -3,10 +3,11 @@ import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { run } from "../src/cli/index.mjs";
+import { reportRows } from "../src/cli/run-report.mjs";
 import { jobLogPath, logsDir, pendingWritesPath, runDir } from "../src/config/paths.mjs";
 import { openDb } from "../src/memory/db.mjs";
 import { addJob } from "../src/memory/jobs.mjs";
-import { saveRunState } from "../src/queue/resume.mjs";
+import { readRunState, saveRunState } from "../src/queue/resume.mjs";
 import { recordOutcome, recordPhaseDone, recordPrUrl, recordRunFields, recordTermination } from "../src/queue/run-state.mjs";
 import { ensureProject, makeHome, makeProject } from "../test-support/memory.mjs";
 import { makeSickHome } from "../test-support/sick-home.mjs";
@@ -62,7 +63,14 @@ const COMPLEX_CLEAN = [
   ["commit", "ok", "committed"],
 ];
 
-test("a legacy fast-track run is read as the one pipeline: the full step table, its never-recorded exploration ⚠️, so it is not happy", async (t) => {
+const HEADER = ["| Step | Agent | Result | Note | Time |", "|-------|--------|--------|------|-------|"];
+
+// The Step cells of the printed table, in order.
+function stepCells(lines) {
+  return lines.filter((line) => line.startsWith("| ") && !line.startsWith("| Step |")).map((line) => line.split(" | ")[0].slice(2));
+}
+
+test("a legacy fast-track run is read as the one pipeline: the full table, its never-recorded exploration ⚠️, so it is not happy", async (t) => {
   const { env, id, run: target } = makeRun(t, "report-simple-legacy");
   saveRunState({ projectId: target.projectId, slug: SLUG, env, state: { tier: "simple", type: "feature/refactor" } });
   recordPhases(target, [
@@ -74,35 +82,40 @@ test("a legacy fast-track run is read as the one pipeline: the full step table, 
 
   const lines = await report(env, id);
 
-  assert.deepEqual(lines.slice(2, 4), ["| Step | Agent | Status | Highlight |", "|-------|--------|--------|----------|"], lines.join("\n"));
+  assert.deepEqual(lines.slice(2, 4), HEADER, lines.join("\n"));
   assert.equal(lines.some((line) => line.startsWith("Verification ")), false, "the compact fast-track line is still printed");
   assert.ok(lines.includes("Happy: no — 2 Exploration ⚠️ not recorded"), lines.join("\n"));
   assert.equal("tier" in JSON.parse((await report(env, id, ["--json"]))[0]), false, "the json report carries a tier");
 });
 
-test("a clean run prints the step table, every step ✅", async (t) => {
+test("a clean run prints one table, every step ✅ with its verdict word, then the Total and the Happy line", async (t) => {
   const { env, id, run: target } = makeRun(t, "report-complex-happy");
   recordPhases(target, COMPLEX_CLEAN);
   recordDelivery(target);
 
   const lines = await report(env, id);
 
-  assert.deepEqual(lines.slice(0, 4), [`## 🗂️ Report — ${SLUG}`, "", "| Step | Agent | Status | Highlight |", "|-------|--------|--------|----------|"]);
-  assert.equal(lines[4], "| 1 Triage | 🔍 Triager | ✅ | confirmed the missing helper |");
-  assert.equal(lines[10], "| 7 Runtime | 📱 Runtime | ✅ | real run confirmed |");
-  assert.equal(lines[11], `| 8 Commit/PR | 🚀 Commit/PR | ✅ | PR ${PR} |`);
-  assert.equal(lines[12], "| 9 Report | 🗂️ Report | ⏳ | this report |");
+  assert.deepEqual(lines.slice(0, 4), [`## 🗂️ Report — ${SLUG}`, "", ...HEADER]);
+  assert.equal(lines[4], "| 1 Triage | 🔍 Triager | ✅ PROCEED | confirmed the missing helper | - |");
+  assert.equal(lines[5], "| 2 Exploration | 🧭 Explore | ✅ OK | 12 files mapped | - |");
+  assert.equal(lines[9], "| 6 Verification | ✅ Verifier | ✅ PASSED | suite green | - |");
+  assert.equal(lines[10], "| 7 Runtime | 📱 Runtime | ✅ CONFIRMED | real run confirmed | - |");
+  assert.equal(lines[11], `| 8 Commit/PR | 🚀 Commit/PR | ✅ OK | PR ${PR} | - |`);
+  assert.equal(lines[12], "| 9 Report | 🗂️ Report | ⏳ | this report | - |");
+  assert.ok(lines.includes("**Total:** ⏱️ -"), lines.join("\n"));
   assert.ok(lines.includes("Happy: yes"), lines.join("\n"));
+  assert.equal(lines.filter((line) => line.startsWith("| Step |")).length, 1, "the report prints more than one table");
+  assert.equal(lines.some((line) => line.includes("{{")), false, "a placeholder reached the output");
   assert.deepEqual(lines.slice(-3), ["## Open items", "", "- none"]);
 });
 
-test("every step is planned: a step never recorded is ⚠️, and the runtime is ⏭️ only after a PASSED verification", async (t) => {
+test("every step is planned: a step never recorded is ⚠️ at its nominal slot, and the runtime is ⏭️ only after a PASSED verification", async (t) => {
   const { env, id, run: target } = makeRun(t, "report-skips", { type: "bug/error" });
   recordPhases(target, [["implementation", "ok", "fixed"], ["verification", "PASSED", "green"]]);
   recordDelivery(target);
 
-  const { steps, happy, reason } = JSON.parse((await report(env, id, ["--json"]))[0]);
-  const icons = Object.fromEntries(steps.map((step) => [step.phase, step.icon]));
+  const { rows, happy, reason } = JSON.parse((await report(env, id, ["--json"]))[0]);
+  const icons = Object.fromEntries(rows.map((row) => [row.phase, row.icon]));
 
   assert.deepEqual(icons, {
     triage: "⚠️",
@@ -115,11 +128,15 @@ test("every step is planned: a step never recorded is ⚠️, and the runtime is
     commit: "✅",
     null: "⏳",
   });
+  assert.deepEqual(
+    rows.map((row) => row.step),
+    ["1 Triage", "2 Exploration", "3 Architecture", "4 Implementation", "5 QA", "6 Verification", "7 Runtime", "8 Commit/PR", "9 Report"],
+  );
   assert.equal(happy, false);
   assert.equal(reason, "1 Triage ⚠️ not recorded");
 });
 
-test("a phase recorded twice is a 🔁 re-run: not happy, with the execution table and its total", async (t) => {
+test("a phase recorded twice is its own 🔁2 row: the run is not happy and the one table carries its total", async (t) => {
   const { env, id, run: target } = makeRun(t, "report-rerun");
   recordPhases(target, [
     ["implementation", "ok", "first try"],
@@ -130,12 +147,140 @@ test("a phase recorded twice is a 🔁 re-run: not happy, with the execution tab
 
   const lines = await report(env, id);
 
-  assert.ok(lines.includes("Happy: no — 4 Implementation 🔁 fixed the failures"), lines.join("\n"));
-  assert.ok(lines.includes("| Step | Agent | Status | Summary | Time |"));
-  assert.ok(lines.includes("| implementation | ⚙️ Coder | ok | first try | - |"));
-  assert.ok(lines.includes("| implementation | ⚙️ Coder | ok | fixed the failures | - |"));
+  assert.ok(lines.includes("| 4 Implementation | ⚙️ Coder | ✅ OK | first try | - |"), lines.join("\n"));
+  assert.ok(lines.includes("| 4 Implementation 🔁2 | ⚙️ Coder | ✅ OK | fixed the failures | - |"), lines.join("\n"));
+  assert.ok(lines.includes("Happy: no — 4 Implementation 🔁2 fixed the failures"), lines.join("\n"));
+  assert.equal(lines.some((line) => line.includes("Summary")), false, "the second table is still printed");
+  assert.equal(lines.filter((line) => line.startsWith("**Total:**")).length, 1, lines.join("\n"));
   assert.ok(lines.includes("**Total:** ⏱️ -"), lines.join("\n"));
   assert.deepEqual(lines.slice(-3), ["## Open items", "", "- none"]);
+});
+
+test("the rows follow the order the run recorded: a re-run sits where it happened, an unrecorded step at its nominal slot", async (t) => {
+  const { env, id, run: target } = makeRun(t, "report-temporal");
+  recordPhases(target, [
+    ["triage", "PROCEED", "confirmed"],
+    ["implementation", "ok", "first try"],
+    ["verification", "FAILED", "lint red"],
+    ["implementation", "ok", "fixed"],
+    ["verification", "PASSED", "green"],
+    ["runtime", "CONFIRMED", "real run"],
+  ]);
+  recordDelivery(target);
+
+  const lines = await report(env, id);
+  const { reason } = JSON.parse((await report(env, id, ["--json"]))[0]);
+
+  assert.deepEqual(stepCells(lines), [
+    "1 Triage",
+    "2 Exploration",
+    "3 Architecture",
+    "4 Implementation",
+    "5 QA",
+    "6 Verification",
+    "4 Implementation 🔁2",
+    "6 Verification 🔁2",
+    "7 Runtime",
+    "8 Commit/PR",
+    "9 Report",
+  ]);
+  assert.ok(lines.includes("| 6 Verification | ✅ Verifier | ❌ FAILED | lint red | - |"), lines.join("\n"));
+  assert.ok(lines.includes("| 6 Verification 🔁2 | ✅ Verifier | ✅ PASSED | green | - |"), lines.join("\n"));
+  assert.equal(reason, "6 Verification ❌ lint red");
+  assert.equal(stepCells(lines).filter((cell) => cell === "5 QA").length, 1);
+});
+
+test("three launches of a phase are 🔁2 then 🔁3", async (t) => {
+  const { env, id, run: target } = makeRun(t, "report-three-launches");
+  recordPhases(target, [
+    ["implementation", "ok", "first"],
+    ["implementation", "ok", "second"],
+    ["implementation", "ok", "third"],
+  ]);
+  recordDelivery(target);
+
+  const cells = stepCells(await report(env, id));
+
+  assert.deepEqual(cells.filter((cell) => cell.startsWith("4 Implementation")), ["4 Implementation", "4 Implementation 🔁2", "4 Implementation 🔁3"]);
+});
+
+test("the commit row reads the delivery the runtime recorded", async (t) => {
+  const cases = [
+    ["pr-opened", (target) => { recordPhases(target, [["commit", "PR opened"]]); recordDelivery(target); }, `| 8 Commit/PR | 🚀 Commit/PR | ✅ PR OPENED | PR ${PR} | - |`],
+    ["committed", (target) => recordPhases(target, [["commit", "ok"]]), "| 8 Commit/PR | 🚀 Commit/PR | ✅ OK | committed, no pull request recorded | - |"],
+    ["no-change", (target) => recordOutcome({ ...target, status: "no_change", notice: "the helper already exists" }), "| 8 Commit/PR | 🚀 Commit/PR | ✅ | no change needed - resolved without a pull request | - |"],
+    ["nothing", () => {}, "| 8 Commit/PR | 🚀 Commit/PR | ⚠️ | no pull request recorded | - |"],
+  ];
+  for (const [name, arrange, expected] of cases) {
+    const { env, id, run: target } = makeRun(t, `report-commit-${name}`);
+    recordPhases(target, COMPLEX_CLEAN.filter(([phase]) => phase !== "commit"));
+    arrange(target);
+    const lines = await report(env, id);
+    assert.ok(lines.includes(expected), `${name}:\n${lines.join("\n")}`);
+  }
+});
+
+test("the reason and the note of an entry share its Note cell", async (t) => {
+  const { env, id, run: target } = makeRun(t, "report-reason-note");
+  recordPhases(target, COMPLEX_CLEAN.filter(([phase]) => phase !== "qa"));
+  recordPhaseDone({ ...target, phase: "qa", verdict: "APPROVED", reason: "GATE: coverage-x", note: "revised", artifact: "qa.md" });
+  recordDelivery(target);
+
+  const lines = await report(env, id);
+
+  assert.ok(lines.includes("| 5 QA | 🛡️ QA-Guardian | ✅ APPROVED | GATE: coverage-x — revised | - |"), lines.join("\n"));
+});
+
+test("the Time of a row is the measurement of its own launch: the k-th measured lane of a phase meets its k-th recorded row", () => {
+  const state = {
+    phases: [
+      { phase: "implementation", verdict: "ok" },
+      { phase: "verification", verdict: "FAILED" },
+      { phase: "implementation", verdict: "ok" },
+    ],
+  };
+  const measured = [
+    { phase: "implementation", durationS: 41 },
+    { phase: "verification", durationS: null },
+    { phase: "implementation", durationS: 30 },
+  ];
+
+  const rows = reportRows(state, measured).filter((row) => row.launch > 0);
+
+  assert.deepEqual(rows.map((row) => [row.phase, row.launch, row.durationS]), [["implementation", 1, 41], ["verification", 1, null], ["implementation", 2, 30]]);
+});
+
+test("a malformed entry in state.json is skipped, never a crash: the launches count only the phases named", async (t) => {
+  const { env, id, run: target } = makeRun(t, "report-malformed");
+  saveRunState({
+    projectId: target.projectId,
+    slug: SLUG,
+    env,
+    state: {
+      type: "feature/refactor",
+      phases: [{ phase: "triage", verdict: "PROCEED", note: "first" }, null, { verdict: "x" }, { phase: "triage", verdict: "PROCEED", note: "again" }],
+    },
+  });
+  recordDelivery(target);
+
+  const cells = stepCells(await report(env, id));
+
+  assert.deepEqual(cells.slice(0, 2), ["1 Triage", "1 Triage 🔁2"]);
+});
+
+test("a phase the steps do not know is a row at its temporal place, with no agent", async (t) => {
+  const { env, id, run: target } = makeRun(t, "report-unknown-phase");
+  recordPhases(target, COMPLEX_CLEAN);
+  // `recordPhaseDone` refuses a phase outside the pipeline, so the entry lands in state.json the way a hand edit would.
+  const state = readRunState({ projectId: target.projectId, slug: SLUG, env });
+  saveRunState({ projectId: target.projectId, slug: SLUG, env, state: { ...state, phases: [...state.phases, { phase: "reflect", verdict: "ok", note: "L12, M3", at: new Date().toISOString() }] } });
+  recordDelivery(target);
+
+  const lines = await report(env, id);
+  const cells = stepCells(lines);
+
+  assert.ok(lines.includes("| reflect | - | ✅ OK | L12, M3 | - |"), lines.join("\n"));
+  assert.deepEqual(cells.slice(cells.indexOf("8 Commit/PR")), ["8 Commit/PR", "reflect", "9 Report"]);
 });
 
 test("every failing gate of the fail-safe rule makes the run not happy", async (t) => {
@@ -174,8 +319,9 @@ test("a PASSED run that recorded no runtime lane skips 7 as a static change", as
   recordPhases(target, COMPLEX_CLEAN.filter(([phase]) => phase !== "runtime"));
   recordDelivery(target);
   const lines = await report(env, id);
-  assert.ok(lines.includes("| 7 Runtime | 📱 Runtime | ⏭️ | purely static change |"), lines.join("\n"));
+  assert.ok(lines.includes("| 7 Runtime | 📱 Runtime | ⏭️ | purely static change | - |"), lines.join("\n"));
   assert.ok(lines.includes("Happy: yes"), lines.join("\n"));
+  assert.ok(lines.some((line) => line.startsWith("**Total:** ⏱️ ")), lines.join("\n"));
   assert.deepEqual(lines.slice(-3), ["## Open items", "", "- none"]);
 });
 
@@ -187,10 +333,9 @@ test("a note with `|` or a line break stays inside its table cell and on the Hap
 
   const lines = await report(env, id);
 
-  assert.ok(lines.includes("| 5 QA | 🛡️ QA-Guardian | ✅ | 3 risks \\| 1 red |"), lines.join("\n"));
-  assert.ok(lines.includes("| 4 Implementation | ⚙️ Coder | 🔁 | a \\| b second line |"), lines.join("\n"));
-  assert.ok(lines.includes("Happy: no — 4 Implementation 🔁 a \\| b second line"), lines.join("\n"));
-  assert.ok(lines.includes("| implementation | ⚙️ Coder | ok | a \\| b second line | - |"), lines.join("\n"));
+  assert.ok(lines.includes("| 5 QA | 🛡️ QA-Guardian | ✅ APPROVED | 3 risks \\| 1 red | - |"), lines.join("\n"));
+  assert.ok(lines.includes("| 4 Implementation 🔁2 | ⚙️ Coder | ✅ OK | a \\| b second line | - |"), lines.join("\n"));
+  assert.ok(lines.includes("Happy: no — 4 Implementation 🔁2 a \\| b second line"), lines.join("\n"));
   assert.equal(lines.includes("second line"), false, lines.join("\n"));
 });
 
@@ -199,6 +344,17 @@ test("a run with no delivery recorded is not happy", async (t) => {
   recordPhases(target, COMPLEX_CLEAN.filter(([phase]) => phase !== "commit"));
   const lines = await report(env, id);
   assert.ok(lines.includes("Happy: no — 8 Commit/PR ⚠️ no pull request recorded"), lines.join("\n"));
+});
+
+test("the json report carries the rows and the verdict of the one table, nothing of the old two", async (t) => {
+  const { env, id, run: target } = makeRun(t, "report-json-keys");
+  recordPhases(target, COMPLEX_CLEAN);
+  recordDelivery(target);
+
+  const json = JSON.parse((await report(env, id, ["--json"]))[0]);
+
+  assert.deepEqual(Object.keys(json), ["slug", "rows", "happy", "reason", "durationS", "openItems", "recorded"]);
+  assert.deepEqual(Object.keys(json.rows[0]), ["phase", "step", "agent", "launch", "icon", "word", "note", "durationS"]);
 });
 
 test("the report carries no lesson audit, even when the stream has `lesson_save` calls: Phase 10's reflector reports the saves", async (t) => {

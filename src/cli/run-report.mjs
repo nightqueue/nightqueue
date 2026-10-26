@@ -29,6 +29,7 @@ const STEPS = [
 
 const OPEN_CHECKS = ["05", "07"];
 const DEDICATED_TICKET = "dedicated ticket: yes";
+const EMPTY = durationCell(null);
 
 // The recorded entries of one phase in state.json, in the order they were recorded.
 function entriesOf(state, phase) {
@@ -42,31 +43,88 @@ function passedWithoutRuntimeDebt(state) {
   return last !== undefined && verdictWord(last.verdict) === "PASSED";
 }
 
-// The commit step reads the delivery the runtime recorded: the pull request, not a verdict.
-function commitStep(state) {
+// The delivery fact the runtime recorded: the pull request, or the conclusion that none was needed; null when neither.
+function deliveryNote(state) {
   const outcome = isStateObject(state.outcome) ? state.outcome : {};
-  if (outcome.status === "done" && typeof outcome.prUrl === "string") return { icon: "✅", highlight: `PR ${outcome.prUrl}` };
-  if (outcome.status === "no_change") return { icon: "✅", highlight: "no change needed - resolved without a pull request" };
-  if (entriesOf(state, "commit").length > 0) return { icon: "✅", highlight: "committed, no pull request recorded" };
-  return { icon: "⚠️", highlight: "no pull request recorded" };
+  if (outcome.status === "done" && typeof outcome.prUrl === "string") return `PR ${outcome.prUrl}`;
+  if (outcome.status === "no_change") return "no change needed - resolved without a pull request";
+  return null;
 }
 
-// The status and the highlight of one step, derived from what the run recorded.
-function stepStatus(step, { state }) {
-  if (step.phase === null) return { icon: "⏳", highlight: "this report" };
-  if (step.phase === "commit") return commitStep(state);
-  const entries = entriesOf(state, step.phase);
-  const last = entries.at(-1);
-  const note = typeof last?.note === "string" ? last.note.trim() : "";
-  if (entries.length === 0 && step.phase === "runtime" && passedWithoutRuntimeDebt(state)) return { icon: "⏭️", highlight: "purely static change" };
-  if (entries.length === 0) return { icon: "⚠️", highlight: "not recorded" };
-  if (entries.length > 1) return { icon: "🔁", highlight: note || `recorded ${entries.length} times` };
-  return { icon: verdictIcon(last.verdict), highlight: note || (typeof last.verdict === "string" ? last.verdict.trim() : "") };
+// The reason and the note one entry recorded, on one cell; empty when it recorded neither.
+function noteOf(entry) {
+  return [entry.reason, entry.note]
+    .map((text) => (typeof text === "string" ? text.trim() : ""))
+    .filter((text) => text !== "")
+    .join(" — ");
 }
 
-// One row per step of the pipeline, each with its icon and highlight; every run executes every step.
-function stepRows(state) {
-  return STEPS.map((step) => ({ ...step, ...stepStatus(step, { state }) }));
+// The result and the note of one recorded execution; a commit entry exists only once the runtime committed, so it reads the delivery.
+function resultOf(phase, entry, state) {
+  const word = verdictWord(entry.verdict);
+  if (phase !== "commit") return { icon: verdictIcon(entry.verdict), word, note: noteOf(entry) };
+  return { icon: "✅", word, note: deliveryNote(state) ?? (noteOf(entry) || "committed, no pull request recorded") };
+}
+
+// The time the runtime measured for the n-th launch of a phase, or null when it measured none.
+function measuredDuration(measured, phase, launch) {
+  const lanes = Array.isArray(measured) ? measured : [];
+  const lane = lanes.filter((row) => row?.phase === phase)[launch - 1];
+  return lane?.durationS ?? null;
+}
+
+// One row per recorded execution, in the order state.json recorded them; an entry without a phase is skipped.
+function recordedRows(state, measured) {
+  const phases = Array.isArray(state.phases) ? state.phases : [];
+  const launches = new Map();
+  const rows = [];
+  for (const entry of phases) {
+    const phase = typeof entry?.phase === "string" ? entry.phase : "";
+    if (phase.trim() === "") continue;
+    const launch = (launches.get(phase) ?? 0) + 1;
+    launches.set(phase, launch);
+    const step = STEPS.find((candidate) => candidate.phase === phase);
+    rows.push({ phase, step: step?.step ?? phase, agent: step?.agent ?? EMPTY, launch, ...resultOf(phase, entry, state), durationS: measuredDuration(measured, phase, launch) });
+  }
+  return rows;
+}
+
+// The icon and the note of a planned step the run never recorded, read from what it did record around it.
+function missingStatus(step, state) {
+  if (step.phase === null) return { icon: "⏳", note: "this report" };
+  if (step.phase === "commit") {
+    const note = deliveryNote(state);
+    return note === null ? { icon: "⚠️", note: "no pull request recorded" } : { icon: "✅", note };
+  }
+  if (step.phase === "runtime" && passedWithoutRuntimeDebt(state)) return { icon: "⏭️", note: "purely static change" };
+  return { icon: "⚠️", note: "not recorded" };
+}
+
+// The single row of a planned step with no record.
+function missingRow(step, state) {
+  const { icon, note } = missingStatus(step, state);
+  return { phase: step.phase, step: step.step, agent: step.agent, launch: 0, icon, word: "", note, durationS: null };
+}
+
+// The rows of the report: every recorded execution in temporal order, each unrecorded step once at its nominal slot.
+export function reportRows(state, measured) {
+  const recorded = recordedRows(state, measured);
+  const has = new Set(recorded.map((row) => row.phase));
+  const rows = [];
+  let next = 0;
+  const fill = (upTo) => {
+    for (; next < upTo; next++) if (!has.has(STEPS[next].phase)) rows.push(missingRow(STEPS[next], state));
+  };
+  for (const row of recorded) {
+    const at = STEPS.findIndex((step) => step.phase === row.phase);
+    if (at >= 0) {
+      fill(at);
+      next = Math.max(next, at + 1);
+    }
+    rows.push(row);
+  }
+  fill(STEPS.length);
+  return rows;
 }
 
 // One file of the run directory, or an empty text when the run wrote none.
@@ -78,13 +136,25 @@ function readRunFile(runDir, file) {
   }
 }
 
+// The Step cell of one row: its label, suffixed with the launch number of a re-run.
+function stepCell(row) {
+  return row.launch > 1 ? `${row.step} 🔁${row.launch}` : row.step;
+}
+
+// What a row says about its gate: the note it recorded, else its verdict word.
+function gateDetail(row) {
+  return row.note || row.word;
+}
+
 // The first gate that keeps the run from being happy, or null when every gate is positively clean.
-function firstFailingGate(state, steps, plan) {
+function firstFailingGate(state, rows, plan) {
   if (isStateObject(state.termination)) return `terminated at ${state.termination.phase}: ${state.termination.reason}`;
-  for (const icon of ["❌", "🔁", "⚠️"]) {
-    const step = steps.find((row) => row.icon === icon);
-    if (step) return `${step.step} ${icon} ${step.highlight}`.trim();
-  }
+  const failed = rows.find((row) => row.icon === "❌");
+  if (failed) return `${failed.step} ❌ ${gateDetail(failed)}`;
+  const rerun = rows.find((row) => row.launch > 1);
+  if (rerun) return `${stepCell(rerun)} ${gateDetail(rerun)}`;
+  const warned = rows.find((row) => row.icon === "⚠️");
+  if (warned) return `${warned.step} ⚠️ ${gateDetail(warned)}`;
   if (CONFIRMATION_HEADING.test(plan)) return "the plan carries ## Requires user confirmation";
   const status = isStateObject(state.outcome) ? state.outcome.status : null;
   return status === "done" ? null : `the run recorded no delivery (outcome ${status ?? "none"})`;
@@ -98,25 +168,14 @@ function cellText(value) {
     .trim();
 }
 
-// The rows of the step table of a run.
-function stepTableRows(steps) {
-  return steps.map((row) => `| ${row.step} | ${row.agent} | ${row.icon} | ${cellText(row.highlight)} |`).join("\n");
+// The line of the report table one row prints.
+function tableRow(row) {
+  return `| ${stepCell(row)} | ${row.agent} | ${cellText(`${row.icon} ${row.word}`.trim())} | ${cellText(row.note) || EMPTY} | ${durationCell(row.durationS)} |`;
 }
 
-// The agent of a recorded phase, as the execution table names it.
-function agentOf(phase) {
-  return STEPS.find((step) => step.phase === phase)?.agent ?? phase;
-}
-
-// The execution rows of the run: every recorded phase with its note and what the runtime measured for it.
-function executionRows(state, log) {
-  const phases = Array.isArray(state.phases) ? state.phases : [];
-  return phaseRows(state, log).map((row, index) => ({ ...row, note: typeof phases[index]?.note === "string" ? phases[index].note.trim() : "" }));
-}
-
-// The rows of the execution table of an unhappy run: one per recorded phase with the time the runtime measured.
-function executionTableRows(rows) {
-  return rows.map((row) => `| ${row.phase} | ${agentOf(row.phase)} | ${row.status} | ${cellText(row.note) || "-"} | ${durationCell(row.durationS)} |`).join("\n");
+// The rows of the report table of a run.
+function tableRows(rows) {
+  return rows.map(tableRow).join("\n");
 }
 
 // A text collapsed onto one line.
@@ -204,14 +263,13 @@ function openItemLines(items) {
 
 // Everything the report says about the run, before it is printed.
 function buildReport(run, state, log) {
-  const steps = stepRows(state);
-  const reason = firstFailingGate(state, steps, readRunFile(run.runDir, "03-plan.md"));
+  const rows = reportRows(state, phaseRows(state, log));
+  const reason = firstFailingGate(state, rows, readRunFile(run.runDir, "03-plan.md"));
   return {
     slug: run.slug,
-    steps,
+    rows,
     happy: reason === null,
     reason,
-    execution: executionRows(state, log),
     durationS: runDurationS(log),
   };
 }
@@ -220,10 +278,8 @@ function buildReport(run, state, log) {
 function reportValues(report) {
   return {
     SLUG: report.slug,
-    STEP_ROWS: stepTableRows(report.steps),
-    HAPPY: report.happy,
+    ROWS: tableRows(report.rows),
     HAPPY_LINE: report.happy ? "Happy: yes" : `Happy: no — ${cellText(report.reason)}`,
-    EXECUTION_ROWS: executionTableRows(report.execution),
     TOTAL: durationCell(report.durationS),
     OPEN_ITEMS: openItemLines(report.openItems),
   };

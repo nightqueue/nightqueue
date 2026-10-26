@@ -34,8 +34,8 @@ the runtime does all of it: never apply this file there.
 
 - **Before any external action, show the user and wait for confirmation:** the branch/worktree
   name, the complete commit message, `git diff --stat` and a status line (e.g. "QA ✅ ·
-  Verification ✅ · Runtime ✅"). Do not repeat the execution table here — it only reappears in
-  the Phase 9 report if the run is not happy. Ask whether to go ahead with push + PR.
+  Verification ✅ · Runtime ✅"). Do not repeat the report table here — `run report` prints it
+  in Phase 9. Ask whether to go ahead with push + PR.
 - **Close the worktree immediately after the PR is created** (or after confirming that the
   commit stayed local): `git worktree remove <path>` from the main checkout (Claude Code:
   `ExitWorktree` with `action: "delete"`). The branch is already on the remote via push and the
