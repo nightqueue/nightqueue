@@ -23,7 +23,7 @@ const PIPELINE_TERMS = [
   "03-plan",
   "04-implementation",
   "05-qa",
-  "05a-qa-analyst",
+  "07-runtime",
   "06-verification",
   "ARTIFACT_PATH",
   "orchestrator",

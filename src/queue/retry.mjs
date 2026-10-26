@@ -3,7 +3,7 @@ import { callerJobId } from "../config/job-home.mjs";
 import { ghPrViewAsync } from "../host/gh.mjs";
 import { openStore } from "../store/open.mjs";
 import { flattenPrState } from "./pr-state.mjs";
-import { clearRunTerminal, discardRunDir } from "./resume.mjs";
+import { clearRunTerminal, discardRunDir, PRE_RENUMBERING_REFUSAL, preRenumberingArtifact } from "./resume.mjs";
 import { clearTermination } from "./run-state.mjs";
 import { jobRef } from "../memory/refs.mjs";
 
@@ -41,12 +41,18 @@ async function refuseFinishedJob(id, job, { env, prStateImpl }) {
   }
 }
 
+// Refuses to resume a run directory written under the old phase numbering, before anything is written; only a fresh retry starts it over.
+function refusePreRenumberingRun(job, env) {
+  if (preRenumberingArtifact({ projectId: job?.project_id, slug: job?.slug, env }) !== null) throw new UserError(PRE_RENUMBERING_REFUSAL);
+}
+
 // Retries one job (a gate's answer also lifts the runtime's termination of that attempt) and, only with `fresh`, drops the run directory of the previous attempt; the order is fixed, so a refused retry never deletes anything.
 export async function applyRetry({ id, note, fresh = false, env = process.env, prStateImpl = ghPrViewAsync } = {}) {
   requireOwnJob(id, env);
   const store = openStore(env);
   const before = await store.jobs.getJob(id);
   await refuseFinishedJob(id, before, { env, prStateImpl });
+  if (fresh !== true) refusePreRenumberingRun(before, env);
   const job = await store.jobs.retryJob(id, { note, fresh });
   const run = { projectId: before?.project_id, slug: before?.slug, env };
   if (fresh !== true) {

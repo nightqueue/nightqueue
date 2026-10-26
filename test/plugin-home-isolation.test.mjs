@@ -45,7 +45,7 @@ test("the resolve skill tells the pipeline to verify against a throwaway home an
     RESOLVE.includes("Manual acceptance never runs against the operator's own home"),
     "the resolve skill never states the rule as a rule",
   );
-  assert.ok(RESOLVE.includes("isolation rule of Phase 6"), "Phase 6.5 does not point at the isolation rule of Phase 6");
+  assert.ok(RESOLVE.includes("isolation rule of Phase 6"), "Phase 7 does not point at the isolation rule of Phase 6");
 });
 
 test("the verifier agent carries the same rule as its own step, before proving by execution", () => {

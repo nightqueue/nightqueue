@@ -269,7 +269,7 @@ function j125Log() {
     ...lane({ id: "q2", agent: "qa-guardian", at: 740, durationS: 40, iso: ATTEMPT_2, tokens: 150 }),
     ...lane({ id: "v2", agent: "verifier", at: 800, durationS: 80, iso: ATTEMPT_2, tokens: 250 }),
     ...lane({ id: "c3", agent: "coder", at: 900, durationS: 50, iso: ATTEMPT_2, tokens: 90 }),
-    ...lane({ id: "rt", agent: "verifier", at: 952, durationS: 6, iso: ATTEMPT_2, tokens: 120, prompt: "Phase 6.5.\nMode: RUNTIME\nRun it for real." }),
+    ...lane({ id: "rt", agent: "verifier", at: 952, durationS: 6, iso: ATTEMPT_2, tokens: 120, prompt: "Phase 7.\nMode: RUNTIME\nRun it for real." }),
     assistantEvent("all green, publishing", { messageId: "msg_o2", usage: { tokensIn: 50 }, timestamp: secondsIntoAttempt(960, ATTEMPT_2) }),
     orchestratorCommand("toolu_pub", "nightqueue run publish --message-file m.txt", 970, 70),
     assistantEvent("pull request open", { messageId: "msg_o3", usage: { tokensIn: 30 }, timestamp: secondsIntoAttempt(990, ATTEMPT_2) }),

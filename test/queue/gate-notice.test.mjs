@@ -32,7 +32,7 @@ function makeRunDir(t) {
   const dir = mkdtempSync(join(tmpdir(), "nightqueue-gate-notice-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   writeFileSync(join(dir, "03-plan.md"), PLAN);
-  writeFileSync(join(dir, "06-runtime.md"), RUNTIME);
+  writeFileSync(join(dir, "07-runtime.md"), RUNTIME);
   return dir;
 }
 
@@ -61,7 +61,7 @@ test("another section is nested under the confirmation heading, followed by the 
 });
 
 test("a round artifact is read on its last round", (t) => {
-  const notice = composeGateNotice({ runDir: makeRunDir(t), jobId: 7, fromArtifact: { file: "06-runtime.md", section: "## Runtime verdict" } });
+  const notice = composeGateNotice({ runDir: makeRunDir(t), jobId: 7, fromArtifact: { file: "07-runtime.md", section: "## Runtime verdict" } });
   assert.equal(notice, `## Requires user confirmation\n\n## Runtime verdict\nNEEDS-DEVICE\n1. open the app\n\n${ANSWER_LINE}`);
 });
 

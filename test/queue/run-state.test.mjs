@@ -106,17 +106,17 @@ test("a plain `run_phase_done` repeating the runtime's last entry merges into it
 test("a check memo replaces the check's previous one, and only a memo that did not pass becomes the run's last failure", (t) => {
   const env = makeHome(t, "run-state-check-memo");
   const failing = { line: "GATE: runtime-not-met — x", ok: false, completed: false, digest: "a" };
-  assert.equal(recordCheck({ ...RUN, check: "06.5", memo: failing, env }).phase, null);
+  assert.equal(recordCheck({ ...RUN, check: "07", memo: failing, env }).phase, null);
   const passing = { line: "OK", ok: true, completed: true, digest: "b" };
-  const written = recordCheck({ ...RUN, check: "06.5", memo: passing, done: { phase: "runtime", artifact: "06-runtime.md", verdict: "CONFIRMED" }, env });
+  const written = recordCheck({ ...RUN, check: "07", memo: passing, done: { phase: "runtime", artifact: "07-runtime.md", verdict: "CONFIRMED" }, env });
   assert.deepEqual(written.phase, { status: "appended", reason: "GATE: runtime-not-met — x" });
   const state = readState(env);
-  assert.deepEqual([state.checks["06.5"].line, state.checks["06.5"].ok, state.checks.lastFailure.line], ["OK", true, "GATE: runtime-not-met — x"]);
+  assert.deepEqual([state.checks["07"].line, state.checks["07"].ok, state.checks.lastFailure.line], ["OK", true, "GATE: runtime-not-met — x"]);
   assert.equal(state.phases[0].by, "runtime");
-  const again = recordCheck({ ...RUN, check: "06.5", memo: passing, done: { phase: "runtime", artifact: "06-runtime.md", verdict: "CONFIRMED" }, env });
+  const again = recordCheck({ ...RUN, check: "07", memo: passing, done: { phase: "runtime", artifact: "07-runtime.md", verdict: "CONFIRMED" }, env });
   assert.deepEqual(again.phase, { status: "already", reason: null });
   assert.equal(readState(env).phases.length, 1);
-  assert.equal(recordCheck({ ...RUN, check: "06.5", memo: passing, done: { phase: "nope" }, env }).status, "kept");
+  assert.equal(recordCheck({ ...RUN, check: "07", memo: passing, done: { phase: "nope" }, env }).status, "kept");
 });
 
 test("an unknown phase is refused with the accepted list and writes nothing", (t) => {
@@ -244,7 +244,7 @@ test("run fields refuse an unknown field and a value outside the enum, and recor
   assert.match(recordRunFields({ ...RUN, fields: { type: "chore" }, env }).reason, /unknown type `chore`; accepted: bug\/error, feature\/refactor/);
   assert.match(recordRunFields({ ...RUN, fields: { branch: "  " }, env }).reason, /field `branch` cannot be empty/);
   assert.match(recordRunFields({ ...RUN, fields: { qaStageA: { verdict: "BREAKS-FOUND" } }, env }).reason, /field `qaStageA` needs the `artifact`/);
-  assert.match(recordRunFields({ ...RUN, fields: { qaStageA: "05a-qa-analyst.md" }, env }).reason, /field `qaStageA` needs the `artifact`/);
+  assert.match(recordRunFields({ ...RUN, fields: { qaStageA: "05-qa.md" }, env }).reason, /field `qaStageA` needs the `artifact`/);
   assert.equal(existsSync(join(runDir(RUN.projectId, RUN.slug, env), "state.json")), false, "a refused record created the file");
 
   assert.equal(recordRunFields({ ...RUN, fields: { type: "bug/error", branch: "fix/the-worker" }, env }).status, "written");
@@ -292,18 +292,19 @@ test("the writers never lose each other's fields, and the resume decision reads 
   });
 });
 
-test("the QA stage A marker lives outside `phases` and makes the resume re-enter at stage B", (t) => {
+test("the QA stage A marker lives outside `phases` and makes the resume re-enter at stage B", async (t) => {
   const env = makeHome(t, "run-state-qa-stage-a");
   for (const phase of ["triage", "explore", "architecture", "implementation"]) {
     recordPhaseDone({ ...RUN, phase, artifact: `0-${phase}.md`, verdict: "ok", env });
   }
   assert.equal(decideResume({ state: readState(env) }).fromStage, null, "the stage was offered before the marker existed");
+  await new Promise((done) => setTimeout(done, 5));
 
-  const marker = { artifact: " 05a-qa-analyst.md ", verdict: "BREAKS-FOUND" };
+  const marker = { artifact: " 05-qa.md ", verdict: "BREAKS-FOUND" };
   assert.equal(recordRunFields({ ...RUN, fields: { qaStageA: marker }, env }).status, "written");
 
   const state = readState(env);
-  assert.equal(state.qaStageA.artifact, "05a-qa-analyst.md");
+  assert.equal(state.qaStageA.artifact, "05-qa.md");
   assert.equal(state.qaStageA.verdict, "BREAKS-FOUND");
   assert.match(state.qaStageA.at, UTC_ISO);
   assert.deepEqual(state.phases.map((entry) => entry.phase), ["triage", "explore", "architecture", "implementation"]);

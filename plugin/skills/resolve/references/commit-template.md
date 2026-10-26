@@ -1,6 +1,6 @@
 # Commit template
 
-Standard for the commit message that `/nightqueue:resolve` writes in Phase 7 and hands
+Standard for the commit message that `/nightqueue:resolve` writes in Phase 8 and hands
 to `nightqueue run publish --message-file`. The message is filled with what the run
 really did. Nothing is invented.
 

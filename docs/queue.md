@@ -576,7 +576,9 @@ only where the notice holds exactly the line its checklist recorded.
 
 A `gate` job the preflight refused to start also carries a reason, in its own
 `blocked_code` column (a job whose worktree the runtime could not place gates the same way,
-with `worktree-failed`) - it answers a different question than `status`: not where
+with `worktree-failed`, and a job whose run directory was written under the old phase
+numbering with `pre-renumbering-run`, whose notice answers with `queue retry <ref> --fresh`
+because a plain retry is refused) - it answers a different question than `status`: not where
 the job is, but why the runner never started it, and it is what lets `queue retry`
 send that job back without a `--note`. See **What the runner requires of the
 checkout** below for what sets and clears it.
@@ -1006,7 +1008,14 @@ Run `git status --short` in the worktree first.
 
 `Branch`, `Worktree` and `From stage` read `none` when the run recorded none;
 `From stage: qa-stage-b` is the one sub-phase with a marker of its own, so a run
-that died in the QA does not pay the analyst twice. A run the decision refuses -
+that died in the QA does not pay the analyst twice: it is given only while the stage A marker
+names `05-qa.md` and is newer than the last `implementation` record, so a re-implemented run
+never re-enters with the analyst round of its old implementation. A run that started before
+the phases became whole numbers is never resumed, on any path: a retry is refused with
+``run started before the renumbering; retry with `fresh` `` (nothing written), the runner
+gates a claimed job (a swept or re-queued one included) as `pre-renumbering-run` before it
+writes anything or spawns, and `run start` on such a run directory refuses with the same
+line; `fresh` starts it clean. A run the decision refuses -
 no state, a deliberate termination, a resume budget already spent - gets no block
 at all and starts clean, and the runtime counts the resume in `state.json` itself:
 the pipeline never touches that file. With `queue.resumeSession: true` in

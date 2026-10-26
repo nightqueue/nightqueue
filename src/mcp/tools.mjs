@@ -937,7 +937,7 @@ function toolDefinitions(env, state) {
           "The complete prompt of one /resolve subagent for THIS run, rendered by the runtime from the plugin's templates: the handoff contract, the model of its agent (the default or the project's override) and the context block. " +
           "`triager` renders from the request: inside a job the job's own prompt (plus the operator's gate answer), outside a job the `request` argument, required there. Every other target reads the Brief of `<RUN_DIR>/00-brief.md`, written by `nightqueue run check 01`, and refuses `request`. " +
           "Pass `prompt` to the `Agent` tool verbatim, with the answered `subagent_type` and `model`, then gate the answered `artifact` with `nightqueue run check <check>`. " +
-          "`reflector` (Phase 9) renders with no artifact and `check` null: launch it and gate nothing. " +
+          "`reflector` (Phase 10) renders with no artifact and `check` null: launch it and gate nothing. " +
           "`coder` and `verifier` render the fast-track prompt on trivial/simple; `note` is relaunch context (a fix loop, a re-architect, a re-triage), `raw_evidence` is accepted and ignored, `group` the hypotheses of one prover. " +
           "Inside a job the run is resolved from the job's own row — passing `project` or `slug` there is refused; outside a job both are required.",
         inputSchema: {

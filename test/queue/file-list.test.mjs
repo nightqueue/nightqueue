@@ -32,6 +32,12 @@ test("recordedFiles reads the list from the prose only, skipping HTML comments a
   assert.deepEqual(recordedFiles("no list here"), []);
 });
 
+test("recordedFiles reads the one markdown scanner: a list after a `<!--` that never closes is read, a commented or fenced one is not", () => {
+  assert.deepEqual(recordedFiles("note <!-- never closed\n\n## Modified files\n- src/after.mjs\n"), ["src/after.mjs"]);
+  assert.deepEqual(recordedFiles("<!--\n## Modified files\n- src/hidden.mjs\n-->\n"), []);
+  assert.deepEqual(recordedFiles("```md\n## Modified files\n- src/fenced.mjs\n```js\n- src/still-fenced.mjs\n"), []);
+});
+
 test("listedFiles, the parser `run commit` stages from, keeps its behavior after the move", () => {
   assert.deepEqual(listedFiles("## Modified files\n- `src/a.mjs`\n* src/b.mjs\nsome prose here\n## Done\nsrc/c.mjs"), ["src/a.mjs", "src/b.mjs"]);
 });

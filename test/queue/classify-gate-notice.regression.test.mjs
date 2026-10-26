@@ -77,13 +77,13 @@ function longPlanRun(t) {
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   const points = Array.from({ length: 12 }, (_, i) => `- C${i + 1}: ${"decision detail ".repeat(5)}`).join("\n");
   writeFileSync(join(dir, "03-plan.md"), `# Plan\n\n## Requires user confirmation\n\n${points}\n\n## Next\n\nx\n`);
-  writeFileSync(join(dir, "06-runtime.md"), "## Runtime verdict\n\nNEEDS-DEVICE: open the app on a phone and tap the button once.\n");
+  writeFileSync(join(dir, "07-runtime.md"), "## Runtime verdict\n\nNEEDS-DEVICE: open the app on a phone and tap the button once.\n");
   return { dir, planPath: join(dir, "03-plan.md") };
 }
 
 test("a recorded notice nesting another artifact's section is a gate even when the plan's section is far longer", (t) => {
   const { dir, planPath } = longPlanRun(t);
-  const notice = composeGateNotice({ runDir: dir, jobId: 7, fromArtifact: { file: "06-runtime.md", section: "## Runtime verdict" } });
+  const notice = composeGateNotice({ runDir: dir, jobId: 7, fromArtifact: { file: "07-runtime.md", section: "## Runtime verdict" } });
   assert.ok([...confirmationSection(readFileSync(planPath, "utf8"))].length - [...notice].length > 200, "setup: the notice is 200+ cp shorter");
 
   const log = toNdjson([systemInitEvent(), resultEvent({ text: "Paused at the device gate." })]);

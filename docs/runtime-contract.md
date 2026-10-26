@@ -45,9 +45,11 @@ What a runtime has to provide, and what it can rely on:
   `runs/<project_id>/` once (a `runs/.by-id` marker records it, and a run
   already present under the id is never overwritten). The runtime creates the
   directory before the session starts.
-- Artifact names, in order: `00-main-measure.md` (post-merge resume only),
-  `01-triage.md`, `02-explore.md`, `03-plan.md`, `04-implementation.md`,
-  `05a-qa-analyst.md`, `05-qa.md`, `06-verification.md`, `06-runtime.md`.
+- Artifact names, in order: `00-main-measure.md` (Phase 0 step 3 only, the post-merge
+  measure), `01-triage.md`, `02-explore.md`, `03-plan.md`, `04-implementation.md`,
+  `05-qa.md`, `06-verification.md`, `07-runtime.md`. The phases are whole numbers, one
+  artifact per phase: the QA analyst, every prover and the consolidation all write rounds of
+  `05-qa.md`.
 - `state.json` in the same directory carries the resumable state, and **the runtime
   is its only writer**: every key goes through `src/queue/run-state.mjs`, which the
   MCP tools `run_phase_done`, `run_terminate`, `run_skip`, `run_outcome` and `run_set`, the
@@ -99,7 +101,9 @@ What a runtime has to provide, and what it can rely on:
     (`run_set` does not take it).
   - `type`, `branch`, `worktree` and
     `qaStageA{artifact, verdict?, at}`: `run_set`; `nightqueue run check 01` also records
-    the `type` (the Brief's, else derived from the triage when missing) and `run check 05a` the `qaStageA` marker; the runner also records
+    the `type` (the Brief's, else derived from the triage when missing) and `run check 05 --stage analyst` the `qaStageA` marker
+    (artifact `05-qa.md`); a resume re-enters at stage B only while that marker is newer than the
+    last `implementation` record; the runner also records
     `type` from the `TYPE:` half of the slug declaration. A `tier`/`tierRaiseReason` an
     older runtime wrote stays in the file and is never read. Inside a queued job the runner records `branch` and
     `worktree` itself, before the spawn, when it creates the job's worktree; the pipeline
@@ -595,7 +599,12 @@ for a `**Slug:**` field only while the run holds the provisional slug the runtim
 is no fast-track variant). On `qa-lite`, `qa-analyst` and `qa-prover` it reads the
 plan's QA mode (`QA: lite|full` of `run check 03`) and, when the target contradicts it,
 adds the `open_items` line ``the plan's QA mode is <mode> (`run check 03`); <target> was
-rendered anyway`` - it never refuses. A placeholder the run cannot
+rendered anyway`` - it never refuses. The three QA targets all answer the artifact
+`05-qa.md`: `qa-lite` with `check` `05`, `qa-analyst` with `check` `05 --stage analyst`, and
+`qa-prover` with `check` null; the prover's prompt carries its own round draft path
+(`DRAFT_PATH`, `<RUN_DIR>/poc/qa-round-<GROUP_ID>.md`) and its group id (`GROUP_ID`, the
+group's slug plus `-` and 8 hex of the group's sha256, empty for every other target), which it
+appends with `nightqueue run append 05 --group <GROUP_ID>`. A placeholder the run cannot
 fill is an error, never a half prompt. Its `model` is the model of the target's agent (see
 "Agent models and pipeline constants" below).
 
@@ -826,20 +835,23 @@ artifact (and, where a rule needs them, `00-brief.md`, `01-triage.md`, `02-explo
 `03-plan.md` and `state.json`) and prints one fact per line, in this fixed order:
 
 1. `OK` | `MISSING: <sections>` | `GENERATED` (`04`), unchanged. After `MISSING:` nothing
-   else is printed: no gate is evaluated and nothing is recorded but the check memo. `01`
+   else is printed but a `REPAIRED:` line: no gate is evaluated and nothing is recorded but the
+   check memo. On a round artifact (`05`, `06`, `07`) whose open code fence the check closed, the
+   `REPAIRED: …` line follows the first line, before `VERDICT:`; it never changes the memo nor
+   completion. `01`
    with `NEEDS-CLARIFICATION`, `NOT-REPRODUCIBLE` or `PROPOSE-ALTERNATIVE` also requires `## Open items` with an item
    (`MISSING: ## Open items`, or `## Open items (empty)` when it holds only blank lines or
    `None`), because the next step reads it.
 2. `VERDICT: <value>`: `01` the suffix of `## Verdict:` (`PROCEED`, `NO-CHANGE-NEEDED`,
-   `NOT-REPRODUCIBLE`, `NEEDS-CLARIFICATION`, `PROPOSE-ALTERNATIVE`); `05a` and `05` the first non-blank line of
+   `NOT-REPRODUCIBLE`, `NEEDS-CLARIFICATION`, `PROPOSE-ALTERNATIVE`); `05` and `05 --stage analyst` the first non-blank line of
    `## Verdict` (`APPROVED`, `NEEDS FIX`, `NEEDS DISCUSSION`); `06` the suffix of
-   `## Verification:` (`PASSED`, `PASSED-STATIC`, `FAILED`); `06.5` the first non-blank line of
+   `## Verification:` (`PASSED`, `PASSED-STATIC`, `FAILED`); `07` the first non-blank line of
    `## Runtime verdict` (`CONFIRMED`, `NOT-MET`, `SYMPTOM-PERSISTS`, `NEEDS-DEVICE`,
    `UNAVAILABLE`). A verdict outside the values is a `MISSING:` naming the expected line.
 3. `GATE: <code> — <evidence>`, one per firing item, the evidence one trimmed line of at most
    160 code points.
 4. `OPEN: <text>`: `05` `unconfirmed decisions — <value>` when the QA's value is not `none`;
-   `06.5` `<scenario> — to confirm` per `NOT MET / to confirm` row. Never a gate.
+   `07` `<scenario> — to confirm` per `NOT MET / to confirm` row. Never a gate.
 5. `TYPE-MISMATCH: <evidence> — triage: <bug/error|feature/refactor> (<## Diagnosis filled|## Diagnosis absent or empty>)` (`03`).
 6. `CONFIRM: requires-user-confirmation` (`03`, the plan has a `## Requires user confirmation`
    heading).
@@ -849,17 +861,51 @@ artifact (and, where a rule needs them, `00-brief.md`, `01-triage.md`, `02-explo
    code, the table header and prose lines are not counted); `lite` otherwise. The orchestrator's
    Phase 5 reads this line and nothing else to pick the QA mode (a resume re-runs the check).
    It never changes the gates, the memo line nor the exit status.
-8. `INVALIDATED: <item>`, one per item of `## Invalidated assumptions` other than `None` (`05`).
-9. `DIFF-APPLIES: yes|no` (`06.5`, from `Diff applies plan:`; omitted on `n/a` or absent).
-10. `NEEDS-DEVICE` (`06.5`).
-11. `index: saved N files, M libs` | `index: not saved (<reason>)` (`02`).
-12. `recorded: …` lines.
-13. `SCRIPT:` and the device script verbatim to the end of the output (`06.5` `NEEDS-DEVICE`:
+8. `QA-STAGE: provers|skip` (`05 --stage analyst` only): `skip` when the analyst's
+   `## Break hypotheses` holds no item other than `None`, so the orchestrator goes straight to
+   `run check 05`; `provers` otherwise.
+9. `INVALIDATED: <item>`, one per item of `## Invalidated assumptions` other than `None` (`05`).
+10. `DIFF-APPLIES: yes|no` (`07`, from `Diff applies plan:`; omitted on `n/a` or absent).
+11. `NEEDS-DEVICE` (`07`).
+12. `index: saved N files, M libs` | `index: not saved (<reason>)` (`02`).
+13. `recorded: …` lines.
+14. `SCRIPT:` and the device script verbatim to the end of the output (`07` `NEEDS-DEVICE`:
     the lines of `## Runtime verdict` after the verdict, up to `Diff applies plan:`).
 
+The check ids are `00` to `07`; `--stage analyst` is accepted only with `05` (any other stage,
+or a stage on another check, is refused). A retired id of the old numbering is refused with
+the one line `renumbered: use <NN>` (exit 1), and nothing is evaluated.
+
 Every section read is fence-aware: a heading matches by prefix, never inside fenced code, and
-HTML comments are stripped first, also mid-line; a section ends at the next `## ` outside a
-fence. Round artifacts (`05a`, `05`, `06`, `06.5`) are read on their last `## Round`. The Type
+HTML comments are stripped first, also mid-line, by one scanner that keeps fenced lines and code
+spans byte for byte (a `<!--` inside inline code or a fence opens nothing; a comment never
+closed stays visible); a section ends at the next `## ` outside a fence. Round artifacts (`05`,
+`06`, `07`) are split into rounds first, left to right with no lookahead, and read on their last
+`## Round` (its HTML comments stripped inside that round only): a `## Round` heading inside fenced
+code is never a round; a column-0 `## Round <n>` whose number is the highest so far plus one is a
+round even inside an open HTML comment, and closes the comment only; any other `## Round` heading
+counts only outside fenced code and HTML comments (also one opened mid-line), for the check and
+for the next round number alike. Fence lines follow CommonMark, in one place (`fenceStep`): an
+opener is 0-3 spaces then 3+ backticks or tildes, and a backtick info string holding a backtick
+is no fence (```` ```node --test``` ```` is inline code); a closer is the opener's character, at
+least as long, with no info string (```` ```js ```` never closes). Every reader — the gates,
+`roundsOf`/`lastRound`/`nextRound`, `run append`, the consolidation's section reader and the
+`04` file list — reads comments with one scanner (`scanMarkdown`): a `<!--` that never closes
+opens nothing, it and all after it are literal text. The rounds a gate reads (the last round, or
+the consolidation window for `run check 05`) must be well-formed, so a gate never picks an older
+round or a phantom tail:
+- an artifact that ends inside an open code fence (D1) is repaired before any evaluation, under
+  the run lock: the check (and `run append`) appends the fence's own marker as the last line —
+  a no-op for every reader, no round boundary moves — and prints `REPAIRED: the code fence of
+  round <k> opened at line <X> of <file> never closed; the runtime appended `<marker>` at line
+  <Z>` right after the first line;
+- every other defect is one `MISSING:` part, earliest line first, joined by `; `, each asking
+  the lane to append a new `## Round <next>` (never to edit an earlier round): a column-0
+  `## Round <next>` inside a fence of a read round (D2 — a quote and a swallowed round cannot be
+  told apart, so the round is never evaluated; a fenced heading of another number is plain
+  content), a read round that leaves a `<!--` open (D3), and a first read round whose heading
+  sits in a comment the round itself closes (D4). `run check 05` writes no consolidation over a
+  window with a defect and answers its parts. The Type
 every rule uses is `state.type`; without one, the triage's (a `## Diagnosis` with a filled
 `Confirmed root cause:` or `Symptom proof:` is `bug/error`, else `feature/refactor`); without a
 triage, `bug/error`. A method "names a re-runnable search" when it carries a backtick span or
@@ -919,15 +965,18 @@ codes, in output order per phase:
     empty; `usage-coverage-held-on-pipeline` — a risk line with the standalone word `HELD`
     (`UPHELD` never counts) that names `source=pipeline`, `What to avoid`, the scenario name of a
     plan scenario carrying `source=pipeline`, or an item of the plan's `What to avoid`
-    (case-insensitive).
-- `06.5`, on the first table of the last round with a `Result` column:
+    (case-insensitive); on a consolidated round it reads only the `## Validated risks` of the
+    analyst's round (the first number its `source: runtime consolidation · rounds …` line lists),
+    never a prover's `H<n>: HELD` line; the other usage and symptom gates read the consolidated
+    round.
+- `07`, on the first table of the last round with a `Result` column:
   `runtime-not-met` — a row whose Result starts `NOT MET` without `to confirm`;
   `runtime-no-attempt` — a row whose Result is none of `MET`/`NOT MET…`, or whose Evidence is
   empty, `-`, `none` or `not run`.
 
 The check then acts on what it found, and no effect ever changes the first line or the exit
 code. A check **completes** its phase when the first line is `OK` or `GENERATED`, no `GATE:`
-fired and the verdict does not loop back (`06` `FAILED`, `06.5` `NOT-MET` and
+fired and the verdict does not loop back (`06` `FAILED`, `07` `NOT-MET` and
 `SYMPTOM-PERSISTS`); a pause (`CONFIRM`, `TYPE-MISMATCH`, `NEEDS-DEVICE`, `UNAVAILABLE`)
 completes. On completion it records the phase (`recorded: phase_done <phase> <verdict>`, plus
 ` — reason: <reason>` on a re-run: the line the same check failed with, else
@@ -954,9 +1003,77 @@ renamed run. The `recorded:` order of `01` is: type, brief, commit type, phase_d
 run_terminate, termination cleared, slug. `02` on `OK` saves the
 File map and the libraries into the project index, the same as `run index-save`; a store that
 is unavailable inside a job queues the write (`index: not saved (store unavailable; queued at <path>)`)
-and any failure prints `index: not saved (<first line of the error>)`. `05a` records
-`qaStageA` (`recorded: qa_stage_a <verdict>`) and no phase. `run_phase_done` and
+and any failure prints `index: not saved (<first line of the error>)`. `05 --stage analyst`
+records `qaStageA` (`recorded: qa_stage_a <verdict>`, artifact `05-qa.md`) and no phase; its
+check memo is kept apart from the memo of `05`. `run_phase_done` and
 `run_terminate` still work for an older plugin.
+
+**The QA consolidation is the check's own.** `05-qa.md` holds three kinds of `## Round`, told
+apart by the first non-blank line after the heading: `source: runtime consolidation` is a
+consolidated round; `source: prover…` a prover round, whose group is read only from the line
+`run append --group` stamps (`source: prover · group: <id>`; any other prover line has no group,
+so its round never supersedes nor is superseded); otherwise a round with
+`## Break hypotheses` is the analyst's, and any other round a lite one. Before it evaluates,
+`run check 05` (no stage) takes the run lock and, when the last round is neither lite nor
+consolidated and an analyst round exists, merges the window — the last analyst round plus every
+prover round after it, the later round of a group replacing the earlier one — into a new
+`## Round <n+1>` whose first line is `source: runtime consolidation · rounds <a>, <b>, …`; it
+validates that round with the same D1-D4 rules the final check reads it by and, when one fires
+(e.g. a fenced `## Round <n+2>` quote carried from the analyst), writes nothing and fails with
+`the consolidated round <n+1> of 05-qa.md would be ill-formed, so nothing was written: …`. It
+carries, in this order and only when some merged round has it, `## Mapped rules`,
+`## Proven breaks`, `## Suggestions (non-blocking)`, `## Access map (QA)`, `## Validated risks`,
+`## Invalidated assumptions`, `## Generated PoCs` and `## Prevention`: each the analyst's body
+first, then the provers' in round order, raw (HTML comments kept byte for byte; a heading
+inside a fence or a comment opens no section), blank-line separated, bodies that say nothing
+dropped (every line blank, a none spelling — `None`, `Nothing`, `N/A`, `No proven breaks`,
+`(none)`, any bullet, bold, italic or backtick decoration, the whole line or followed by
+punctuation and an explanation, never a prefix such as `None of the callers…` — with the prose
+lines that explain it, a dash, or a header-only table; all of
+them keeps the first body); `## Mapped rules` and `## Access map (QA)` come from the
+analyst only. Its `## Verdict` counts proof, not the analyst's verdict over open hypotheses:
+any merged round whose `## Proven breaks` has a break item gives `NEEDS FIX`; a break item is
+any unfenced line (fenced output is evidence) that is not blank, a none spelling, a dash, a table
+header or separator, a table row whose cells are all empty, none or dashes, a prose line (no
+bullet, no table row, not opening with `H<n>`) in a body that holds a none spelling, or a
+regression that passed in any wording (the line or row carries a regression mark —
+`type=regression`, `(regression)`, a `.regression.` file or `regression PoC|test|net` — and a
+`pass`/`passes`/`passed`, and no failure besides `0 fail`) — such a body is kept in the merged section; else, with
+prover rounds, the provers' verdicts plus the coverage of the analyst's hypotheses (any
+`NEEDS FIX` gives `NEEDS FIX`, else any `NEEDS DISCUSSION` or an unreadable verdict, named on a
+note line, gives `NEEDS DISCUSSION`, else `APPROVED`); with no prover round, an analyst with
+hypotheses gives `NEEDS DISCUSSION` (`no prover round for the analyst's hypotheses`) and one
+without gives its own verdict. The coverage reads the `H<n>` ids that open the items of the
+analyst's `## Break hypotheses` and the `H<n>: BROKE|HELD|INCONCLUSIVE` lines of the counted
+prover rounds' `## Validated risks` (`REFUTED` reads as `HELD`; `PROVEN` reads as `BROKE`, and as
+`HELD` on a hypothesis whose line says `type=regression` or `type: regression`; the
+first status word wins; a bullet or a numbered item allowed; both outside fences and comments,
+bold and backticks ignored): any `BROKE` line gives `NEEDS FIX` (`BROKE: H<a>, …`); else an analyst id with no
+prover line or an `INCONCLUSIVE` line gives `NEEDS DISCUSSION` (`no prover line for H<a>, …`,
+`INCONCLUSIVE: H<c>, …`), so a prover that never appended shows up as its ids. Analyst
+hypotheses with no `H<n>` id keep the provers' verdict and add the note `the analyst's
+hypotheses carry no H<n> id; coverage not checked`. The check then answers over that round, and a second check writes nothing
+(the last round is already a consolidation) until a later prover round arrives. Stage A
+(`05 --stage analyst`) requires every section check `05` reads, so an analyst-only skip round
+always passes the final check.
+
+**`nightqueue run append 05 --group <id> --from <file>`** is the one path a prover writes its
+round by. `<id>` is the `GROUP_ID` value of the prover's `phase_prompt` (the group's slug plus
+8 hex of its sha256, the stem of its `DRAFT_PATH`), and the runtime stamps
+`source: prover · group: <id>` as the round's first line, dropping the draft's own
+`source: prover…` line. It refuses a check other than `05`, a missing or invalid `--group`
+(`^[a-z0-9][a-z0-9-]{0,63}$`), a missing `--from`, an empty draft, a draft with a column-0
+`## Round` line (fenced or not; a leading one is dropped), a draft that leaves a code fence or
+an HTML comment open (naming its line), and a draft whose source is `source: runtime
+consolidation`. It rewrites the draft's `H<n>: REFUTED` lines of `## Validated risks` (outside
+fences and comments, decorations kept) as `H<n>: HELD (REFUTED)` and keeps an `H<n>: PROVEN` as
+written (its reading depends on the hypothesis type, which only the consolidation knows), every
+other byte unchanged. Under the
+same run lock as `state.json` it reads `05-qa.md`, closes a code fence an earlier round left
+open (printing the `REPAIRED:` line before `APPENDED:`), numbers the round from the file (the highest
+round plus one), refuses to write when the new heading would not read as the last round,
+writes it atomically and prints `APPENDED: ## Round <n> to <path>`, so provers appending at the
+same time never lose a round nor share a number.
 
 **A gate notice is composed from the record.** `run_outcome` with `status: "gate"` takes
 `question`, `from_artifact: {file, section}`, or both, and composes the whole `## Notice`:

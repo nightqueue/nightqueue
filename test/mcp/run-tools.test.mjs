@@ -151,7 +151,8 @@ test("`run_set` records the QA stage A marker, and the resume decision reads it 
     payloadOf(await client.callTool({ name: "run_phase_done", arguments: { phase, artifact: `0-${phase}.md`, verdict: "ok" } }));
   }
 
-  const marker = { artifact: "05a-qa-analyst.md", verdict: "BREAKS-FOUND" };
+  await new Promise((done) => setTimeout(done, 5));
+  const marker = { artifact: "05-qa.md", verdict: "BREAKS-FOUND" };
   payloadOf(await client.callTool({ name: "run_set", arguments: { qa_stage_a: marker } }));
 
   const state = readState(env, "alpha", SLUG);

@@ -175,6 +175,36 @@ test("a refused retry never reaches the run directory", async (t) => {
   assert.equal(getJob(id, env).status, "gate");
 });
 
+for (const oldArtifact of ["06-runtime.md", "05a-qa-analyst.md"]) {
+  test(`a retry without fresh of a run dir holding ${oldArtifact} is refused, and nothing is written or deleted`, async (t) => {
+    const env = makeQueue(t, `retry-pre-renumbering-${oldArtifact.slice(0, 3)}`);
+    const id = gatedJob(env);
+    const dir = writeRun(env, { projectId: ensureProject(env, "alpha"), slug: "fix-the-worker" });
+    writeFileSync(join(dir, oldArtifact), "old numbering\n");
+    const before = getJob(id, env);
+
+    await assert.rejects(
+      applyRetry({ id, note: "keep going", env }),
+      { name: "UserError", message: "run started before the renumbering; retry with `fresh`" },
+    );
+    assert.deepEqual(getJob(id, env), before, "a refused retry wrote to the job");
+    assert.equal(readFileSync(join(dir, oldArtifact), "utf8"), "old numbering\n");
+    assert.equal(readFileSync(join(dir, "01-triage.md"), "utf8"), "triage\n");
+  });
+
+  test(`a fresh retry of a run dir holding ${oldArtifact} is accepted and drops the dir`, async (t) => {
+    const env = makeQueue(t, `retry-pre-renumbering-fresh-${oldArtifact.slice(0, 3)}`);
+    const id = gatedJob(env);
+    const dir = writeRun(env, { projectId: ensureProject(env, "alpha"), slug: "fix-the-worker" });
+    writeFileSync(join(dir, oldArtifact), "old numbering\n");
+
+    const { job, runDir: discarded } = await applyRetry({ id, note: "start over", fresh: true, env });
+    assert.equal(job.status, "pending");
+    assert.equal(discarded.status, "removed");
+    assert.equal(existsSync(dir), false);
+  });
+}
+
 test("the note of the operator reaches the prompt of the child under the label of the gate", async (t) => {
   const env = makeQueue(t, "retry-note-prompt");
   const id = gatedJob(env);

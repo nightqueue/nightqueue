@@ -183,8 +183,8 @@ test("a phase_prompt is a context recall: hits from the lessons and memory secti
   const log = logOf([
     attemptMarker(1),
     ...phasePrompt("p1", { target: "architect", check: "03", lessons: ["L5"], memories: ["M9"], decisions: ["D-7", "ACME/D-3"] }),
-    ...phasePrompt("p2", { target: "qa-analyst", check: "05a" }),
-    ...phasePrompt("p3", { target: "runtime", check: "06.5" }),
+    ...phasePrompt("p2", { target: "qa-analyst", check: "05 --stage analyst" }),
+    ...phasePrompt("p3", { target: "runtime", check: "07" }),
   ]);
   const [architect, qa, runtime] = await jobRecalls(log);
   assert.deepEqual(
@@ -195,7 +195,7 @@ test("a phase_prompt is a context recall: hits from the lessons and memory secti
     { ref: "L5", title: "lesson L5", score: null, kind: "lesson" },
     { ref: "M9", title: "memory M9", score: null, kind: "memory" },
   ]);
-  assert.deepEqual([qa.phase, runtime.phase], [5, 6]);
+  assert.deepEqual([qa.phase, runtime.phase], [5, 7]);
 });
 
 test("a context call that hands over only an old log's standing decisions yields no context recall", async () => {
@@ -269,7 +269,7 @@ test("context calls of another agent or another phase stay apart, and memory rec
     attemptMarker(1),
     ...phasePrompt("p1", { target: "qa-guardian", check: "05" }),
     agentToolUseEvent({ id: "lane1", subagentType: "nightqueue:qa-guardian" }),
-    ...phasePrompt("p2", { target: "qa-analyst", check: "05a", parentToolUseId: "lane1" }),
+    ...phasePrompt("p2", { target: "qa-analyst", check: "05 --stage analyst", parentToolUseId: "lane1" }),
     ...phasePrompt("p3", { target: "qa-guardian", check: "06" }),
     toolUseEvent({ name: MEMORY, id: "d1", input: { query: "a" } }),
     jsonResult("d1", [{ id: 7, key: "t", value: "v" }]),

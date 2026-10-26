@@ -59,13 +59,30 @@ test("a run stopped after a completed phase resumes from the next one and reuses
   assert.equal(decideResume({ state: JSON.stringify(state()) }).resume, true, "a raw string of the file is not parsed");
 });
 
+const IMPLEMENTED_AT = "2026-09-06T10:00:00.000Z";
+
+// A state whose phases all carry the implementation time, with the QA stage A marker given.
+function stagedState(qaStageA) {
+  const base = state({ phases: ["triage", "explore", "architecture", "implementation"], qaStageA });
+  return { ...base, phases: base.phases.map((entry) => ({ ...entry, at: IMPLEMENTED_AT })) };
+}
+
 test("the qa stage A marker sends the resume to stage B instead of redoing the analysis", () => {
   const phases = ["triage", "explore", "architecture", "implementation"];
   const plain = decideResume({ state: state({ phases }) });
   assert.deepEqual({ fromPhase: plain.fromPhase, fromStage: plain.fromStage }, { fromPhase: "qa", fromStage: null });
-  const staged = decideResume({ state: state({ phases, qaStageA: { artifact: "05a-qa-analyst.md", verdict: "BREAKS-FOUND" } }) });
+  const staged = decideResume({ state: stagedState({ artifact: "05-qa.md", verdict: "BREAKS-FOUND", at: "2026-09-06T11:00:00.000Z" }) });
   assert.deepEqual({ fromPhase: staged.fromPhase, fromStage: staged.fromStage }, { fromPhase: "qa", fromStage: "qa-stage-b" });
-  assert.equal(decideResume({ state: state({ phases, qaStageA: "05a-qa-analyst.md" }) }).fromStage, null);
+  assert.equal(decideResume({ state: stagedState("05-qa.md") }).fromStage, null);
+});
+
+test("a stage A marker older than the last implementation, on another file or with no time never resumes at stage B", () => {
+  const stale = { artifact: "05-qa.md", verdict: "APPROVED", at: "2026-09-06T09:00:00.000Z" };
+  assert.equal(decideResume({ state: stagedState(stale) }).fromStage, null, "a marker of the old implementation resumed at stage B");
+  assert.equal(decideResume({ state: stagedState({ ...stale, at: IMPLEMENTED_AT }) }).fromStage, null);
+  assert.equal(decideResume({ state: stagedState({ ...stale, artifact: "05-other.md", at: "2026-09-06T11:00:00.000Z" }) }).fromStage, null);
+  assert.equal(decideResume({ state: stagedState({ artifact: "05-qa.md", verdict: "APPROVED" }) }).fromStage, null);
+  assert.equal(decideResume({ state: state({ phases: ["triage", "explore", "architecture", "implementation"], qaStageA: { ...stale, at: "2026-09-06T11:00:00.000Z" } }) }).fromStage, null, "an implementation with no time resumed at stage B");
 });
 
 test("a state written with the PORTUGUESE keys of another runtime is never resumable", () => {
@@ -153,7 +170,7 @@ test("clearRunOutcome drops the record of the previous attempt and keeps everyth
 test("the handoff tells the agent where the run lives, what it kept and which phase comes next", (t) => {
   const env = makeHome(t, "resume-handoff");
   const job = { id: 7, project: "alpha", project_id: ALPHA_ID, slug: "fix-the-worker" };
-  const written = state({ phases: ["triage", "explore", "architecture", "implementation"], qaStageA: { artifact: "05a-qa-analyst.md" } });
+  const written = stagedState({ artifact: "05-qa.md", at: "2026-09-06T11:00:00.000Z" });
   writeState(env, { projectId: ALPHA_ID, slug: job.slug, content: written });
   const stored = readRunState({ projectId: ALPHA_ID, slug: job.slug, env });
 

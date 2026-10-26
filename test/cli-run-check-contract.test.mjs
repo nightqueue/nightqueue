@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
@@ -10,6 +10,7 @@ import { openDb } from "../src/memory/db.mjs";
 import { addJob, getJob } from "../src/memory/jobs.mjs";
 import { evaluateCheck, qaModeOf } from "../src/queue/check-contract.mjs";
 import { composeGateNotice } from "../src/queue/gate-notice.mjs";
+import { nextRound } from "../src/queue/phase-artifacts.mjs";
 import { decideResume, readRunState } from "../src/queue/resume.mjs";
 import { applyRetry } from "../src/queue/retry.mjs";
 import { provisionalSlug } from "../src/queue/run-slug.mjs";
@@ -52,10 +53,10 @@ function seedRun(t, name, { fixture, texts }) {
 }
 
 // Runs `nightqueue run check` in this process, capturing what it printed.
-async function runCheck(env, check) {
+async function runCheck(env, check, args = []) {
   const out = [];
   const err = [];
-  const code = await run(["run", "check", check], { env, out: (line) => out.push(line), err: (line) => err.push(line), stdout: { write: () => {} } });
+  const code = await run(["run", "check", check, ...args], { env, out: (line) => out.push(line), err: (line) => err.push(line), stdout: { write: () => {} } });
   return { code, out, err };
 }
 
@@ -93,7 +94,7 @@ for (const name of fixtureNames()) {
   test(`\`run check\` answers the exact contract lines of the ${name} fixture`, async (t) => {
     const fixture = readFixture(name);
     const { env } = seedRun(t, name, fixture);
-    const { code, out, err } = await runCheck(env, fixture.fixture.check);
+    const { code, out, err } = await runCheck(env, fixture.fixture.check, fixture.fixture.args ?? []);
     assert.equal(code, 0, err.join("\n"));
     assert.deepEqual(out, fixture.expected);
   });
@@ -109,7 +110,7 @@ test("a check that fired a gate, a loop-back verdict or a missing part never com
   assert.equal(missing.completes, false);
   assert.equal(missing.memoLine, "MISSING: ## Checks run, ## Verification");
   const gated = readFixture("runtime-not-met");
-  const result = evaluateCheck({ check: "06.5", texts: gated.texts, state: { type: "bug/error" } });
+  const result = evaluateCheck({ check: "07", texts: gated.texts, state: { type: "bug/error" } });
   assert.equal(result.completes, false);
   assert.equal(result.memoLine, "GATE: runtime-not-met — queue close J-2");
 });
@@ -183,7 +184,7 @@ test("a loop-back verdict or a gate records no phase, and the passing re-check s
 
   const gated = readFixture("runtime-not-met");
   const gatedRun = seedRun(t, "effects-gate", gated);
-  await runCheck(gatedRun.env, "06.5");
+  await runCheck(gatedRun.env, "07");
   assert.equal(stateOf(gatedRun).phases, undefined);
   assert.equal(stateOf(gatedRun).checks.lastFailure.line, "GATE: runtime-not-met — queue close J-2");
 });
@@ -214,14 +215,61 @@ test("a triage with no recorded Type writes the Type it implies", async (t) => {
   assert.equal(stateOf(seeded).type, "feature/refactor");
 });
 
-test("a completed check 05a records the QA stage A marker and no phase", async (t) => {
-  const report = "## Proven breaks\nNone\n\n## Break hypotheses\n- H1\n\n## Test recipe\nnode --test\n\n## Validated risks\n- R1\n\n## Invalidated assumptions\nNone\n\n## Verdict\nAPPROVED\n";
-  const seeded = seedRun(t, "effects-qa-stage-a", { fixture: {}, texts: { "05a-qa-analyst.md": report } });
-  const { out } = await runCheck(seeded.env, "05a");
-  assert.deepEqual(out, ["OK", "VERDICT: APPROVED", "recorded: qa_stage_a APPROVED"]);
+test("a completed check 05 --stage analyst records the QA stage A marker and no phase", async (t) => {
+  const report = "## Round 1\n## Proven breaks\nNone\n\n## Break hypotheses\n- H1\n\n## Test recipe\nnode --test\n\n## Validated risks\n- R1\n\n## Invalidated assumptions\nNone\n\n## Generated PoCs\nNone — the provers write them\n\n## Verdict\nAPPROVED\n";
+  const seeded = seedRun(t, "effects-qa-stage-a", { fixture: {}, texts: { "05-qa.md": report } });
+  const { out } = await runCheck(seeded.env, "05", ["--stage", "analyst"]);
+  assert.deepEqual(out, ["OK", "VERDICT: APPROVED", "QA-STAGE: provers", "recorded: qa_stage_a APPROVED"]);
   const state = stateOf(seeded);
-  assert.deepEqual([state.qaStageA.artifact, state.qaStageA.verdict], ["05a-qa-analyst.md", "APPROVED"]);
+  assert.deepEqual([state.qaStageA.artifact, state.qaStageA.verdict], ["05-qa.md", "APPROVED"]);
   assert.equal(state.phases, undefined);
+});
+
+test("check 05 of a full QA writes the consolidated round of the analyst and both provers, once", async (t) => {
+  const seeded = seedRun(t, "qa-consolidated", readFixture("qa-full-consolidated"));
+  await runCheck(seeded.env, "05");
+  const written = readFileSync(join(seeded.dir, "05-qa.md"), "utf8");
+  const consolidated = written.slice(written.indexOf("## Round 4\n"));
+  assert.ok(written.includes("## Round 4\n"), written);
+  assert.equal(consolidated.split("\n")[1], "source: runtime consolidation · rounds 1, 2, 3");
+  assert.match(consolidated, /^## Verdict\nNEEDS FIX$/m);
+  await runCheck(seeded.env, "05");
+  assert.equal(readFileSync(join(seeded.dir, "05-qa.md"), "utf8"), written, "a second check wrote another consolidation");
+});
+
+test("PoC qa-r4-fence-stale-round vector a (H12): the check closes the open fence and refuses the fenced round, and the lane's appended round converges", async (t) => {
+  const fence = "```";
+  const open = `## Round 1\n## Checks run\n- npm test\n\n## Verification: FAILED\n\n${fence}text\nunclosed\n\n## Round 2\n## Checks run\n- npm test\n\n## Verification: PASSED\n`;
+  const seeded = seedRun(t, "fence-stale-round", { fixture: {}, texts: { "06-verification.md": open } });
+  const path = join(seeded.dir, "06-verification.md");
+  const first = await runCheck(seeded.env, "06");
+  assert.ok(first.out[0].startsWith("MISSING: line 10 of 06-verification.md is a column-0 `## Round 2` inside the code fence opened at line 7 (round 1): append a new `## Round 2`"), first.out.join("\n"));
+  assert.equal(first.out[1], `REPAIRED: the code fence of round 1 opened at line 7 of 06-verification.md never closed; the runtime appended \`${fence}\` at line 15`);
+  assert.ok(!first.out.some((line) => line.startsWith("VERDICT:")), first.out.join("\n"));
+  assert.equal(readFileSync(path, "utf8"), `${open}${fence}\n`);
+  appendFileSync(path, "## Round 2\n## Checks run\n- npm test\n\n## Verification: PASSED\n");
+  assert.equal(nextRound(readFileSync(path, "utf8")), 3);
+  const second = await runCheck(seeded.env, "06");
+  assert.deepEqual(second.out.slice(0, 2), ["OK", "VERDICT: PASSED"], second.out.join("\n"));
+});
+
+test("a check over a round artifact whose fences all close never writes it", async (t) => {
+  const text = `## Round 1\n${verification("PASSED")}\n\`\`\`\nlog\n\`\`\`\n`;
+  const seeded = seedRun(t, "closed-fence-untouched", { fixture: {}, texts: { "06-verification.md": text } });
+  const path = join(seeded.dir, "06-verification.md");
+  const before = statSync(path).mtimeMs;
+  await nextMillisecond();
+  const { out } = await runCheck(seeded.env, "06");
+  assert.deepEqual(out.slice(0, 2), ["OK", "VERDICT: PASSED"]);
+  assert.ok(!out.some((line) => line.startsWith("REPAIRED:")), out.join("\n"));
+  assert.equal(readFileSync(path, "utf8"), text);
+  assert.equal(statSync(path).mtimeMs, before);
+});
+
+test("a retired check id of the old numbering is refused with one line naming its new id", async (t) => {
+  const seeded = seedRun(t, "renumbered", { fixture: {}, texts: {} });
+  assert.deepEqual(await runCheck(seeded.env, "06.5"), { code: 1, out: [], err: ["nightqueue: renumbered: use 07"] });
+  assert.deepEqual(await runCheck(seeded.env, "05a"), { code: 1, out: [], err: ["nightqueue: renumbered: use 05"] });
 });
 
 // ---- Fix round 1.
@@ -281,7 +329,7 @@ test("a code token with regex characters named verbatim in the brief holds the c
 
 test("table cells keep a pipe inside a code span, and a lone backtick is plain text", () => {
   const runtime = "## Runtime verdict\nCONFIRMED\n\n| # | Scenario | Result | Evidence |\n|---|---|---|---|\n| 1 | list | MET | `a|b` matched |\n";
-  assert.deepEqual(evaluateCheck({ check: "06.5", texts: { "06-runtime.md": runtime } }).lines, ["OK", "VERDICT: CONFIRMED"]);
+  assert.deepEqual(evaluateCheck({ check: "07", texts: { "07-runtime.md": runtime } }).lines, ["OK", "VERDICT: CONFIRMED"]);
   const texts = readFixture("coverage-table-pipes").texts;
   const plan = texts["03-plan.md"].replace("| 2 | a \\| b path |", "| 2 | a ` b path |");
   const result = evaluateCheck({ check: "03", texts: { ...texts, "03-plan.md": plan }, state: { type: "bug/error" } });
@@ -307,7 +355,7 @@ test("the QA line never changes completion nor the memo line of check 03", () =>
   assert.equal(result.memoLine, "OK");
   const confirm = evaluateCheck({ check: "03", texts: readFixture("confirm").texts, state: { type: "bug/error" } });
   assert.deepEqual(confirm.lines.slice(-2), ["CONFIRM: requires-user-confirmation", "QA: lite"]);
-  for (const check of ["05", "06", "06.5"]) assert.equal(evaluateCheck({ check, texts }).lines.some((line) => line.startsWith("QA: ")), false, check);
+  for (const check of ["05", "06", "07"]) assert.equal(evaluateCheck({ check, texts }).lines.some((line) => line.startsWith("QA: ")), false, check);
 });
 
 test("a `###` confirmation heading the check announces is the section the gate notice composes", async (t) => {

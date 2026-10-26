@@ -1,3 +1,4 @@
+import { UserError } from "../config/errors.mjs";
 import { withLockSync } from "../config/lock.mjs";
 import { runDir } from "../config/paths.mjs";
 import { jobRef } from "../memory/refs.mjs";
@@ -85,6 +86,12 @@ function underRunLock({ projectId, slug, env, write }) {
   } catch (err) {
     return kept(`the state of the run could not be locked: ${String(err?.message ?? err).split("\n")[0]}`);
   }
+}
+
+// Runs an action on one run's files under the same lock as its state.json; never call a `record*` inside it, the lock is not re-entrant.
+export function withRunLock({ projectId, slug, env = process.env }, action) {
+  if (!isRunPath(projectId, slug)) throw new UserError(`unsafe project or slug: \`${projectId}\`/\`${slug}\``);
+  return withLockSync(`${runDir(projectId, slug, env)}.lock`, action, RUN_LOCK);
 }
 
 // The runtime-only key a field name writes, whole (`job`) or dotted (`job.id`), or null when it names none.
@@ -267,7 +274,7 @@ function invalidPrTemplate(template) {
   return template.source === "repo" && trimmedText(template.path) === null ? kept("a repository template needs its `path`") : null;
 }
 
-// Records the pull request template the runtime found for the run, the one Phase 7 writes the body for; the latest call wins.
+// Records the pull request template the runtime found for the run, the one Phase 8 writes the body for; the latest call wins.
 export function recordPrTemplate({ projectId, slug, template, env = process.env } = {}) {
   const refused = invalidPrTemplate(template);
   if (refused) return refused;

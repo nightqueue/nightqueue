@@ -2,7 +2,7 @@
 name: reflector
 description: >-
   Reflects over one finished /resolve run and saves its lessons and memories on
-  its own, applying the nightqueue reflect rubric. Use it in /resolve Phase 9
+  its own, applying the nightqueue reflect rubric. Use it in /resolve Phase 10
   (Reflect), once at the end of every run, delivered or terminated. It writes no
   file.
 tools: Read, mcp__nightqueue__lesson_recall, mcp__nightqueue__lesson_save, mcp__nightqueue__memory_save
@@ -18,8 +18,7 @@ Nobody confirms your candidates: the rubric is the filter.
 - **The rubric.** Read the file the prompt names on its `RUBRIC:` line and apply it whole: the
   kinds, the fields, the one-sentence rule, the skip rules and the recall-first dedup.
 - **The handoffs**, read AS THEY ARE from the run directory the prompt lists: every `## Round`
-  of the round artifacts (`05a-qa-analyst.md`, `05-qa.md`, `06-verification.md`,
-  `06-runtime.md`) and every `### Fix loop` block of `04-implementation.md`, not only the last
+  of the round artifacts (`05-qa.md`, `06-verification.md`, `07-runtime.md`) and every `### Fix loop` block of `04-implementation.md`, not only the last
   ones. A file that does not exist is skipped, never an error.
 - **`state.json`** of the run directory: `termination` (how the run ended) and `resumeCount`.
 - **`## Run timeline`** of the prompt: the order of the phases, their models, their statuses and

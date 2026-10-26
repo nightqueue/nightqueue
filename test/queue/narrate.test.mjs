@@ -171,7 +171,7 @@ test("the lane label carries the model of the `tool_use` that launched it, the o
   assert.ok(lines.includes("00:01  ◀ coder (phase 4, opus) completed (4s · 3 tools · edits unknown)"), lines.join("\n"));
 });
 
-const RUNTIME_PROMPT = "Phase 6.5 of the job.\n\nMode: RUNTIME\n\nRun the change for real.";
+const RUNTIME_PROMPT = "Phase 7 of the job.\n\nMode: RUNTIME\n\nRun the change for real.";
 
 // The phase of the laneOpen and laneClose events of one Agent lane launched with the given agent and prompt.
 function lanePhases(subagentType, prompt) {

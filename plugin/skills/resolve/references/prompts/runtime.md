@@ -17,7 +17,7 @@ Steps 1–2.7 of your method already ran in the verification before this lane: p
 
 ## Deliver
 
-Write ARTIFACT_PATH as this launch's `## Round`, in this order; `## Runtime verdict` is mandatory (`nightqueue run check 06.5`).
+Write ARTIFACT_PATH as this launch's `## Round`, in this order; `## Runtime verdict` is mandatory (`nightqueue run check 07`).
 
 ## Runtime verdict
 Its first line is exactly one of:
