@@ -5,7 +5,6 @@ import type { AttemptRow, PhaseAttempt, TimelinePhase } from "./types";
 export interface CaptionClocks {
   runElapsedMs: number | null;
   clockMs: number | null;
-  tier?: string | null;
 }
 
 export interface TrackCounts {
@@ -19,17 +18,16 @@ export function spentMs(phase: TimelinePhase, runElapsedMs: number | null): numb
   return (phase.durationMs ?? 0) + Math.max(0, runElapsedMs - phase.liveSinceMs);
 }
 
-// The caption of a skipped slot: the tier that routes around it, the agent that skipped it with its reason, or a bare `skipped`.
-function skippedCaption(phase: TimelinePhase, tier: string | null): string {
+// The caption of a skipped slot: the agent that skipped it with its reason, or a bare `skipped`.
+function skippedCaption(phase: TimelinePhase): string {
   const record = phase.skipped;
   if (!record) return "skipped";
-  if (record.by === "tier") return tier ? `skipped · ${tier} tier` : "skipped · tier";
   return record.reason ? `skipped · ${record.by}: ${record.reason}` : `skipped · ${record.by}`;
 }
 
 // The time caption of one phase: its active time with its attempts past one and a `gate` word where the gate stopped it, blank before it ran, why it was skipped.
-export function phaseCaption(phase: TimelinePhase, { runElapsedMs, tier = null }: CaptionClocks): string {
-  if (phase.state === "skipped") return skippedCaption(phase, tier);
+export function phaseCaption(phase: TimelinePhase, { runElapsedMs }: CaptionClocks): string {
+  if (phase.state === "skipped") return skippedCaption(phase);
   if (phase.state === "pending") return "";
   const spent = formatDurationMs(spentMs(phase, runElapsedMs));
   const caption = phase.attempts > 1 ? `${spent} · ${phase.attempts} att.` : spent;

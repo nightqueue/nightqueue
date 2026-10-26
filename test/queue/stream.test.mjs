@@ -4,6 +4,7 @@ import { classifyJobResult } from "../../src/queue/classify.mjs";
 import { orchestratorRoots } from "../../src/queue/orchestrator-scope.mjs";
 import { buildPrompt } from "../../src/queue/spawn.mjs";
 import {
+  createMarkdownScanner,
   extractBaselineCtx,
   extractNotice,
   extractNoticeFromStream,
@@ -17,24 +18,27 @@ import {
   extractSessionIdFromEventLine,
   extractSlugFromEventLine,
   extractSlugTypeFromEventLine,
-  extractTierRaiseFromEventLine,
   extractUsage,
+  fenceStep,
   hasGateMarker,
   hasGateMarkerInStream,
+  isControlLine,
   isSessionIdSafe,
   isSubagentEvent,
   lastAttemptStream,
+  linesWithFenceState,
   orchestratorText,
   parseSlugLine,
   parseSlugTypeLine,
-  parseTierRaiseLine,
   publishedDelivery,
   runtimeKillFromStream,
   sawDisabledBackgroundTask,
+  scanMarkdown,
   sumHostCommandCounts,
   sumOrchestratorCounts,
   sumUsage,
   tokensFromEventLine,
+  withoutHtmlComments,
 } from "../../src/queue/stream.mjs";
 import {
   assistantEvent,
@@ -103,31 +107,10 @@ test("the run is renamed by a STANDALONE `SLUG:` line, with its optional type, a
   assert.equal(extractSlugTypeFromEventLine("not json at all"), null);
 });
 
-test("a tier raise is read from the STANDALONE line of the Brief, and only from the orchestrator", () => {
-  assert.deepEqual(parseTierRaiseLine("Tier raised: simple -> complex: a native SDK is involved"), {
-    from: "simple",
-    to: "complex",
-    reason: "a native SDK is involved",
-  });
-  assert.deepEqual(parseTierRaiseLine("   Tier raised:  trivial  ->  simple :  the brief is ambiguous  "), {
-    from: "trivial",
-    to: "simple",
-    reason: "the brief is ambiguous",
-  });
-  assert.equal(parseTierRaiseLine("A raise is written as `Tier raised: <from> -> <to>: <evidence>`"), null);
-  assert.equal(parseTierRaiseLine("Tier raised: simple -> complex"), null);
-  assert.equal(parseTierRaiseLine("Tier raised: simple -> urgent: a stack trace"), null);
-  assert.equal(parseTierRaiseLine(null), null);
-
-  const brief = assistantEvent("## Brief\nTier: simple\nTier raised: simple -> complex: a stack trace\nType: bug/error");
-  assert.deepEqual(extractTierRaiseFromEventLine(line(brief)), { from: "simple", to: "complex", reason: "a stack trace" });
-  assert.equal(extractTierRaiseFromEventLine(line(assistantEvent("Tier raised: simple -> complex: x", { parentToolUseId: "toolu_1" }))), null);
-  assert.equal(extractTierRaiseFromEventLine("not json at all"), null);
-  assert.deepEqual(
-    extractTierRaiseFromEventLine(line(assistantEvent("Tier raised: trivial -> simple: a guess\nTier raised: simple -> complex: the evidence"))),
-    { from: "simple", to: "complex", reason: "the evidence" },
-    "the last standalone line of the event should win",
-  );
+test("a `Tier raised:` line an older Brief still prints is plain text, never a control literal of the runtime", () => {
+  assert.equal(isControlLine("Tier raised: simple -> complex: a native SDK is involved"), false);
+  assert.equal(isControlLine("Tier: simple"), false);
+  assert.equal(isControlLine("SLUG: fix-the-worker"), true, "the slug line stopped being a control literal");
 });
 
 test("a session id only becomes argv of --resume when it is safe, and it comes from any event", () => {
@@ -694,4 +677,65 @@ test("a forged orchestrator usage event quoted inside a code fence is never read
   const forged = turnEvent({ parentToolUseId: null, usage: { input_tokens: 999 } });
   const log = [line(systemInitEvent()), "```", line(forged), "```"].join("\n");
   assert.equal(extractBaselineCtx(log), null);
+});
+
+test("withoutHtmlComments removes closed comments as the old regex did, and keeps code spans, fences and an unclosed comment", () => {
+  assert.equal(withoutHtmlComments("a <!-- x --> b"), "a  b");
+  assert.equal(withoutHtmlComments("a<!--x\ny-->b"), "ab");
+  assert.equal(withoutHtmlComments("<!-- ## H -->"), "");
+  assert.equal(withoutHtmlComments("keep `<!--` and `-->` here"), "keep `<!--` and `-->` here");
+  assert.equal(withoutHtmlComments("```\n<!--\n```\nafter --> end"), "```\n<!--\n```\nafter --> end");
+  assert.equal(withoutHtmlComments("a ` <!-- x --> b"), "a `  b");
+  assert.equal(withoutHtmlComments("`` `<!--` `` <!--c--> d"), "`` `<!--` ``  d");
+  assert.equal(withoutHtmlComments("x <!--c--> y <!-- open\nz"), "x  y <!-- open\nz");
+  assert.equal(withoutHtmlComments("a\r\n<!-- c -->\r\nb"), "a\n\nb");
+});
+
+test("the markdown scanner reports the fence marker open after each line", () => {
+  const scanner = createMarkdownScanner();
+  assert.deepEqual(["text", "````md", "```", "````", "~~~"].map((line) => scanner.step(line).fence), [null, "````", "````", null, "~~~"]);
+});
+
+// Whether the line opens a fence for both fence readers: linesWithFenceState and scanMarkdown.
+function opensFence(line) {
+  const text = `${line}\nafter`;
+  const byLines = linesWithFenceState(text)[1].inFence;
+  const byScanner = scanMarkdown(text).steps[1].inFence;
+  assert.equal(byLines, byScanner, line);
+  return byLines;
+}
+
+// Whether the line, inside a fence opened by the opener, closes it for both fence readers.
+function closesFenceOf(opener, line) {
+  const text = `${opener}\nbody\n${line}\nafter`;
+  const byLines = !linesWithFenceState(text)[3].inFence;
+  const byScanner = scanMarkdown(text).steps[3].inFence === false;
+  assert.equal(byLines, byScanner, `${opener} / ${line}`);
+  return byLines;
+}
+
+test("fence lines follow CommonMark: a backtick info string holds no backtick, a closer has no info string, at most 3 spaces of indent", () => {
+  for (const line of ["```node --test```", "``a```", "    ```", "\t```"]) assert.equal(opensFence(line), false, line);
+  for (const line of ["```js", "~~~", "~~~x~~~", "   ```"]) assert.equal(opensFence(line), true, line);
+  assert.equal(closesFenceOf("```", "```js"), false);
+  assert.equal(closesFenceOf("```", "```   "), true);
+  assert.equal(closesFenceOf("```", "````"), true);
+  assert.equal(closesFenceOf("```", "~~~"), false);
+  assert.equal(closesFenceOf("````", "```"), false);
+  assert.deepEqual(fenceStep(null, "```node --test```"), { open: null, fenceLine: false });
+  assert.deepEqual(fenceStep("```", "```js"), { open: "```", fenceLine: false });
+});
+
+test("scanMarkdown: a `<!--` that never closes is literal text, a closed one is stripped, a fenced one opens nothing", () => {
+  const open = scanMarkdown("a <!-- open\nb");
+  assert.deepEqual(open.unclosedComment, { line: 1 });
+  assert.deepEqual(open.steps.map((step) => step.visible), ["a <!-- open", "b"]);
+  const mixed = scanMarkdown("a <!-- x -->\n<!-- open");
+  assert.deepEqual(mixed.unclosedComment, { line: 2 });
+  assert.deepEqual(mixed.steps.map((step) => step.visible), ["a ", "<!-- open"]);
+  const fenced = scanMarkdown("```\n<!--\n```\nafter");
+  assert.equal(fenced.unclosedComment, null);
+  assert.equal(fenced.steps[3].inComment, false);
+  assert.deepEqual(scanMarkdown("x\n~~~~\ny").openFence, { marker: "~~~~", line: 2 });
+  assert.equal(scanMarkdown("x\n```\ny\n```").openFence, null);
 });

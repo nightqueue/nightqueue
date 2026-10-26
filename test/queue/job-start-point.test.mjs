@@ -247,6 +247,44 @@ test("the holds of the open jobs come from their run states, and an unreadable q
   assert.equal(await openJobHolds({ store: failing, env }), null);
 });
 
+// The holds the runner would read with job 9 done or cancelled and holding `feat/x` in its run state.
+async function holdsOfJobNine(env, status) {
+  recordRunFields({ projectId: FIXED_PROJECT_ID, slug: "other-run", fields: { branch: "feat/x", worktree: "/tmp/other-wt" }, env });
+  const jobs = [{ id: OTHER_JOB, project_id: FIXED_PROJECT_ID, slug: "other-run", status }];
+  return await openJobHolds({ store: { jobs: { listOpenJobs: async () => jobs } }, env });
+}
+
+test("a cancelled job no longer holds its branch for another job's start, while a done one still does", async (t) => {
+  const env = homeEnv(t, "start-cancelled-owner");
+  const checkout = initGitRepo(makeDir(t, "start-cancelled-owner-repo"));
+  branchWithCommit(checkout, "feat/x");
+
+  const stillDone = await prepare(env, checkout, { job: jobOf({ branch: "feat/x" }), holds: await holdsOfJobNine(env, "done") });
+  assert.equal(stillDone.code, WORKTREE_FAILED);
+  assert.match(stillDone.message, /belongs to J-9, which is not closed; two open jobs never share a branch/);
+
+  const afterCancel = await prepare(env, checkout, { job: jobOf({ branch: "feat/x" }), holds: await holdsOfJobNine(env, "cancelled") });
+  assert.equal(afterCancel.ok, true, afterCancel.message);
+  assert.equal(afterCancel.branch, "feat/x");
+});
+
+test("a cancelled job retried after another job took its branch is refused naming that job, and resumes when nobody holds it", async (t) => {
+  const env = homeEnv(t, "start-cancelled-retry");
+  const checkout = initGitRepo(makeDir(t, "start-cancelled-retry-repo"));
+  branchWithCommit(checkout, "feat/x");
+  const first = await prepare(env, checkout, { job: jobOf({ branch: "feat/x" }) });
+  assert.equal(first.ok, true, first.message);
+
+  const refused = await prepare(env, checkout, { job: jobOf({ branch: "feat/x" }), holds: [otherHold({ branch: "feat/x" })] });
+  assert.equal(refused.code, WORKTREE_FAILED);
+  assert.match(refused.message, /belongs to J-9, which is not closed/);
+
+  const resumed = await prepare(env, checkout, { job: jobOf({ branch: "feat/x" }) });
+  assert.equal(resumed.ok, true, resumed.message);
+  assert.equal(resumed.branch, "feat/x");
+  assert.equal(resumed.reused, true);
+});
+
 test("a job whose run was cleared, as by a --fresh retry, is placed again on its start branch", async (t) => {
   const env = homeEnv(t, "start-fresh");
   const checkout = initGitRepo(makeDir(t, "start-fresh-repo"));

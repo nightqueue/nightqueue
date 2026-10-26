@@ -26,7 +26,6 @@ interface JobHeaderProps {
   job: JobDetail;
   statusLabel: string;
   closeState: JobCloseState | null;
-  runTier: string | null;
   actions: HeaderStatusActions;
   onCancel: () => void;
 }
@@ -72,7 +71,7 @@ function StatusPill({ status, closeState, closing, noChange, label }: { status: 
 
 export const BUDGET_COUNTER_TOOLTIP = "budget counter: inner retries count";
 
-// A static caption chip of the header (tier, priority, attempt), with an optional tooltip.
+// A static caption chip of the header (priority, attempt), with an optional tooltip.
 function HeaderChip({ children, title }: { children: string; title?: string }) {
   return (
     <span title={title} className="inline-flex min-h-7 items-center rounded-full border border-line px-2.5 text-sm text-muted">
@@ -211,8 +210,7 @@ function HeaderActions({ job, actions, onCancel }: { job: JobDetail; actions: He
 }
 
 // The job header: ref, title, status and chips; origin line; timing line; actions.
-export function JobHeader({ job, statusLabel, closeState, runTier, actions, onCancel }: JobHeaderProps) {
-  const tier = job.tier ?? runTier;
+export function JobHeader({ job, statusLabel, closeState, actions, onCancel }: JobHeaderProps) {
   return (
     <section aria-label="job header" className="flex flex-col gap-4">
       <HeaderActions job={job} actions={actions} onCancel={onCancel} />
@@ -222,7 +220,6 @@ export function JobHeader({ job, statusLabel, closeState, runTier, actions, onCa
         </h1>
         <div className="flex flex-wrap items-center gap-2.5">
           <StatusPill status={job.status} closeState={closeState} closing={actions.close.closing} noChange={job.resolution === "no-change"} label={statusLabel} />
-          {tier && <HeaderChip>{tier}</HeaderChip>}
           <HeaderChip>{`p${job.priority}`}</HeaderChip>
           <HeaderChip title={BUDGET_COUNTER_TOOLTIP}>{`attempt ${job.attempts} / ${job.max_attempts}`}</HeaderChip>
         </div>

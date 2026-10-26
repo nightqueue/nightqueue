@@ -373,6 +373,15 @@ async function startOnBranch(place, name) {
   return failed(`the branch \`${name}\` does not exist in ${place.checkout} nor on origin`);
 }
 
+// Why a job may not take back the worktree or branch its run recorded: another open job holds it now; null when none does.
+async function recordedRefusal(ctx, prior) {
+  if (prior.branch === null && prior.worktree === null) return null;
+  const holds = await ctx.openHolds();
+  if (!Array.isArray(holds)) return failed(`the queue could not be read to check who owns \`${prior.worktree ?? prior.branch}\`; retry`);
+  const refusal = ownerRefusal({ others: otherHolds(holds, ctx.job) }, { path: prior.worktree, branch: prior.branch });
+  return refusal ? failed(refusal) : null;
+}
+
 // Places a job on the starting point it was queued with, checked against the main checkout, live locks and every other open job.
 async function placeStart(ctx, start) {
   const listed = await ctx.git(["worktree", "list", "--porcelain"]);
@@ -394,6 +403,8 @@ export async function prepareJobWorktree({ job, checkout, baseBranch, env = proc
     const hints = { slug: start ? null : job.slug, type: recordedText(state?.type) };
     const ctx = { job, checkout, baseBranch, env, log, target, hints, openHolds, claimTimeoutMs, git: gitIn({ gitImpl, checkout, env }) };
     const prior = { worktree: recordedText(state?.worktree), branch: recordedText(state?.branch) };
+    const taken = await recordedRefusal(ctx, prior);
+    if (taken) return taken;
     const entry = await reusableEntry(ctx.git, { prior, hints });
     if (entry) {
       const held = shortBranch(entry.branch) ?? prior.branch;

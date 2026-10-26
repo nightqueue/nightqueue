@@ -1,7 +1,9 @@
 ARTIFACT_PATH: <RUN_DIR>/02-explore.md
 Read before acting (via Read): none.
-Return summary (≤10 lines, per the handoff contract of step 5.2): status + artifact path +
-"index saved: N files" (or the reason for not having saved it) + open items.
+[the generic handoff lines]
+The return also says "N files, M libs mapped" — the File map count and the Third-party libraries count.
+
+Inputs: the affected area and the objective below (from the validated brief, never the user's raw input); the known map of the project and its known libs when earlier runs indexed one; the `## Applicable lessons` and `## Project memory` when the context carries them.
 
 Find the files related to: [AFFECTED AREA]
 Task objective: [OBJECTIVE]
@@ -14,16 +16,43 @@ Do NOT rediscover the fresh files of the map — trust them and complement only 
 is missing for this area. Revalidate ONLY the ones marked REVALIDATE (they changed or
 disappeared since the indexing). Fix the responsibilities that are wrong.
 
-The index is persisted by the runtime from your artifact (`nightqueue run index-save`); these two lines only name where it lands:
-project: [PROJECT — the name on the Project: line of the prompt]
-repo_root: [CWD PATH]
-
 [Paste the `block` of `context_for_phase` (target: "explore") — omit when it came back empty:]
 [CONTEXT BLOCK]
 
-Produce also the `## Access map` of the target code (max 3 hops, each consumer walked up to
-a terminal) and the `unimplemented intent: <param> · governs <scope | filter |
-auth | other>` lines for every parameter/field/flag read and not used in a decision. The cap of
-30 files includes the files of the map.
+Search rule: a search for a file or a pattern stays inside the repository below or the project checkout — never from `/` or the home (the job refuses them) — and a plugin file lives under `plugin/` of the checkout, never elsewhere on disk.
 
 Limit: at most 30 relevant files.
+
+## Deliver
+
+Write these sections to ARTIFACT_PATH, in this order and with these headings. All three are mandatory (`nightqueue run check 02` fails without any of them). After this phase the runtime persists the project's structural index from `## File map` and `## Third-party libraries` (`nightqueue run index-save`), so keep those two headings and their line formats exactly.
+
+## File map
+- <absolute path> — <responsibility in 1 line>
+One line per mapped file, at most 30, the files the Access map cites included.
+
+## Access map
+Only for the target code of this task. One line per entry point, each consumer walked up at most 3 hops to a terminal:
+- <consumer> · <file:line> · <hop1 → hop2 → hop3> · terminal: <one of the below>
+
+Valid terminals (do not invent another label):
+- `click: <label/element> (<file:line>)`
+- `route: <URL + query params that change the behavior>`
+- `job/cron/webhook: <trigger> (<file:line>)`
+- `command: <entrypoint operated by a human — CLI, skill, agent> (<file:line>)`
+- `external consumer: not verifiable`
+
+A parameter, field or flag the target code READS and uses in no decision gets a line of its own, verbatim:
+`- unimplemented intent: <param> · governs <scope | filter | auth | other>`
+(`scope` = which records/entities the operation reaches; `filter` = a cut inside an already defined scope; `auth` = who can; `other` = the rest, with 3 words of explanation.)
+
+A target with no UI consumer, route, job or command (instruction text, a purely textual refactor, a library with no call site) → do not leave the section mute nor write `n/a`: write `**No entry point:** <reason> · <exact command that confirmed it>`.
+
+Cut off by the cap of 30 files → the last line of this section, after the entry points, is `partial: <N> consumers not walked up`. Without a cut the line does not exist.
+
+## Third-party libraries
+- <lib>@<resolved version>
+A lib `nightqueue libs` answered `not-found` → `- <lib> (version not found)`. No lib on the path → `- None`.
+
+Repository: [CWD PATH]
+Project: [PROJECT — the name on the Project: line of the prompt]

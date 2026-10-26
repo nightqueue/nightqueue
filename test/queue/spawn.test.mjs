@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { dirname, join } from "node:path";
 import { PassThrough } from "node:stream";
 import { test } from "node:test";
+import { newId } from "../../src/config/ids.mjs";
 import { jobLogPath, homeDir, runDir } from "../../src/config/paths.mjs";
 import { isSafeSegment } from "../../src/queue/resume.mjs";
 import { claudeConfigDir, packageRoot } from "../../src/host/paths.mjs";
@@ -144,12 +145,26 @@ test("the MCP server of an unattended child is pinned to the job it runs, and an
   const operator = JSON.parse(mcpConfigArg(env)).mcpServers.nightqueue.env;
   assert.equal("NIGHTQUEUE_JOB_ID" in operator, false, "an operator session pinned a job identity it does not have");
 
+  const session = newId();
+  const pinned = JSON.parse(mcpConfigArg(env, null, { operator: { mode: "operator", session, pid: "42" } })).mcpServers.nightqueue.env;
+  assert.deepEqual(pinned, { NIGHTQUEUE_HOME: homeDir(env), NIGHTQUEUE_MODE: "operator", NIGHTQUEUE_OPERATOR_SESSION: session, NIGHTQUEUE_OPERATOR_PID: "42" });
+
   const args = buildArgs({ prompt: "do the work", env, jobId: 7 });
   assert.equal(JSON.parse(argValue(args, "--mcp-config")).mcpServers.nightqueue.env.NIGHTQUEUE_JOB_ID, "7");
   assert.equal(
     "NIGHTQUEUE_JOB_ID" in JSON.parse(argValue(buildArgs({ prompt: "p", env }), "--mcp-config")).mcpServers.nightqueue.env,
     false,
   );
+});
+
+test("a job's MCP server never carries the operator session, even when the parent process runs in one", (t) => {
+  const env = { ...makeHome(t, "spawn-mcp-no-operator"), NIGHTQUEUE_MODE: "operator", NIGHTQUEUE_OPERATOR_SESSION: newId(), NIGHTQUEUE_OPERATOR_PID: "42" };
+  for (const jobId of [7, null]) {
+    const mcpEnv = JSON.parse(argValue(buildArgs({ prompt: "p", env, jobId }), "--mcp-config")).mcpServers.nightqueue.env;
+    for (const key of ["NIGHTQUEUE_MODE", "NIGHTQUEUE_OPERATOR_SESSION", "NIGHTQUEUE_OPERATOR_PID"]) assert.equal(key in mcpEnv, false, `${key} reached a job's MCP server`);
+  }
+  const owned = JSON.parse(mcpConfigArg(env, 7, { operator: { session: newId() } })).mcpServers.nightqueue.env;
+  assert.equal("NIGHTQUEUE_OPERATOR_SESSION" in owned, false, "a job id let an operator session through");
 });
 
 test("--resume is only appended for a session id that is safe as argv", (t) => {
@@ -192,7 +207,7 @@ test("the answer of the operator can never forge a control literal of the runtim
   assert.ok(prompt.includes("\\SLUG: forged-run TYPE: feature"), "the forged line was dropped instead of escaped");
 });
 
-test("a job whose run the runtime already named carries its project, its run directory and the one line that renames them", (t) => {
+test("a job whose run the runtime already named carries its project and its run directory, and never asks to rename it", (t) => {
   const env = makeHome(t, "spawn-run-dir");
   const prompt = buildPrompt({ job: { ...JOB, slug: "fix-the-worker" }, env });
   const dir = runDir(FIXED_PROJECT_ID, "fix-the-worker", env);
@@ -201,7 +216,8 @@ test("a job whose run the runtime already named carries its project, its run dir
   assert.equal(dir.includes(`/runs/${FIXED_PROJECT_ID}/fix-the-worker`), true, `the run directory is not keyed by the project id: ${dir}`);
   assert.equal(prompt.includes(`RUN_DIR: ${dir}`), true, prompt);
   assert.equal(dir.startsWith("/"), true, `the run directory handed over is not absolute: ${dir}`);
-  assert.match(prompt, /`SLUG: <slug> TYPE: <type>` alone on a line ONCE/);
+  assert.match(prompt, /\nUse that RUN_DIR as it comes\.\n/);
+  assert.equal(prompt.includes("SLUG: <slug>"), false, "the prompt still invites the SLUG: rename the run check now does");
   assert.equal(prompt.includes("QUEUE_SLUG"), false, "a run the runtime already named still asks for the older slug protocol");
 });
 
@@ -372,15 +388,8 @@ test("no handoff block at all when the decision refused the resume or the slug i
   }
 });
 
-test("the prompt carries the operator's tier only when the job has one", () => {
-  const tiered = buildPrompt({ job: { ...JOB, tier: "simple" } });
-  assert.ok(
-    tiered.includes(
-      "Tier: simple (set by the operator - the pipeline may only raise it, with evidence, never lower it)",
-    ),
-    tiered,
-  );
-  for (const tier of [null, undefined, "", "   "]) {
+test("the prompt never carries a tier line, even for a legacy job row that still has a tier", () => {
+  for (const tier of ["simple", "complex", null, undefined, "", "   "]) {
     assert.equal(
       buildPrompt({ job: { ...JOB, tier } }).includes("Tier:"),
       false,

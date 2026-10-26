@@ -121,11 +121,11 @@ function readRunners(env, killImpl) {
 }
 
 // The live block of a running job, derived from the tail of its log: the narrator's state plus the partial tokens of the attempt.
-export function liveBlock(tail, { tier = null, truncated = false } = {}) {
+export function liveBlock(tail, { truncated = false } = {}) {
   const tokens = partialTokens(tail);
   return {
     source: "log-tail",
-    ...liveState(tail, { tier }),
+    ...liveState(tail),
     truncated: truncated === true,
     tokens: tokens ? { in: tokens.in, out: tokens.out, cache_read: tokens.cache_read, cache_creation: tokens.cache_creation } : null,
     tokens_estimated: tokens ? tokens.estimated : null,
@@ -136,7 +136,7 @@ export function liveBlock(tail, { tier = null, truncated = false } = {}) {
 function readLiveOf(job, env) {
   const attempt = readAttemptTail(jobLogPath(job.id, env));
   if (attempt === null) return { live: null, error: `the log of ${jobRef(job.id)} is missing or unreadable` };
-  return { live: liveBlock(attempt.text, { tier: job.tier, truncated: attempt.truncated }), error: null };
+  return { live: liveBlock(attempt.text, { truncated: attempt.truncated }), error: null };
 }
 
 // Gives every running job its `live` block and every other job `live: null`, with the section that reports how the read went; a log that cannot be read leaves only its own job at null.

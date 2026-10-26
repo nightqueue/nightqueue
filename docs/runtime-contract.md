@@ -45,13 +45,15 @@ What a runtime has to provide, and what it can rely on:
   `runs/<project_id>/` once (a `runs/.by-id` marker records it, and a run
   already present under the id is never overwritten). The runtime creates the
   directory before the session starts.
-- Artifact names, in order: `00-main-measure.md` (post-merge resume only),
-  `01-triage.md`, `02-explore.md`, `03-plan.md`, `04-implementation.md`,
-  `05a-qa-analyst.md`, `05-qa.md`, `06-verification.md`, `06-runtime.md`.
+- Artifact names, in order: `01-triage.md`, `02-explore.md`, `03-plan.md`, `04-implementation.md`,
+  `05-qa.md`, `06-verification.md`, `07-runtime.md`. The phases are whole numbers, one
+  artifact per phase: the QA analyst, every prover and the consolidation all write rounds of
+  `05-qa.md`.
 - `state.json` in the same directory carries the resumable state, and **the runtime
   is its only writer**: every key goes through `src/queue/run-state.mjs`, which the
   MCP tools `run_phase_done`, `run_terminate`, `run_skip`, `run_outcome` and `run_set`, the
-  command `nightqueue run pr` and the runner itself call. The pipeline never writes
+  commands `nightqueue run check`, `nightqueue run pr` and `nightqueue run publish`, and the
+  runner itself call. The pipeline never writes
   the file, and an `updatedAt` an older plugin hand-wrote is overwritten by the
   runtime's clock and never read. Every key, and who writes it:
   - `schemaVersion` (always `1`), `projectId` and `slug`: every write, as fixed
@@ -59,21 +61,34 @@ What a runtime has to provide, and what it can rely on:
     rewritten and never read to find the run.
   - `updatedAt` and the `at` of every record: the runtime's UTC clock, one stamp per
     write.
-  - `phases[{phase, at, artifact?, verdict?, note?, reason?}]`: `run_phase_done`, append-only,
-    so a phase recorded twice never erases the first record.
-  - `termination{phase, reason, at}`: `run_terminate`; a run terminated this way is
-    never resumed by a retry.
+  - `phases[{phase, at, artifact?, verdict?, note?, reason?, by?}]`: `nightqueue run check` on
+    a complete phase and `run publish`/`run pr` for `commit` (both `by: "runtime"`), and
+    `run_phase_done`; append-only, so a phase recorded twice never erases the first record.
+    One merge keeps an older plugin from doubling a row: a `run_phase_done` with no `reason`
+    whose phase is the one of the LAST entry, written `by: "runtime"` with the same artifact
+    (or the call sent none), merges its `verdict`/`note` into that entry instead of appending.
+  - `checks{<NN>: {line, ok, completed, digest, at}, lastFailure?{check, line, at}}`:
+    `nightqueue run check` alone, the memo of the last check of each artifact (its first
+    notable line and the sha256 of the text it read); it supplies the reason of a re-run and
+    keeps a check run twice on the same text from appending twice. It is not a `run_set` field.
+  - `termination{phase, reason, at, by?}`: `run_terminate`, and `nightqueue run check 01` on a
+    terminal triage verdict (`by: "runtime"`); a run terminated this way is never resumed by a
+    retry. A runtime-written termination lasts one attempt: a completed `run check 01` that
+    proceeds lifts it (`recorded: termination cleared`), and so does a `queue retry` of a `gate`
+    job. One written by hand (no `by`) is never lifted.
   - `skips{<phase>:{by, reason?, at}}`: why a slot of the studio track did not run,
-    for display only. The `tier` entries (`by: "tier"`, no reason) are written by the
-    runtime on every `tier`/`type` write, from `phasesFor(tier, type)`, and from the
-    tier alone while `type` is unknown; a tier raise drops the ones back in the track.
+    for display only. Every run executes every phase, so the runtime writes no skip of
+    its own; a `tier` entry (`by: "tier"`) an older runtime wrote is kept and shown as is.
     Agent entries (`by` an agent name, with a reason) are written by `run_skip`, which
-    refuses a phase already in `phases` and the `tier` author. The key is never in
+    refuses a phase already in `phases` and an author that is not an agent (`tier`
+    included). The key is never in
     `phases` and is never read by resume, routing, the run report or the run context;
     a phase that still runs shows as run. `pipeline_phases.status` is post-run
-    telemetry only: it is written by `pipeline_log` after the run and is never a
+    telemetry only: it is written by `nightqueue run report` (or an older plugin's
+    `pipeline_log`) from `state.json` after the run and is never a
     source of the live track.
-  - `outcome{status, at, notice?, prUrl?}`: `run_outcome` (`status`, `notice`),
+  - `outcome{status, at, notice?, prUrl?}`: `run_outcome` (`status`, and `notice` or, for a
+    gate, the notice it composes from `question`/`from_artifact`),
     `nightqueue run pr` (`status: "done"`) and the runner, which writes `prUrl` at
     finalize from what the session really published - it is never a parameter.
     `status: "no_change"` is the run's deliberate conclusion that no code change is
@@ -82,10 +97,15 @@ What a runtime has to provide, and what it can rely on:
   - `prTemplate{source, path?, headings, at}`: `nightqueue run pr` (both the
     `--template` query and the publishing call), the template the body is checked
     against - `repo` with its path, or `nightqueue`.
-  - `type`, `tier`, `tierRaiseReason`, `branch`, `worktree` and
-    `qaStageA{artifact, verdict?, at}`: `run_set`; the runner also records
-    `tier`/`tierRaiseReason` from the `Tier raised:` line and `type` from the `TYPE:`
-    half of the slug declaration. Inside a queued job the runner records `branch` and
+  - `commitType`: `nightqueue run check 01` only, from the Brief's `**Commit type:**`
+    (`run_set` does not take it).
+  - `type`, `branch`, `worktree` and
+    `qaStageA{artifact, verdict?, at}`: `run_set`; `nightqueue run check 01` also records
+    the `type` (the Brief's, else derived from the triage when missing) and `run check 05 --stage analyst` the `qaStageA` marker
+    (artifact `05-qa.md`); a resume re-enters at stage B only while that marker is newer than the
+    last `implementation` record; the runner also records
+    `type` from the `TYPE:` half of the slug declaration. A `tier`/`tierRaiseReason` an
+    older runtime wrote stays in the file and is never read. Inside a queued job the runner records `branch` and
     `worktree` itself, before the spawn, when it creates the job's worktree; the pipeline
     sends them only in an interactive `/resolve`.
   - `resumeCount`: the runner alone, when it hands a resume over to the pipeline.
@@ -95,7 +115,7 @@ What a runtime has to provide, and what it can rely on:
     right after it creates the run directory and before it creates the worktree - so a job
     the worktree step gates still has it. `ref` is `J-<id>`, `projectKey` the project's key. A later attempt of
     the same job keeps the first block, a block of another job refuses the write, and a
-    `SLUG:` rename carries it along with the directory. `job` is runtime-only: `run_set`
+    rename (`run check 01` or `SLUG:`) carries it along with the directory. `job` is runtime-only: `run_set`
     refuses `job` and every `job.*` name (``kept("`job` is written by the runtime only")``),
     and no pipeline write can change it. It is how a run knows itself without the database:
     the `run_*` tools and `nightqueue run` resolve a job's run from it when the row cannot be
@@ -146,8 +166,7 @@ What a runtime has to provide, and what it can rely on:
   append that races the rename starts a live file. A replay that meets the database still
   unavailable stops there and leaves the rest of the file untouched.
 - Literals a runtime parses from the pipeline's stdout: `SLUG: <slug> TYPE: <type>`
-  (the run renames itself), `Tier raised: <from> -> <to>: <evidence>` (the Brief
-  raised the tier), `## Requires user confirmation` (the run is waiting on a human
+  (the run renames itself), `## Requires user confirmation` (the run is waiting on a human
   gate), `## Notice` (the executive summary to deliver) and `QUEUE_SLUG:`, which
   **is deprecated in favour of `SLUG:`** and still read.
 - Authority of each literal:
@@ -157,14 +176,12 @@ What a runtime has to provide, and what it can rely on:
     row. A slug that is not a safe path segment, or one another run of the project
     already holds, is refused - the job keeps the slug the runtime gave it and the
     reason goes to the job log. `TYPE:` is optional and is recorded as the run's
-    `type`.
+    `type`. The shipped plugin no longer prints it - `run check 01` binds the slug
+    from the triager's `**Slug:**` - and the runtime keeps parsing it for an older
+    plugin.
   - `QUEUE_SLUG:` - the LAST standalone line wins. It is kept for a plugin older
     than the named prompt, which has no other way to bind its slug, and the runtime
     still asks for it in the prompt of a job whose row carries no run yet.
-  - `Tier raised:` - a standalone line, the LAST of an event wins. `<to>` becomes the
-    run's `tier` and `<evidence>` its `tierRaiseReason`; the Brief prints it before
-    the run has a slug, so the raise waits in memory until there is a `state.json` to
-    record it into.
   - `## Notice` - read from the FINAL `result` event; an intermediate message that
     echoes an earlier one never wins.
 - The prompt is the other direction of the same contract: the runtime names the run
@@ -203,7 +220,10 @@ What a runtime has to provide, and what it can rely on:
   `03-plan.md` is readable and has its own `## Requires user confirmation` section (heading
   to the next level-2 heading, outside fences), a notice shorter than that section by more
   than `GATE_NOTICE_MARGIN_CP` (200 code points, `src/queue/classify.mjs`) is read the same
-  way - a gate whose notice does not carry the question is `failed`, with the
+  way (except a notice recorded through `run_outcome` that nests another artifact's section:
+  its first non-blank line after the gate heading is another heading, the shape
+  `from_artifact` composes; that notice is another gate and is not measured against the
+  plan's section; a `## Notice` in the final text is always measured) - a gate whose notice does not carry the question is `failed`, with the
   fixed notice `the run stopped at a gate but its notice does not carry the question - see
   <plan path>` (`<plan path>` unknown when the classifier was given none); a clean run
   reaching neither reading is `failed` otherwise, keeping its final text as the reason.
@@ -388,9 +408,12 @@ read-only and sit behind the same token gate as the rest of `/api`.
 
 **Operator sessions.** `nightqueue open` (and `nightqueue queue session`, and a studio
 terminal through them) starts `claude` with `NIGHTQUEUE_MODE=operator`,
-`NIGHTQUEUE_OPERATOR_PID=<pid of the launcher>` and, only when a project is preselected,
-`NIGHTQUEUE_PROJECT=<project id>`; an inherited value of any of the three is dropped first, and
-the runner strips all three from every job it spawns. `nightqueue open` runs in the home, never
+`NIGHTQUEUE_OPERATOR_PID=<pid of the launcher>`, `NIGHTQUEUE_OPERATOR_SESSION=<a ULID minted
+per launch>` and, only when a project is preselected, `NIGHTQUEUE_PROJECT=<project id>`; an
+inherited value of any of them is dropped first, and the runner strips them all from every job
+it spawns. The same session id, `NIGHTQUEUE_MODE` and the pid are pinned explicitly in the MCP
+server's env inside `--mcp-config` (a job's MCP env never carries them), and the argv pins
+`--permission-mode default` (a job keeps `bypassPermissions`). `nightqueue open` runs in the home, never
 in a checkout; a hook resolves the session's project from its directory, else from
 `NIGHTQUEUE_PROJECT` (never inside a job, and only for a well-formed id), and SessionStart then
 leads its block with `Current project (preselected by nightqueue open): <name>`. In operator mode only (never in a
@@ -404,67 +427,81 @@ probe each; no log tail, no gh), omitted when the registry cannot be listed. The
 `--settings` are the jobs' settings with two changes, neither of which reaches the host's
 `settings.json` (`desiredHooks` and the doctor hook check are unchanged, so an edit in any other
 Claude session never spawns a hook): the PreToolUse matcher becomes
-`Agent|Task|Bash|Read|Grep|Glob|Edit|Write|MultiEdit|NotebookEdit`, and a `SubagentStop` group
-runs `nightqueue hook subagent-stop` (timeout 60 s); `permissions.allow` pre-approves
-`mcp__nightqueue__*`, `WebFetch` and `WebSearch`: the operator reads the web (a linked page, an
-issue, a library's docs) without a prompt; the guard does not judge those two tools, since they
-neither edit nor execute.
+`Agent|Task|Bash|Read|Grep|Glob|Edit|Write|MultiEdit|NotebookEdit`, and `permissions.allow`
+pre-approves `mcp__nightqueue__*`, `WebFetch` and `WebSearch` only: the operator reads the web
+(a linked page, an issue, a library's docs) without a prompt; the guard does not judge those
+two tools, since they neither edit nor execute. Edit, Write and Bash are never pre-approved.
 
 The `agent-foreground` hook in operator mode is the operator guard. Each refusal is a PreToolUse
 `deny` whose reason is one line starting `operator guard:`, naming what is allowed instead; it never moves
-a call to the foreground. The main thread (no `agent_id` in the payload) may not use `Edit`,
-`Write`, `MultiEdit` or `NotebookEdit`; reads anything on disk but `<home>/secrets.json` and any
-`.env*` file, never a Grep whose `path` is the home or a parent of it (the sweep would read the
-secrets file) nor a path that cannot be resolved (an absolute Glob `pattern` or Grep `glob` is
-judged by its static prefix too); Bash only as one bare command with no shell
-operator or backslash:
-`nightqueue|nq <queue|project|org|connection|doctor|memory|lesson|libs|version> …`
-(not `queue session`, `project add|move`, `queue add --run`,
-`doctor --fix`, `--follow` or `--foreground`) or a read-only `git -C <checkout> …`; and
-`Agent`/`Task` only for the `triage`, `qa` and `reviewer` subagents (`<role>`,
-`nightqueue:<role>` or `plugin_nightqueue_<role>`). Every top-level CLI command is classified as
-allowed or refused in one list, and so is every subcommand of `queue` and `project`;
-a test keeps both exhaustive. Every subagent reads exactly where the main thread reads. The
-`qa` subagent may edit only inside a qa worktree `<home>/qa/<project id>/<id>`; its Bash is
-`nightqueue sandbox worktree <project>`, `nightqueue sandbox worktree --drop <path>`, or a
-command of the exact shape `cd <path inside a qa worktree> && …` - the only accepted shape for
-anything else; the text after `&&` may hold no `cd`/`pushd`/`popd`, `..` segment, `$(…)`,
-`$'…'`, backtick, backslash, `$VAR`, leading `~`, newline, glob or brace next to a dot, or
-absolute path outside the worktree except `/dev/null` (an option glued to one, `-C/etc`,
-included); in any segment of the chain `nightqueue` runs only as `nightqueue sandbox <cmd>`,
-`gh` only as a read, and `git` never as `push`, `remote` or `config`. This anchor is
-best-effort, **not a sandbox**: it reads the command line, and a program the command starts can
-still reach outside the worktree. Any other subagent may not edit, and its Bash is one bare
-`nightqueue|nq` read (`queue status|log`, `project list`,
-`org list`, `connection list`, `memory stats`, `doctor` without `--fix`, `version`), the main
-thread's `git -C` reads, `gh pr view|diff|checks|list|status` or `gh issue view|list`. The
-guard fails closed: an error inside it refuses every tool but `Read`/`Grep`/`Glob`, an `Edit`,
-`Write`, `MultiEdit`, `NotebookEdit`, `Bash`, `Agent` or `Task` call whose `tool_input` is not
-an object is refused, and a registry it cannot read refuses `git -C`.
+a call to the foreground; an allowed call answers nothing (never `allow`), so the host's
+permission prompt still applies. Every call of the main thread and of every subagent (a payload
+with `agent_id`/`agent_type`) is judged in one order: a malformed call; the reads (anything on
+disk but `<home>/secrets.json` and any `.env*` file, never a Grep whose `path` is the home or a
+parent of it, nor a path that cannot be resolved; an absolute Glob `pattern` or Grep `glob` is
+judged by its static prefix); `Agent`/`Task` (main thread), allowed for every plugin agent but
+the operator under `nightqueue:<name>` or `plugin_nightqueue_<name>` (`PIPELINE_AGENTS`; a bare
+name, `nightqueue:triage`, `nightqueue:qa` are refused); the writes; then Bash. A write or a Bash
+command lands in one of three bands:
+
+- **never**, refused with `operator guard: never (<what>)` even when a consent would match:
+  a write under the home, the Claude config dir, `~/.codex`, any `.claude/settings*.json` or
+  `.codex/`, or a `.env*` file; a Bash command any segment of which (split on unquoted `;`,
+  `&`, `|`, `(`, `)`, newline, `$(` and backtick, env assignments and wrappers such as `sudo`,
+  `env`, `xargs`, `timeout <n>` skipped) deletes files, force- or delete-pushes, runs
+  `git branch -D|-d`, `reset --hard`, `clean` or `rm`, is a refused nightqueue form (every
+  refused top-level command but `verify` and `sandbox <cmd>`, plus `sandbox worktree`,
+  `queue session`, `project add|move`, `queue add --run`, `doctor --fix`, `--follow`,
+  `--foreground`), runs `sh -c`/`eval` text, names the home, or names a `.env*` or
+  `secrets.json` path (a `<rev>:<path>` included). A relative path word is resolved only after
+  an explicit `cd` in the command.
+- **free**: the main thread's one bare
+  `nightqueue|nq <queue|project|org|connection|doctor|memory|lesson|libs|version> …` (not
+  `queue session`, `project add|move`, `queue add --run`, `doctor --fix`, `--follow` or
+  `--foreground`) or read-only `git -C <checkout> …`; a subagent's one bare `nightqueue|nq` read
+  (`queue status|log`, `project list`, `org list`, `connection list`, `memory stats`, `doctor`
+  without `--fix`, `libs`, `version`), the `git -C` reads (also as
+  `cd <checkout> && git <read>`), `gh pr view|diff|checks|list|status` or `gh issue view|list`.
+  Every top-level CLI command is classified as allowed or refused in one list, and so is every
+  subcommand of `queue` and `project`; a test keeps both exhaustive.
+- **consent**: a write is `edit` (an existing path, inside a registered checkout, else refused)
+  or `create` (a new path); any other Bash is `git-write` (a git subcommand neither read nor
+  never) or `run`, and must be one bare command as `cd <registered checkout> && <command>`,
+  `git -C <registered checkout> <command>`, or bare from a cwd inside a checkout (a git `-c`,
+  `--git-dir`, `--work-tree`, `--namespace` or `--exec-path` option is refused). It passes only
+  when a live consent of the session covers it, else
+  `operator guard: needs consent (<kind> <scope>): …`.
+
+Consents live in `<home>/operator/<NIGHTQUEUE_OPERATOR_SESSION>.jsonl`, append-only, one JSON
+event per line: a grant `{at, session, pid, project_id, project, kind, scope, reason, answer}` or
+a revoke `{at, revoke: true, project_id, kind, scope, answer?}`; the live consents are the grants
+no later revoke of the same project, kind and scope withdrew. A missing file is no consent, an
+unparsable line is skipped, any other read error fails closed. Each event appends one line to
+`<home>/logs/operator-<session>.log`. Coverage is never widened: a path consent covers its
+canonical path and what lies under it (a symlink resolving into the never band stays never); a
+command consent covers a command run in its project's current checkout whose words, after
+`git`/`-C <dir>` and a leading `timeout <n>`, open with the consent's words; a
+`connection-write` consent covers one exact `<connection> <METHOD> <path>`. Without a session id
+(no `nightqueue open`, or inside a job) there are no consents. The record is the audit and the
+guard; the host's prompt is the barrier.
+
+The guard fails closed: an error inside it refuses every tool but `Read`/`Grep`/`Glob`, an
+`Edit`, `Write`, `MultiEdit`, `NotebookEdit`, `Bash`, `Agent` or `Task` call whose `tool_input`
+is not an object is refused, and a registry it cannot read refuses `git -C`.
 Job mode is unchanged and still fails open.
 
-The `subagent-stop` hook acts only in an operator session (`NIGHTQUEUE_MODE=operator`, no
-`NIGHTQUEUE_JOB_ID`), on `SubagentStop`, for the `qa` role. Its one candidate is the first line
-of `last_assistant_message` when it reads `QA_WORKTREE: <path>`; only when the payload has no
-`last_assistant_message`, it is the first `QA_WORKTREE: <path>` line of the subagent's last
-assistant entry in the final 2 MB of `agent_transcript_path` - a path the transcript merely
-quotes elsewhere is never a candidate. Backticks around the path and trailing `.,;:)` are
-dropped. The candidate is dropped (unlock, `git worktree
-remove --force`, `git worktree prune`) only when it is a qa worktree of this home whose
-project's checkout exists and whose lock names `NIGHTQUEUE_OPERATOR_PID`, or that has no lock:
-a worktree another live session holds is never dropped. It always answers nothing and never
-fails the session. What it misses, `nightqueue open` and `nightqueue doctor --fix` drop once the
-worktree is stale (see [the CLI](cli.md#sandbox)).
+In an operator session the MCP server's instructions replace the tools-only line with the
+three-band line and add one line on `connection-write`; any other client sees them unchanged.
 
-The thirty-two MCP tools of tool contract 9, with the parameters `nightqueue mcp` actually
-accepts (every answer carries `contract: 9`; a call to a tool an older contract had and this one
+The thirty-three MCP tools of tool contract 10, with the parameters `nightqueue mcp` actually
+accepts (every answer carries `contract: 10`; a call to a tool an older contract had and this one
 dropped is answered with the older-definitions line):
 
 | tool | parameters |
 |---|---|
 | `lesson_recall` | `query?`, `project?`, `target?`, `exclude_ids?` |
 | `context_for_phase` | `target` (`triager`, `architect`, `coder`, `qa`, `verifier`, `explore`), `query?`, `project?`, `repo_root?`, `exclude_ids?` |
-| `phase_prompt` | `target` (`triager`, `explore`, `architect`, `coder`, `coder-fix`, `verifier`, `runtime`, `qa-lite`, `qa-analyst`, `qa-prover`, `reflector` - no artifact, `check` null), `query?`, `stage?`, `delivery_constraints?`, `raw_evidence?`, `group?` (required for `qa-prover`), `note?`, `artifact?` (`runtime` only), `project?`, `slug?` |
+| `phase_prompt` | `target` (`triager`, `explore`, `architect`, `coder`, `coder-fix`, `verifier`, `runtime`, `qa-lite`, `qa-analyst`, `qa-prover`, `reflector` - no artifact, `check` null), `query?`, `stage?`, `delivery_constraints?`, `request?` (`triager` only, required outside a job), `raw_evidence?` (accepted and ignored), `group?` (required for `qa-prover`), `note?`, `artifact?` (accepted and ignored: an older plugin still sends it; `runtime` always answers `07-runtime.md`), `project?`, `slug?` |
 | `lesson_save` | `title`, `root_cause`, `solution`, `prevention`, `attempts?`, `project?`, `target?` (a title the owner already has bumps its `attempts`; answers `deduped` and `violated` - `true` only inside a queue job, on a dedup onto a lesson this run was given, which also bumps the lesson's `violated`) |
 | `memory_recall` | `query?`, `project?` |
 | `lesson_delete` | `id` (`L344` or the plain number), `project` (name or key): deletes one lesson and its search entry; an unknown id or another project's is refused; refused inside a queue job; answers `{id, ref, title, project}` |
@@ -472,8 +509,8 @@ dropped is answered with the older-definitions line):
 | `memory_save` | `key`, `value`, `project?` (a key the owner already has is kept, never overwritten: answers `deduped: true` with the stored value; answers `{id, ref: "M<id>", project, deduped, value}`; allowed inside a queue job) |
 | `index_save` | `project`, `repo_root`, `files[{path, responsibility}]`, `libs?[{lib, version}]` |
 | `index_recall` | `project`, `repo_root?`, `query?` |
-| `pipeline_log` | `outcome`, `project?`, `slug?`, `tier?`, `tier_operator?`, `tier_raise_reason?`, `task_type?`, `gate_stop?`, `duration_s?`, `phases?[{phase, model?, status?, retry?, duration_s?, note?, reason?}]` (a phase sent with no `reason` takes the one `run_phase_done` recorded for it, paired by phase name in order, only when `phases` lists exactly as many rows of that phase as the run recorded; otherwise none of that phase's reasons are copied and the answer's `reasons_unpaired` names it) |
-| `queue_add` | `project?`, `prompt`, `cwd?`, `register?`, `key?` (with `register`), `title?` (one line, at most 120 characters; blank is none), `priority?` (1-9), `max_attempts?` (1-10), `timeout_s?` (60-86400), `tier?` (`trivial`, `simple`, `complex`), `origin?` (a list of `{kind, ref}`; omitted or null detects every recognised link of the prompt, `[]` is none; the old `{kind, ref}` or `false` is refused as an older client, contract 6) |
+| `pipeline_log` | `outcome`, `project?`, `slug?`, `task_type?`, `gate_stop?`, `duration_s?`, `phases?` (accepted and ignored: the phase rows come from the run's `state.json`, with their recorded `note` and `reason`; inside a job a run already recorded in this attempt answers `already_recorded: true` and adds no row; outside a job, or in a job with no recorded attempt start, so does a run whose last record carries the same outcome and phase count; the operator's outcomes add a row per call) |
+| `queue_add` | `project?`, `prompt`, `cwd?`, `register?`, `key?` (with `register`), `title?` (one line, at most 120 characters; blank is none), `priority?` (1-9), `max_attempts?` (1-10), `timeout_s?` (60-86400), `origin?` (a list of `{kind, ref}`; omitted or null detects every recognised link of the prompt, `[]` is none; the old `{kind, ref}` or `false` is refused as an older client, contract 6) (a prompt that depends on another job or pull request is refused before anything is registered or queued; see "A job is self-contained" below) |
 | `project_register` | `cwd`, `name?`, `key?`, `org?` (registers the repository of `cwd`, a linked worktree as its main checkout, only after the person said yes; answers `{registered, project, key, org, path, hint}`; nothing is queued) |
 | `project_integrations` | `project`, `action` (`show`, `set`, `unset`), `key?` (`<kind>.<setting>`, required by `set`/`unset`), `value?` (text, required by `set`) (answers `{project, integrations, providers: [{kind, keys}]}` with the settings each provider of the build declares; `set` validates against the provider, `unset` of the last key leaves the project without integrations; `set`/`unset` refused from inside a job; never a secret) |
 | `tracker_issues` | `team?` (the tracker's team key), `project?` (the tracker's project name), `state?` (`open` default, `closed`, `all`), `limit?` (1-50, default 25), `include_filters?`, `text?` (title or description contains it, case-insensitive, at most 200), `label?` (one label name, exact, case-insensitive) (read-only, the home's Linear connection, no nightqueue project; answers `{ok: true, provider, items, truncated, filters?}` or the normal answer `{ok: false, error: "no-connection" \| "provider-unavailable", hint, provider}`; filters cached five minutes) |
@@ -481,19 +518,20 @@ dropped is answered with the older-definitions line):
 | `tracker_create` | `team`, `title` (at most 255), `description?` (at most 50,000), `priority?` (0-4), `state?`, `labels?`, `assignee?` (a name, display name, email or `me`) (writes only after the person's explicit ok; refused inside a job before anything is sent; answers `{ok: true, provider, issue: {ref, title, url}}`; an unknown or ambiguous name is `invalid-input` with the valid names and nothing is sent) |
 | `tracker_comment` | `ref`, `body` (at most 50,000) (writes only after the person's explicit ok; refused inside a job; answers `{ok: true, provider, ref, comment: {url}}`) |
 | `tracker_update` | `ref`, `title?`, `description?` (replaces the whole text), `priority?`, `state?`, `assignee?` (`none` unassigns), `labels_add?`, `labels_remove?` (writes only after the person's explicit ok; refused inside a job; answers `{ok: true, provider, issue, changed}`; a write that timed out or was not confirmed answers `provider-unavailable` with a hint to read the issue before trying again; no tracker tool deletes or archives) |
-| `connection_call` | `connection` (a stored connection's name), `method?` (`GET` default, `POST`, `PATCH`, `PUT`; any other, `DELETE` included, is `invalid-input`), `path?` (at most 2,000; relative to the root: a scheme, a leading `//`, a `.` or `..` segment, `\`, `?`, `#`, whitespace or an encoded `.`, `/` or `\` is `invalid-input`), `query?` (an object of text, number, boolean or list of texts), `body?` (JSON, at most 50,000 characters serialized, never on a GET) (the runtime injects the secret and the host is fixed by the kind: Sentry `<url>/api/0/`, Linear `https://api.linear.app/graphql` with an empty path and the GraphQL in `body`, Discord the webhook URL itself with an empty path (GET or POST) or exactly `messages/<id>` (GET or PATCH, to read or edit a posted message), and only `thread_id` and `wait` in `query`; a redirect is never followed; 10 s timeout; answers `{ok: true, status, body, body_truncated?}` with the body redacted then cut at 50,000 characters, or the normal answer `{ok: false, error: "no-connection" \| "invalid-input" \| "provider-unavailable", status, detail}` with a fixed detail, never the provider's message, the URL or a header; a GET reads, any other method only after the person's explicit ok to the exact connection, method, path and body; a non-GET is refused inside a job before anything is sent, a GET is allowed) |
+| `connection_call` | `connection` (a stored connection's name), `method?` (`GET` default, `POST`, `PATCH`, `PUT`; any other, `DELETE` included, is `invalid-input`), `path?` (at most 2,000; relative to the root: a scheme, a leading `//`, a `.` or `..` segment, `\`, `?`, `#`, whitespace or an encoded `.`, `/` or `\` is `invalid-input`), `query?` (an object of text, number, boolean or list of texts), `body?` (JSON, at most 50,000 characters serialized, never on a GET) (the runtime injects the secret and the host is fixed by the kind: Sentry `<url>/api/0/`, Linear `https://api.linear.app/graphql` with an empty path and the GraphQL in `body`, Discord the webhook URL itself with an empty path (GET or POST) or exactly `messages/<id>` (GET or PATCH, to read or edit a posted message), and only `thread_id` and `wait` in `query`; a redirect is never followed; 10 s timeout; answers `{ok: true, status, body, body_truncated?}` with the body redacted then cut at 50,000 characters, or the normal answer `{ok: false, error: "no-connection" \| "invalid-input" \| "provider-unavailable" \| "needs-consent", status, detail}` with a fixed detail, never the provider's message, the URL or a header; a GET reads, any other method only after the person's explicit ok to the exact connection, method, path and body; a non-GET is refused inside a job before anything is sent, a GET is allowed; in an operator session a non-GET with no live `connection-write` consent covering it answers `needs-consent` and sends nothing) |
+| `operator_consent` | `kind` (`edit`, `create`, `run`, `git-write`, `connection-write`), `scope` (at most 2,000: an absolute path for edit/create, one bare command for run, a writing git subcommand for git-write, `<connection> <POST\|PATCH\|PUT> <path>` for connection-write), `project?` (required but for connection-write), `reason?` and `answer?` (the person's answer quoted verbatim; both required on a grant), `revoke?` (records the person's consent in `<home>/operator/<session>.jsonl` and one line in `<home>/logs/operator-<session>.log`; a never-band scope, a revoke that matches nothing, a call inside a job or outside an operator session are refused; answers `{ok: true, consent, line}` or `{ok: true, revoked, line}`) |
 | `queue_status` | `job_id?`, `pr_url?` (never with `job_id`), `limit?` (1-50) |
 | `queue_run` | `job_id?` |
 | `queue_stop` | `pid?` |
 | `queue_session` | `job_id` |
 | `queue_cancel` | `job_id`, `reason?`, `stop?`, `release_worktree?` |
 | `queue_close` | `job_id`, `force?` |
-| `queue_retry` | `job_id`, `note?`, `fresh?`, `run?` |
+| `queue_retry` | `job_id`, `note?`, `fresh?`, `run?` (a `closed` job, or a `done` job whose pull request is merged, is refused: a finished job does not resume) |
 | `run_phase_done` | `phase`, `artifact?`, `verdict?`, `note?`, `reason?` (why the phase ran again; omitted on its first run), `project?`, `slug?` |
 | `run_terminate` | `phase`, `reason`, `project?`, `slug?` |
 | `run_skip` | `phase`, `by`, `reason`, `project?`, `slug?` |
-| `run_outcome` | `status` (`done`, `gate`, `no_change`), `notice?` (required with `no_change`), `project?`, `slug?` |
-| `run_set` | `type?`, `tier?`, `tier_raise_reason?`, `branch?`, `worktree?`, `qa_stage_a?{artifact, verdict?}`, `project?`, `slug?` |
+| `run_outcome` | `status` (`done`, `gate`, `no_change`), `notice?` (required with `no_change`), `question?` and `from_artifact?{file, section}` (`gate` only, never with `notice`: the runtime composes the whole `## Notice`; see "A gate notice is composed from the record" below), `project?`, `slug?` |
+| `run_set` | `type?`, `branch?`, `worktree?`, `qa_stage_a?{artifact, verdict?}`, `project?`, `slug?` |
 
 The five `run_*` tools are the only way the pipeline records its run (see the
 `state.json` list above). Inside a job each of them resolves the run from the job's
@@ -512,6 +550,14 @@ The CLI `nightqueue queue add --run-dir <dir>` is
 refused with the same reason. A legacy pending job whose stored prompt or `state.json`
 still carries the operator-run markers (`## PRIOR RUN (operator)`, `origin: operator`) runs as
 before: the resume cap and the `Re-run:` lines read them, nothing writes them.
+
+`queue_add` `tier` is retired the same way (there is no risk tier: every job runs the one
+pipeline): a value is refused before validation with ``\`tier\` was removed: every job
+runs the one /resolve pipeline (one model per agent, QA mode chosen by `run check 03`);
+drop it - a client still sending it is an older nightqueue plugin, update it``, nothing is
+registered or queued, and a `null` or blank `tier` is ignored. `nightqueue queue add
+--tier <t>` is refused with the same line. `run_set` no longer takes `tier` or
+`tier_raise_reason`.
 
 `context_for_phase` returns `{project, block}`: the block is
 `## Applicable lessons` + `## Project memory` (+ `## Structural index` for
@@ -537,24 +583,108 @@ and asks again without the exclusion when that would leave the phase with nothin
 
 `phase_prompt` returns `{prompt, subagent_type, model, artifact, check, open_items}`: the
 whole prompt of one /resolve subagent, rendered from the templates under
-`plugin/skills/resolve/references/prompts/`. It resolves the run like the `run_*` tools and reads
-every value from it: the tier and type `nightqueue run start` recorded, the `## Brief` of
-`<RUN_DIR>/00-brief.md` (refused, naming the path, when it is missing), the routing row of
-`src/queue/routing.mjs`, the same context block `context_for_phase` answers (with the same
-per-run lesson exclusion). `coder` and
-`verifier` render the fast-track prompt on `trivial`/`simple`. A placeholder the run cannot
-fill is an error, never a half prompt; a target the tier does not route is rendered with
-an `open_items` line.
+`plugin/skills/resolve/references/prompts/` (a `{{>deliverables/<name>}}` partial is read from
+the sibling `references/deliverables/`, where the shared `## Deliver` blocks of the
+implementation, QA report and verification live). It resolves the run like the `run_*` tools and reads
+every value from it: the type `run check 01` recorded, the `## Brief` of `<RUN_DIR>/00-brief.md` (refused, naming the path and
+`run check 01`, when it is missing), the pipeline constants of `src/queue/routing.mjs`, the same
+context block `context_for_phase` answers (with the same per-run lesson exclusion). The
+`triager` is the one target rendered without the Brief and without a type: `RAW_REQUEST` is
+the job's own prompt inside a job (plus `Operator answer to the gate: <note>` when the row
+carries one; a `request` sent there is ignored with an `open_items` line), and the `request`
+input outside a job; `ORIGIN` is the run's `origin/*.md` files (its context block then
+carries no `## Job origin`, so the origin is never twice in the prompt); `NEEDS_SLUG` asks
+for a `**Slug:**` field only while the run holds the provisional slug the runtime derived.
+`request` on any other target is refused. Every target renders its own template (there
+is no fast-track variant). On `qa-lite`, `qa-analyst` and `qa-prover` it reads the
+plan's QA mode (`QA: lite|full` of `run check 03`) and, when the target contradicts it,
+adds the `open_items` line ``the plan's QA mode is <mode> (`run check 03`); <target> was
+rendered anyway`` - it never refuses. The three QA targets all answer the artifact
+`05-qa.md`: `qa-lite` with `check` `05`, `qa-analyst` with `check` `05 --stage analyst`, and
+`qa-prover` with `check` null; the prover's prompt carries its own round draft path
+(`DRAFT_PATH`, `<RUN_DIR>/poc/qa-round-<GROUP_ID>.md`) and its group id (`GROUP_ID`, the
+group's slug plus `-` and 8 hex of the group's sha256, empty for every other target), which it
+appends with `nightqueue run append 05 --group <GROUP_ID>`. A placeholder the run cannot
+fill is an error, never a half prompt. Its `model` is the model of the target's agent (see
+"Agent models and pipeline constants" below). The `verifier`, `runtime`, `qa-lite`,
+`qa-analyst` and `qa-prover` prompts carry `Demo repository: {{DEMO_REPO}}` (the
+`_demo-repo.md` partial): the project's `verification.demoRepo` setting (`nightqueue project
+demo-repo`), or `none configured` without one or outside a project, in which case no real
+pull request is created, merged or closed and that scenario is reported as a gate; a store
+that cannot read the setting answers `none configured` with an `open_items` line.
 
-In `pipeline_log`, `tier` is the FINAL tier the run executed, `tier_operator` is the
-tier the operator declared on the job (absent when there was none), and a run whose
-`tier_operator` differs from its `tier` is a run whose tier was raised, with the
-evidence of that raise in `tier_raise_reason`. There is no "raised" flag: it is derived
-from those two values. Inside a job, `project` and `slug` come from the job's own row
+### The skill's references
+
+`plugin/skills/resolve/SKILL.md` is the orchestrator's skeleton: the contract, Phase 0 and,
+per phase, the launch, the `run check`, the answer table and its judgment rules. What only
+one phase or one mode needs lives in `references/` and is read when the phase says so:
+`resume.md` (Phase 0, with a `RESUME CANDIDATE` block), `interactive-worktree.md` (Phase 0
+and Phase 8 outside a job; the only file of the skill that names the host's worktree tool),
+`qa-phase.md` (Phase 5), `phase-8.md` with `commit-template.md` and `pr-template.md`
+(Phase 8), `phase-9.md` (Phase 9: the report, the `## Notice` writing rules and the icon
+tables). `report.md` is rendered by `nightqueue run report` and never read by the
+orchestrator. The budget is pinned by `test/skill-budget.test.mjs`: the always-loaded bytes
+(`SKILL.md` plus every `references/prompts/_*.md` partial) and each lazy reference have a
+ceiling set to the measured size, lowered and never raised; `SKILL.md` stays within 350
+lines and every `### Phase N` section within 40 (Phase 0 within 70).
+
+### Agent models and pipeline constants
+
+`src/queue/routing.mjs` is the single source of the model each agent runs on
+(`nightqueue run start --routing` prints the table):
+
+| Agent | Default model |
+| --- | --- |
+| triager | sonnet |
+| explore | haiku |
+| architect | opus |
+| coder | opus |
+| qa-analyst | sonnet |
+| qa-prover | haiku |
+| verifier | haiku |
+| reflector | haiku |
+| merger | sonnet |
+
+A project overrides any agent but the merger with
+`nightqueue project models <project> --set <agent>=<model>` (`opus`, `sonnet` or `haiku`;
+`--unset <agent>` brings the default back). The override is stored as
+`agents.<agent>.model` in the project's settings JSON (the `projects.integrations` column,
+under the reserved `agents` key that `project integrations` never shows nor drops).
+`phase_prompt` answers the resolved `model`: `coder` and `coder-fix` take the coder's,
+`verifier` and `runtime` the verifier's, `qa-lite` and `qa-analyst` the qa-analyst's,
+`qa-prover` the qa-prover's, `reflector` the reflector's; a store that cannot read the
+override answers the default with an `open_items` line. `run start` answers the same
+models as `models`.
+
+Every run shares the same constants: the verifier scope is the project's real checks
+(typecheck, lint, build, tests) plus the QA's PoCs, at most 2 fix iterations, the
+project's `CLAUDE.md` is named to the coder when it exists, `index_recall` and
+`context_for_phase` always run, and there is no time target.
+
+`nightqueue run report` records the run's telemetry itself, so the shipped plugin never
+calls `pipeline_log`; the tool stays for an older plugin and for the operator's outcomes
+(`investigated`, `queued`). Both write the same row through one module
+(`src/queue/pipeline-record.mjs`): the phases come from `state.json`, one row per recorded
+phase (`failed` for a ❌ verdict, `retry` for a phase seen before); `run report` also
+derives the outcome (`pr_opened`, `local_commit`, `no_commit`) and the gate stop (`user`
+for a gate outcome, else the terminated or last failed phase) from it, while
+`pipeline_log` keeps the `outcome`/`gate_stop` it was sent. Inside a job the run is
+recorded at most once per attempt (since the job's `attempt_started_at`); outside a job, or
+in a job with no recorded attempt start, a run is not recorded again while the latest
+`pipeline_runs` row of its project and slug carries the same outcome and phase count, and
+the operator's `investigated`/`queued` outcomes of `pipeline_log` insert a row per call. A
+`NO-CHANGE-NEEDED` run records no gate stop. A failed record is the fixed open item `the
+run was not recorded in the telemetry` of the report, never a non-zero exit.
+
+In `pipeline_log`, `phases`, `tier`, `tier_operator` and `tier_raise_reason` are accepted and
+ignored: an older plugin still sends them, and none of them is read or written. The
+`pipeline_runs.tier` column is NOT NULL in the shipped schema, so every new row carries
+the constant `complex` (the one track every run executes); `tier_operator` and
+`tier_raise_reason` stay NULL. The three columns are kept unread until a later schema
+bump drops them. Inside a job, `project` and `slug` come from the job's own row
 and whatever the call sent for them is overridden (not refused: an older plugin still
-sends them); `tier`, `task_type` and `tier_raise_reason` may be left out when the run
-already recorded them with `run_set`, and a `tier` neither the call nor the run
-resolves is refused naming `run_set`, before any row is written. The durations and the
+sends them); `task_type` may be left out when the run already recorded it with
+`run_set`. The durations and the
 models are measured by the runtime on the stream of the job - the total from the
 attempt marker to the last message, and one lane per subagent, matched to its phase in
 the order the phases were launched - and they overwrite what the call sent. A phase the
@@ -641,8 +771,8 @@ before that marker: the lane's opening is then unknown, so `agent`, `model` and 
 
 `agent` is the subagent lane still open, or `orchestrator` outside one (then `phase` follows
 the `nightqueue run start|publish|report` commands and `model`, `lane_opened_at` are `null`);
-`phase` is the 1-based position of the current phase in the tier's track and `phases` the size of
-that track (both `null` when the tier or the phase is unknown); `last.kind` is `tool` or `text`;
+`phase` is the 1-based position of the current phase in the nine-slot track and `phases` the size of
+that track (`phase` is `null` when the phase is unknown); `last.kind` is `tool` or `text`;
 `tokens` are the partial usage of the running attempt, estimated from the assistant turns until
 the result event reports them, and no cost is ever estimated. `queue_run`
 starts the runner detached and answers right away with the path of its log,
@@ -730,10 +860,293 @@ vocabularies are `target` (`triager`, `architect`, `coder`, `qa`, `verifier`, pl
 `explore`, `architecture`, `implementation`, `qa`, `verification`, `runtime`,
 `commit`), the run `status` of `run_outcome` (`done`, `gate`, `no_change` - how the process
 ended stays the runtime's call),
-`tier` (`trivial`, `simple`, `complex`), `task_type` (`bug/error`,
+`task_type` (`bug/error`,
 `feature/refactor`), `outcome` (`pr_opened`, `local_commit`, `no_commit`),
 `gate_stop` (`critique`, `triage`, `architect`, `qa`, `verification`, `runtime`,
 `user`), the phase `status` (`ok`, `failed`, `skipped`). A value outside them comes back as an error message, never as a stack.
+
+**The artifact check answers the gates.** `nightqueue run check <NN>` reads the phase's
+artifact (and, where a rule needs them, `00-brief.md`, `01-triage.md`, `02-explore.md`,
+`03-plan.md` and `state.json`) and prints one fact per line, in this fixed order:
+
+1. `OK` | `MISSING: <sections>` | `GENERATED` (`04`), unchanged. After `MISSING:` nothing
+   else is printed but a `REPAIRED:` line: no gate is evaluated and nothing is recorded but the
+   check memo. On a round artifact (`05`, `06`, `07`) whose open code fence the check closed, the
+   `REPAIRED: …` line follows the first line, before `VERDICT:`; it never changes the memo nor
+   completion. `01`
+   with `NEEDS-CLARIFICATION`, `NOT-REPRODUCIBLE` or `PROPOSE-ALTERNATIVE` also requires `## Open items` with an item
+   (`MISSING: ## Open items`, or `## Open items (empty)` when it holds only blank lines or
+   `None`), because the next step reads it.
+2. `VERDICT: <value>`: `01` the suffix of `## Verdict:` (`PROCEED`, `NO-CHANGE-NEEDED`,
+   `NOT-REPRODUCIBLE`, `NEEDS-CLARIFICATION`, `PROPOSE-ALTERNATIVE`); `05` and `05 --stage analyst` the first non-blank line of
+   `## Verdict` (`APPROVED`, `NEEDS FIX`, `NEEDS DISCUSSION`); `06` the suffix of
+   `## Verification:` (`PASSED`, `PASSED-STATIC`, `FAILED`); `07` the first non-blank line of
+   `## Runtime verdict` (`CONFIRMED`, `NOT-MET`, `SYMPTOM-PERSISTS`, `NEEDS-DEVICE`,
+   `UNAVAILABLE`). A verdict outside the values is a `MISSING:` naming the expected line.
+3. `GATE: <code> — <evidence>`, one per firing item, the evidence one trimmed line of at most
+   160 code points.
+4. `OPEN: <text>`: `05` `unconfirmed decisions — <value>` when the QA's value is not `none`;
+   `07` `<scenario> — to confirm` per `NOT MET / to confirm` row. Never a gate.
+5. `TYPE-MISMATCH: <evidence> — triage: <bug/error|feature/refactor> (<## Diagnosis filled|## Diagnosis absent or empty>)` (`03`).
+6. `CONFIRM: requires-user-confirmation` (`03`, the plan has a `## Requires user confirmation`
+   heading).
+7. `QA: lite|full` (`03`, always printed on a complete plan): `full` when an unfenced line of
+   the plan opens with `**Always-gate class:** yes`, or when `## Identified risks` holds two or
+   more risk items carrying 🔴 (a list item `- `/`* `/`+ `/`<n>. `, or a table body row; fenced
+   code, the table header and prose lines are not counted); `lite` otherwise. The orchestrator's
+   Phase 5 reads this line and nothing else to pick the QA mode (a resume re-runs the check).
+   It never changes the gates, the memo line nor the exit status.
+8. `QA-STAGE: provers|skip` (`05 --stage analyst` only): `skip` when the analyst's
+   `## Break hypotheses` holds no item other than `None`, so the orchestrator goes straight to
+   `run check 05`; `provers` otherwise.
+9. `INVALIDATED: <item>`, one per item of `## Invalidated assumptions` other than `None` (`05`).
+10. `DIFF-APPLIES: yes|no` (`07`, from `Diff applies plan:`; omitted on `n/a` or absent).
+11. `NEEDS-DEVICE` (`07`).
+12. `index: saved N files, M libs` | `index: not saved (<reason>)` (`02`).
+13. `recorded: …` lines.
+14. `SCRIPT:` and the device script verbatim to the end of the output (`07` `NEEDS-DEVICE`:
+    the lines of `## Runtime verdict` after the verdict, up to `Diff applies plan:`).
+
+The check ids are `00` to `07`; `--stage analyst` is accepted only with `05` (any other stage,
+or a stage on another check, is refused). A retired id of the old numbering is refused with
+the one line `renumbered: use <NN>` (exit 1), and nothing is evaluated.
+
+Every section read is fence-aware: a heading matches by prefix, never inside fenced code, and
+HTML comments are stripped first, also mid-line, by one scanner that keeps fenced lines and code
+spans byte for byte (a `<!--` inside inline code or a fence opens nothing; a comment never
+closed stays visible); a section ends at the next `## ` outside a fence. Round artifacts (`05`,
+`06`, `07`) are split into rounds first, left to right with no lookahead, and read on their last
+`## Round` (its HTML comments stripped inside that round only): a `## Round` heading inside fenced
+code is never a round; a column-0 `## Round <n>` whose number is the highest so far plus one is a
+round even inside an open HTML comment, and closes the comment only; any other `## Round` heading
+counts only outside fenced code and HTML comments (also one opened mid-line), for the check and
+for the next round number alike. Fence lines follow CommonMark, in one place (`fenceStep`): an
+opener is 0-3 spaces then 3+ backticks or tildes, and a backtick info string holding a backtick
+is no fence (```` ```node --test``` ```` is inline code); a closer is the opener's character, at
+least as long, with no info string (```` ```js ```` never closes). Every reader — the gates,
+`roundsOf`/`lastRound`/`nextRound`, `run append`, the consolidation's section reader and the
+`04` file list — reads comments with one scanner (`scanMarkdown`): a `<!--` that never closes
+opens nothing, it and all after it are literal text. The rounds a gate reads (the last round, or
+the consolidation window for `run check 05`) must be well-formed, so a gate never picks an older
+round or a phantom tail:
+- an artifact that ends inside an open code fence (D1) is repaired before any evaluation, under
+  the run lock: the check (and `run append`) appends the fence's own marker as the last line —
+  a no-op for every reader, no round boundary moves — and prints `REPAIRED: the code fence of
+  round <k> opened at line <X> of <file> never closed; the runtime appended `<marker>` at line
+  <Z>` right after the first line;
+- every other defect is one `MISSING:` part, earliest line first, joined by `; `, each asking
+  the lane to append a new `## Round <next>` (never to edit an earlier round): a column-0
+  `## Round <next>` inside a fence of a read round (D2 — a quote and a swallowed round cannot be
+  told apart, so the round is never evaluated; a fenced heading of another number is plain
+  content), a read round that leaves a `<!--` open (D3), and a first read round whose heading
+  sits in a comment the round itself closes (D4). `run check 05` writes no consolidation over a
+  window with a defect and answers its parts. The Type
+every rule uses is `state.type`; without one, the triage's (a `## Diagnosis` with a filled
+`Confirmed root cause:` or `Symptom proof:` is `bug/error`, else `feature/refactor`); without a
+triage, `bug/error`. A method "names a re-runnable search" when it carries a backtick span or
+one of the words `grep`, `rg`, `glob`, `ast-grep`, `git `, `find `, `ls `, `sed `, `awk `,
+`node `, `npm `. Table cells are split the GFM way: one leading and one trailing `|` are
+dropped, `\|` is a literal pipe, a pipe inside a code span (a backtick run closed by a run of
+the same length on the line) is cell text, and an unmatched backtick is plain text. The gate
+codes, in output order per phase:
+
+- `01`, the `## Brief` of the triage, matched as a whole unfenced heading line (never a prefix):
+  - `brief-missing` — `## Brief absent`, on every verdict (a later phase prompt needs it even
+    on a terminated run);
+  - only on `PROCEED`: `brief-field-empty` — `<field>`, for `Affected area`, `Context`,
+    `Objective`, `Expected outcome` and `Commit type`, in that order, when the field is absent,
+    blank, `n/a` or wholly a `<…>`/`[…]` placeholder; `brief-type-invalid` — `<value>` when a
+    `**Type:**` is present but not `bug/error`/`feature/refactor` (an absent Type is no gate:
+    the `## Diagnosis` rule below applies); `brief-commit-type-invalid` — `<value>` when the
+    Commit type is not one of the accepted commit types.
+- `01` `symptom-proof-missing` — a `PROCEED` on a `bug/error` run whose `## Diagnosis` is
+  absent, has no `Symptom proof:` line, or leaves it empty, `n/a` or a `<…>` placeholder.
+- `03`, `bug/error` only and only when the plan has no `**Type mismatch:**` line with evidence
+  (such a line prints `TYPE-MISMATCH` instead and skips these three); the plan must then also
+  carry `## Symptom coverage` (`MISSING: ## Symptom coverage`, or `(empty)` with no table row):
+  - `coverage-vector-no-reason` — a row whose Status is not `covered`/`not-covered`, or whose
+    Reason is empty, `-`, `n/a` or `not applicable`;
+  - `coverage-enumeration-no-method` — `**How I enumerated:**` absent from the section, or its
+    value names no re-runnable search;
+  - `coverage-not-covered-without-confirmation` — a `not-covered` row in a plan without
+    `## Requires user confirmation`.
+- `03`, any Type, only while the plan has no `## Requires user confirmation`:
+  - `usage-coverage-cond-1` — a `- ` line of `## Usage coverage` containing
+    `changed=yes · source=pipeline`;
+  - `usage-coverage-cond-2` — a `**Always-gate class:** yes` line in that section;
+  - `usage-coverage-cond-3` — a line of `02-explore.md` matching
+    `unimplemented intent: <param> · governs <axis>` whose axis is the first word of the plan's
+    `**Diff axis:**`, EXCEPT when `<param>` is the ticket's own deliverable: its code token
+    (the first backtick span, else the first code-shaped identifier: a path holding `/`,
+    dotted, camelCase or PascalCase with an inner capital, snake_case, or a `name()` call)
+    is found as a whole token, case-sensitive (not preceded by `[\w$.]`, not followed by
+    `[\w$]`), in the `## Validated brief` of `01-triage.md` or the `**Objective:**` line of
+    `00-brief.md`. A prose-only `<param>` never holds the exception: the gate fires and the
+    user answers it. Without `02-explore.md` it never fires;
+  - `usage-coverage-cond-4` — a line of `00-brief.md` or `01-triage.md` starting `- `, with
+    ` · ` fields, one of which is exactly `to confirm`.
+- `05`, read on the last round's `## Validated risks`; the symptom codes only for a
+  `bug/error` plan without a Type mismatch:
+  - `symptom-coverage-n-mismatch` — no `Symptom coverage: <N> · <method> · omitted: <value>`
+    line, or `N` is not the number of rows of the plan's `## Symptom coverage` table;
+  - `symptom-coverage-omitted-empty` — the `omitted:` field absent or empty;
+  - `symptom-coverage-method-generic` — the method names no re-runnable search, or reads
+    `reviewed|read|analyzed the plan`;
+  - the usage codes only when the plan has `## Usage coverage` or `**Always-gate class:** yes`:
+    `usage-coverage-nm-mismatch` — no `Usage coverage: <N> · <M> · divergences: … · unconfirmed decisions: …`
+    line, no `## Access map (QA)`, or `N` differs from the plan's `- ` scenario lines or `M`
+    from the access map's `- ` lines other than `partial:` and `unimplemented intent:`;
+    `usage-coverage-divergences-empty` — `divergences:` or `unconfirmed decisions:` absent or
+    empty; `usage-coverage-held-on-pipeline` — a risk line with the standalone word `HELD`
+    (`UPHELD` never counts) that names `source=pipeline`, `What to avoid`, the scenario name of a
+    plan scenario carrying `source=pipeline`, or an item of the plan's `What to avoid`
+    (case-insensitive); on a consolidated round it reads only the `## Validated risks` of the
+    analyst's round (the first number its `source: runtime consolidation · rounds …` line lists),
+    never a prover's `H<n>: HELD` line; the other usage and symptom gates read the consolidated
+    round.
+- `07`, on the first table of the last round with a `Result` column:
+  `runtime-not-met` — a row whose Result starts `NOT MET` without `to confirm`;
+  `runtime-no-attempt` — a row whose Result is none of `MET`/`NOT MET…`, or whose Evidence is
+  empty, `-`, `none` or `not run`.
+
+The check then acts on what it found, and no effect ever changes the first line or the exit
+code. A check **completes** its phase when the first line is `OK` or `GENERATED`, no `GATE:`
+fired and the verdict does not loop back (`06` `FAILED`, `07` `NOT-MET` and
+`SYMPTOM-PERSISTS`); a pause (`CONFIRM`, `TYPE-MISMATCH`, `NEEDS-DEVICE`, `UNAVAILABLE`)
+completes. On completion it records the phase (`recorded: phase_done <phase> <verdict>`, plus
+` — reason: <reason>` on a re-run: the line the same check failed with, else
+`re-run after <check> <line>` of the newest failure, else `re-run`; ` (already)` when the same
+text was already recorded); otherwise it prints `recorded: none (<line>)`, and a write the
+state refuses prints `recorded: not recorded (<reason>)`. `01` records the Type, even on a
+gate: the Brief's valid `**Type:**` wins over a recorded one (`recorded: type <type>`, or
+`(was <old>)` when it replaces one); without it the Type the triage implies, only when
+`state.type` has none. On completion `01` also writes the triage's `## Brief` section
+verbatim into `<RUN_DIR>/00-brief.md` (`recorded: brief 00-brief.md`), records the
+`commitType` (`recorded: commit type <c>`), on a terminal verdict (`NOT-REPRODUCIBLE`,
+`NEEDS-CLARIFICATION`, `PROPOSE-ALTERNATIVE`, `NO-CHANGE-NEEDED`) the termination
+(`recorded: run_terminate triage <VERDICT>`, reason
+`<VERDICT>: <first item of ## Open items, else of ## Validated brief>`, `by: "runtime"`), and
+on a `PROCEED` lifts a triage termination the runtime wrote (`recorded: termination
+cleared`). The slug comes last, after every other write to the run dir: a job run that still
+holds the provisional slug the runtime derived takes the Brief's `**Slug:**` (the row
+rebound and the run dir renamed, as a `SLUG:` declaration does: `recorded: slug <new>
+(renamed from <old>; run dir <path>)`, the path the orchestrator uses as `RUN_DIR` from then
+on); any other run keeps its slug (`recorded: slug <slug>`, with `(kept: <reason>)` when the
+Brief named one it cannot take: absent, not a safe segment, already taken, or the run already
+has its slug). The runner re-reads the row's slug after the session, so it finishes on the
+renamed run. The `recorded:` order of `01` is: type, brief, commit type, phase_done,
+run_terminate, termination cleared, slug. `02` on `OK` saves the
+File map and the libraries into the project index, the same as `run index-save`; a store that
+is unavailable inside a job queues the write (`index: not saved (store unavailable; queued at <path>)`)
+and any failure prints `index: not saved (<first line of the error>)`. `05 --stage analyst`
+records `qaStageA` (`recorded: qa_stage_a <verdict>`, artifact `05-qa.md`) and no phase; its
+check memo is kept apart from the memo of `05`. `run_phase_done` and
+`run_terminate` still work for an older plugin.
+
+**The QA consolidation is the check's own.** `05-qa.md` holds three kinds of `## Round`, told
+apart by the first non-blank line after the heading: `source: runtime consolidation` is a
+consolidated round; `source: prover…` a prover round, whose group is read only from the line
+`run append --group` stamps (`source: prover · group: <id>`; any other prover line has no group,
+so its round never supersedes nor is superseded); otherwise a round with
+`## Break hypotheses` is the analyst's, and any other round a lite one. Before it evaluates,
+`run check 05` (no stage) takes the run lock and, when the last round is neither lite nor
+consolidated and an analyst round exists, merges the window — the last analyst round plus every
+prover round after it, the later round of a group replacing the earlier one — into a new
+`## Round <n+1>` whose first line is `source: runtime consolidation · rounds <a>, <b>, …`; it
+validates that round with the same D1-D4 rules the final check reads it by and, when one fires
+(e.g. a fenced `## Round <n+2>` quote carried from the analyst), writes nothing and fails with
+`the consolidated round <n+1> of 05-qa.md would be ill-formed, so nothing was written: …`. It
+carries, in this order and only when some merged round has it, `## Mapped rules`,
+`## Proven breaks`, `## Suggestions (non-blocking)`, `## Access map (QA)`, `## Validated risks`,
+`## Invalidated assumptions`, `## Generated PoCs` and `## Prevention`: each the analyst's body
+first, then the provers' in round order, raw (HTML comments kept byte for byte; a heading
+inside a fence or a comment opens no section), blank-line separated, bodies that say nothing
+dropped (every line blank, a none spelling — `None`, `Nothing`, `N/A`, `No proven breaks`,
+`(none)`, any bullet, bold, italic or backtick decoration, the whole line or followed by
+punctuation and an explanation, never a prefix such as `None of the callers…` — with the prose
+lines that explain it, a dash, or a header-only table; all of
+them keeps the first body); `## Mapped rules` and `## Access map (QA)` come from the
+analyst only. Its `## Verdict` counts proof, not the analyst's verdict over open hypotheses:
+any merged round whose `## Proven breaks` has a break item gives `NEEDS FIX`; a break item is
+any unfenced line (fenced output is evidence) that is not blank, a none spelling, a dash, a table
+header or separator, a table row whose cells are all empty, none or dashes, a prose line (no
+bullet, no table row, not opening with `H<n>`) in a body that holds a none spelling, or a
+regression that passed in any wording (the line or row carries a regression mark —
+`type=regression`, `(regression)`, a `.regression.` file or `regression PoC|test|net` — and a
+`pass`/`passes`/`passed`, and no failure besides `0 fail`) — such a body is kept in the merged section; else, with
+prover rounds, the provers' verdicts plus the coverage of the analyst's hypotheses (any
+`NEEDS FIX` gives `NEEDS FIX`, else any `NEEDS DISCUSSION` or an unreadable verdict, named on a
+note line, gives `NEEDS DISCUSSION`, else `APPROVED`); with no prover round, an analyst with
+hypotheses gives `NEEDS DISCUSSION` (`no prover round for the analyst's hypotheses`) and one
+without gives its own verdict. The coverage reads the `H<n>` ids that open the items of the
+analyst's `## Break hypotheses` and the `H<n>: BROKE|HELD|INCONCLUSIVE` lines of the counted
+prover rounds' `## Validated risks` (`REFUTED` reads as `HELD`; `PROVEN` reads as `BROKE`, and as
+`HELD` on a hypothesis whose line says `type=regression` or `type: regression`; the
+first status word wins; a bullet or a numbered item allowed; both outside fences and comments,
+bold and backticks ignored): any `BROKE` line gives `NEEDS FIX` (`BROKE: H<a>, …`); else an analyst id with no
+prover line or an `INCONCLUSIVE` line gives `NEEDS DISCUSSION` (`no prover line for H<a>, …`,
+`INCONCLUSIVE: H<c>, …`), so a prover that never appended shows up as its ids. Analyst
+hypotheses with no `H<n>` id keep the provers' verdict and add the note `the analyst's
+hypotheses carry no H<n> id; coverage not checked`. The check then answers over that round, and a second check writes nothing
+(the last round is already a consolidation) until a later prover round arrives. Stage A
+(`05 --stage analyst`) requires every section check `05` reads, so an analyst-only skip round
+always passes the final check.
+
+**`nightqueue run append 05 --group <id> --from <file>`** is the one path a prover writes its
+round by. `<id>` is the `GROUP_ID` value of the prover's `phase_prompt` (the group's slug plus
+8 hex of its sha256, the stem of its `DRAFT_PATH`), and the runtime stamps
+`source: prover · group: <id>` as the round's first line, dropping the draft's own
+`source: prover…` line. It refuses a check other than `05`, a missing or invalid `--group`
+(`^[a-z0-9][a-z0-9-]{0,63}$`), a missing `--from`, an empty draft, a draft with a column-0
+`## Round` line (fenced or not; a leading one is dropped), a draft that leaves a code fence or
+an HTML comment open (naming its line), and a draft whose source is `source: runtime
+consolidation`. It rewrites the draft's `H<n>: REFUTED` lines of `## Validated risks` (outside
+fences and comments, decorations kept) as `H<n>: HELD (REFUTED)` and keeps an `H<n>: PROVEN` as
+written (its reading depends on the hypothesis type, which only the consolidation knows), every
+other byte unchanged. Under the
+same run lock as `state.json` it reads `05-qa.md`, closes a code fence an earlier round left
+open (printing the `REPAIRED:` line before `APPENDED:`), numbers the round from the file (the highest
+round plus one), refuses to write when the new heading would not read as the last round,
+writes it atomically and prints `APPENDED: ## Round <n> to <path>`, so provers appending at the
+same time never lose a round nor share a number.
+
+**A gate notice is composed from the record.** `run_outcome` with `status: "gate"` takes
+`question`, `from_artifact: {file, section}`, or both, and composes the whole `## Notice`:
+`file` is a bare artifact name of the run directory (`^[A-Za-z0-9][A-Za-z0-9._-]*\.md$`, read
+on its last `## Round` when it is a round artifact) and `section` a heading found by prefix,
+outside fences, at its exact level first and then by the same title at any level (`#` to
+`######`), so every section `run check` requires or announces (`CONFIRM`, `## Open items`,
+`## Runtime verdict`, `## Usage coverage`) is found. A confirmation section, at any heading level, is carried verbatim; any other is
+nested under that heading; the question follows; inside a job the body ends with
+`Answer with: nightqueue queue retry J-<id> --note "<your answer>"`. A missing file or section,
+a path, `question`/`from_artifact` with another status, or either one together with `notice`
+is refused, and nothing is recorded. The answer echoes the composed `notice`. The pipeline
+then ends its turn with one plain line: a job whose final text has no `## Notice` still ends
+at `gate` with the recorded notice, and a `## Notice` in the text still wins over the record.
+
+**A job is self-contained, and a finished job does not resume.** `queue_add` refuses, before
+anything is registered or queued, a prompt that conditions the work on another job or pull
+request, answering "This brief depends on another job's pull request. A job must be
+self-contained: fold this work into that job (as a stage) or make it independent. Nothing was
+changed. Matched: `<phrase>`." The patterns (`src/queue/dependent-prompt.mjs`) are matched
+case-insensitively, anywhere, on the prompt without its fenced code and `<comment-thread>`
+blocks: `after [job] J-<n>`, `once PR|pull request #<n> is|has been|gets merged`,
+`depends on J-<n>` / `depends on job`, `when [PR] #<n> lands`. The CLI `queue add` and the
+studio do not apply it. `queue_retry` and `queue retry` refuse a `closed` job
+(``J-<n> is closed: a finished job does not resume; queue a new one``) and a `done` job whose
+pull request gh reads as merged (``J-<n> is done and its pull request is merged: …``), before
+writing anything; an unreadable answer or `NIGHTQUEUE_NO_PR_CHECK=1` proves no merge.
+
+**The commit message follows the template in effect.** `run start` answers
+`commitTemplate{source, path, label}`, first match wins: `config` (git's `commit.template` read
+in the run's checkout, `~` and relative paths resolved, a missing file falls through), `repo`
+(the repository's commit convention file; `.gitmessage` gives `path`), `nightqueue` (the
+fallback, `plugin/skills/resolve/references/commit-template.md`). `run publish --message-file`
+checks the message before staging anything and prints one
+`REJECTED: commit message — <reason>` per violation: an empty subject or one starting with `#`,
+a body whose line 2 is not blank, a `Co-Authored-By:` line (any case, at line start) or a
+`Refs:` line; under the fallback, a subject that is not Conventional Commits. Once the pull
+request is open, `run publish` and `run pr` record the `commit` phase (`by: "runtime"`).
 
 **A lockfile is published only when it is proved reproducible.** `run publish` (and
 `run commit`) refuse every lockfile (`package-lock.json`, `yarn.lock`, `pnpm-lock.yaml`,

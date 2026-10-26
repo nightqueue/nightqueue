@@ -1,0 +1,4 @@
+OK
+VERDICT: CONFIRMED
+OPEN: sms login — to confirm
+recorded: phase_done runtime CONFIRMED

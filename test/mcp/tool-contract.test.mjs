@@ -8,7 +8,7 @@ import { STALE_CONTRACT_ADVISORY, TOOL_CONTRACT } from "../../src/mcp/tool-contr
 import { makeHome, makeProject, projectIdOf } from "../../test-support/memory.mjs";
 
 const CLI = fileURLToPath(new URL("../../bin/nightqueue.mjs", import.meta.url));
-const STALE_LINE = "your client has the tool definitions of an older nightqueue (contract 8, this server is 9): start a new session or restart the MCP client";
+const STALE_LINE = "your client has the tool definitions of an older nightqueue (contract 9, this server is 10): start a new session or restart the MCP client";
 
 // Connects a real stdio client to `nightqueue mcp`, closed at the end of the test.
 async function connect(t, env) {
@@ -51,9 +51,9 @@ test("the handshake and every answer publish the tool contract, and a current cl
   const { env } = makeContractHome(t, "contract-published");
   const client = await connect(t, env);
 
-  assert.equal(TOOL_CONTRACT, 9);
-  assert.match(client.getServerVersion().title, /tool contract 9/);
-  assert.match(client.getInstructions(), /tool contract 9/);
+  assert.equal(TOOL_CONTRACT, 10);
+  assert.match(client.getServerVersion().title, /tool contract 10/);
+  assert.match(client.getInstructions(), /tool contract 10/);
   const status = await answer(client, "queue_status", {});
   assert.equal(status.contract, TOOL_CONTRACT);
   assert.equal(status.advisories.includes(STALE_CONTRACT_ADVISORY), false);

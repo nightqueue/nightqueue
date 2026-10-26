@@ -1,0 +1,4 @@
+OK
+VERDICT: PROCEED
+GATE: brief-commit-type-invalid — feature
+recorded: none (GATE: brief-commit-type-invalid — feature)

@@ -1,7 +1,7 @@
 import { briefBody } from "./prompt-brief.mjs";
 import { COMMIT_TYPES } from "./branch-name.mjs";
 
-// A runtime header line the operator writes above the brief, which says nothing about the task itself.
+// A `Tier:`/`Tier raised:` header line an older runtime or operator wrote above the brief, kept as the compatibility shim for prompts queued before the tier was removed.
 const RUNTIME_HEADER = /^\s*tier(\s+raised)?\s*:/i;
 
 export const TITLE_LIMIT = 120;

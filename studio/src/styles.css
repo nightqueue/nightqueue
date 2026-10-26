@@ -183,4 +183,13 @@
   .xterm .xterm-scrollable-element > .scrollbar > .slider {
     border-radius: 9999px;
   }
+
+  .xterm .xterm-scrollable-element > .scrollbar.vertical,
+  .xterm .xterm-scrollable-element > .scrollbar.vertical > .slider {
+    width: 8px !important;
+  }
+
+  .xterm .xterm-scrollable-element > .scrollbar.vertical > .slider {
+    left: 0 !important;
+  }
 }

@@ -9,7 +9,8 @@ import {
 } from "./db.mjs";
 import { projectIdOrNull } from "./registry.mjs";
 
-export const PIPELINE_TIERS = ["trivial", "simple", "complex"];
+// `pipeline_runs.tier` is NOT NULL in the shipped schema (ddl.mjs); no run has a tier any more, so every row carries the value of the one track every run now executes, until the schema bump that drops the column.
+const LEGACY_RUN_TIER = "complex";
 export const PIPELINE_TASK_TYPES = ["bug/error", "feature/refactor"];
 export const OPERATOR_PIPELINE_OUTCOMES = ["investigated", "queued"];
 export const PIPELINE_OUTCOMES = ["pr_opened", "local_commit", "no_commit", ...OPERATOR_PIPELINE_OUTCOMES];
@@ -40,7 +41,7 @@ function optionalText(value) {
 }
 
 // Validates every field of a run before any write, so an invalid enum never leaves an orphan row.
-function validateRun({ slug, tier, tierOperator, taskType, outcome, gateStop, phases }) {
+function validateRun({ slug, taskType, outcome, gateStop, phases }) {
   const cleanSlug = optionalText(slug);
   if (!cleanSlug) throw new UserError("`slug` is required and cannot be empty");
   const list = Array.isArray(phases) ? phases : [];
@@ -50,8 +51,6 @@ function validateRun({ slug, tier, tierOperator, taskType, outcome, gateStop, ph
   }
   return {
     slug: cleanSlug,
-    tier: requireEnum("tier", tier, PIPELINE_TIERS),
-    tierOperator: optionalEnum("tier_operator", tierOperator, PIPELINE_TIERS),
     taskType: optionalEnum("task_type", taskType, PIPELINE_TASK_TYPES),
     outcome: requireEnum("outcome", outcome, PIPELINE_OUTCOMES),
     gateStop: optionalEnum("gate_stop", gateStop, PIPELINE_GATE_STOPS),
@@ -106,8 +105,8 @@ function inImmediateTransaction(db, steps) {
 function insertRunRows(db, { run, projectId, values }) {
   const inserted = db
     .prepare(
-      `INSERT INTO pipeline_runs (project_id, slug, tier, tier_operator, tier_raise_reason, task_type, outcome, gate_stop, duration_s, model, session_id)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO pipeline_runs (project_id, slug, tier, task_type, outcome, gate_stop, duration_s, model, session_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     )
     .run(...values);
   const runId = Number(inserted.lastInsertRowid);
@@ -130,14 +129,26 @@ function insertRunOnce(db, write, from) {
   });
 }
 
+// Writes the run unless the latest run of its project and slug records the same outcome and phase count, the check and the insert in one transaction.
+function insertRunUnlessSame(db, write) {
+  return inImmediateTransaction(db, () => {
+    const latest = db
+      .prepare(
+        `SELECT r.outcome, (SELECT count(*) FROM pipeline_phases p WHERE p.run_id = r.id) AS phases
+         FROM pipeline_runs r WHERE r.project_id IS ? AND r.slug = ? ORDER BY r.id DESC LIMIT 1`,
+      )
+      .get(write.projectId, write.run.slug);
+    const same = latest && latest.outcome === write.run.outcome && Number(latest.phases) === write.run.phases.length;
+    return same ? { skipped: true, projectId: write.projectId } : insertRunRows(db, write);
+  });
+}
+
 // The column values of one pipeline run, in the order `insertRunRows` writes them; `origin` names the model and the session that ran it.
-function runValues(run, owner, { tierRaiseReason, durationS }, origin) {
+function runValues(run, owner, { durationS }, origin) {
   return [
     owner,
     run.slug,
-    run.tier,
-    run.tierOperator,
-    optionalText(tierRaiseReason),
+    LEGACY_RUN_TIER,
     run.taskType,
     run.outcome,
     run.gateStop,
@@ -279,12 +290,12 @@ export function runTimeline({ projectId, slug, since } = {}, env = process.env, 
 
 // Persists the telemetry of one pipeline run of a project id (null for a global one): the run and its phases in a single transaction.
 export function logPipelineRun(
-  { projectId, slug, tier, tierOperator, tierRaiseReason, taskType, outcome, gateStop, durationS, phases = [] },
+  { projectId, slug, taskType, outcome, gateStop, durationS, phases = [] },
   env = process.env,
 ) {
-  const run = validateRun({ slug, tier, tierOperator, taskType, outcome, gateStop, phases });
+  const run = validateRun({ slug, taskType, outcome, gateStop, phases });
   const owner = projectIdOrNull(projectId);
-  const values = runValues(run, owner, { tierRaiseReason, durationS }, { model: env?.NIGHTQUEUE_MODEL, sessionId: env?.NIGHTQUEUE_SESSION_ID });
+  const values = runValues(run, owner, { durationS },{ model: env?.NIGHTQUEUE_MODEL, sessionId: env?.NIGHTQUEUE_SESSION_ID });
   const db = openDb(env);
   const write = { db, run, projectId: owner, values };
   return ensureRunDurable(withFullSync(db, () => withWriteRetry(() => insertRun(db, write))), write, env);
@@ -300,4 +311,13 @@ export function logPipelineRunOnce(spec = {}, { since } = {}, env = process.env)
   const values = runValues(run, owner, spec, { model: spec.model, sessionId: spec.sessionId });
   const db = openDb(env);
   return withFullSync(db, () => withWriteRetry(() => insertRunOnce(db, { run, projectId: owner, values }, from)));
+}
+
+// Persists a pipeline run unless the latest run of the same project and slug records the same outcome and phases; `model` and `sessionId` travel in the spec.
+export function logPipelineRunUnlessSame(spec = {}, env = process.env) {
+  const run = validateRun(spec);
+  const owner = projectIdOrNull(spec.projectId);
+  const values = runValues(run, owner, spec, { model: spec.model, sessionId: spec.sessionId });
+  const db = openDb(env);
+  return withFullSync(db, () => withWriteRetry(() => insertRunUnlessSame(db, { run, projectId: owner, values })));
 }

@@ -1,4 +1,4 @@
-export const OPERATOR_SESSION_KEYS = ["NIGHTQUEUE_MODE", "NIGHTQUEUE_PROJECT", "NIGHTQUEUE_OPERATOR_PID"];
+export const OPERATOR_SESSION_KEYS = ["NIGHTQUEUE_MODE", "NIGHTQUEUE_PROJECT", "NIGHTQUEUE_OPERATOR_PID", "NIGHTQUEUE_OPERATOR_SESSION"];
 
 // A copy of an environment without the variables that mark an operator session, so no child inherits them.
 export function withoutOperatorSession(env) {

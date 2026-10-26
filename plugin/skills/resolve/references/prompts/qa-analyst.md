@@ -1,10 +1,17 @@
 ## File handoff (contract — read first)
-ARTIFACT_PATH: {{RUN_DIR}}/05a-qa-analyst.md (append-only: this launch is ## Round {{ROUND}})
+ARTIFACT_PATH: {{RUN_DIR}}/05-qa.md (append-only: this launch is ## Round {{ROUND}})
 {{>_round}}
 Read before acting (via Read):
 - `{{RUN_DIR}}/04-implementation.md` — ## Modified files (the files to attack).
 - `{{RUN_DIR}}/03-plan.md` (open it only AFTER step 0 of the Access map (QA), when it
-  applies) — see the QA attack brief above, pasted here by the orchestrator.
+  applies) — ## Identified risks, ## Assumptions, ## Pre-mortem, and ## Symptom coverage /
+  ## Usage coverage when present; see the QA attack brief below.
+{{#HAS_USAGE_COVERAGE}}
+- `{{RUN_DIR}}/02-explore.md` when it exists — ## Access map, read only after your own ## Access map (QA).
+{{/HAS_USAGE_COVERAGE}}
+{{>_handoff}}
+
+Inputs: the artifacts above; the QA attack brief; the plugin paths of your methodology; the `## Applicable lessons` and `## Project memory` when the context carries them.
 
 QA attack brief:
 {{>_qa-attack-brief}}
@@ -15,7 +22,7 @@ Attack every pre-mortem mitigation per the QA attack brief above: static proof (
 goes to ## Proven breaks, runtime-dependent proof becomes a ## Break hypotheses item.
 
 Apply the COMPLETE analytical attack (fronts, risks, assumptions, callers,
-robustness), but follow the rules of the ANALYST Mode: do NOT write or run a runtime
+robustness), as an analysis without runtime PoCs: do NOT write or run a runtime
 PoC — each runtime break becomes a hypothesis in ## Break hypotheses
 (grouped by probable root, with type, minimum context and an assigned PoC name).
 A static break (proof by reading) is yours: report it in ## Proven breaks.
@@ -30,11 +37,20 @@ EXACT SCENARIO of the bug (state of the bug account + input of the symptom) and 
 fixed code.
 
 {{/IS_BUG}}
-Finish with ## Proven breaks (static), ## Break hypotheses,
-## Test recipe, ## Validated risks (analytical HELD or "→ hypothesis
-H<n>") and ## Invalidated assumptions (or "None").
+{{>deliverables/qa-report}}
+
+This request also delivers, right after ## Proven breaks (the artifact gate requires both):
+
+## Break hypotheses
+- H<n> · group: <probable root> · type: break | regression · <file:line> · vector: <…> · the PoC asserts: <correct behavior> · context: <files> · PoC: <unique assigned file name>
+
+## Test recipe
+(the exact command — runner, preload/setup —, the naming conventions and the project's gotchas)
+
+and writes ## Generated PoCs as `None — this request writes no runtime PoC`.
 
 {{>_context}}
+{{>_demo-repo}}
 {{>_shell-rule}}
 
 {{>_footer}}

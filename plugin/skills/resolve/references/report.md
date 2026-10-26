@@ -1,20 +1,13 @@
 ## 🗂️ Report — {{SLUG}}
 
-{{#FAST_TRACK}}
-Verification {{VERIFICATION_ICON}} · {{DELIVERY}}
-{{/FAST_TRACK}}
-{{^FAST_TRACK}}
-| Step | Agent | Status | Highlight |
-|-------|--------|--------|----------|
-{{STEP_ROWS}}
-{{/FAST_TRACK}}
-
-{{HAPPY_LINE}}
-{{^HAPPY}}
-
-| Step | Agent | Status | Summary | Time |
-|-------|--------|--------|--------|-------|
-{{EXECUTION_ROWS}}
+| Step | Agent | Result | Note | Time |
+|-------|--------|--------|------|-------|
+{{ROWS}}
 
 **Total:** ⏱️ {{TOTAL}}
-{{/HAPPY}}
+
+{{HAPPY_LINE}}
+
+## Open items
+
+{{OPEN_ITEMS}}

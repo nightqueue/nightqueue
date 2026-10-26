@@ -1,15 +1,17 @@
 import assert from "node:assert/strict";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
+import { run } from "../../src/cli/index.mjs";
 import { runDir } from "../../src/config/paths.mjs";
 import { openDb } from "../../src/memory/db.mjs";
 import { addJob, claimJobById, persistRunFacts } from "../../src/memory/jobs.mjs";
 import { saveLesson } from "../../src/memory/lessons.mjs";
 import { decideResume } from "../../src/queue/resume.mjs";
+import { recordOutcome, recordPhaseDone, recordPrUrl, recordRunFields } from "../../src/queue/run-state.mjs";
 import { ensureProject, makeHome, makeProject, projectIdOf } from "../../test-support/memory.mjs";
 
 const CLI = fileURLToPath(new URL("../../bin/nightqueue.mjs", import.meta.url));
@@ -62,7 +64,7 @@ test("inside a job the run tools resolve the run from the job's own row", async 
   assert.deepEqual({ ok: done.ok, project: done.project, slug: done.slug }, { ok: true, project: "alpha", slug: SLUG });
   assert.equal(done.path, join(runDir(ensureProject(env, "alpha"), SLUG, env), "state.json"));
 
-  payloadOf(await client.callTool({ name: "run_set", arguments: { tier: "complex", tier_raise_reason: "a native SDK is involved" } }));
+  payloadOf(await client.callTool({ name: "run_set", arguments: { type: "bug/error" } }));
   payloadOf(await client.callTool({ name: "run_outcome", arguments: { status: "gate", notice: "the operator has to choose" } }));
 
   const state = readState(env, "alpha", SLUG);
@@ -71,8 +73,8 @@ test("inside a job the run tools resolve the run from the job's own row", async 
     { schemaVersion: 1, projectId: projectIdOf(env, "alpha"), slug: SLUG, resumeCount: 0 },
   );
   assert.deepEqual(state.phases.map((entry) => entry.phase), ["triage"]);
-  assert.equal(state.tier, "complex");
-  assert.equal(state.tierRaiseReason, "a native SDK is involved");
+  assert.equal(state.type, "bug/error");
+  assert.equal("tier" in state, false, "run_set recorded a tier");
   assert.equal(state.outcome.status, "gate");
   assert.match(state.updatedAt, UTC_ISO);
   assert.match(state.phases[0].at, UTC_ISO);
@@ -151,7 +153,8 @@ test("`run_set` records the QA stage A marker, and the resume decision reads it 
     payloadOf(await client.callTool({ name: "run_phase_done", arguments: { phase, artifact: `0-${phase}.md`, verdict: "ok" } }));
   }
 
-  const marker = { artifact: "05a-qa-analyst.md", verdict: "BREAKS-FOUND" };
+  await new Promise((done) => setTimeout(done, 5));
+  const marker = { artifact: "05-qa.md", verdict: "BREAKS-FOUND" };
   payloadOf(await client.callTool({ name: "run_set", arguments: { qa_stage_a: marker } }));
 
   const state = readState(env, "alpha", SLUG);
@@ -175,7 +178,7 @@ test("inside a job `pipeline_log` records the run of its own row and the fields 
   payloadOf(
     await client.callTool({
       name: "run_set",
-      arguments: { tier: "complex", type: "bug/error", tier_raise_reason: "a stack trace in the claim path" },
+      arguments: { type: "bug/error" },
     }),
   );
 
@@ -189,52 +192,79 @@ test("inside a job `pipeline_log` records the run of its own row and the fields 
 
   const row = openDb(env).prepare("SELECT * FROM pipeline_runs ORDER BY id DESC LIMIT 1").get();
   assert.deepEqual(
-    { projectId: row.project_id, slug: row.slug, tier: row.tier, taskType: row.task_type, reason: row.tier_raise_reason },
-    { projectId: projectIdOf(env, "alpha"), slug: SLUG, tier: "complex", taskType: "bug/error", reason: "a stack trace in the claim path" },
+    { projectId: row.project_id, slug: row.slug, taskType: row.task_type },
+    { projectId: projectIdOf(env, "alpha"), slug: SLUG, taskType: "bug/error" },
     "the run named from the outside was recorded instead of the job's own",
   );
 });
 
-test("`run_phase_done` records the reason a phase ran again, and `pipeline_log` copies it only when its table lists every launch of that phase", async (t) => {
+test("`pipeline_log` ignores the sent `phases` and records the run's state.json phases with their reasons", async (t) => {
   const { env, job } = makeRunningJob(t, "mcp-pipeline-log-reasons");
   const client = await connect(t, { ...env, NIGHTQUEUE_JOB_ID: String(job.id) });
   const reason = "fix loop 1: the lint check failed";
 
-  payloadOf(await client.callTool({ name: "run_set", arguments: { tier: "simple" } }));
+  payloadOf(await client.callTool({ name: "run_set", arguments: { type: "feature/refactor" } }));
   payloadOf(await client.callTool({ name: "run_phase_done", arguments: { phase: "verification", verdict: "FAILED" } }));
   payloadOf(await client.callTool({ name: "run_phase_done", arguments: { phase: "verification", verdict: "PASSED", reason } }));
   payloadOf(await client.callTool({ name: "run_phase_done", arguments: { phase: "qa", verdict: "PASSED" } }));
-  assert.deepEqual(readState(env, "alpha", SLUG).phases.map((entry) => entry.reason ?? null), [null, reason, null]);
 
-  const reasonsOf = (runId) =>
-    openDb(env).prepare("SELECT reason FROM pipeline_phases WHERE run_id = ? ORDER BY seq").all(runId).map((row) => row.reason);
-  const log = async (phases) =>
-    payloadOf(await client.callTool({ name: "pipeline_log", arguments: { outcome: "pr_opened", phases } }));
-  const verification = (extra = {}) => ({ phase: "verification", ...extra });
+  const sent = [{ phase: "triage", reason: "sent by an older plugin" }, { phase: "triage" }];
+  const logged = payloadOf(await client.callTool({ name: "pipeline_log", arguments: { outcome: "pr_opened", phases: sent, tier_operator: "x" } }));
 
-  const equal = await log([verification(), verification(), { phase: "qa" }]);
-  assert.deepEqual(reasonsOf(equal.runId), [null, reason, null], "the recorded reasons were not paired launch by launch");
-  assert.equal("reasons_unpaired" in equal, false, "an answer with every reason paired changed shape");
+  assert.equal("reasons_unpaired" in logged, false, "the answer still carries the retired pairing field");
+  const rows = openDb(env)
+    .prepare("SELECT phase, status, retry, reason FROM pipeline_phases WHERE run_id = ? ORDER BY seq")
+    .all(logged.runId)
+    .map((row) => ({ phase: row.phase, status: row.status, retry: Number(row.retry), reason: row.reason }));
+  assert.deepEqual(rows, [
+    { phase: "verification", status: "failed", retry: 0, reason: null },
+    { phase: "verification", status: "ok", retry: 1, reason },
+    { phase: "qa", status: "ok", retry: 0, reason: null },
+  ]);
+});
 
-  const more = await log([verification(), verification(), verification(), { phase: "qa" }]);
-  assert.deepEqual(reasonsOf(more.runId), [null, null, null, null], "a reason landed on a row of another launch");
-  assert.deepEqual(more.reasons_unpaired, ["verification"]);
+test("inside a job a second `pipeline_log` in the same attempt answers `already_recorded` and adds no row", async (t) => {
+  const { env, job } = makeRunningJob(t, "mcp-pipeline-log-once");
+  const client = await connect(t, { ...env, NIGHTQUEUE_JOB_ID: String(job.id) });
+  payloadOf(await client.callTool({ name: "run_phase_done", arguments: { phase: "triage", verdict: "PROCEED" } }));
 
-  const fewer = await log([verification(), { phase: "qa" }]);
-  assert.deepEqual(reasonsOf(fewer.runId), [null, null], "the only row took the reason of a different launch");
-  assert.deepEqual(fewer.reasons_unpaired, ["verification"]);
+  const first = payloadOf(await client.callTool({ name: "pipeline_log", arguments: { outcome: "no_commit", gate_stop: "triage" } }));
+  const second = payloadOf(await client.callTool({ name: "pipeline_log", arguments: { outcome: "pr_opened" } }));
 
-  const sent = await log([verification(), verification({ reason: "symptom persists" }), { phase: "qa" }]);
-  assert.deepEqual(reasonsOf(sent.runId), [null, "symptom persists", null], "the recorded reason won over the one the call sent");
-  assert.equal("reasons_unpaired" in sent, false);
+  assert.equal(Number.isInteger(first.runId), true, JSON.stringify(first));
+  assert.deepEqual({ ok: second.ok, already: second.already_recorded }, { ok: true, already: true });
+  const rows = openDb(env).prepare("SELECT outcome FROM pipeline_runs WHERE slug = ?").all(SLUG);
+  assert.deepEqual(rows.map((row) => row.outcome), ["no_commit"]);
+});
 
-  const sentFewer = await log([verification({ reason: "X" }), { phase: "qa" }]);
-  assert.deepEqual(reasonsOf(sentFewer.runId), ["X", null], "the sent reason did not win on its own row");
-  assert.deepEqual(sentFewer.reasons_unpaired, ["verification"], "the recorded reason that was not placed went unreported");
+test("outside a job an older plugin's `pipeline_log` after `run report` answers `already_recorded` and adds no row", async (t) => {
+  const env = makeHome(t, "mcp-pipeline-log-after-report");
+  makeProject(t, env, "alpha");
+  const target = { projectId: ensureProject(env, "alpha"), slug: SLUG, env };
+  recordRunFields({ ...target, fields: { type: "bug/error" } });
+  for (const phase of ["implementation", "commit"]) recordPhaseDone({ ...target, phase, verdict: "ok", note: "x", artifact: `${phase}.md` });
+  recordOutcome({ ...target, status: "done" });
+  recordPrUrl({ ...target, prUrl: "https://github.com/acme/api/pull/9" });
+  const out = [];
+  const code = await run(["run", "report", "--json", "--project", "alpha", "--slug", SLUG], { env, out: (line) => out.push(line), err: () => {}, stdout: { write: () => {} } });
+  assert.equal(code, 0);
+  assert.equal(JSON.parse(out[0]).recorded, "recorded");
 
-  const noReason = await log([verification(), verification(), { phase: "qa" }, { phase: "qa" }]);
-  assert.deepEqual(reasonsOf(noReason.runId), [null, reason, null, null]);
-  assert.equal("reasons_unpaired" in noReason, false, "a phase recorded with no reason was reported unpaired");
+  const client = await connect(t, env);
+  const logged = payloadOf(await client.callTool({ name: "pipeline_log", arguments: { project: "alpha", slug: SLUG, outcome: "pr_opened" } }));
+
+  assert.deepEqual({ ok: logged.ok, already: logged.already_recorded }, { ok: true, already: true });
+  assert.equal(openDb(env).prepare("SELECT count(*) AS n FROM pipeline_runs WHERE slug = ?").get(SLUG).n, 1);
+});
+
+test("outside a job the operator's outcome sent twice for one slug records two rows", async (t) => {
+  const env = makeHome(t, "mcp-pipeline-log-operator-always");
+  makeProject(t, env, "alpha");
+  const client = await connect(t, env);
+  for (let i = 0; i < 2; i += 1) {
+    payloadOf(await client.callTool({ name: "pipeline_log", arguments: { project: "alpha", slug: "hunt", outcome: "investigated" } }));
+  }
+  assert.equal(openDb(env).prepare("SELECT count(*) AS n FROM pipeline_runs WHERE slug = 'hunt'").get().n, 2);
 });
 
 test("outside a job `pipeline_log` records the operator's outcomes, and inside a job it refuses them", async (t) => {
@@ -242,14 +272,14 @@ test("outside a job `pipeline_log` records the operator's outcomes, and inside a
   const outside = await connect(t, env);
   for (const outcome of ["investigated", "queued"]) {
     const logged = payloadOf(
-      await outside.callTool({ name: "pipeline_log", arguments: { project: "alpha", slug: `hunt-${outcome}`, tier: "complex", outcome } }),
+      await outside.callTool({ name: "pipeline_log", arguments: { project: "alpha", slug: `hunt-${outcome}`, outcome } }),
     );
     const row = openDb(env).prepare("SELECT slug, outcome FROM pipeline_runs WHERE id = ?").get(logged.runId);
     assert.deepEqual({ slug: row.slug, outcome: row.outcome }, { slug: `hunt-${outcome}`, outcome });
   }
 
   const inside = await connect(t, { ...env, NIGHTQUEUE_JOB_ID: String(job.id) });
-  const refused = await inside.callTool({ name: "pipeline_log", arguments: { tier: "complex", outcome: "investigated" } });
+  const refused = await inside.callTool({ name: "pipeline_log", arguments: { outcome: "investigated" } });
   assert.equal(refused.isError, true);
   assert.match(textOf(refused), /outcome `investigated` is the operator's/);
 });
@@ -289,6 +319,59 @@ test("a phase, a status or a call with nothing to record is refused with the acc
   assert.match(textOf(empty), /nothing was recorded in the state.json of `alpha\/fix-the-worker`: no field to record/);
 
   assert.equal(existsSync(join(runDir(ensureProject(env, "alpha"), SLUG, env), "state.json")), false, "a refused call created the file");
+});
+
+test("`run_outcome` composes a gate notice from the run's artifact and question, and refuses what it cannot compose", async (t) => {
+  const { env, job } = makeRunningJob(t, "mcp-run-tools-gate-notice");
+  const dir = runDir(ensureProject(env, "alpha"), SLUG, env);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "03-plan.md"), "## Implementation plan\nx\n\n## Requires user confirmation\n1. Approve C1?\n\n## Assumptions\n- none\n");
+  const client = await connect(t, { ...env, NIGHTQUEUE_JOB_ID: String(job.id) });
+
+  const refusals = [
+    [{ status: "gate", from_artifact: { file: "../03-plan.md", section: "## Requires user confirmation" } }, /bare name of a run artifact/],
+    [{ status: "gate", from_artifact: { file: "03-plan.md", section: "## Nope" } }, /03-plan.md has no `## Nope` section: nothing was recorded/],
+    [{ status: "done", question: "why?" }, /only compose a `gate` notice/],
+    [{ status: "gate", notice: "hand-written", question: "why?" }, /either `notice` or `question`\/`from_artifact`, never both/],
+  ];
+  for (const [args, message] of refusals) {
+    const refused = await client.callTool({ name: "run_outcome", arguments: args });
+    assert.equal(refused.isError, true, JSON.stringify(args));
+    assert.match(textOf(refused), message);
+  }
+  assert.equal(existsSync(join(dir, "state.json")), false, "a refused call wrote state.json");
+
+  const composed = payloadOf(
+    await client.callTool({
+      name: "run_outcome",
+      arguments: { status: "gate", question: "Approve?", from_artifact: { file: "03-plan.md", section: "## Requires user confirmation" } },
+    }),
+  );
+  const expected = `## Requires user confirmation\n1. Approve C1?\n\nApprove?\n\nAnswer with: nightqueue queue retry J-${job.id} --note "<your answer>"`;
+  assert.equal(composed.notice, expected);
+  assert.deepEqual(readState(env, "alpha", SLUG).outcome.notice, expected);
+  assert.equal(readState(env, "alpha", SLUG).outcome.status, "gate");
+});
+
+test("a refused `run_outcome` notice says why and that nothing was recorded, so the run can fix it and emit again", async (t) => {
+  const { env, job } = makeRunningJob(t, "mcp-run-tools-notice-reasons");
+  const dir = runDir(ensureProject(env, "alpha"), SLUG, env);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "03-plan.md"), "## Implementation plan\nx\n");
+  const client = await connect(t, { ...env, NIGHTQUEUE_JOB_ID: String(job.id) });
+
+  const refusals = [
+    [{ status: "no_change" }, /needs the run's conclusion as its notice/],
+    [{ status: "no_change", notice: "   " }, /needs the run's conclusion as its notice/],
+    [{ status: "gate", from_artifact: { file: "03-plan.md", section: "## X" } }, /has no `## X` section: nothing was recorded/],
+  ];
+  for (const [args, reason] of refusals) {
+    const refused = await client.callTool({ name: "run_outcome", arguments: args });
+    assert.equal(refused.isError, true, JSON.stringify(args));
+    assert.match(textOf(refused), reason);
+    assert.match(textOf(refused), /nothing was recorded/);
+  }
+  assert.equal(existsSync(join(dir, "state.json")), false, "a refused notice wrote state.json");
 });
 
 test("inside a job the recall drops what the run already saw, and gives it back when it is all there is", async (t) => {

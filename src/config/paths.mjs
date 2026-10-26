@@ -226,7 +226,7 @@ export function legacyOperatorQaDir(env = process.env) {
   return join(homeDir(env), "operator-qa");
 }
 
-// Directory holding the ephemeral QA worktrees of the operator's qa subagent, one sub-directory per project id.
+// Directory holding the ephemeral QA worktrees `nightqueue sandbox worktree` creates, one sub-directory per project id.
 export function qaDir(env = process.env) {
   return join(homeDir(env), "qa");
 }
@@ -249,6 +249,21 @@ export function logsDir(env = process.env) {
 // Path of the accumulated log of one queue job, appended once per attempt.
 export function jobLogPath(id, env = process.env) {
   return join(logsDir(env), `job-${id}.log`);
+}
+
+// Directory of the consent records of the operator sessions, one file per `nightqueue open` session.
+export function operatorDir(env = process.env) {
+  return join(homeDir(env), "operator");
+}
+
+// Path of the append-only consent record of one operator session.
+export function operatorConsentPath(session, env = process.env) {
+  return join(operatorDir(env), `${session}.jsonl`);
+}
+
+// Path of the human log of one operator session: one line per consent or revoke.
+export function operatorLogPath(session, env = process.env) {
+  return join(logsDir(env), `operator-${session}.log`);
 }
 
 // Path of the sentinel file that keeps the queue paused.

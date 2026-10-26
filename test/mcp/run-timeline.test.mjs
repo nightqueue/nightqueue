@@ -24,7 +24,7 @@ function makeJobRun(t, name) {
 
 // Records one pipeline run of the slug with the given phases.
 function logRun(env, projectId, phases) {
-  return logPipelineRun({ projectId, slug: SLUG, tier: "complex", outcome: "pr_opened", phases }, env);
+  return logPipelineRun({ projectId, slug: SLUG, outcome: "pr_opened", phases }, env);
 }
 
 // Renders the timeline and answers it with the open items it pushed.

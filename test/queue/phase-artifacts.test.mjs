@@ -1,10 +1,56 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { lastRound, nextFixLoop, nextRound, PHASE_ARTIFACTS } from "../../src/queue/phase-artifacts.mjs";
+import { parseExploreArtifact } from "../../src/cli/explore-artifact.mjs";
+import { lastRound, nextFixLoop, nextRound, PHASE_ARTIFACTS, QA_ANALYST_STAGE } from "../../src/queue/phase-artifacts.mjs";
+import { RESUME_PHASE_ORDER } from "../../src/queue/resume.mjs";
+
+const EXPLORE_HEADINGS = ["## File map", "## Access map", "## Third-party libraries"];
+
+test("the explore gate requires the headings the index-save parser reads", () => {
+  assert.deepEqual(PHASE_ARTIFACTS.get("02").sections, EXPLORE_HEADINGS);
+  const artifact = `${EXPLORE_HEADINGS[0]}\n- /a.mjs — a\n\n${EXPLORE_HEADINGS[1]}\n- **No entry point:** text · grep\n\n${EXPLORE_HEADINGS[2]}\n- None\n`;
+  assert.equal(parseExploreArtifact(artifact).files.length, 1);
+});
+
+test("the plan, implementation, QA and verification gates require the mandatory sections of their ## Deliver blocks", () => {
+  const sections = (phase) => PHASE_ARTIFACTS.get(phase).sections;
+  assert.deepEqual(sections("03"), ["## Implementation plan", "## Assumptions", "## Pre-mortem", "## Identified risks"]);
+  assert.deepEqual(sections("04"), ["## Modified files"]);
+  assert.deepEqual(QA_ANALYST_STAGE.sections, ["## Proven breaks", "## Break hypotheses", "## Test recipe", "## Validated risks", "## Invalidated assumptions", "## Generated PoCs", "## Verdict"]);
+  for (const heading of sections("05")) assert.ok(QA_ANALYST_STAGE.sections.includes(heading), `stage A must require ${heading}, which check 05 reads`);
+  assert.deepEqual(sections("05"), ["## Proven breaks", "## Validated risks", "## Invalidated assumptions", "## Generated PoCs", "## Verdict"]);
+  assert.deepEqual(sections("06"), ["## Checks run", "## Verification"]);
+  assert.deepEqual(sections("07"), ["## Runtime verdict"]);
+});
+
+test("the phases are whole numbers: the check ids run 00 to 07, and the analyst stage is no key of its own", () => {
+  assert.deepEqual([...PHASE_ARTIFACTS.keys()], ["00", "01", "02", "03", "04", "05", "06", "07"]);
+  assert.equal(PHASE_ARTIFACTS.get("07").file, "07-runtime.md");
+  assert.equal(QA_ANALYST_STAGE.file, PHASE_ARTIFACTS.get("05").file);
+});
 
 test("the verifier, runtime and QA artifacts are round artifacts; the others are not", () => {
   const rounds = [...PHASE_ARTIFACTS].filter(([, artifact]) => artifact.rounds).map(([phase]) => phase);
-  assert.deepEqual(rounds, ["05a", "05", "06", "06.5"]);
+  assert.deepEqual(rounds, ["05", "06", "07"]);
+  assert.equal(QA_ANALYST_STAGE.rounds, true);
+});
+
+test("each artifact names the canonical phase it completes, and only the brief and the QA stage A complete none", () => {
+  const phases = Object.fromEntries([...PHASE_ARTIFACTS].map(([check, artifact]) => [check, artifact.phase]));
+  assert.deepEqual(phases, { "00": null, "01": "triage", "02": "explore", "03": "architecture", "04": "implementation", "05": "qa", "06": "verification", "07": "runtime" });
+  assert.equal(QA_ANALYST_STAGE.phase, null);
+  for (const phase of Object.values(phases).filter(Boolean)) assert.ok(RESUME_PHASE_ORDER.includes(phase), phase);
+});
+
+test("the triage, QA, verification and runtime artifacts declare where their verdict is read and the values it takes", () => {
+  const verdicts = [...PHASE_ARTIFACTS].filter(([, artifact]) => artifact.verdict).map(([check, artifact]) => [check, artifact.verdict.label]);
+  assert.deepEqual(verdicts, [
+    ["01", "## Verdict: <PROCEED|NO-CHANGE-NEEDED|NOT-REPRODUCIBLE|NEEDS-CLARIFICATION|PROPOSE-ALTERNATIVE>"],
+    ["05", "## Verdict: <APPROVED|NEEDS FIX|NEEDS DISCUSSION> as the first line"],
+    ["06", "## Verification: <PASSED|PASSED-STATIC|FAILED>"],
+    ["07", "## Runtime verdict: <CONFIRMED|NOT-MET|SYMPTOM-PERSISTS|NEEDS-DEVICE|UNAVAILABLE> as the first line"],
+  ]);
+  assert.equal(QA_ANALYST_STAGE.verdict.label, "## Verdict: <APPROVED|NEEDS FIX|NEEDS DISCUSSION> as the first line");
 });
 
 test("`lastRound` is the last `## Round` up to the end, or the whole text with no round", () => {

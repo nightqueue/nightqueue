@@ -12,7 +12,7 @@ const ORG_SLUG = /^[a-z0-9][a-z0-9_-]*$/i;
 const HTTPS_ORIGIN = /^https:\/\/[a-z0-9.-]+(?::\d+)?\/?$/i;
 const MAX_FRAMES = 30;
 const MAX_BREADCRUMBS = 20;
-const MAX_RECENT_EVENTS = 5;
+const MAX_FULL_EVENTS = 3;
 const MAX_FIELD = 300;
 
 // Reads a Sentry reference: an issue link, a short id written right after the word sentry, or (explicitly given) a bare id.
@@ -115,49 +115,64 @@ function safeTags(event) {
   return tags.filter((tag) => typeof tag?.key === "string" && TAG_KEYS.has(tag.key));
 }
 
-// The exception, frames, breadcrumbs and allowed tags of the latest event as markdown lines; request, user and contexts are never read.
+// The exception, frames, breadcrumbs and allowed tags of one event as markdown lines; request, user and contexts are never read.
 function eventLines(event) {
   const exceptions = exceptionValues(event);
   const crumbs = entriesOf(event, "breadcrumbs").flatMap((data) => (Array.isArray(data?.values) ? data.values : []));
   const tags = safeTags(event);
   return [
     "",
-    "## Exception",
+    "#### Exception",
     ...exceptions.map((value) => `- ${oneLine(value?.type)}: ${oneLine(value?.value)}`),
     "",
-    "## Frames (innermost first, in-app first)",
+    "#### Frames (innermost first, in-app first)",
     ...topFrames(exceptions).map((frame) => `- ${oneLine(frame?.filename)}:${oneLine(frame?.function)}:${oneLine(frame?.lineNo)}`),
     "",
-    `## Breadcrumbs (last ${MAX_BREADCRUMBS})`,
+    `#### Breadcrumbs (last ${MAX_BREADCRUMBS})`,
     ...crumbs.slice(-MAX_BREADCRUMBS).map((crumb) => `- ${oneLine(crumb?.category)}: ${oneLine(crumb?.message)}`),
     "",
-    "## Tags",
+    "#### Tags",
     ...tags.map((tag) => `- ${oneLine(tag?.key)}=${oneLine(tag?.value)}`),
   ];
 }
 
-// The most recent events of the issue, one summary line each; only date, id and title are read.
-function recentEventLines(answer) {
-  if (!answer.ok) return ["", `Recent events not read (${answer.detail}).`];
-  const events = Array.isArray(answer.body) ? answer.body.slice(0, MAX_RECENT_EVENTS) : [];
-  return [
-    "",
-    `## Recent events (up to ${MAX_RECENT_EVENTS})`,
-    ...events.map((event) => `- ${oneLine(event?.dateCreated)} ${oneLine(event?.eventID)}: ${oneLine(event?.title || event?.message)}`),
-  ];
+// The heading of one listed event: its position, date, id and title.
+function eventHeading(event, at, count) {
+  return `### Event ${at + 1} of ${count} — ${oneLine(event?.dateCreated)} ${oneLine(event?.eventID)}: ${oneLine(event?.title || event?.message)}`;
 }
 
-// Fetches the issue, its most recent events and its latest event in detail as markdown, or answers the reason it could not.
+// The full body of a listed event, read once more by its id when the list answered it without entries; answers { event } or { detail }.
+async function fullEvent(listed, { issueUrl, connection, http }) {
+  if (Array.isArray(listed?.entries)) return { event: listed };
+  const id = typeof listed?.eventID === "string" ? listed.eventID : "";
+  if (!id) return { detail: "no event id" };
+  const answer = await http(`${issueUrl}events/${encodeURIComponent(id)}/`, { headers: authHeaders(connection) });
+  return answer.ok ? { event: answer.body ?? {} } : { detail: answer.detail };
+}
+
+// The most recent events of the issue in full, newest first, each with the same caps as a single event.
+async function recentEventLines({ issueUrl, connection, http }) {
+  const answer = await http(`${issueUrl}events/?full=true&per_page=${MAX_FULL_EVENTS}`, { headers: authHeaders(connection) });
+  if (!answer.ok) return ["", `Recent events not read (${answer.detail}).`];
+  const events = Array.isArray(answer.body) ? answer.body.slice(0, MAX_FULL_EVENTS) : [];
+  const lines = ["", `## Recent events (the ${events.length} most recent, in full)`];
+  for (const [at, listed] of events.entries()) {
+    const full = await fullEvent(listed, { issueUrl, connection, http });
+    const body = full.event ? eventLines(full.event) : ["", `Event not read (${full.detail}).`];
+    lines.push("", eventHeading(listed, at, events.length), ...body);
+  }
+  return lines;
+}
+
+// Fetches the issue and its most recent events in full as markdown, or answers the reason it could not.
 async function enrichSentry(ref, { connection, http }) {
   const resolved = await issueIdOf(ref, { record: connection, http });
   if (!resolved.id) return { detail: resolved.detail };
   const issueUrl = `${orgRoot(connection)}/issues/${resolved.id}/`;
   const issue = await http(issueUrl, { headers: authHeaders(connection) });
   if (!issue.ok) return { detail: `issue ${resolved.id} not read (${issue.detail})` };
-  const recent = await http(`${issueUrl}events/?per_page=${MAX_RECENT_EVENTS}`, { headers: authHeaders(connection) });
-  const event = await http(`${issueUrl}events/latest/`, { headers: authHeaders(connection) });
-  const tail = event.ok ? eventLines(event.body) : ["", `Latest event not read (${event.detail}).`];
-  return { markdown: `${[...issueLines(ref, issue.body ?? {}), ...recentEventLines(recent), ...tail].join("\n")}\n` };
+  const recent = await recentEventLines({ issueUrl, connection, http });
+  return { markdown: `${[...issueLines(ref, issue.body ?? {}), ...recent].join("\n")}\n` };
 }
 
 // The short id, permalink and title of an issue, or the reason they could not be read.

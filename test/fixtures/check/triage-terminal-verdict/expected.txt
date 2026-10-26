@@ -1,0 +1,7 @@
+OK
+VERDICT: NOT-REPRODUCIBLE
+recorded: brief 00-brief.md
+recorded: commit type fix
+recorded: phase_done triage NOT-REPRODUCIBLE
+recorded: run_terminate triage NOT-REPRODUCIBLE
+recorded: slug check-contract

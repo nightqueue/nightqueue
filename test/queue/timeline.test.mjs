@@ -29,10 +29,10 @@ function phaseOf(timeline, number) {
   return timeline.phases.find((phase) => phase.number === number);
 }
 
-test("a complex job running its coder has the brief done, the skipped lanes marked and the coder now", () => {
+test("a job running its coder has the brief done, the skipped lanes marked and the coder now", () => {
   const events = [{ kind: "attempt", elapsedMs: 0 }, marker(0, 1000), open(4, "coder", 5000, { model: "opus" })];
-  const timeline = phaseTimeline(events, { tier: "complex", status: "running" });
-  assert.equal(timeline.track, "Standard");
+  const timeline = phaseTimeline(events, { status: "running" });
+  assert.deepEqual(Object.keys(timeline), ["phases", "clockMs"], "the timeline carries no track and no tier");
   assert.deepEqual(states(timeline), { 0: "done", 1: "skipped", 2: "skipped", 3: "skipped", 4: "now", 5: "pending", 6: "pending", 7: "pending", 8: "pending" });
   assert.deepEqual([1, 2, 3].map((number) => phaseOf(timeline, number).skipped), [null, null, null], "a passed-over in-track slot carries no skip record");
   assert.equal(phaseOf(timeline, 0).durationMs, 5000);
@@ -51,21 +51,23 @@ test("a fix loop sums its lanes instead of spanning from the first opening to th
     open(4, "coder", 4000, { laneId: "c2" }),
     close(4, "coder", 9000, { durationMs: 5000, laneId: "c2" }),
   ];
-  const timeline = phaseTimeline(events, { tier: "simple", status: "done" });
+  const timeline = phaseTimeline(events, { status: "done" });
   const coder = phaseOf(timeline, 4);
   assert.deepEqual([coder.durationMs, coder.state], [7000, "done"]);
-  assert.equal(coder.model, "sonnet", "the routing row's model is the fallback when the lane carried none");
+  assert.equal(coder.model, "opus", "the agent's default model is the fallback when the lane carried none");
+  const overridden = phaseTimeline(events, { status: "done", models: { coder: "sonnet", verifier: "haiku" } });
+  assert.equal(phaseOf(overridden, 4).model, "sonnet", "the project's model is the fallback when it overrides the agent");
 });
 
 test("a gate stops the timeline at the last phase reached", () => {
   const events = [{ kind: "attempt", elapsedMs: 0 }, open(1, "triager", 1000, { laneId: "t" }), close(1, "triager", 2000, { durationMs: 1000, laneId: "t" }), open(3, "architect", 2500, { laneId: "a" })];
-  const timeline = phaseTimeline(events, { tier: "complex", status: "gate" });
+  const timeline = phaseTimeline(events, { status: "gate" });
   assert.equal(states(timeline)[3], "gate");
   assert.equal(states(timeline)[1], "done");
   assert.equal(states(timeline)[4], "pending");
 });
 
-test("a trivial job that published and reported is done end to end, runtime hatched by tier, publish and report timed on commit · PR", () => {
+test("a job that published and reported is done end to end, the slots it passed over skipped, publish and report timed on commit · PR", () => {
   const events = [
     { kind: "attempt", elapsedMs: 0 },
     open(4, "coder", 1000, { laneId: "c" }),
@@ -76,34 +78,38 @@ test("a trivial job that published and reported is done end to end, runtime hatc
     marker(8, 9000),
     { kind: "resultEnd", elapsedMs: 10000 },
   ];
-  const timeline = phaseTimeline(events, { tier: "trivial", status: "done" });
-  assert.equal(timeline.track, "Fast Lite");
+  const timeline = phaseTimeline(events, { status: "done" });
   assert.deepEqual(timeline.phases.map((phase) => phase.number), [0, 1, 2, 3, 4, 5, 6, 7, 8]);
   assert.deepEqual(states(timeline), { 0: "done", 1: "skipped", 2: "skipped", 3: "skipped", 4: "done", 5: "skipped", 6: "done", 7: "skipped", 8: "done" });
   assert.equal(phaseOf(timeline, 0).durationMs, 2000);
-  assert.deepEqual(phaseOf(timeline, 7).skipped, { by: "tier", reason: null, at: null });
+  assert.equal(phaseOf(timeline, 7).skipped, null, "a passed-over slot carries no skip record");
   assert.equal(phaseOf(timeline, 8).durationMs, 3000);
 });
 
-test("an unknown tier still has the nine slots from second 0, with no track, no tier and nothing skipped", () => {
-  const unknown = phaseTimeline([open(4, "coder", 0)], { tier: null, status: "running" });
-  assert.deepEqual([unknown.track, unknown.tier, unknown.clockMs, unknown.phases.length], [null, null, 0, 9]);
+test("a job with no narrated attempt still has the nine slots from second 0, each pending slot with its agent's default model", () => {
+  const unknown = phaseTimeline([open(4, "coder", 0)], { status: "running" });
+  assert.deepEqual([unknown.clockMs, unknown.phases.length], [0, 9]);
   assert.equal(phaseOf(unknown, 4).state, "now");
-  assert.equal(phaseOf(unknown, 4).model, null, "no tier, no routing model");
-  const early = phaseTimeline([{ kind: "attempt", elapsedMs: 0 }, open(1, "triager", 1000)], { tier: null, status: "running" });
+  assert.equal(phaseOf(unknown, 4).model, "opus", "the coder's default model");
+  const early = phaseTimeline([{ kind: "attempt", elapsedMs: 0 }, open(1, "triager", 1000)], { status: "running" });
   assert.deepEqual(states(early), { 0: "done", 1: "now", 2: "pending", 3: "pending", 4: "pending", 5: "pending", 6: "pending", 7: "pending", 8: "pending" });
-  const empty = phaseTimeline([], { tier: "simple", status: "pending" });
-  assert.deepEqual(new Set(empty.phases.map((phase) => phase.state)), new Set(["pending", "skipped"]));
+  const empty = phaseTimeline([], { status: "pending" });
+  assert.deepEqual(new Set(empty.phases.map((phase) => phase.state)), new Set(["pending"]));
   assert.deepEqual(new Set(empty.phases.map((phase) => phase.tokens_label)), new Set(["-"]));
+  assert.deepEqual(
+    empty.phases.map((phase) => phase.model),
+    [null, "sonnet", "haiku", "opus", "opus", "sonnet", "haiku", null, null],
+  );
 });
 
-test("every slot carries its routing agent, the colour key of the studio", () => {
-  const timeline = phaseTimeline([], { tier: "complex", status: "pending" });
+test("every slot carries its agent, the colour key of the studio", () => {
+  const timeline = phaseTimeline([], { status: "pending" });
   assert.deepEqual(
     timeline.phases.map((phase) => [phase.name, phase.agent]),
     [["brief", null], ["triager", "triager"], ["explore", "explore"], ["architect", "architect"], ["coder", "coder"], ["qa-guardian", "qaGuardian"], ["verifier", "verifier"], ["runtime", null], ["commit · PR", null]],
   );
-  assert.equal(timeline.tier, "complex");
+  assert.equal("tier" in timeline, false);
+  assert.equal("track" in timeline, false);
 });
 
 // The numbers of the skipped slots of a timeline.
@@ -111,52 +117,40 @@ function skippedNumbers(timeline) {
   return timeline.phases.filter((phase) => phase.state === "skipped").map((phase) => phase.number);
 }
 
-test("a simple bug hatches explore, architect, qa-guardian and runtime by tier, never the triager; recorded skips carry their time", () => {
-  const derived = phaseTimeline([], { tier: "simple", type: "bug/error", status: "pending" });
-  assert.deepEqual(skippedNumbers(derived), [2, 3, 5, 7]);
-  assert.deepEqual(phaseOf(derived, 2).skipped, { by: "tier", reason: null, at: null });
-  assert.equal(phaseOf(derived, 1).state, "pending");
-  const skips = { explore: { by: "tier", at: "2026-10-09T10:00:00.000Z" } };
-  const recorded = phaseTimeline([], { tier: "simple", type: "bug/error", status: "pending", skips });
-  assert.deepEqual(phaseOf(recorded, 2).skipped, { by: "tier", reason: null, at: "2026-10-09T10:00:00.000Z" });
+test("a fresh run hatches no slot: every run executes every phase", () => {
+  assert.deepEqual(skippedNumbers(phaseTimeline([], { status: "pending" })), []);
+  assert.deepEqual(skippedNumbers(phaseTimeline([], { status: "pending", skips: {} })), []);
 });
 
-test("a simple feature also hatches the triager by tier: five skipped", () => {
-  const timeline = phaseTimeline([], { tier: "simple", type: "feature/refactor", status: "pending" });
-  assert.deepEqual(skippedNumbers(timeline), [1, 2, 3, 5, 7]);
-  assert.deepEqual(phaseOf(timeline, 1).skipped, { by: "tier", reason: null, at: null });
-  assert.equal(phaseOf(timeline, 1).model, null, "a skipped slot names no routing model");
+test("a tier skip an older runtime recorded still renders as a skip of the `tier` author, with its time", () => {
+  const skips = { explore: { by: "tier", at: "2026-10-09T10:00:00.000Z" }, runtime: { by: "tier" } };
+  const legacy = phaseTimeline([], { status: "pending", skips });
+  assert.deepEqual(skippedNumbers(legacy), [2, 7]);
+  assert.deepEqual(phaseOf(legacy, 2).skipped, { by: "tier", reason: null, at: "2026-10-09T10:00:00.000Z" });
+  assert.equal(phaseOf(legacy, 2).model, null, "a skipped slot names no model");
 });
 
-test("a simple run of unknown type hatches four and leaves the triager pending; trivial hatches five and complex none", () => {
-  const unknownType = phaseTimeline([], { tier: "simple", type: "not-a-type", status: "pending" });
-  assert.deepEqual(skippedNumbers(unknownType), [2, 3, 5, 7]);
-  assert.equal(phaseOf(unknownType, 1).state, "pending");
-  assert.deepEqual(skippedNumbers(phaseTimeline([], { tier: "trivial", status: "pending" })), [1, 2, 3, 5, 7]);
-  assert.deepEqual(skippedNumbers(phaseTimeline([], { tier: "complex", type: "feature/refactor", status: "pending" })), []);
-});
-
-test("an agent skip shows on its slot with who and why, and a tier entry back in the track is ignored", () => {
-  const skips = { qa: { by: "architect", reason: "docs only", at: "2026-10-09T10:00:00.000Z" }, triage: { by: "tier", at: "x" }, explore: "junk", verification: { by: 3 } };
-  const timeline = phaseTimeline([{ kind: "attempt", elapsedMs: 0 }, open(4, "coder", 1000)], { tier: "complex", status: "running", skips });
+test("an agent skip shows on its slot with who and why, and a malformed record is ignored", () => {
+  const skips = { qa: { by: "architect", reason: "docs only", at: "2026-10-09T10:00:00.000Z" }, explore: "junk", verification: { by: 3 } };
+  const timeline = phaseTimeline([{ kind: "attempt", elapsedMs: 0 }, open(4, "coder", 1000)], { status: "running", skips });
   assert.equal(phaseOf(timeline, 5).state, "skipped");
   assert.deepEqual(phaseOf(timeline, 5).skipped, { by: "architect", reason: "docs only", at: "2026-10-09T10:00:00.000Z" });
   assert.deepEqual([6, 7, 8].map((number) => phaseOf(timeline, number).state), ["pending", "pending", "pending"]);
-  assert.equal(phaseOf(timeline, 1).skipped, null, "a complex run's triager is in the track, so a stale tier entry never hatches it");
   assert.equal(phaseOf(timeline, 2).skipped, null);
+  assert.equal(phaseOf(timeline, 6).skipped, null);
 });
 
 test("a slot the run reached is never shown skipped, whatever its skip record says", () => {
   const skips = { qa: { by: "architect", reason: "docs only", at: null } };
   const opened = [{ kind: "attempt", elapsedMs: 0 }, open(5, "qa-guardian", 1000, { laneId: "q" })];
-  assert.equal(phaseOf(phaseTimeline(opened, { tier: "complex", status: "running", skips }), 5).state, "now");
+  assert.equal(phaseOf(phaseTimeline(opened, { status: "running", skips }), 5).state, "now");
   const closed = [...opened, close(5, "qa-guardian", 3000, { durationMs: 2000, laneId: "q" })];
-  const done = phaseOf(phaseTimeline(closed, { tier: "complex", status: "done", skips }), 5);
+  const done = phaseOf(phaseTimeline(closed, { status: "done", skips }), 5);
   assert.deepEqual([done.state, done.skipped], ["done", null]);
 });
 
 test("a gated job with no narrated event stops at the track's first phase", () => {
-  const timeline = phaseTimeline([], { tier: "complex", status: "gate" });
+  const timeline = phaseTimeline([], { status: "gate" });
   const gated = timeline.phases.filter((phase) => phase.state === "gate");
   assert.deepEqual(
     gated.map((phase) => phase.number),
@@ -165,7 +159,7 @@ test("a gated job with no narrated event stops at the track's first phase", () =
 });
 
 test("a lane killed by the attempt boundary counts up to that attempt's last clock reading, and a lane without usage counts its reported tokens", () => {
-  const timeline = createTimeline({ tier: "complex" });
+  const timeline = createTimeline();
   for (const event of [
     { kind: "attempt", elapsedMs: 0 },
     open(1, "triager", 1000, { laneId: "t" }),
@@ -194,7 +188,7 @@ const GATED_ATTEMPT = [
 ];
 
 test("a gated job has its stopped phase in the gate state, its time counted to the stop and the job clock at the stop", () => {
-  const timeline = phaseTimeline(GATED_ATTEMPT, { tier: "complex", status: "gate" });
+  const timeline = phaseTimeline(GATED_ATTEMPT, { status: "gate" });
   assert.equal(states(timeline)[3], "gate");
   const architect = phaseOf(timeline, 3);
   assert.deepEqual([architect.startMs, architect.attempts, architect.durationMs], [2500, 1, 7500]);
@@ -212,7 +206,7 @@ test("a job resumed after a gate counts each phase's attempts, splits their time
     open(4, "coder", 5000, { laneId: "c" }),
     close(4, "coder", 9000, { durationMs: 4000, laneId: "c" }),
   ];
-  const timeline = phaseTimeline(resumed, { tier: "complex", status: "done" });
+  const timeline = phaseTimeline(resumed, { status: "done" });
   assert.equal(new Set(timeline.phases.map((phase) => phase.state)).has("gate"), false);
   const architect = phaseOf(timeline, 3);
   assert.deepEqual([architect.attempts, architect.durationMs, architect.startMs], [2, 10500, 2500]);
@@ -275,7 +269,7 @@ function j125Log() {
     ...lane({ id: "q2", agent: "qa-guardian", at: 740, durationS: 40, iso: ATTEMPT_2, tokens: 150 }),
     ...lane({ id: "v2", agent: "verifier", at: 800, durationS: 80, iso: ATTEMPT_2, tokens: 250 }),
     ...lane({ id: "c3", agent: "coder", at: 900, durationS: 50, iso: ATTEMPT_2, tokens: 90 }),
-    ...lane({ id: "rt", agent: "verifier", at: 952, durationS: 6, iso: ATTEMPT_2, tokens: 120, prompt: "Phase 6.5.\nMode: RUNTIME\nRun it for real." }),
+    ...lane({ id: "rt", agent: "verifier", at: 952, durationS: 6, iso: ATTEMPT_2, tokens: 120, prompt: "Phase 7.\nMode: RUNTIME\nRun it for real." }),
     assistantEvent("all green, publishing", { messageId: "msg_o2", usage: { tokensIn: 50 }, timestamp: secondsIntoAttempt(960, ATTEMPT_2) }),
     orchestratorCommand("toolu_pub", "nightqueue run publish --message-file m.txt", 970, 70),
     assistantEvent("pull request open", { messageId: "msg_o3", usage: { tokensIn: 30 }, timestamp: secondsIntoAttempt(990, ATTEMPT_2) }),
@@ -287,7 +281,7 @@ function j125Log() {
 }
 
 test("J-125: a job resumed in attempt 2 keeps the phases attempt 1 ran, each summed over its own lanes, with its tokens", () => {
-  const timeline = phaseTimeline(narrateLog(j125Log(), { usage: true }), { tier: "complex", status: "done" });
+  const timeline = phaseTimeline(narrateLog(j125Log(), { usage: true }), { status: "done" });
   assert.deepEqual(states(timeline), { 0: "done", 1: "done", 2: "done", 3: "done", 4: "done", 5: "done", 6: "done", 7: "done", 8: "done" });
   for (const phase of timeline.phases) assert.ok(Number.isFinite(phase.durationMs), `phase ${phase.number} has no duration`);
   assert.deepEqual([1, 2, 3].map((number) => phaseOf(timeline, number).durationMs), [60000, 90000, 120000]);

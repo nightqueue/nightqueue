@@ -117,6 +117,19 @@ test("--repo-root and --project index the artifact from any working directory", 
   );
 });
 
+test("an artifact with no `## Structural index` section still saves its files and libs", (t) => {
+  const env = makeHome(t, "index-save-no-structural");
+  const repo = makeRepo(t, env, "alpha");
+  const text = exploreArtifact(repo).replace("## Structural index\n\n- Persisted by the runtime from this artifact.\n", "");
+  assert.equal(text.includes("## Structural index"), false, "the fixture still carries the structural index");
+  const artifact = writeArtifact(t, "no-structural", text);
+
+  const result = runIndexSave(env, repo, [artifact]);
+
+  assert.equal(result.code, 0, result.stderr);
+  assert.equal(result.stdout, "index saved: 3 files, 2 libs");
+});
+
 test("`## Libs` is read as the alias of `## Third-party libraries`", async (t) => {
   const env = makeHome(t, "index-save-alias");
   const repo = makeRepo(t, env, "alpha");
@@ -243,5 +256,5 @@ test("`nightqueue run` lists its subcommands and refuses an unknown one", (t) =>
   assert.equal(help.status, 0, help.stderr);
   assert.match(help.stdout, /subcommands:\n(?:.*\n)*? {2}nightqueue run index-save <artifact>/);
   assert.equal(unknown.status, 1);
-  assert.match(unknown.stderr, /unknown run subcommand `secrets-swep`; use: check, commit, dir, log, pr, index-save/);
+  assert.match(unknown.stderr, /unknown run subcommand `secrets-swep`; use: check, append, commit, dir, log, pr, index-save/);
 });

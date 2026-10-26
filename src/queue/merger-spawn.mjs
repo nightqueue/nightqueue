@@ -4,13 +4,14 @@ import { logsDir } from "../config/paths.mjs";
 import { MERGER_DIR_ENV, MERGER_FILES_ENV } from "../hooks/merger-guard.mjs";
 import { mergerSettings } from "../host/settings.mjs";
 import { CLOSE_WORKER_ENV } from "./close-deps.mjs";
+import { AGENT_MODELS } from "./routing.mjs";
 import { compactStamp } from "./runner.mjs";
 import { pluginDir, spawnClaude } from "./spawn.mjs";
 import { extractResultText } from "./stream.mjs";
 
 const MERGER_STOP_POLL_MS = 1000;
 
-// The argv of the merger agent: Read and Edit only, sonnet, no MCP server, and only the guard's settings.
+// The argv of the merger agent: Read and Edit only, its default model, no MCP server, and only the guard's settings.
 export function mergerArgs({ prompt, env = process.env }) {
   return [
     "-p",
@@ -18,7 +19,7 @@ export function mergerArgs({ prompt, env = process.env }) {
     "--agent",
     "nightqueue:merger",
     "--model",
-    "sonnet",
+    AGENT_MODELS.merger,
     "--tools",
     "Read,Edit",
     "--permission-mode",

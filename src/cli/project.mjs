@@ -1,13 +1,23 @@
-import { existsSync, rmSync } from "node:fs";
+import { existsSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { UserError } from "../config/errors.mjs";
 import { requireOrg } from "../config/orgs.mjs";
-import { registerProject as registerInStore, renameProject, requireGitPath, requireProject, setProjectKey } from "../config/projects.mjs";
+import {
+  mainCheckoutOf,
+  normalizePath,
+  pathContains,
+  registerProject as registerInStore,
+  renameProject,
+  requireGitPath,
+  requireProject,
+  setProjectKey,
+} from "../config/projects.mjs";
 import { runsDir } from "../config/paths.mjs";
 import { loadConfig } from "../config/store.mjs";
 import { changeProjectIntegrations, integrationLines, integrationsView } from "../integrations/settings.mjs";
 import { requireKey } from "../memory/refs.mjs";
 import { refuseHomeWriteInsideJob } from "../queue/home-guard.mjs";
+import { agentModels, requireAgent, requireModel } from "../queue/routing.mjs";
 import { openRegistryReader, openRegistryWriter, openStore } from "../store/open.mjs";
 import { checkArgs, parseCommand } from "./args.mjs";
 import { askKey, choose } from "./prompt.mjs";
@@ -237,6 +247,129 @@ async function runIntegrations(argv, ctx) {
   await changeIntegrations(ctx, { name, action, args, json: values.json === true });
 }
 
+const MODELS_USAGE = "nightqueue project models <project> [--set <agent>=<model>]... [--unset <agent>]... [--json]";
+
+// Each agent's model for a project and where it comes from (`project` override or `default`).
+function modelView(projectAgents) {
+  const models = agentModels(projectAgents);
+  return Object.fromEntries(
+    Object.entries(models).map(([agent, model]) => [agent, { model, source: model === projectAgents?.[agent]?.model ? "project" : "default" }]),
+  );
+}
+
+// Prints a project's agent models, as lines or as the JSON answer.
+function printModels(ctx, { project, projectAgents, json }) {
+  const agents = modelView(projectAgents);
+  if (json) {
+    ctx.out(JSON.stringify({ project: project.name, agents }));
+    return;
+  }
+  for (const [agent, { model, source }] of Object.entries(agents)) ctx.out(`${agent}=${model} (${source})`);
+}
+
+// Reads `--set` values written `<agent>=<model>`, each name validated.
+function modelAssignments(values) {
+  return values.map((arg) => {
+    const at = arg.indexOf("=");
+    if (at <= 0) throw new UserError(`\`${arg}\` is not <agent>=<model>; usage: ${MODELS_USAGE}`);
+    return { agent: requireAgent(arg.slice(0, at)), model: requireModel(arg.slice(at + 1)) };
+  });
+}
+
+// The overrides after the sets and unsets are applied, every name validated before anything is written.
+function changedAgents(current, { set, unset }) {
+  const next = { ...(current ?? {}) };
+  for (const { agent, model } of modelAssignments(set)) next[agent] = { model };
+  for (const agent of unset) delete next[requireAgent(agent)];
+  return next;
+}
+
+// Runs `project models <project>` without changes: reads only, a home without a database knowing no project.
+async function showModels(ctx, { name, json }) {
+  const store = await openRegistryReader(ctx.env);
+  if (!store) throw new UserError(`unknown project \`${name}\`; no project is registered yet`);
+  const project = await requireProject(store, name);
+  printModels(ctx, { project, projectAgents: await store.projects.agents(project.id), json });
+}
+
+// Runs `project models <project> --set/--unset`: every change validated before the one write, refused inside a job.
+async function changeModels(ctx, { name, set, unset, json }) {
+  refuseHomeWriteInsideJob(ctx.env);
+  const store = await openRegistryWriter(ctx.env);
+  const project = await requireProject(store, name);
+  const next = changedAgents(await store.projects.agents(project.id), { set, unset });
+  const projectAgents = await store.projects.setAgents(project.id, next);
+  printModels(ctx, { project, projectAgents, json });
+}
+
+// Runs `project models`: shows or changes the model each agent of the project runs on.
+async function runModels(argv, ctx) {
+  const options = { set: { type: "string", multiple: true }, unset: { type: "string", multiple: true }, json: { type: "boolean" } };
+  const { values, positionals } = parseCommand(argv, options);
+  checkArgs(positionals, { min: 1, max: 1, usage: MODELS_USAGE });
+  const set = values.set ?? [];
+  const unset = values.unset ?? [];
+  const json = values.json === true;
+  if (set.length === 0 && unset.length === 0) return await showModels(ctx, { name: positionals[0], json });
+  await changeModels(ctx, { name: positionals[0], set, unset, json });
+}
+
+const DEMO_REPO_USAGE = "nightqueue project demo-repo <project> [--set <path>] [--json]";
+
+// Prints a project's demo repository, as one line or as the JSON answer.
+function printDemoRepo(ctx, { project, demoRepo, json }) {
+  if (json) {
+    ctx.out(JSON.stringify({ project: project.name, demoRepo }));
+    return;
+  }
+  ctx.out(demoRepo ?? "none configured");
+}
+
+// Tells whether a directory is the project's own repository: its checkout, one of its worktrees, inside it or around it.
+function isOwnRepository(absolute, project) {
+  if (typeof project?.path !== "string" || !project.path) return false;
+  const own = mainCheckoutOf(normalizePath(project.path));
+  return mainCheckoutOf(absolute) === own || pathContains(own, absolute) || pathContains(absolute, own);
+}
+
+// The canonical path of a git repository that is not the project's own, or a refusal naming the path.
+function requireDemoRepository(path, project) {
+  const absolute = normalizePath(path);
+  if (!existsSync(absolute) || !statSync(absolute).isDirectory()) throw new UserError(`the demo repository \`${absolute}\` is not an existing directory`);
+  if (!existsSync(join(absolute, ".git"))) throw new UserError(`the demo repository \`${absolute}\` is not a git repository`);
+  if (isOwnRepository(absolute, project)) {
+    throw new UserError(`the demo repository \`${absolute}\` is the project's own repository: real pull requests are never opened there`);
+  }
+  return absolute;
+}
+
+// Runs `project demo-repo <project>` without `--set`: reads only.
+async function showDemoRepo(ctx, { name, json }) {
+  const store = await openRegistryReader(ctx.env);
+  if (!store) throw new UserError(`unknown project \`${name}\`; no project is registered yet`);
+  const project = await requireProject(store, name);
+  printDemoRepo(ctx, { project, demoRepo: await store.projects.demoRepo(project.id), json });
+}
+
+// Runs `project demo-repo <project> --set <path>`: the path validated before the one write, refused inside a job.
+async function changeDemoRepo(ctx, { name, path, json }) {
+  refuseHomeWriteInsideJob(ctx.env);
+  const store = await openRegistryWriter(ctx.env);
+  const project = await requireProject(store, name);
+  const demoRepoPath = requireDemoRepository(path, project);
+  printDemoRepo(ctx, { project, demoRepo: await store.projects.setDemoRepo(project.id, demoRepoPath), json });
+}
+
+// Runs `project demo-repo`: shows or sets the repository where verifications may open real pull requests.
+async function runDemoRepo(argv, ctx) {
+  const { values, positionals } = parseCommand(argv, { set: { type: "string" }, json: { type: "boolean" } });
+  checkArgs(positionals, { min: 1, max: 1, usage: DEMO_REPO_USAGE });
+  const json = values.json === true;
+  if (values.set === undefined) return await showDemoRepo(ctx, { name: positionals[0], json });
+  if (!values.set) throw new UserError(`\`--set\` needs a path; usage: ${DEMO_REPO_USAGE}`);
+  await changeDemoRepo(ctx, { name: positionals[0], path: values.set, json });
+}
+
 const SUBCOMMANDS = new Map([
   ["add", runAdd],
   ["list", runList],
@@ -245,6 +378,8 @@ const SUBCOMMANDS = new Map([
   ["remove", runRemove],
   ["move", runMove],
   ["integrations", runIntegrations],
+  ["models", runModels],
+  ["demo-repo", runDemoRepo],
 ]);
 
 export const SUBCOMMAND_NAMES = Object.freeze([...SUBCOMMANDS.keys()]);

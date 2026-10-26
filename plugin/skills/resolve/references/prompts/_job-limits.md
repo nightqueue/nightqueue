@@ -1,0 +1,2 @@
+Search rule: a search for a file or a pattern stays inside the repository below or the project checkout — never from `/` or the home (the job refuses them) — and a plugin file lives under `plugin/` of the checkout, never elsewhere on disk.
+Long commands: inside a job a command that outlives the Bash timeout is KILLED, not backgrounded — give a long command a Bash `timeout` parameter sized to it, up to `queue.bashTimeoutS.max`.

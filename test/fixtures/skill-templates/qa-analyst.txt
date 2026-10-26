@@ -1,8 +1,18 @@
-ARTIFACT_PATH: <RUN_DIR>/05a-qa-analyst.md (append-only: this launch is ## Round [n])
+ARTIFACT_PATH: <RUN_DIR>/05-qa.md (append-only: this launch is ## Round [n])
+[the round rule]
 Read before acting (via Read):
 - `<RUN_DIR>/04-implementation.md` — ## Modified files (the files to attack).
 - `<RUN_DIR>/03-plan.md` (open it only AFTER step 0 of the Access map (QA), when it
-  applies) — see the QA attack brief above, pasted here by the orchestrator.
+  applies) — ## Identified risks, ## Assumptions, ## Pre-mortem, and ## Symptom coverage /
+  ## Usage coverage when present; see the QA attack brief below.
+[Include only if 03-plan.md has ## Usage coverage:]
+- `<RUN_DIR>/02-explore.md` when it exists — ## Access map, read only after your own ## Access map (QA).
+[the generic handoff lines]
+
+Inputs: the artifacts above; the QA attack brief; the plugin paths of your methodology; the `## Applicable lessons` and `## Project memory` when the context carries them.
+
+QA attack brief:
+[the QA attack brief]
 
 Mode: ANALYST
 
@@ -10,7 +20,7 @@ Attack every pre-mortem mitigation per the QA attack brief above: static proof (
 goes to ## Proven breaks, runtime-dependent proof becomes a ## Break hypotheses item.
 
 Apply the COMPLETE analytical attack (fronts, risks, assumptions, callers,
-robustness), but follow the rules of the ANALYST Mode: do NOT write or run a runtime
+robustness), as an analysis without runtime PoCs: do NOT write or run a runtime
 PoC — each runtime break becomes a hypothesis in ## Break hypotheses
 (grouped by probable root, with type, minimum context and an assigned PoC name).
 A static break (proof by reading) is yours: report it in ## Proven breaks.
@@ -24,12 +34,28 @@ EXACT SCENARIO of the bug (state of the bug account + input of the symptom) and 
 <module>.regression.test.* — the prover is going to build it to PASS against the
 fixed code.
 
-Finish with ## Proven breaks (static), ## Break hypotheses,
-## Test recipe, ## Validated risks (analytical HELD or "→ hypothesis
-H<n>") and ## Invalidated assumptions (or "None").
+## Deliver
+[the QA report deliverable, report branch:]
+## Proven breaks
+## Validated risks
+## Invalidated assumptions
+## Generated PoCs
+## Verdict
+
+This request also delivers, right after ## Proven breaks (the artifact gate requires both):
+
+## Break hypotheses
+- H<n> · group: <probable root> · type: break | regression · <file:line> · vector: <…> · the PoC asserts: <correct behavior> · context: <files> · PoC: <unique assigned file name>
+
+## Test recipe
+[the exact command, the naming conventions and the project's gotchas]
+
+and writes ## Generated PoCs as `None — this request writes no runtime PoC`.
 
 [Paste the `block` of `context_for_phase` (target: "qa") — omit when it came back empty:]
 [CONTEXT BLOCK]
+
+Demo repository: [DEMO REPO — the project's configured path, or `none configured`] — the only repository where a verification may create, merge or close a real pull request; `none configured` → no real pull request: report that scenario as a gate.
 
 Repository: [CWD PATH]
 Project: [PROJECT — the name on the Project: line of the prompt]

@@ -1,3 +1,5 @@
+import { scanMarkdown } from "./stream.mjs";
+
 // The one section of the pipeline the runtime can write by itself, because git already knows what the implementation touched.
 export const FILE_LIST = "## Modified files";
 
@@ -15,9 +17,12 @@ export function listedFiles(text) {
   return body.split("\n").map(pathOfLine).filter(Boolean);
 }
 
-// The artifact's text without its HTML comments and fenced code blocks, where a header or a path is an example, never the list.
+// The artifact's text without its HTML comments and fenced code blocks, where a header or a path is an example, never the list; read by the one markdown scanner.
 function proseOf(text) {
-  return text.replace(/<!--[\s\S]*?(?:-->|$)/g, "").replace(/^(`{3,}|~{3,})[^\n]*\n[\s\S]*?(?:^\1[^\n]*$|(?![\s\S]))/gm, "");
+  return scanMarkdown(text)
+    .steps.filter((step) => !step.inFence)
+    .map((step) => step.visible)
+    .join("\n");
 }
 
 // The paths an implementation artifact records for the runtime's own bookkeeping, read from its prose only.

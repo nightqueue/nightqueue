@@ -1,0 +1,4 @@
+OK
+GATE: coverage-not-covered-without-confirmation — 2
+QA: lite
+recorded: none (GATE: coverage-not-covered-without-confirmation — 2)

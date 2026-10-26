@@ -1,7 +1,6 @@
 import { sameBranch } from "./branch-name.mjs";
 import { insideRoots, orchestratorBashAllowed, readTarget } from "./orchestrator-scope.mjs";
 
-const FENCE_LINE_RE = /^\s{0,3}(`{3,}|~{3,})/;
 const QUOTED_LINE_RE = /^\s*\d+\t/;
 const GATE_HEADING_RE = /^#{1,6}\s+Requires user confirmation\s*$/i;
 const NOTICE_HEADING_RE = /^#{1,6}\s+Notice\s*$/i;
@@ -12,13 +11,11 @@ const SLUG_TYPE_LINE_RE = new RegExp(`^\\s*SLUG:\\s*(${SLUG_SOURCE})(?:\\s+TYPE:
 const SESSION_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{7,63}$/;
 // The line `openAttemptLog` writes before each attempt; the runtime numbers them 1, 2, 3… in order, so a line out of that sequence is incidental output shaped like a marker.
 const ATTEMPT_MARKER_RE = /^=== attempt (\d+) @ (\S+) ===$/;
-const TIER_RAISE_LINE_RE = /^\s*Tier raised:\s*(trivial|simple|complex)\s*->\s*(trivial|simple|complex)\s*:\s*(.+?)\s*$/;
 // Every standalone line the runtime reads as a control literal of its contract: the parsers below and the prompt escaper share this list, so neither can gain a literal the other ignores.
 export const CONTROL_LINE_PATTERNS = Object.freeze([
   SLUG_LINE_RE,
   SLUG_TYPE_LINE_RE,
   ATTEMPT_MARKER_RE,
-  TIER_RAISE_LINE_RE,
 ]);
 // The raw line the CLI prints (never a JSON event of the stream) when it gives up waiting for a background task.
 const RAW_CEILING_LINE_RE = /^Background tasks still running after/;
@@ -67,29 +64,149 @@ function orchestratorTextFromLine(rawLine) {
   return orchestratorText(parseEventLine(rawLine));
 }
 
-// Tells whether a fence marker closes the open one: same character and at least as long, as markdown requires.
-function closesFence(open, marker) {
-  return marker[0] === open[0] && marker.length >= open.length;
+// One line against the open code fence, by the CommonMark rules: the fence open after it and whether the line is a fence opener or closer.
+export function fenceStep(open, line) {
+  const text = String(line ?? "");
+  if (open === null) {
+    const opener = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(text);
+    if (opener === null || (opener[1][0] === "`" && opener[2].includes("`"))) return { open: null, fenceLine: false };
+    return { open: opener[1], fenceLine: true };
+  }
+  const closer = /^ {0,3}(`{3,}|~{3,})[ \t]*$/.exec(text);
+  const closes = closer !== null && closer[1][0] === open[0] && closer[1].length >= open.length;
+  return closes ? { open: null, fenceLine: true } : { open, fenceLine: false };
 }
 
 // Splits a text into lines flagged with whether they lie inside a markdown code fence, nesting included.
-function linesWithFenceState(text) {
+export function linesWithFenceState(text) {
   const scanned = [];
   let open = null;
   for (const line of String(text ?? "").replace(/\r\n?/g, "\n").split("\n")) {
-    const marker = FENCE_LINE_RE.exec(line)?.[1] ?? null;
-    if (marker && (open === null || closesFence(open, marker))) {
-      open = open === null ? marker : null;
-      scanned.push({ line, inFence: true });
-      continue;
-    }
-    scanned.push({ line, inFence: open !== null });
+    const step = fenceStep(open, line);
+    scanned.push({ line, inFence: step.fenceLine || open !== null });
+    open = step.open;
   }
   return scanned;
 }
 
+// The length of the backtick run at a position of the text.
+export function backtickRunAt(text, at) {
+  let end = at;
+  while (text[end] === "`") end += 1;
+  return end - at;
+}
+
+// The index just past the code span opened by a backtick run, or -1 when no run of the same length closes it.
+export function codeSpanEnd(text, at, run) {
+  let cursor = at + run;
+  while (cursor < text.length) {
+    const next = text.indexOf("`", cursor);
+    if (next < 0) return -1;
+    const closing = backtickRunAt(text, next);
+    if (closing === run) return next + run;
+    cursor = next + closing;
+  }
+  return -1;
+}
+
+// One line read left to right: its text outside HTML comments (code spans kept verbatim, a `<!--` at or past `literalFrom` kept as text), whether a comment is open at its end and where that comment opened (-1 when none opened on the line).
+function outsideComments(line, inComment, literalFrom = Infinity) {
+  let visible = "";
+  let open = inComment;
+  let openedAt = -1;
+  let at = 0;
+  while (at < line.length) {
+    if (open) {
+      const close = line.indexOf("-->", at);
+      if (close < 0) break;
+      [open, openedAt, at] = [false, -1, close + 3];
+    } else if (line[at] === "`") {
+      const run = backtickRunAt(line, at);
+      const end = codeSpanEnd(line, at, run);
+      const next = end < 0 ? at + run : end;
+      visible += line.slice(at, next);
+      at = next;
+    } else if (at < literalFrom && line.startsWith("<!--", at)) {
+      [open, openedAt, at] = [true, at, at + 4];
+    } else {
+      visible += line[at];
+      at += 1;
+    }
+  }
+  return { visible, inComment: open, openedAt };
+}
+
+// The column from which a `<!--` of the 1-based line is literal text: none before `literalFrom`, all of them after its line.
+function literalColumnOf(literalFrom, lineNumber) {
+  if (literalFrom === null || lineNumber < literalFrom.line) return Infinity;
+  return lineNumber === literalFrom.line ? literalFrom.column : 0;
+}
+
+// A line-by-line markdown scanner: each step answers its 1-based line, the fence and comment state at the line's start, the line's text outside comments, whether a comment is open at its end and the fence marker open after it.
+export function createMarkdownScanner({ literalFrom = null, inComment: startsInComment = false } = {}) {
+  let fence = null;
+  let inComment = startsInComment;
+  let lineNumber = 0;
+  return {
+    step(line) {
+      lineNumber += 1;
+      const start = { line: lineNumber, inFence: fence !== null, inComment };
+      const fenced = inComment ? { open: null, fenceLine: false } : fenceStep(fence, line);
+      if (fenced.fenceLine) {
+        fence = fenced.open;
+        return { ...start, inFence: true, visible: line, endsInComment: false, fence, fenceLine: true, openedAt: -1 };
+      }
+      if (fence !== null) return { ...start, visible: line, endsInComment: false, fence, fenceLine: false, openedAt: -1 };
+      const scanned = outsideComments(line, inComment, literalColumnOf(literalFrom, lineNumber));
+      inComment = scanned.inComment;
+      return { ...start, visible: scanned.visible, endsInComment: inComment, fence: null, fenceLine: false, openedAt: scanned.openedAt };
+    },
+    resetComment() {
+      inComment = false;
+    },
+  };
+}
+
+// Where the HTML comment still open at the end of the lines opened (1-based line and column), or null when every comment closes.
+function unclosedCommentOpener(lines) {
+  const scanner = createMarkdownScanner();
+  let opener = null;
+  let endsInComment = false;
+  for (const line of lines) {
+    const step = scanner.step(line);
+    if (step.openedAt >= 0) opener = { line: step.line, column: step.openedAt };
+    endsInComment = step.endsInComment;
+  }
+  return endsInComment ? opener : null;
+}
+
+// The code fence open at the end of the scanned steps (its marker and the 1-based line it opened at), or null.
+function openFenceOfSteps(steps) {
+  let open = null;
+  for (const step of steps) {
+    if (step.fence === null) open = null;
+    else open ??= { marker: step.fence, line: step.line };
+  }
+  return open;
+}
+
+// A whole text read by the one markdown scanner: a `<!--` that never closes opens nothing (it and all after it are literal text); answers the lines, their steps, that unclosed `<!--` and the fence open at the end.
+export function scanMarkdown(text) {
+  const lines = String(text ?? "").replace(/\r\n?/g, "\n").split("\n");
+  const opener = unclosedCommentOpener(lines);
+  const scanner = createMarkdownScanner({ literalFrom: opener });
+  const steps = lines.map((line) => scanner.step(line));
+  return { lines, steps, unclosedComment: opener === null ? null : { line: opener.line }, openFence: openFenceOfSteps(steps) };
+}
+
+// The text without its HTML comments, read by the markdown scanner: code spans and fenced lines are kept byte for byte, and a `<!--` that never closes is kept as literal text.
+export function withoutHtmlComments(text) {
+  const { steps } = scanMarkdown(text);
+  return steps.map((step, at) => step.visible + (step.endsInComment || at === steps.length - 1 ? "" : "\n")).join("");
+}
+
 // Tells whether a scanned line can carry a marker: outside a fence and not a `cat -n` style quotation.
-function isMarkerCandidate({ line, inFence }) {
+export function isMarkerCandidate({ line, inFence }) {
   return !inFence && !QUOTED_LINE_RE.test(line);
 }
 
@@ -151,21 +268,6 @@ export function extractSlugTypeFromEventLine(rawLine) {
     if (declared) return declared;
   }
   return null;
-}
-
-// Reads a STANDALONE `Tier raised: <from> -> <to>: <evidence>` line, the shape the Brief records a raise in; an inline mention never matches.
-export function parseTierRaiseLine(line) {
-  const match = TIER_RAISE_LINE_RE.exec(String(line ?? ""));
-  return match ? { from: match[1], to: match[2], reason: match[3] } : null;
-}
-
-// Extracts the tier raise from a raw NDJSON line: only orchestrator text, last valid match of the event.
-export function extractTierRaiseFromEventLine(rawLine) {
-  const text = orchestratorTextFromLine(rawLine);
-  if (!text) return null;
-  let found = null;
-  for (const line of text.split("\n")) found = parseTierRaiseLine(line) ?? found;
-  return found;
 }
 
 // Tells whether a line would be read as a control literal of the runtime contract, which is what the prompt escaper has to neutralize.
@@ -367,23 +469,60 @@ export function extractNotice(text) {
 // A level-2 heading other than the confirmation one, which ends its section.
 const NEXT_SECTION_RE = /^##\s+\S/;
 
-// The `## Requires user confirmation` section of a plan's text, heading included, up to the next level-2 heading outside a fence.
-export function confirmationSection(text) {
+// The first section whose heading line the predicate accepts, heading included, up to the next level-2 heading, both read outside a fence.
+function sectionWhere(text, isHeading) {
   const scanned = linesWithFenceState(text);
-  let start = -1;
-  let end = scanned.length;
-  scanned.forEach((entry, index) => {
-    if (!isMarkerCandidate(entry)) return;
-    if (start < 0 && GATE_HEADING_RE.test(entry.line)) start = index;
-    else if (start >= 0 && end === scanned.length && NEXT_SECTION_RE.test(entry.line)) end = index;
-  });
+  const start = scanned.findIndex((entry) => isMarkerCandidate(entry) && isHeading(entry.line));
   if (start < 0) return null;
+  const next = scanned.slice(start + 1).findIndex((entry) => isMarkerCandidate(entry) && NEXT_SECTION_RE.test(entry.line));
+  const end = next < 0 ? scanned.length : start + 1 + next;
   const body = scanned
     .slice(start, end)
     .map((entry) => entry.line)
     .join("\n")
     .trim();
   return body || null;
+}
+
+// The section whose heading line starts with the heading (so `## Verification: FAILED` is `## Verification`), read outside a fence; null when absent.
+export function sectionOf(text, heading) {
+  return sectionWhere(text, (line) => line.trimEnd().startsWith(heading));
+}
+
+// The section whose heading line is exactly the heading (trailing spaces allowed, never a prefix), read outside a fence; null when absent.
+export function wholeHeadingSectionOf(text, heading) {
+  return sectionWhere(text, (line) => line.trimEnd() === heading);
+}
+
+// The section whose heading, at any level from `#` to `######`, starts with the heading's title, read outside a fence; null when absent.
+export function sectionOfAnyLevel(text, heading) {
+  const title = String(heading ?? "").replace(/^#+\s*/, "");
+  if (title === "") return null;
+  return sectionWhere(text, (line) => {
+    const match = /^#{1,6}\s+(.*)$/.exec(line.trimEnd());
+    return match !== null && match[1].startsWith(title);
+  });
+}
+
+// Whether a notice nests another artifact's section: the first non-blank line after its gate heading is a heading of its own.
+export function nestsAnotherSection(text) {
+  const lines = unfencedLines(text);
+  const gateAt = lines.findIndex((line) => GATE_HEADING_RE.test(line));
+  if (gateAt < 0) return false;
+  const next = lines.slice(gateAt + 1).find((line) => line.trim() !== "");
+  return next !== undefined && /^#{1,6}\s+\S/.test(next) && !GATE_HEADING_RE.test(next);
+}
+
+// The lines of a text that lie outside every code fence and are not a `cat -n` style quotation.
+export function unfencedLines(text) {
+  return linesWithFenceState(text)
+    .filter(isMarkerCandidate)
+    .map((entry) => entry.line);
+}
+
+// The `## Requires user confirmation` section of a plan's text, heading included, up to the next level-2 heading outside a fence.
+export function confirmationSection(text) {
+  return sectionWhere(text, (line) => GATE_HEADING_RE.test(line));
 }
 
 // Last `## Notice` the ORCHESTRATOR said in an intermediate event, the only fallback when the result has none.
@@ -433,9 +572,20 @@ export function prUrlRepo(url) {
   return `${owner}/${name}`.toLowerCase();
 }
 
-// Tells whether an event is the host announcing a pull request it has just OPENED, carrying a `url` that really is one.
-function isPublishedPr(event) {
-  return event?.type === "system" && event.subtype === "code_change_published" && event.action === "created" && isPrUrl(event.url);
+// Tells whether an event is the host announcing a pull request it has just OPENED, or EDITED when that URL is vouched for (recorded by `run publish` or proven to head the run's branch; the event itself names no branch).
+function isPublishedPr(event, vouched) {
+  if (event?.type !== "system" || event.subtype !== "code_change_published" || !isPrUrl(event.url)) return false;
+  return event.action === "created" || (event.action === "edited" && vouched.includes(event.url));
+}
+
+// URLs of the pull requests the host announced as EDITED in a stream, deduplicated.
+export function editedPublicationUrls(log) {
+  const urls = String(log ?? "")
+    .split("\n")
+    .map(parseEventLine)
+    .filter((event) => event?.type === "system" && event.subtype === "code_change_published" && event.action === "edited" && isPrUrl(event.url))
+    .map((event) => event.url);
+  return [...new Set(urls)];
 }
 
 // Repository a publication happened in: the `repo` the host named, or the one its own URL carries when it named none.
@@ -457,11 +607,11 @@ function publishedBranch(event) {
 }
 
 // Every pull request the host published in the run's own repository, in stream order.
-function ownRepoPublications(log, repo) {
+function ownRepoPublications(log, repo, vouched) {
   const published = String(log ?? "")
     .split("\n")
     .map(parseEventLine)
-    .filter(isPublishedPr);
+    .filter((event) => isPublishedPr(event, vouched));
   if (published.length === 0) return [];
   const own = ownRepo(published, repo);
   return published.filter((event) => publishedRepo(event) === own);
@@ -469,6 +619,7 @@ function ownRepoPublications(log, repo) {
 
 // Whether a publication is the run's own (`own`), provably another branch's (`foreign`) or cannot be told (`unproven`).
 function publicationKind(event, { branch, hints }) {
+  if (event.action === "edited") return "own";
   const named = publishedBranch(event);
   const runBranch = typeof branch === "string" ? branch.trim() : "";
   if (!named || !runBranch) return "unproven";
@@ -491,8 +642,9 @@ function strayPublication(publications, finalUrl) {
 
 // Pull request the HOST itself published (`system`/`code_change_published` with `action: "created"`) that is the run's own delivery, and the last one dropped.
 // Only the run's repository speaks; a publication leads the runtime's `recorded` URL only when it names the run's own branch, and one naming another branch never wins.
-export function publishedDelivery(log, { repo = null, branch = null, hints = {}, recorded = null } = {}) {
-  const publications = ownRepoPublications(log, repo).map((event) => ({ event, kind: publicationKind(event, { branch, hints }) }));
+export function publishedDelivery(log, { repo = null, branch = null, hints = {}, recorded = null, provenEdits = [] } = {}) {
+  const vouched = [...(recorded ? [recorded] : []), ...(Array.isArray(provenEdits) ? provenEdits : [])];
+  const publications = ownRepoPublications(log, repo, vouched).map((event) => ({ event, kind: publicationKind(event, { branch, hints }) }));
   const delivered = deliveredPublication(publications, recorded);
   const url = delivered ? delivered.event.url : null;
   return { url, stray: strayPublication(publications, url ?? recorded) };

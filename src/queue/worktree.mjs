@@ -71,11 +71,11 @@ function jobHold(job, env) {
   return { jobId: job.id, projectId: job.project_id, slug: job.slug, type: text(state?.type), branch, worktree: worktree === null ? null : canonicalPath(worktree) };
 }
 
-// What every job that is not closed holds; null when the queue cannot be read, so the caller gates instead of assuming nobody owns anything.
+// What every job that is neither closed nor cancelled holds; null when the queue cannot be read, so the caller gates instead of assuming nobody owns anything.
 export async function openJobHolds({ store, env = process.env } = {}) {
   try {
     const jobs = await store.jobs.listOpenJobs();
-    return (Array.isArray(jobs) ? jobs : []).map((job) => jobHold(job, env)).filter(Boolean);
+    return (Array.isArray(jobs) ? jobs : []).filter((job) => job.status !== "cancelled").map((job) => jobHold(job, env)).filter(Boolean);
   } catch {
     return null;
   }

@@ -11,6 +11,7 @@ import { sqliteToIso } from "../memory/schema.mjs";
 import { openStore, openStoreReadOnly } from "../store/open.mjs";
 import { acquire, bashTimeoutS, concurrencyCap, gate, inheritUserEnvironment, isPaused, leaseHeartbeatMs, release, renew, resumeSessionEnabled, stillOwned } from "./claim.mjs";
 import { backoffMs, classifyJobResult, isTerminalRuntimeKill, isTransientFailure, nightqueueMcpUnreachable } from "./classify.mjs";
+import { provenEditedPrUrls } from "./edit-proof.mjs";
 import { recordedFiles } from "./file-list.mjs";
 import { BLOCK_CODES, preflight } from "./preflight.mjs";
 import { createStoreOutage, OUTAGE_STOPPED, waitNextPass } from "./store-outage.mjs";
@@ -32,7 +33,8 @@ import { holdRunnerAwake } from "./keep-awake.mjs";
 import { killProcess, ownRunnerRecord } from "./registry.mjs";
 import { runMaintenance } from "./maintenance.mjs";
 import { appendPendingWrite, PENDING_KEYS, replayPendingWrites } from "./pending-writes.mjs";
-import { clearRunOutcome, decideResume, isRunPath, isSafeSegment, ownRunState, readRunState, renameRunDir, resumeHandoff, writeRunTerminal } from "./resume.mjs";
+import { clearRunOutcome, decideResume, isRunPath, isSafeSegment, ownRunState, PRE_RENUMBERING_REFUSAL, preRenumberingArtifact, readRunState, resumeHandoff, writeRunTerminal } from "./resume.mjs";
+import { adoptRunSlug, followRunSlug, slugRefusal } from "./run-slug.mjs";
 import { JOB_BLOCK_ALREADY_RECORDED, recordJobBlock, recordPrUrl, recordResume, recordRunFields } from "./run-state.mjs";
 import { DISABLED_BACKGROUND_ESCAPE_LINE } from "./run-notice.mjs";
 
@@ -48,7 +50,6 @@ import {
   extractSessionIdFromEventLine,
   extractSlugFromEventLine,
   extractSlugTypeFromEventLine,
-  extractTierRaiseFromEventLine,
   extractUsage,
   isPrUrl,
   sawDisabledBackgroundTask,
@@ -90,6 +91,7 @@ const DEFAULT_DEPS = {
   idleTimeoutS: IDLE_TIMEOUT_S,
   maintenanceImpl: runMaintenance,
   prListImpl: ghPrList,
+  prDetailImpl: undefined,
   finishJobImpl: null,
   killImpl: null,
   keepAwakeImpl: holdRunnerAwake,
@@ -180,13 +182,6 @@ async function bindSlugOrNull(job, slug, { store, outage }) {
   }
 }
 
-// Why a slug claim was refused, phrased for the job log.
-function slugRefusal(bound) {
-  if (!bound) return "the database is unavailable";
-  if (bound.status !== "taken") return "the job is no longer ours";
-  return Number.isInteger(bound.heldBy) ? `${jobRef(bound.heldBy)} holds it` : "every candidate is already on disk";
-}
-
 // Records the branch the state of a run registered, once the job is bound to that run.
 async function persistBranch(job, slug, ctx) {
   const branch = readRunState({ projectId: job.project_id, slug, env: ctx.env })?.branch ?? null;
@@ -200,27 +195,76 @@ async function recordBranch(job, slug, branch, { store, env }) {
   await writeOrQueue(job, slug, record, { write: () => store.jobs.persistRunFacts(job.id, facts), env });
 }
 
-// Binds the row back to the slug its files never left; a refused revert is said out loud, and the witness then refuses the mismatched row.
-async function revertSlugClaim(job, slug, ctx) {
-  const reverted = await bindSlugOrNull(job, slug, ctx);
-  if (reverted?.status === "bound") return;
-  appendJobLog(job.id, `WARNING: the row could not be bound back to \`${slug}\` (${slugRefusal(reverted)}): it names a run directory this run never wrote; the run stays in \`${slug}\``, ctx.env);
-}
-
 // Moves the run of this job onto the slug the pipeline declared; a name another job or run already took, or an unavailable database, keeps the slug the runtime gave it.
 async function adoptSlug(job, facts, slug, ctx) {
-  const { store, env } = ctx;
+  const { store, env, outage } = ctx;
+  runSlugNow(job, facts, env);
   if (slug === facts.slug) return;
-  const keep = (reason) => appendJobLog(job.id, `the run keeps the slug \`${facts.slug}\`: it could not be renamed to \`${slug}\` (${reason})`, env);
-  const claimed = await bindSlugOrNull(job, slug, ctx);
-  if (claimed?.status !== "bound") return keep(slugRefusal(claimed));
-  const renamed = renameRunDir({ projectId: job.project_id, from: facts.slug, to: slug, env });
-  if (renamed.status === "kept") {
-    await revertSlugClaim(job, facts.slug, ctx);
-    return keep(renamed.reason);
+  const adopted = await adoptRunSlug({ job, from: facts.slug, to: slug, store, env, outage });
+  if (adopted.warning) {
+    appendJobLog(job.id, `WARNING: ${adopted.warning}: it names a run directory this run never wrote; the run stays in \`${facts.slug}\``, env);
+  }
+  if (adopted.status === "kept") {
+    appendJobLog(job.id, `the run keeps the slug \`${facts.slug}\`: it could not be renamed to \`${slug}\` (${adopted.reason})`, env);
+    return;
   }
   facts.slug = slug;
   await persistBranch(job, slug, { store, env });
+}
+
+// The slug the run lives under right now, found on disk from its job block once a dir the runner saw vanished; a move is adopted into the facts and said in the job log.
+function runSlugNow(job, facts, env) {
+  if (!isSafeSegment(facts.slug)) return facts.slug;
+  if (existsSync(runDir(job.project_id, facts.slug, env))) {
+    facts.slugOnDisk = facts.slug;
+    return facts.slug;
+  }
+  if (facts.slugOnDisk !== facts.slug) return facts.slug;
+  const now = followRunSlug({ projectId: job.project_id, slug: facts.slug, jobId: job.id, env });
+  if (now === facts.slug) return facts.slug;
+  facts.slug = now;
+  facts.slugMoved = true;
+  appendJobLog(job.id, `the run moved to \`${now}\` (renamed by run check 01)`, env);
+  return facts.slug;
+}
+
+// Follows a rename `run check 01` made during the session: from disk first, and from the row only when asked and the disk could not tell.
+async function syncRunSlug(job, facts, ctx, { askRow = false } = {}) {
+  if (!isSafeSegment(facts.slug)) return;
+  runSlugNow(job, facts, ctx.env);
+  if (facts.slugMoved) {
+    facts.slugMoved = false;
+    await persistBranch(job, facts.slug, ctx);
+    return;
+  }
+  if (!askRow || existsSync(runDir(job.project_id, facts.slug, ctx.env))) return;
+  await syncRunSlugFromRow(job, facts, ctx);
+}
+
+// Follows the row's new slug once the run directory moved there, for a run whose dir carries no job block to find it by.
+async function syncRunSlugFromRow(job, facts, ctx) {
+  const row = await rowOrNull(job, ctx);
+  const slug = row?.slug;
+  if (!isSafeSegment(slug) || slug === facts.slug || !runDirMoved(job.project_id, { from: facts.slug, to: slug }, ctx.env)) return;
+  facts.slug = slug;
+  appendJobLog(job.id, `the run moved to \`${slug}\` (renamed by run check 01)`, ctx.env);
+  await persistBranch(job, slug, ctx);
+}
+
+// Whether a run directory moved from one slug to the other: gone at the old one, present at the new one.
+function runDirMoved(projectId, { from, to }, env) {
+  return !existsSync(runDir(projectId, from, env)) && existsSync(runDir(projectId, to, env));
+}
+
+// The job's row as the store has it now, or null when the database is unavailable (the outage noted).
+async function rowOrNull(job, { store, outage }) {
+  try {
+    return await store.jobs.getJob(job.id);
+  } catch (err) {
+    if (!isStoreOutage(err)) throw err;
+    outage?.note(err);
+    return null;
+  }
 }
 
 // Records the task type the pipeline declared with its slug; a state that refuses the write is said out loud and never costs the run.
@@ -237,21 +281,6 @@ async function captureSlugOverride(job, facts, line, ctx) {
   facts.slugDeclared = true;
   if (declared.type) persistRunType(job, declared.type, facts.slug, ctx.env);
   await adoptSlug(job, facts, declared.slug, ctx);
-}
-
-// Records the tier a raise announced in the Brief moved the run to, with the evidence that justified it; a state that refuses the write is said out loud and never costs the run.
-function persistTierRaise(job, raise, slug, env) {
-  const written = recordRunFields({ projectId: job.project_id, slug, fields: { tier: raise.to, tierRaiseReason: raise.reason }, env });
-  if (written.status !== "written") appendJobLog(job.id, `the tier raise could not be recorded in the state of the run: ${written.reason}`, env);
-}
-
-// Records the tier raise the orchestrator announced; the Brief is written before the run has a slug, so a raise waits in the facts until there is a state.json to record it into.
-function captureTierRaise(job, facts, line, { env }) {
-  facts.tierRaise = extractTierRaiseFromEventLine(line) ?? facts.tierRaise;
-  if (!facts.tierRaise || !isSafeSegment(facts.slug)) return;
-  const raise = facts.tierRaise;
-  facts.tierRaise = null;
-  persistTierRaise(job, raise, facts.slug, env);
 }
 
 // The accumulated log of a job as it is on disk: the only reading that carries the attempt markers the telemetry is measured from; a log that cannot be read measures nothing.
@@ -341,7 +370,7 @@ async function captureSession(job, facts, line, attempt, ctx) {
   facts.sessionInFlight = sessionId;
   const session = { worker: job.worker, attempts: attempt, sessionId: isFirst ? sessionId : null, lastSessionId: sessionId, lastSessionAttempt: attempt };
   try {
-    if (!(await sessionRecorded(job, facts.slug, session, ctx))) return;
+    if (!(await sessionRecorded(job, facts, session, ctx))) return;
     if (isFirst) facts.sessionId = sessionId;
     facts.lastSessionId = sessionId;
   } finally {
@@ -350,23 +379,23 @@ async function captureSession(job, facts, line, attempt, ctx) {
 }
 
 // Writes the session facts of an attempt, queuing them when the database is unavailable; false when they were neither written nor queued.
-async function sessionRecorded(job, slug, session, { store, env }) {
+async function sessionRecorded(job, facts, session, { store, env }) {
   try {
-    const { attempts, ...facts } = session;
-    await store.jobs.persistRunFacts(job.id, facts);
+    const { attempts, ...sessionFacts } = session;
+    await store.jobs.persistRunFacts(job.id, sessionFacts);
     return true;
   } catch (err) {
     if (!isStoreOutage(err)) throw err;
     const record = { kind: "session", key: PENDING_KEYS.session(job.id, session.attempts), payload: session };
-    return queueRecord(job, slug, record, env) !== null;
+    return queueRecord(job, runSlugNow(job, facts, env), record, env) !== null;
   }
 }
 
 // Records the run facts that appear in the stream, writing one fact per line of the stream at most.
 async function captureFacts(job, facts, line, attempt, ctx) {
+  await syncRunSlug(job, facts, ctx);
   await captureSlug(job, facts, line, ctx);
   await captureSlugOverride(job, facts, line, ctx);
-  captureTierRaise(job, facts, line, ctx);
   await captureRateLimit(job, facts, line, ctx);
   await captureSession(job, facts, line, attempt, ctx);
 }
@@ -452,6 +481,8 @@ async function runAttempts(job, ctx) {
   const { env, deps } = ctx;
   const facts = {
     slug: job.slug ?? null,
+    slugMoved: false,
+    slugOnDisk: null,
     slugDeclared: false,
     sessionId: job.session_id ?? null,
     resumableSessionId: ctx.sessionResumable === false ? null : (job.session_id ?? null),
@@ -460,7 +491,6 @@ async function runAttempts(job, ctx) {
     rateLimit: null,
     fiveHour: null,
     pause: null,
-    tierRaise: null,
   };
   const pauseSignalImpl = deps.pauseSignalImpl ?? (() => ownPauseUntilMs(env) ?? pauseUntilMs(facts.pause));
   const resumeForced = resumeSessionEnabled(env) || wasRateLimitParked(job);
@@ -471,12 +501,13 @@ async function runAttempts(job, ctx) {
     const renewed = await untilStoreAnswers(ctx, () => renew(job, env));
     if (renewed === OUTAGE_STOPPED) return { lost: false, outageStopped: true, facts, attempt, ...attemptTotals(tally), outcome: null, result: null };
     if (!renewed) return { lost: true, facts, attempt, ...attemptTotals(tally), outcome: null, result: null };
+    runSlugNow(job, facts, env);
     if (isSafeSegment(facts.slug)) clearRunOutcome({ projectId: job.project_id, slug: facts.slug, env });
     const resumeSessionId = resumeForced ? facts.resumableSessionId : null;
     const baselines = resumeSessionId ? sessionBaselines(readJobLog(job.id, env)) : null;
     const attemptStartedAt = new Date().toISOString();
     const result = await spawnClaude({
-      prompt: ctx.prompt,
+      prompt: ctx.promptFor(facts.slug),
       cwd: ctx.cwd,
       timeoutS: job.timeout_s,
       idleTimeoutS: deps.idleTimeoutS,
@@ -495,6 +526,7 @@ async function runAttempts(job, ctx) {
       bashTimeoutS: deps.bashTimeoutS,
       inheritUserEnvironment: deps.inheritUserEnvironment,
     });
+    await syncRunSlug(job, facts, ctx, { askRow: true });
     tallyAttempt(tally, result.log, ctx, { resumed: Boolean(resumeSessionId), baselines });
     reportUnpricedResume(job.id, tally.usages.at(-1), env);
     const totals = attemptTotals(tally);
@@ -505,7 +537,8 @@ async function runAttempts(job, ctx) {
     const planPath = isRunPath(job.project_id, facts.slug) ? join(runDir(job.project_id, facts.slug, env), "03-plan.md") : null;
     const state = readRunState({ projectId: job.project_id, slug: facts.slug, env });
     const runOutcome = await attemptRunOutcome(job, facts.slug, { since: attemptStartedAt, store: ctx.store });
-    const outcome = classifyJobResult({ ...result, state, planPath, runOutcome });
+    const provenEdits = await provenEditedPrUrls(result.log, { state, detailImpl: deps.prDetailImpl });
+    const outcome = classifyJobResult({ ...result, state, planPath, runOutcome, provenEdits });
     if (!isRetryable(job, attempt, result, outcome, state)) {
       return { lost: false, facts, attempt, ...totals, outcome, result };
     }
@@ -964,6 +997,11 @@ async function preflightJob(job, { store, env, deps }) {
   return preflight({ job, env, gitImpl: deps.gitImpl, existsImpl: deps.existsImpl, resolveBinImpl: deps.resolveBinImpl, openWorktrees });
 }
 
+// The block of a job whose run directory was written under the old phase numbering: only a fresh retry starts it over.
+function preRenumberingBlock(file) {
+  return { ok: false, code: BLOCK_CODES.PRE_RENUMBERING_RUN, message: `${PRE_RENUMBERING_REFUSAL} (${file} is in the run directory)`, fresh: true };
+}
+
 // Everything before the spawn - preflight, run slug, job block, worktree - each store step waiting out an outage; answers what the spawn needs, or the report that ends the job.
 async function prepareJob(claimed, ctx) {
   const { env, deps } = ctx;
@@ -973,6 +1011,8 @@ async function prepareJob(claimed, ctx) {
   const openPrs = await openPrsForJob(claimed, { env, deps });
   const job = await withRunSlug(claimed, ctx, check.cwd);
   if (job === OUTAGE_STOPPED) return { report: stoppedInOutage(claimed, env) };
+  const stale = preRenumberingArtifact({ projectId: job.project_id, slug: job.slug, env });
+  if (stale !== null) return { report: await gateJob(job, preRenumberingBlock(stale), ctx) };
   ensureRunDir(job, env);
   if ((await recordJob(job, ctx)) === OUTAGE_STOPPED) return { report: stoppedInOutage(job, env) };
   if ((await enrichOrigin(job, ctx)) === OUTAGE_STOPPED) return { report: stoppedInOutage(job, env) };
@@ -1022,6 +1062,12 @@ function queueMeasures(job, run, env) {
   if (record) queueRecord(job, run.facts.slug, record, env);
 }
 
+// The resume handoff re-pointed at the slug the run lives under now; the same handoff when the run never moved.
+function handoffAt(handoff, { projectId, slug, env }) {
+  if (!handoff || slug === handoff.slug) return handoff;
+  return { ...handoff, slug, runDir: runDir(projectId, slug, env) };
+}
+
 // Runs one held job: what comes before the spawn, its attempts and the single write of the outcome.
 async function runHeldJob(claimed, ctx) {
   const { env } = ctx;
@@ -1033,8 +1079,8 @@ async function runHeldJob(claimed, ctx) {
   const handoff = resumeHandoff({ job, resume, state, env });
   if (handoff) persistResume(job, resume.resumeCount, env);
   logOperatorReruns(job, handoff, env);
-  const prompt = buildPrompt({ job, handoff, openPrs, env });
-  const run = await runAttempts(job, { ...ctx, cwd: prepared.path, sessionResumable: prepared.reused && !prepared.legacy, prompt });
+  const promptFor = (slug) => buildPrompt({ job: { ...job, slug }, handoff: handoffAt(handoff, { projectId: job.project_id, slug, env }), openPrs, env });
+  const run = await runAttempts(job, { ...ctx, cwd: prepared.path, sessionResumable: prepared.reused && !prepared.legacy, promptFor });
   if (run.lost) {
     noteOwnershipLost(job, env);
     await recordLateMeasures(job, run, ctx);

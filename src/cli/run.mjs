@@ -1,19 +1,19 @@
 import { mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
-import { StoreUnavailableError, UserError } from "../config/errors.mjs";
-import { resolveProjectRef } from "../config/projects.mjs";
-import { withMeasuredMtimes } from "../memory/index-paths.mjs";
+import { basename, dirname, join, resolve } from "node:path";
+import { UserError } from "../config/errors.mjs";
+import { writeFileAtomic } from "../config/store.mjs";
 import { FILE_LIST } from "../queue/file-list.mjs";
-import { resolveJobRun } from "../queue/job-run.mjs";
-import { appendPendingWrite, PENDING_KEYS } from "../queue/pending-writes.mjs";
-import { lastRound, PHASE_ARTIFACTS } from "../queue/phase-artifacts.mjs";
+import { CHECK_CONTEXT_FILES, evaluateCheck, fileListResult, repairedLine, roundDefectParts } from "../queue/check-contract.mjs";
+import { PHASE_ARTIFACTS, withClosedFence } from "../queue/phase-artifacts.mjs";
 import { defaultGitImpl } from "../queue/preflight.mjs";
-import { callerJobId } from "../queue/retry.mjs";
-import { recordPrTemplate } from "../queue/run-state.mjs";
+import { consolidationNumbersOf, consolidationOf } from "../queue/qa-rounds.mjs";
+import { readRunState } from "../queue/resume.mjs";
+import { recordPrTemplate, withRunLock } from "../queue/run-state.mjs";
 import { runDurationS } from "../queue/telemetry.mjs";
-import { openStore } from "../store/open.mjs";
 import { checkArgs, parseCommand } from "./args.mjs";
-import { parseExploreArtifact } from "./explore-artifact.mjs";
+import { checkEffectLines } from "./check-effects.mjs";
+import { APPEND_USAGE, appendedText, runAppend } from "./run-append.mjs";
+import { saveIndexFromText } from "./index-save.mjs";
 import { realPath } from "./paths.mjs";
 import { findPrTemplate } from "./pr-template.mjs";
 import { durationCell, phaseRows, readJobLog, readRequiredFile, requireRunState, resolveRun, RUN_OPTIONS, worktreeOf } from "./run-context.mjs";
@@ -34,7 +34,8 @@ import { START_USAGE, runStart } from "./run-start.mjs";
 import { SECRETS_SWEEP_USAGE, runSecretsSweep } from "./secrets-sweep.mjs";
 
 const USAGE = {
-  check: "nightqueue run check <NN> [--project <name> --slug <slug>]",
+  check: "nightqueue run check <NN> [--stage analyst] [--project <name> --slug <slug>]",
+  append: APPEND_USAGE,
   commit: "nightqueue run commit --message-file <path> [--files-from <path>] [--extra <pathspec>]",
   dir: "nightqueue run dir [--project <name> --slug <slug>]",
   log: "nightqueue run log [--json] [--project <name> --slug <slug>]",
@@ -49,6 +50,8 @@ const USAGE = {
 const HELP_FLAGS = new Set(["--help", "-h", "help"]);
 
 const NOTHING_TO_PRINT = "no phase recorded yet";
+
+const RENUMBERED = new Map([["06.5", "07"], ["05a", "05"]]);
 
 // The tab-separated table the agent pastes: one line per phase, then the total of the whole run.
 function logLines(rows, totalS) {
@@ -77,37 +80,6 @@ function readArtifact(path) {
   } catch {
     return "";
   }
-}
-
-// Whether the artifact carries a section, matched on the heading line so `## Verification: FAILED` still counts as `## Verification`.
-function hasHeading(text, heading) {
-  return text.split("\n").some((line) => line.trimEnd().startsWith(heading));
-}
-
-// The first non-blank line of a section, closed by the next `## ` heading; null when the section is absent or empty.
-function firstLineOfSection(text, heading) {
-  const lines = text.split("\n");
-  const start = lines.findIndex((line) => line.trimEnd().startsWith(heading));
-  if (start === -1) return null;
-  for (const line of lines.slice(start + 1)) {
-    if (line.startsWith("## ")) return null;
-    if (line.trim() !== "") return line.trim();
-  }
-  return null;
-}
-
-// Whether the section's first line is the one the gate requires in that position.
-function firstLineHolds(text, { heading, pattern }) {
-  const line = firstLineOfSection(text, heading);
-  return line !== null && pattern.test(line);
-}
-
-// What the gate found absent: the required sections the artifact does not carry, the artifact itself when nothing was written, or the line a section must open with.
-function missingParts(text, { file, sections, firstLineUnder }) {
-  const absent = sections.filter((heading) => !hasHeading(text, heading));
-  if (absent.length > 0) return absent;
-  if (text.trim() === "") return [`${file} (not written)`];
-  return firstLineUnder && !firstLineHolds(text, firstLineUnder) ? [firstLineUnder.label] : [];
 }
 
 // The lines a read-only git command answered, or null when git refused to answer at all.
@@ -159,13 +131,80 @@ function checkFileList(run, path, text, ctx) {
   return "GENERATED";
 }
 
-// The gate of one phase: the sections its artifact must carry, checked on the artifact itself.
-function checkArtifact(run, artifact, ctx) {
+// Writes a round artifact atomically, naming what was being written when it fails.
+function writeRoundArtifact(path, text, what) {
+  try {
+    writeFileAtomic(path, text);
+  } catch (error) {
+    throw new UserError(`could not write ${what} to ${path}: ${error.message}`);
+  }
+}
+
+// Closes, under the run lock, a code fence a round artifact leaves open at its end, and answers the `REPAIRED:` line (null when nothing was open).
+function repairRoundArtifact(run, path, env) {
+  if (readArtifact(path) === "") return null;
+  return withRunLock({ projectId: run.projectId, slug: run.slug, env }, () => {
+    const { text, closed } = withClosedFence(readArtifact(path));
+    if (closed === null) return null;
+    writeRoundArtifact(path, text, "the closing code fence");
+    return repairedLine(basename(path), closed);
+  });
+}
+
+// Writes the consolidated round a full QA's `05-qa.md` still lacks, under the run lock so no prover appends in between; a window with an ill-formed round is never consolidated and answers its `MISSING:` parts.
+function consolidateQa(run, path, env) {
+  if (readArtifact(path) === "") return [];
+  return withRunLock({ projectId: run.projectId, slug: run.slug, env }, () => {
+    const raw = readArtifact(path);
+    const numbers = consolidationNumbersOf(raw);
+    if (numbers === null) return [];
+    const gaps = roundDefectParts(basename(path), raw, numbers);
+    if (gaps.length > 0) return gaps;
+    const consolidation = consolidationOf(raw);
+    if (consolidation === null) return [];
+    writeRoundArtifact(path, validConsolidatedText(basename(path), raw, consolidation), "the QA consolidation");
+    return [];
+  });
+}
+
+// The artifact with the consolidated round appended, refused when the round it builds is one the final check would refuse.
+export function validConsolidatedText(file, raw, consolidation) {
+  const { text } = appendedText(raw, consolidation.number, consolidation.body);
+  const defects = roundDefectParts(file, text, [consolidation.number]);
+  if (defects.length > 0) throw new UserError(`the consolidated round ${consolidation.number} of ${file} would be ill-formed, so nothing was written: ${defects.join("; ")}`);
+  return text;
+}
+
+// The gate of one phase, evaluated against the check contract on the artifact and the run files its rules read; a round artifact gets its open fence closed first.
+function checkArtifact({ run, check, stage, state, ctx }) {
+  const artifact = PHASE_ARTIFACTS.get(check);
   const path = join(run.runDir, artifact.file);
-  const text = readArtifact(path);
-  if (artifact.sections[0] === FILE_LIST) return checkFileList(run, path, text, ctx);
-  const missing = missingParts(artifact.rounds ? lastRound(text) : text, artifact);
-  return missing.length === 0 ? "OK" : `MISSING: ${missing.join(", ")}`;
+  if (artifact.sections[0] === FILE_LIST) {
+    const first = checkFileList(run, path, readArtifact(path), ctx);
+    return fileListResult(first, readArtifact(path));
+  }
+  const repaired = artifact.rounds ? repairRoundArtifact(run, path, ctx.env) : null;
+  const gaps = check === "05" && stage === null ? consolidateQa(run, path, ctx.env) : [];
+  const files = [...new Set([...CHECK_CONTEXT_FILES, artifact.file])];
+  const texts = Object.fromEntries(files.map((file) => [file, readArtifact(join(run.runDir, file))]));
+  return { ...evaluateCheck({ check, stage, texts, state, gaps }), repaired };
+}
+
+// The stage a check names, refused unless it is `analyst` on check `05`; null without one.
+function checkStage(check, value) {
+  if (value === undefined) return null;
+  if (value !== "analyst" || check !== "05") throw new UserError(`unknown stage \`${value}\` of check \`${check}\`; the only stage is \`05 --stage analyst\``);
+  return value;
+}
+
+// Prints a check result: its first line, the `REPAIRED:` line of a fence the runtime closed, its other contract lines, the lines of its chained effects, then the device script last so it never breaks the line parsing.
+function printCheck(result, effects, ctx) {
+  const [first, ...rest] = result.lines;
+  const repaired = result.repaired ? [result.repaired] : [];
+  for (const line of [first, ...repaired, ...rest, ...effects]) ctx.out(line);
+  if (result.script.length === 0) return;
+  ctx.out("SCRIPT:");
+  for (const line of result.script) ctx.out(line);
 }
 
 // Runs `run dir`, which prints the absolute directory of THIS run: `runs/<project_id>/<slug>` under the home.
@@ -179,14 +218,18 @@ async function runDirCommand(argv, ctx) {
 
 // Runs `run check`, which answers whether the artifact of a phase of THIS run is there with the sections the pipeline reads from it.
 async function runCheck(argv, ctx) {
-  const { values, positionals } = parseCommand(argv, RUN_OPTIONS);
+  const { values, positionals } = parseCommand(argv, { ...RUN_OPTIONS, stage: { type: "string" } });
   checkArgs(positionals, { min: 1, max: 1, usage: USAGE.check });
-  const artifact = PHASE_ARTIFACTS.get(positionals[0].trim().toLowerCase());
-  if (!artifact) {
+  const check = positionals[0].trim().toLowerCase();
+  if (RENUMBERED.has(check)) throw new UserError(`renumbered: use ${RENUMBERED.get(check)}`);
+  if (!PHASE_ARTIFACTS.has(check)) {
     throw new UserError(`unknown phase \`${positionals[0]}\`; the artifact gate covers: ${[...PHASE_ARTIFACTS.keys()].join(", ")}`);
   }
+  const stage = checkStage(check, values.stage);
   const run = await resolveRun(values, ctx);
-  ctx.out(checkArtifact(run, artifact, ctx));
+  const state = readRunState({ projectId: run.projectId, slug: run.slug, env: ctx.env });
+  const result = checkArtifact({ run, check, stage, state, ctx });
+  printCheck(result, await checkEffectLines({ run, check, stage, result, state, ctx }), ctx);
   return 0;
 }
 
@@ -218,7 +261,7 @@ function checkPrMode(values) {
   }
 }
 
-// Prints the pull request template in effect for the run and records it in state.json, so Phase 7 reads it instead of deciding.
+// Prints the pull request template in effect for the run and records it in state.json, so Phase 8 reads it instead of deciding.
 function announceTemplate(run, cwd, ctx) {
   const template = findPrTemplate(cwd);
   ctx.out(template.source === "repo" ? `TEMPLATE: repo (${template.label})` : "TEMPLATE: nightqueue (fallback)");
@@ -298,42 +341,17 @@ async function runIndexSave(argv, ctx) {
   const [artifact] = checkArgs(positionals, { min: 1, max: 1, usage: USAGE["index-save"] });
   const repoRoot = repoRootPath(ctx.cwd, values["repo-root"]);
   const project = values.project ?? repoRoot;
-  const parsed = parseExploreArtifact(readNamedArtifact(artifactPath(ctx.cwd, artifact)));
-  if (!parsed.libsSection) ctx.err("nightqueue run index-save: no `## Third-party libraries` section; no lib was saved");
-  for (const line of parsed.ignoredLibs) {
-    ctx.err(`nightqueue run index-save: not a \`<lib>@<version>\` entry, skipped: ${line}`);
-  }
-  const store = openStore(ctx.env);
-  try {
-    const saved = await store.index.saveProjectIndex({
-      projectId: (await resolveProjectRef(store, project))?.id ?? null,
-      repoRoot,
-      files: parsed.files,
-      libs: parsed.libs,
-    });
-    ctx.out(`index saved: ${saved.files} files, ${saved.libs} libs`);
-    return 0;
-  } catch (err) {
-    return await queueIndexSave(err, { repoRoot, parsed }, ctx);
-  }
-}
-
-// Queues an index save the unavailable database refused inside a job into the job's run, saying where it waits; outside a job, or for any other failure, the error is raised as it came.
-async function queueIndexSave(err, { repoRoot, parsed }, ctx) {
-  const own = callerJobId(ctx.env);
-  if (!(err instanceof StoreUnavailableError) || own === null) throw err;
-  const run = await resolveJobRun(own, ctx.env);
-  const at = new Date().toISOString();
-  const payload = { projectId: run.projectId, repoRoot, files: withMeasuredMtimes(parsed.files, repoRoot), libs: parsed.libs };
-  const entry = { key: PENDING_KEYS.indexSave(run.projectId, at), kind: "index_save", at, jobId: own, payload };
-  const queued = appendPendingWrite({ projectId: run.projectId, slug: run.slug, entry, env: ctx.env });
-  if (queued.status !== "queued") throw err;
-  ctx.err(`QUEUED: ${queued.path}`);
+  const text = readNamedArtifact(artifactPath(ctx.cwd, artifact));
+  const warn = (line) => ctx.err(`nightqueue run index-save: ${line}`);
+  const saved = await saveIndexFromText({ text, project, repoRoot, ctx, warn });
+  if (saved.status === "queued") ctx.err(`QUEUED: ${saved.path}`);
+  else ctx.out(`index saved: ${saved.files} files, ${saved.libs} libs`);
   return 0;
 }
 
 const SUBCOMMANDS = new Map([
   ["check", runCheck],
+  ["append", runAppend],
   ["commit", runCommit],
   ["dir", runDirCommand],
   ["log", runLog],

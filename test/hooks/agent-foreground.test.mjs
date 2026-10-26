@@ -371,7 +371,7 @@ test("the operator reads anything on disk, and the secrets file, a `.env*` file 
   }
 });
 
-test("the operator's main thread never edits, and its Bash outside the operator guard's list is denied while the list passes untouched", (t) => {
+test("the operator's main thread edits nothing without consent, and its Bash outside the free list is denied while the list passes untouched", (t) => {
   const { env, worktree } = operatorFixture(t);
   for (const tool of ["Edit", "Write", "MultiEdit", "NotebookEdit"]) {
     const reason = denyReasonOf(runAgentForeground({ input: mainCall(tool, { file_path: join(worktree, "x") }, worktree), env }));
@@ -384,16 +384,18 @@ test("the operator's main thread never edits, and its Bash outside the operator 
   assert.equal(runAgentForeground({ input: mainCall("Bash", { command: "nightqueue queue status", run_in_background: true }, worktree), env }), "");
 });
 
-test("the operator's subagent launches are never moved to the foreground, and only its own three subagents launch", (t) => {
+test("the operator's subagent launches are never moved to the foreground, and only the pipeline agents launch", (t) => {
   const { env, worktree, runDir } = operatorFixture(t);
-  assert.equal(runAgentForeground({ input: mainCall("Agent", { prompt: "triage", subagent_type: "nightqueue:triage", run_in_background: true }, worktree), env }), "");
-  assert.equal(runAgentForeground({ input: mainCall("Task", { prompt: "triage", subagent_type: "triage" }, worktree), env }), "");
-  const reason = denyReasonOf(runAgentForeground({ input: mainCall("Agent", { prompt: "triage" }, worktree), env }));
-  assert.ok(reason.startsWith(OPERATOR_REASON_PREFIX), reason);
-  const subagent = (toolInput) => ({ ...mainCall("Bash", toolInput, worktree), agent_id: "a1", agent_type: "nightqueue:triage" });
+  assert.equal(runAgentForeground({ input: mainCall("Agent", { prompt: "triage", subagent_type: "nightqueue:triager", run_in_background: true }, worktree), env }), "");
+  assert.equal(runAgentForeground({ input: mainCall("Task", { prompt: "change", subagent_type: "plugin_nightqueue_coder" }, worktree), env }), "");
+  for (const toolInput of [{ prompt: "triage" }, { prompt: "triage", subagent_type: "nightqueue:triage" }, { prompt: "qa", subagent_type: "nightqueue:qa" }]) {
+    const reason = denyReasonOf(runAgentForeground({ input: mainCall("Agent", toolInput, worktree), env }));
+    assert.ok(reason.startsWith(OPERATOR_REASON_PREFIX), reason);
+  }
+  const subagent = (toolInput) => ({ ...mainCall("Bash", toolInput, worktree), agent_id: "a1", agent_type: "nightqueue:triager" });
   assert.equal(runAgentForeground({ input: subagent({ command: "gh pr diff 3", run_in_background: true }), env }), "");
   assert.ok(denyReasonOf(runAgentForeground({ input: subagent({ command: "npm test" }), env })).startsWith(OPERATOR_REASON_PREFIX));
-  const read = (file_path) => ({ ...mainCall("Read", { file_path }, worktree), agent_id: "a1", agent_type: "nightqueue:triage" });
+  const read = (file_path) => ({ ...mainCall("Read", { file_path }, worktree), agent_id: "a1", agent_type: "nightqueue:triager" });
   assert.equal(runAgentForeground({ input: read(join(runDir, "03-plan.md")), env }), "");
   assert.ok(denyReasonOf(runAgentForeground({ input: read(join(env.NIGHTQUEUE_HOME, "secrets.json")), env })).startsWith(OPERATOR_REASON_PREFIX));
 });

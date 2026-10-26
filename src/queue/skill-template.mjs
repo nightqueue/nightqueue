@@ -1,10 +1,10 @@
 import { readFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { packageRoot } from "../host/paths.mjs";
 
 const SECTION = /\{\{([#^])([A-Z_]+)\}\}([\s\S]*?)\{\{\/\2\}\}/g;
 const VARIABLE = /\{\{([A-Z_]+)\}\}/g;
-const PARTIAL = /\{\{>([\w-]+)\}\}\n?/g;
+const PARTIAL = /\{\{>([\w-]+(?:\/[\w-]+)?)\}\}\n?/g;
 const BLOCK_TAG_LINE = /^(\{\{[#^/][A-Z_]+\}\})\n/gm;
 const MAX_PARTIAL_DEPTH = 3;
 
@@ -27,11 +27,11 @@ function loadTemplate(dir, name) {
   }
 }
 
-// The template with every `{{>partial}}` line replaced by the partial's own text, read from the same directory.
+// The template with every `{{>partial}}` line replaced by the partial's own text, read from the same directory, or for `{{>dir/name}}` from that sibling directory of it.
 function expandPartials(dir, text, depth = 0) {
   if (depth > MAX_PARTIAL_DEPTH) throw new Error("prompt partials nest too deep");
   return text.replace(PARTIAL, (_match, name) => {
-    const partial = expandPartials(dir, loadTemplate(dir, name), depth + 1);
+    const partial = expandPartials(dir, loadTemplate(name.includes("/") ? dirname(dir) : dir, name), depth + 1);
     return partial.endsWith("\n") ? partial : `${partial}\n`;
   });
 }

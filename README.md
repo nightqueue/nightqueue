@@ -94,7 +94,7 @@ and the settings. Everything it does goes through the same runtime commands and
 MCP tools the CLI uses — nothing is Studio-only underneath.
 
 **A job, phase by phase.** The pipeline card shows the nine slots of the run
-from second zero, each in its agent's colour; a slot the tier skips is hatched
+from second zero, each in its agent's colour; a slot the run skips is hatched
 and says why. Active time, tokens, cost and attempts, with the token share per
 phase. The live log is a tree — phase → lane → event — with answers, hand-backs
 and phase reports you can expand, and the notice the job wrote beside it.
@@ -103,21 +103,21 @@ and phase reports you can expand, and the notice the job wrote beside it.
 
 **An operator beside the queue.** A Claude Code session in a terminal docked at
 the bottom of every page, or split beside it. It runs `nightqueue open` in the
-home — investigate a bug, reproduce it in a throwaway worktree, review a
-finished job's pull request, prepare the next job — and never edits code, runs
-it, commits or opens a pull request; the queue does that. `Resume in terminal`
+home — investigate a bug, make a small change on your checkout, review a
+finished job's pull request, prepare the next job — and edits, runs commands or
+writes git only after you consent; it never deletes files or force-pushes. `Resume in terminal`
 reopens the session that did the work of any job in `gate`, `failed` or `done`.
 
 [![The Studio split in two: a Claude Code operator session on the left, the queue on the right](docs/assets/studio-operator.jpg)](docs/assets/studio-operator.jpg)
 
 **Queue in prose, or from Linear.** `+ Add job` takes the project, the whole
-request as prose, a tier (or lets the pipeline decide) and a priority, shows the
+request as prose and a priority, shows the
 exact `queue_add` call it will make, and `Queue and start runner` starts the
 batch at once. With Linear connected, the issues card below the queue lists the
 workspace by team and project; `Queue` on an issue opens the drawer with it as
 the job's origin.
 
-[![The Add job drawer: project, brief, tier, priority and the queue_add call it will make](docs/assets/studio-add-job.png)](docs/assets/studio-add-job.png)
+[![The Add job drawer: project, brief, priority and the queue_add call it will make](docs/assets/studio-add-job.png)](docs/assets/studio-add-job.png)
 
 **Integrations, orgs and projects.** GitHub, Expo, Linear, Sentry and Discord as
 connections — a secret is never shown again once saved. Orgs and projects are
@@ -182,7 +182,7 @@ The full reference is in [docs/cli.md](docs/cli.md); this is the daily set.
 
 ```sh
 # queue
-nightqueue queue add [project] "<request>" [--tier trivial|simple|complex] [--priority 1-9] [--run]
+nightqueue queue add [project] "<request>" [--priority 1-9] [--run]
 nightqueue queue run [--watch [s] [--from HH:MM] --until HH:MM] [--job J-<id>] [--stop]
 nightqueue queue status [J-<id>|<PR URL>] [--follow] [--json]
 nightqueue queue log <id> [--follow]
@@ -243,7 +243,7 @@ follows the [code of conduct](CODE_OF_CONDUCT.md).
 | | |
 |---|---|
 | [Install](docs/install.md) | `init`, what it sets up, updating, trying without installing |
-| [Queue](docs/queue.md) | jobs, runners, tiers, gates, logs, writing a job |
+| [Queue](docs/queue.md) | jobs, runners, gates, logs, writing a job |
 | [Memory](docs/memory.md) | lessons, memories, recall, the MCP tools |
 | [CLI](docs/cli.md) | every command, configuration, `doctor` |
 | [Runtime contract](docs/runtime-contract.md) | what the pipeline and the runner promise each other |

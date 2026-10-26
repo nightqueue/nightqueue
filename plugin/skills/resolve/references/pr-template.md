@@ -1,12 +1,12 @@
 # Pull request template
 
-Standard for the pull request that `/nightqueue:resolve` opens at the end of Phase 7.
+Standard for the pull request that `/nightqueue:resolve` opens at the end of Phase 8.
 The title and the body are filled with the artifacts of the run that is closing.
 Nothing is invented.
 
-The execution record of the run — phases, models, durations, lesson count, tier — is
+The execution record of the run — phases, models, durations, lesson count — is
 NOT part of the pull request: that data lives in the telemetry and in the report of
-Phase 8.
+Phase 9.
 
 ## Which template applies
 
@@ -43,10 +43,10 @@ decide it yourself.
 
 ## Title
 
-One line, the subject of the commit created in Phase 7:
+One line, the subject of the commit created in Phase 8:
 `<type>(<scope>): <summary>` — at most 72 characters, no final period, no emoji, no
 name of an agent, a model or a vendor. The scope is optional and follows the commit
-convention detected in step 1 of Phase 7.
+convention detected in step 1 of Phase 8.
 
 ## The nightqueue template (fallback)
 
@@ -84,10 +84,10 @@ Every subsection of `## QA` is backed by a non-empty file under
 
 | Subsection | `<method>` | What the file holds |
 | --- | --- | --- |
-| Automated | `automated` | the verifier's real output: a copy of the last `## Round` of `06-verification.md` (`automated-verification.md`), plus the PoC excerpt of `05-qa.md` when the tier produced one |
-| API | `api` | the HTTP log or the recorded request and response of Phase 6.5 |
-| Browser | `browser` | the screenshot or the page log of Phase 6.5 |
-| Device (Android / iOS emulator or device) | `emulator` | the screenshot or the log of the build or OTA exercised in Phase 6.5 |
+| Automated | `automated` | the verifier's real output: a copy of the last `## Round` of `06-verification.md` (`automated-verification.md`), plus the PoC excerpt of `05-qa.md` when the QA produced one |
+| API | `api` | the HTTP log or the recorded request and response of Phase 7 |
+| Browser | `browser` | the screenshot or the page log of Phase 7 |
+| Device (Android / iOS emulator or device) | `emulator` | the screenshot or the log of the build or OTA exercised in Phase 7 |
 
 Extensions: `.log`, `.md`, `.txt`, `.png`, `.jpg`. A method with no evidence file has no
 subsection — never a subsection without a file. `nightqueue run pr` answers
@@ -97,10 +97,10 @@ subsection — never a subsection without a file. `nightqueue run pr` answers
 
 | Section | Real source | Rule |
 | --- | --- | --- |
-| `## Report` | `01-triage.md` (`## Validated brief`); in the trivial tier, the `## Brief` of Phase 0 (`**Affected area:**`, `**Objective:**`, `**Expected outcome:**`) | The symptom as the reporter saw it, never the cause. For a feature: what was asked and by whom. |
+| `## Report` | `01-triage.md` (`## Validated brief`) | The symptom as the reporter saw it, never the cause. For a feature: what was asked and by whom. |
 | `## Cause` | `01-triage.md` `## Diagnosis`, `03-plan.md` | For a feature, write what motivated the change — no invented root cause. |
-| `## Changes` | `## Modified files` of `04-implementation.md`, described by the matching line of `**Files to create/modify:**` of `03-plan.md` | One bullet per file or per coherent area, at most 10 bullets, one line each. A path with no matching plan line (a deviation from the plan, or the trivial tier, which has no plan) carries the path alone or the coder's deviation note — never an invented description. More than 10 paths: group by directory or area, one bullet per area with the number of files. Every path of `## Modified files` appears in EXACTLY one bullet — alone or inside a group, never in both and never dropped. |
-| `## QA` | the files under `<RUN_DIR>/evidence/` | One `###` subsection per file-backed method that really ran, one bullet per test; `Not tested:` names what was left out (a `NOT MET` line of Phase 6.5, a `## Suggestions` item with `dedicated ticket: yes`, a part that depends on another system) and its risk. **Never drop a real open item to make the pull request look clean.** |
+| `## Changes` | `## Modified files` of `04-implementation.md`, described by the matching line of `**Files to create/modify:**` of `03-plan.md` | One bullet per file or per coherent area, at most 10 bullets, one line each. A path with no matching plan line (a deviation from the plan) carries the path alone or the coder's deviation note — never an invented description. More than 10 paths: group by directory or area, one bullet per area with the number of files. Every path of `## Modified files` appears in EXACTLY one bullet — alone or inside a group, never in both and never dropped. |
+| `## QA` | the files under `<RUN_DIR>/evidence/` | One `###` subsection per file-backed method that really ran, one bullet per test; `Not tested:` names what was left out (a `NOT MET` line of Phase 7, a `## Suggestions` item with `dedicated ticket: yes`, a part that depends on another system) and its risk. **Never drop a real open item to make the pull request look clean.** |
 
 ## Optional lines
 
@@ -120,7 +120,7 @@ subsection — never a subsection without a file. `nightqueue run pr` answers
 - In the nightqueue template, a fifth `## ` section: the four above are the whole body.
   A repository template has no such limit.
 - The execution record of the run: phases, models, statuses, durations, `Lessons
-  saved`, `Tier`, `Slug` as a field. It belongs to the telemetry of Phase 8, not here.
+  saved`, `Slug` as a field. It belongs to the telemetry of Phase 9, not here.
 - The name of an agent, a model or a vendor. To identify the automation, use the
   nickname `nightqueue`.
 - A `Co-Authored-By` trailer.

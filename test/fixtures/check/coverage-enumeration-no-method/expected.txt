@@ -1,0 +1,4 @@
+OK
+GATE: coverage-enumeration-no-method — I analyzed the code and the callers
+QA: lite
+recorded: none (GATE: coverage-enumeration-no-method — I analyzed the code and the callers)

@@ -79,7 +79,7 @@ export function mainCheckoutOf(root) {
 }
 
 // Tells whether a directory is the registered path itself or lies inside it.
-function contains(path, target) {
+export function pathContains(path, target) {
   if (target === path) return true;
   return target.startsWith(path.endsWith(sep) ? path : `${path}${sep}`);
 }
@@ -92,7 +92,7 @@ export function projectContaining(projects, cwd) {
   for (const project of Array.isArray(projects) ? projects : []) {
     if (typeof project?.path !== "string" || !project.path) continue;
     const path = normalizePath(project.path);
-    if (!contains(path, target) || path.length <= bestLength) continue;
+    if (!pathContains(path, target) || path.length <= bestLength) continue;
     best = project;
     bestLength = path.length;
   }
