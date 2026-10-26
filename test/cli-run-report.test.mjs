@@ -88,8 +88,9 @@ test("a clean run prints the step table, every step ✅", async (t) => {
 
   assert.deepEqual(lines.slice(0, 4), [`## 🗂️ Report — ${SLUG}`, "", "| Step | Agent | Status | Highlight |", "|-------|--------|--------|----------|"]);
   assert.equal(lines[4], "| 1 Triage | 🔍 Triager | ✅ | confirmed the missing helper |");
-  assert.equal(lines[10], "| 6.5 Runtime | 📱 Runtime | ✅ | real run confirmed |");
-  assert.equal(lines[11], `| 7 Commit/PR | 🚀 Commit/PR | ✅ | PR ${PR} |`);
+  assert.equal(lines[10], "| 7 Runtime | 📱 Runtime | ✅ | real run confirmed |");
+  assert.equal(lines[11], `| 8 Commit/PR | 🚀 Commit/PR | ✅ | PR ${PR} |`);
+  assert.equal(lines[12], "| 9 Report | 🗂️ Report | ⏳ | this report |");
   assert.equal(lines.at(-1), "Happy: yes");
 });
 
@@ -110,6 +111,7 @@ test("every step is planned: a step never recorded is ⚠️, and the runtime is
     verification: "✅",
     runtime: "⏭️",
     commit: "✅",
+    null: "⏳",
   });
   assert.equal(happy, false);
   assert.equal(reason, "1 Triage ⚠️ not recorded");
@@ -164,12 +166,12 @@ test("every failing gate of the fail-safe rule makes the run not happy", async (
   }
 });
 
-test("a PASSED run that recorded no runtime lane skips 6.5 as a static change", async (t) => {
+test("a PASSED run that recorded no runtime lane skips 7 as a static change", async (t) => {
   const { env, id, run: target } = makeRun(t, "report-static");
   recordPhases(target, COMPLEX_CLEAN.filter(([phase]) => phase !== "runtime"));
   recordDelivery(target);
   const lines = await report(env, id);
-  assert.ok(lines.includes("| 6.5 Runtime | 📱 Runtime | ⏭️ | purely static change |"), lines.join("\n"));
+  assert.ok(lines.includes("| 7 Runtime | 📱 Runtime | ⏭️ | purely static change |"), lines.join("\n"));
   assert.equal(lines.at(-1), "Happy: yes");
 });
 
@@ -192,10 +194,10 @@ test("a run with no delivery recorded is not happy", async (t) => {
   const { env, id, run: target } = makeRun(t, "report-no-delivery");
   recordPhases(target, COMPLEX_CLEAN.filter(([phase]) => phase !== "commit"));
   const lines = await report(env, id);
-  assert.ok(lines.includes("Happy: no — 7 Commit/PR ⚠️ no pull request recorded"), lines.join("\n"));
+  assert.ok(lines.includes("Happy: no — 8 Commit/PR ⚠️ no pull request recorded"), lines.join("\n"));
 });
 
-test("the report carries no lesson audit, even when the stream has `lesson_save` calls: Phase 9's reflector reports the saves", async (t) => {
+test("the report carries no lesson audit, even when the stream has `lesson_save` calls: Phase 10's reflector reports the saves", async (t) => {
   const log = toNdjson([
     toolUseEvent({ name: "mcp__nightqueue__lesson_save", id: "toolu_1", input: { title: "x", target: "coder" } }),
     toolResultEvent({ toolUseId: "toolu_1" }),

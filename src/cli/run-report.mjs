@@ -18,8 +18,9 @@ const STEPS = [
   { phase: "implementation", step: "4 Implementation", agent: "⚙️ Coder" },
   { phase: "qa", step: "5 QA", agent: "🛡️ QA-Guardian" },
   { phase: "verification", step: "6 Verification", agent: "✅ Verifier" },
-  { phase: "runtime", step: "6.5 Runtime", agent: "📱 Runtime" },
-  { phase: "commit", step: "7 Commit/PR", agent: "🚀 Commit/PR" },
+  { phase: "runtime", step: "7 Runtime", agent: "📱 Runtime" },
+  { phase: "commit", step: "8 Commit/PR", agent: "🚀 Commit/PR" },
+  { phase: null, step: "9 Report", agent: "🗂️ Report" },
 ];
 
 const OK_VERDICTS = new Set(["PROCEED", "APPROVED", "PASSED", "CONFIRMED", "DONE", "OK"]);
@@ -45,7 +46,7 @@ function entriesOf(state, phase) {
   return phases.filter((entry) => entry?.phase === phase);
 }
 
-// True when the verification passed with a real run of the checks, which is what lets a change skip 6.5 as purely static.
+// True when the verification passed with a real run of the checks, which is what lets a change skip 7 as purely static.
 function passedWithoutRuntimeDebt(state) {
   const last = entriesOf(state, "verification").at(-1);
   return last !== undefined && verdictWord(last.verdict) === "PASSED";
@@ -62,6 +63,7 @@ function commitStep(state) {
 
 // The status and the highlight of one step, derived from what the run recorded.
 function stepStatus(step, { state }) {
+  if (step.phase === null) return { icon: "⏳", highlight: "this report" };
   if (step.phase === "commit") return commitStep(state);
   const entries = entriesOf(state, step.phase);
   const last = entries.at(-1);

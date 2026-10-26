@@ -1,15 +1,18 @@
 import { mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { UserError } from "../config/errors.mjs";
+import { writeFileAtomic } from "../config/store.mjs";
 import { FILE_LIST } from "../queue/file-list.mjs";
-import { evaluateCheck, fileListResult } from "../queue/check-contract.mjs";
-import { PHASE_ARTIFACTS } from "../queue/phase-artifacts.mjs";
+import { evaluateCheck, fileListResult, repairedLine, roundDefectParts } from "../queue/check-contract.mjs";
+import { PHASE_ARTIFACTS, withClosedFence } from "../queue/phase-artifacts.mjs";
 import { defaultGitImpl } from "../queue/preflight.mjs";
+import { consolidationNumbersOf, consolidationOf } from "../queue/qa-rounds.mjs";
 import { readRunState } from "../queue/resume.mjs";
-import { recordPrTemplate } from "../queue/run-state.mjs";
+import { recordPrTemplate, withRunLock } from "../queue/run-state.mjs";
 import { runDurationS } from "../queue/telemetry.mjs";
 import { checkArgs, parseCommand } from "./args.mjs";
 import { checkEffectLines } from "./check-effects.mjs";
+import { APPEND_USAGE, appendedText, runAppend } from "./run-append.mjs";
 import { saveIndexFromText } from "./index-save.mjs";
 import { realPath } from "./paths.mjs";
 import { findPrTemplate } from "./pr-template.mjs";
@@ -31,7 +34,8 @@ import { START_USAGE, runStart } from "./run-start.mjs";
 import { SECRETS_SWEEP_USAGE, runSecretsSweep } from "./secrets-sweep.mjs";
 
 const USAGE = {
-  check: "nightqueue run check <NN> [--project <name> --slug <slug>]",
+  check: "nightqueue run check <NN> [--stage analyst] [--project <name> --slug <slug>]",
+  append: APPEND_USAGE,
   commit: "nightqueue run commit --message-file <path> [--files-from <path>] [--extra <pathspec>]",
   dir: "nightqueue run dir [--project <name> --slug <slug>]",
   log: "nightqueue run log [--json] [--project <name> --slug <slug>]",
@@ -46,6 +50,8 @@ const USAGE = {
 const HELP_FLAGS = new Set(["--help", "-h", "help"]);
 
 const NOTHING_TO_PRINT = "no phase recorded yet";
+
+const RENUMBERED = new Map([["06.5", "07"], ["05a", "05"]]);
 
 // The tab-separated table the agent pastes: one line per phase, then the total of the whole run.
 function logLines(rows, totalS) {
@@ -128,22 +134,77 @@ function checkFileList(run, path, text, ctx) {
 // The run files a check may read besides its own artifact: the request, the triage, the explore map and the plan.
 const CONTEXT_FILES = ["00-brief.md", "01-triage.md", "02-explore.md", "03-plan.md"];
 
-// The gate of one phase, evaluated against the check contract on the artifact and the run files its rules read.
-function checkArtifact({ run, check, state, ctx }) {
+// Writes a round artifact atomically, naming what was being written when it fails.
+function writeRoundArtifact(path, text, what) {
+  try {
+    writeFileAtomic(path, text);
+  } catch (error) {
+    throw new UserError(`could not write ${what} to ${path}: ${error.message}`);
+  }
+}
+
+// Closes, under the run lock, a code fence a round artifact leaves open at its end, and answers the `REPAIRED:` line (null when nothing was open).
+function repairRoundArtifact(run, path, env) {
+  if (readArtifact(path) === "") return null;
+  return withRunLock({ projectId: run.projectId, slug: run.slug, env }, () => {
+    const { text, closed } = withClosedFence(readArtifact(path));
+    if (closed === null) return null;
+    writeRoundArtifact(path, text, "the closing code fence");
+    return repairedLine(basename(path), closed);
+  });
+}
+
+// Writes the consolidated round a full QA's `05-qa.md` still lacks, under the run lock so no prover appends in between; a window with an ill-formed round is never consolidated and answers its `MISSING:` parts.
+function consolidateQa(run, path, env) {
+  if (readArtifact(path) === "") return [];
+  return withRunLock({ projectId: run.projectId, slug: run.slug, env }, () => {
+    const raw = readArtifact(path);
+    const numbers = consolidationNumbersOf(raw);
+    if (numbers === null) return [];
+    const gaps = roundDefectParts(basename(path), raw, numbers);
+    if (gaps.length > 0) return gaps;
+    const consolidation = consolidationOf(raw);
+    if (consolidation === null) return [];
+    writeRoundArtifact(path, validConsolidatedText(basename(path), raw, consolidation), "the QA consolidation");
+    return [];
+  });
+}
+
+// The artifact with the consolidated round appended, refused when the round it builds is one the final check would refuse.
+export function validConsolidatedText(file, raw, consolidation) {
+  const { text } = appendedText(raw, consolidation.number, consolidation.body);
+  const defects = roundDefectParts(file, text, [consolidation.number]);
+  if (defects.length > 0) throw new UserError(`the consolidated round ${consolidation.number} of ${file} would be ill-formed, so nothing was written: ${defects.join("; ")}`);
+  return text;
+}
+
+// The gate of one phase, evaluated against the check contract on the artifact and the run files its rules read; a round artifact gets its open fence closed first.
+function checkArtifact({ run, check, stage, state, ctx }) {
   const artifact = PHASE_ARTIFACTS.get(check);
   const path = join(run.runDir, artifact.file);
   if (artifact.sections[0] === FILE_LIST) {
     const first = checkFileList(run, path, readArtifact(path), ctx);
     return fileListResult(first, readArtifact(path));
   }
+  const repaired = artifact.rounds ? repairRoundArtifact(run, path, ctx.env) : null;
+  const gaps = check === "05" && stage === null ? consolidateQa(run, path, ctx.env) : [];
   const files = [...new Set([...CONTEXT_FILES, artifact.file])];
   const texts = Object.fromEntries(files.map((file) => [file, readArtifact(join(run.runDir, file))]));
-  return evaluateCheck({ check, texts, state });
+  return { ...evaluateCheck({ check, stage, texts, state, gaps }), repaired };
 }
 
-// Prints a check result: its contract lines, the lines of its chained effects, then the device script last so it never breaks the line parsing.
+// The stage a check names, refused unless it is `analyst` on check `05`; null without one.
+function checkStage(check, value) {
+  if (value === undefined) return null;
+  if (value !== "analyst" || check !== "05") throw new UserError(`unknown stage \`${value}\` of check \`${check}\`; the only stage is \`05 --stage analyst\``);
+  return value;
+}
+
+// Prints a check result: its first line, the `REPAIRED:` line of a fence the runtime closed, its other contract lines, the lines of its chained effects, then the device script last so it never breaks the line parsing.
 function printCheck(result, effects, ctx) {
-  for (const line of [...result.lines, ...effects]) ctx.out(line);
+  const [first, ...rest] = result.lines;
+  const repaired = result.repaired ? [result.repaired] : [];
+  for (const line of [first, ...repaired, ...rest, ...effects]) ctx.out(line);
   if (result.script.length === 0) return;
   ctx.out("SCRIPT:");
   for (const line of result.script) ctx.out(line);
@@ -160,16 +221,18 @@ async function runDirCommand(argv, ctx) {
 
 // Runs `run check`, which answers whether the artifact of a phase of THIS run is there with the sections the pipeline reads from it.
 async function runCheck(argv, ctx) {
-  const { values, positionals } = parseCommand(argv, RUN_OPTIONS);
+  const { values, positionals } = parseCommand(argv, { ...RUN_OPTIONS, stage: { type: "string" } });
   checkArgs(positionals, { min: 1, max: 1, usage: USAGE.check });
   const check = positionals[0].trim().toLowerCase();
+  if (RENUMBERED.has(check)) throw new UserError(`renumbered: use ${RENUMBERED.get(check)}`);
   if (!PHASE_ARTIFACTS.has(check)) {
     throw new UserError(`unknown phase \`${positionals[0]}\`; the artifact gate covers: ${[...PHASE_ARTIFACTS.keys()].join(", ")}`);
   }
+  const stage = checkStage(check, values.stage);
   const run = await resolveRun(values, ctx);
   const state = readRunState({ projectId: run.projectId, slug: run.slug, env: ctx.env });
-  const result = checkArtifact({ run, check, state, ctx });
-  printCheck(result, await checkEffectLines({ run, check, result, state, ctx }), ctx);
+  const result = checkArtifact({ run, check, stage, state, ctx });
+  printCheck(result, await checkEffectLines({ run, check, stage, result, state, ctx }), ctx);
   return 0;
 }
 
@@ -201,7 +264,7 @@ function checkPrMode(values) {
   }
 }
 
-// Prints the pull request template in effect for the run and records it in state.json, so Phase 7 reads it instead of deciding.
+// Prints the pull request template in effect for the run and records it in state.json, so Phase 8 reads it instead of deciding.
 function announceTemplate(run, cwd, ctx) {
   const template = findPrTemplate(cwd);
   ctx.out(template.source === "repo" ? `TEMPLATE: repo (${template.label})` : "TEMPLATE: nightqueue (fallback)");
@@ -291,6 +354,7 @@ async function runIndexSave(argv, ctx) {
 
 const SUBCOMMANDS = new Map([
   ["check", runCheck],
+  ["append", runAppend],
   ["commit", runCommit],
   ["dir", runDirCommand],
   ["log", runLog],

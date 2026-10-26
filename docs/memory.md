@@ -241,7 +241,7 @@ nightqueue `SessionEnd` entry (a third-party one stays).
   cwd; with none it offers `project_register` and calls it only on a yes), drafts the
   candidates, lists them numbered and asks once; it saves ONLY the ones the person confirms
   and reports their refs.
-- the reflector of `/resolve` - Phase 9, the last phase of every run that reaches Phase 8,
+- the reflector of `/resolve` - Phase 10, the last phase of every run that reaches Phase 9,
   delivered or terminated, never at a gate pause. It saves on its own, with no confirmation,
   and returns at most ten lines whose refs the orchestrator prints as one `🪞 Reflection:`
   line above `## Notice`. The orchestrator itself never calls `lesson_save` or `memory_save`.
@@ -270,8 +270,8 @@ also bumps `violated` and answers `violated: true`. An interactive `/nightqueue:
 given.
 
 **What the reflector reads.** The run's handoffs as they are, never the job's raw stream. The
-loop artifacts keep their history: `05a-qa-analyst.md`, `05-qa.md`, `06-verification.md` and
-`06-runtime.md` are append-only, one `## Round n` per launch, and a fix-loop coder appends a
+loop artifacts keep their history: `05-qa.md`, `06-verification.md` and
+`07-runtime.md` are append-only, one `## Round n` per launch, and a fix-loop coder appends a
 `### Fix loop n — what was wrong / what changed` block to `04-implementation.md` instead of
 rewriting it (gates read only the last round). Its prompt carries the run timeline - phase,
 model, status and reason in order - from this attempt's `pipeline_phases`: the orchestrator

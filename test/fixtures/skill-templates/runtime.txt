@@ -1,5 +1,5 @@
 ## File handoff (contract — read first)
-ARTIFACT_PATH: <RUN_DIR>/06-runtime.md (append-only: this launch is ## Round [n])
+ARTIFACT_PATH: <RUN_DIR>/07-runtime.md (append-only: this launch is ## Round [n])
 Read before acting (via Read): <RUN_DIR>/01-triage.md (## Validated brief, ## Diagnosis on a bug) ·
 <RUN_DIR>/03-plan.md (## Implementation plan, ## Usage coverage when present) · <RUN_DIR>/04-implementation.md ·
 <RUN_DIR>/06-verification.md (its last `## Round`)
@@ -17,7 +17,7 @@ Steps 1–2.7 of your method already ran in the verification before this lane: p
 
 ## Deliver
 
-Write ARTIFACT_PATH as this launch's `## Round`, in this order; `## Runtime verdict` is mandatory (`nightqueue run check 06.5`).
+Write ARTIFACT_PATH as this launch's `## Round`, in this order; `## Runtime verdict` is mandatory (`nightqueue run check 07`).
 
 ## Runtime verdict
 Its first line is exactly one of:

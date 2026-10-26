@@ -7,6 +7,7 @@ Read before acting (via Read):
 If ARTIFACT_PATH exists, Read it and Write it back with every earlier round unchanged, then append
 `## Round [n]` at the end with this launch's whole output (every mandatory section, the verdict
 line included). Never edit an earlier round; otherwise create it with `## Round [n]`.
+Inside a code block, indent any `## Round` line you quote by one space, and close every code fence and every `<!--` before your round ends (a literal `<!--` goes in backticks).
 [the generic handoff lines]
 
 Inputs: the artifacts above; its scope; the stage when the plan is staged; the `## Applicable lessons` and `## Project memory` when the context carries them.

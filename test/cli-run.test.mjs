@@ -85,7 +85,7 @@ test("`nightqueue run` refuses a missing and an unknown subcommand, and says it 
   const unknown = await runCli(env, ["run", "logs"]);
 
   assert.equal(empty.code, 1);
-  assert.match(empty.err.join("\n"), /unknown run subcommand ``; use: check, commit, dir, log, pr/);
+  assert.match(empty.err.join("\n"), /unknown run subcommand ``; use: check, append, commit, dir, log, pr/);
   assert.equal(unknown.code, 1);
   assert.match(unknown.err.join("\n"), /unknown run subcommand `logs`/);
   assert.match(unknown.err.join("\n"), /acts on the run of the job it is called from/);
@@ -271,8 +271,8 @@ test("`run check` answers OK on a complete artifact and names every section the 
   assert.equal(plan.code, 0);
   assert.deepEqual(plan.out, ["MISSING: ## Pre-mortem, ## Identified risks"]);
 
-  const qa = await runCli(env, ["run", "check", "05a"], { jobId: id });
-  assert.deepEqual(qa.out, ["MISSING: ## Proven breaks, ## Break hypotheses, ## Test recipe, ## Validated risks, ## Invalidated assumptions, ## Verdict"]);
+  const qa = await runCli(env, ["run", "check", "05", "--stage", "analyst"], { jobId: id });
+  assert.deepEqual(qa.out, ["MISSING: ## Proven breaks, ## Break hypotheses, ## Test recipe, ## Validated risks, ## Invalidated assumptions, ## Generated PoCs, ## Verdict"]);
 
   const explore = await runCli(env, ["run", "check", "02"], { jobId: id });
   assert.deepEqual(explore.out, ["MISSING: ## File map, ## Access map, ## Third-party libraries"]);
@@ -287,12 +287,12 @@ test("`run check` answers OK on a complete artifact and names every section the 
     assert.deepEqual(exploreIncomplete.out, [`MISSING: ${heading}`]);
   }
 
-  writeArtifact(env, "06-runtime.md", "# Runtime\n\nDiff applies plan: yes\n");
-  const runtimeIncomplete = await runCli(env, ["run", "check", "06.5"], { jobId: id });
+  writeArtifact(env, "07-runtime.md", "# Runtime\n\nDiff applies plan: yes\n");
+  const runtimeIncomplete = await runCli(env, ["run", "check", "07"], { jobId: id });
   assert.deepEqual(runtimeIncomplete.out, ["MISSING: ## Runtime verdict"]);
 
-  writeArtifact(env, "06-runtime.md", "# Runtime\n\n## Runtime verdict\n\nCONFIRMED\n");
-  const runtime = await runCli(env, ["run", "check", "06.5"], { jobId: id });
+  writeArtifact(env, "07-runtime.md", "# Runtime\n\n## Runtime verdict\n\nCONFIRMED\n");
+  const runtime = await runCli(env, ["run", "check", "07"], { jobId: id });
   assert.deepEqual(gateLines(runtime.out), ["OK", "VERDICT: CONFIRMED"]);
 });
 
@@ -324,12 +324,14 @@ test("`run check` of a round artifact reads only its last `## Round`, and a lega
   writeArtifact(env, "05-qa.md", "## Round 1\n\n## Proven breaks\nNone\n\n## Validated risks\n- R1 HELD\n\n## Invalidated assumptions\nNone\n\n## Generated PoCs\nNone\n");
   assert.deepEqual(await check("05"), ["MISSING: ## Verdict"], "a consolidated report with no verdict passed the gate");
 
-  writeArtifact(env, "06-runtime.md", "## Round 1\n\n## Runtime verdict\nCONFIRMED\n\n## Round 2\n\nDiff applies plan: yes\n");
-  assert.deepEqual(await check("06.5"), ["MISSING: ## Runtime verdict"]);
-  writeArtifact(env, "06-runtime.md", "## Round 1\n\nDiff applies plan: no\n\n## Round 2\n\n## Runtime verdict\nCONFIRMED\n");
-  assert.deepEqual(await check("06.5"), ["OK", "VERDICT: CONFIRMED"]);
-  writeArtifact(env, "06-runtime.md", "## Round 2\n");
-  assert.deepEqual(await check("06.5"), ["MISSING: ## Runtime verdict"]);
+  writeArtifact(env, "07-runtime.md", "## Round 1\n\n## Runtime verdict\nCONFIRMED\n\n## Round 2\n\nDiff applies plan: yes\n");
+  assert.deepEqual(await check("07"), ["MISSING: ## Runtime verdict"]);
+  writeArtifact(env, "07-runtime.md", "## Round 1\n\nDiff applies plan: no\n\n## Round 2\n\n## Runtime verdict\nCONFIRMED\n");
+  assert.deepEqual(await check("07"), ["OK", "VERDICT: CONFIRMED"]);
+  writeArtifact(env, "07-runtime.md", "## Round 2\n");
+  assert.deepEqual(await check("07"), ["MISSING: ## Runtime verdict"]);
+  writeArtifact(env, "07-runtime.md", "## Round 1\n\n## Runtime verdict\nCONFIRMED\n\n```\n## Round 9\n```\n");
+  assert.deepEqual(await check("07"), ["OK", "VERDICT: CONFIRMED"], "a fenced round heading opened a round");
 });
 
 test("`run check 00` answers the missing brief, and OK once the brief carries ## Brief", async (t) => {
@@ -375,14 +377,14 @@ test("`run check 01` requires `Evidence level: <1-4>` as the first line under ##
   }
 });
 
-test("`run check 05a` outside a job answers for an operator run named by project and slug", async (t) => {
-  const env = makeQueue(t, "cli-run-check-operator-05a");
+test("`run check 05 --stage analyst` outside a job answers for an operator run named by project and slug", async (t) => {
+  const env = makeQueue(t, "cli-run-check-operator-analyst");
   const slug = "hunt-the-notice";
   recordRunFields({ projectId: ensureProject(env, "alpha"), slug, fields: { origin: "operator" }, env });
-  writeArtifact(env, "05a-qa-analyst.md", "# QA\n\n## Proven breaks\n\nNone\n\n## Break hypotheses\n\n- H1\n\n## Test recipe\n\nnode --test\n\n## Validated risks\n\n- R1 → hypothesis H1\n\n## Invalidated assumptions\n\nNone\n\n## Verdict\n\nNEEDS FIX\n", { slug });
-  const qa = await runCli(env, ["run", "check", "05a", "--project", "alpha", "--slug", slug]);
+  writeArtifact(env, "05-qa.md", "# QA\n\n## Round 1\n\n## Proven breaks\n\nNone\n\n## Break hypotheses\n\n- H1\n\n## Test recipe\n\nnode --test\n\n## Validated risks\n\n- R1 → hypothesis H1\n\n## Invalidated assumptions\n\nNone\n\n## Generated PoCs\n\nNone — the provers write them\n\n## Verdict\n\nNEEDS FIX\n", { slug });
+  const qa = await runCli(env, ["run", "check", "05", "--stage", "analyst", "--project", "alpha", "--slug", slug]);
   assert.equal(qa.code, 0);
-  assert.deepEqual(gateLines(qa.out), ["OK", "VERDICT: NEEDS FIX"]);
+  assert.deepEqual(gateLines(qa.out), ["OK", "VERDICT: NEEDS FIX", "QA-STAGE: provers"]);
 });
 
 test("`run check 04` generates the file list from the worktree when the coder left none", async (t) => {
@@ -427,9 +429,15 @@ test("`run check` refuses a phase it does not know and a missing argument, and e
   const env = makeQueue(t, "cli-run-check-usage");
   const id = boundJob(env);
 
-  const unknown = await runCli(env, ["run", "check", "07"], { jobId: id });
+  const unknown = await runCli(env, ["run", "check", "08"], { jobId: id });
   assert.equal(unknown.code, 1);
-  assert.match(unknown.err.join("\n"), /unknown phase `07`; the artifact gate covers: 00, 01, 02, 03, 04, 05a, 05, 06, 06\.5$/m);
+  assert.match(unknown.err.join("\n"), /unknown phase `08`; the artifact gate covers: 00, 01, 02, 03, 04, 05, 06, 07$/m);
+
+  for (const args of [["06", "--stage", "analyst"], ["05", "--stage", "foo"]]) {
+    const staged = await runCli(env, ["run", "check", ...args], { jobId: id });
+    assert.equal(staged.code, 1, args.join(" "));
+    assert.equal(staged.out.length, 0, args.join(" "));
+  }
 
   const missing = await runCli(env, ["run", "check"], { jobId: id });
   assert.equal(missing.code, 1);

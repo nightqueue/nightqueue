@@ -1,0 +1,31 @@
+# Plan
+
+## Implementation plan
+- Add the `active` filter to listJobs.
+
+## Symptom coverage
+
+**How I enumerated:** `grep -rn "listJobs" src`
+
+| # | Path/trigger that produces this symptom | Status | Reason |
+|---|---|---|---|
+| 1 | list view | covered | the filter is in listJobs |
+| 2 | queue status | covered | same helper |
+
+## Usage coverage
+
+**Diff axis:** filter — the diff changes which rows the list returns
+**Always-gate class:** no — no query
+**Scenarios consulted:** `grep -rn "listJobs" src`
+
+- list view · today: all rows · after: active rows only · changed=yes · source=literal ticket ("only active")
+- export csv · today: all rows · after: all rows · changed=no · source=pipeline
+
+## Assumptions
+- [P1] the list reads one table — invalidated if: a view joins it.
+
+## Pre-mortem
+- [PM1] archived rows leak — mitigation: a test.
+
+## Identified risks
+- [R1] the default changes — how to test it: node --test.

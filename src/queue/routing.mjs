@@ -12,7 +12,7 @@
  *   (explore maps files the triage already scoped; provers write and run one PoC for one pre-analysed
  *   hypothesis; verifier runs the project's checks and the PoCs; reflector distils lessons from written artifacts).
  * The merger keeps `sonnet`. A project overrides any of them with `nightqueue project models`.
- * Phases 0/7/8 run in the orchestrator, on the skill's model. Every run executes every phase.
+ * Phases 0/8/9 run in the orchestrator, on the skill's model. Every run executes every phase.
  */
 
 import { UserError } from "../config/errors.mjs";

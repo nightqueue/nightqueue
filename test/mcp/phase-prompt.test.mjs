@@ -1,17 +1,17 @@
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { test } from "node:test";
 import { runDir } from "../../src/config/paths.mjs";
-import { LESSON_TARGET_OF, PROMPT_TARGETS, phasePrompt, promptsDir, renderTemplate } from "../../src/mcp/phase-prompt.mjs";
+import { groupIdOf, LESSON_TARGET_OF, PROMPT_TARGETS, phasePrompt, promptsDir, renderTemplate } from "../../src/mcp/phase-prompt.mjs";
 import { openDb } from "../../src/memory/db.mjs";
 import { addJob, claimJobById, persistRunFacts } from "../../src/memory/jobs.mjs";
 import { saveLesson } from "../../src/memory/lessons.mjs";
 import { recordInjected } from "../../src/hooks/state.mjs";
 import { recordRunFields } from "../../src/queue/run-state.mjs";
 import { RUNTIME_PROMPT_RE } from "../../src/queue/narrate.mjs";
-import { PHASE_ARTIFACTS } from "../../src/queue/phase-artifacts.mjs";
+import { PHASE_ARTIFACTS, QA_ANALYST_STAGE } from "../../src/queue/phase-artifacts.mjs";
 import { renderSkillTemplate } from "../../src/queue/skill-template.mjs";
 import { setProjectAgents } from "../../src/memory/registry.mjs";
 import { AGENT_MODELS } from "../../src/queue/routing.mjs";
@@ -52,7 +52,9 @@ const FULL = {
   STAGE: "2 — the report",
   GROUP: "H1, H2 (group: parsing)",
   NOTE: "the verifier failed on the empty title",
-  ARTIFACT: "06-runtime.md",
+  ARTIFACT: "07-runtime.md",
+  DRAFT_PATH: `${RUN}/poc/qa-round-h1-h2-group-parsing-0a1b2c3d.md`,
+  GROUP_ID: "h1-h2-group-parsing-0a1b2c3d",
   ROUND: "2",
   FIX_LOOP: "1",
 };
@@ -139,10 +141,12 @@ function assertLinesPreserved(fixtureName, render, template) {
   }
 }
 
-// The values each template renders with in a real run, where only the prover gets a GROUP.
+// The values each template renders with in a real run, where only the prover gets a GROUP and a round draft.
 function valuesOf(template) {
-  return template === "qa-prover" ? FULL : { ...FULL, GROUP: "" };
+  return template === "qa-prover" ? FULL : { ...FULL, GROUP: "", DRAFT_PATH: "", GROUP_ID: "" };
 }
+
+const PROVER_ROUND_HEADINGS = ["## Proven breaks", "## Validated risks", "## Generated PoCs", "## Verdict"];
 
 test("golden: every line of each old template survives, in order, in the render of its new home", () => {
   for (const [name, templates] of GOLDEN) {
@@ -152,7 +156,7 @@ test("golden: every line of each old template survives, in order, in the render 
 
 const QA_REPORT_HEADINGS = ["## Proven breaks", "## Validated risks", "## Invalidated assumptions", "## Generated PoCs", "## Verdict"];
 
-test("the QA requests render the report Deliver block, and the prover only its verdict per hypothesis", () => {
+test("the QA requests render the report Deliver block, and the prover only its round draft", () => {
   for (const template of ["qa-lite", "qa-analyst"]) {
     const render = renderTemplate(template, valuesOf(template));
     assert.ok(render.includes("\nInputs: "), `${template} has no Inputs line`);
@@ -165,14 +169,17 @@ test("the QA requests render the report Deliver block, and the prover only its v
       assert.ok(at > from, `${template}: ${heading} is missing or out of order after ## Deliver`);
       from = at;
     }
-    assert.equal(render.includes("no .md artifact of your own"), false, `${template} renders the prover's deliverable`);
+    assert.equal(render.includes("nightqueue run append 05 --group"), false, `${template} renders the prover's deliverable`);
   }
   const analyst = renderTemplate("qa-analyst", valuesOf("qa-analyst")).split("\n");
   for (const heading of ["## Break hypotheses", "## Test recipe"]) assert.ok(analyst.includes(heading), `the analyst request does not deliver ${heading}`);
   const prover = renderTemplate("qa-prover", FULL);
   assert.ok(prover.includes("\n## Deliver\n"), "the prover request has no `## Deliver` block");
-  assert.ok(prover.includes("`PROVEN`"), "the prover request does not name its verdict per hypothesis");
-  assert.equal(prover.split("\n").includes("## Proven breaks"), false, "the prover request renders the full report");
+  assert.ok(prover.includes("BROKE (PROVEN)"), "the prover request does not name its verdict per hypothesis");
+  assert.equal(prover.includes("\nsource: prover"), false, "the prover request has the lane write its own round source, which the runtime stamps");
+  assert.ok(prover.includes(`nightqueue run append 05 --group ${FULL.GROUP_ID} --from ${FULL.DRAFT_PATH}`), "the prover request does not append its round through the runtime");
+  assert.equal(prover.includes("Read it and Write it back"), false, "the prover request rewrites 05-qa.md itself");
+  for (const heading of ["## Mapped rules", "## Invalidated assumptions"]) assert.equal(prover.split("\n").includes(heading), false, `the prover request renders the full report heading ${heading}`);
   assert.ok(prover.includes("Lesson L<id> applied"), "the prover request lacks the lesson-citation protocol");
 });
 
@@ -182,10 +189,15 @@ const CHECK_OF = {
   coder: "04",
   "coder-fix": "04",
   "qa-lite": "05",
-  "qa-analyst": "05a",
+  "qa-analyst": "05 --stage analyst",
   verifier: "06",
-  runtime: "06.5",
+  runtime: "07",
 };
+
+// The sections the gate of a check id requires, the analyst stage of check 05 included.
+function gateSections(check) {
+  return check === "05 --stage analyst" ? QA_ANALYST_STAGE.sections : PHASE_ARTIFACTS.get(check).sections;
+}
 
 test("each request renders Inputs, the handoff, and after ## Deliver every section its artifact gate requires", () => {
   for (const [template, check] of Object.entries(CHECK_OF)) {
@@ -196,17 +208,19 @@ test("each request renders Inputs, the handoff, and after ## Deliver every secti
       assert.ok(render.includes("Lesson L<id> applied"), `${template} lacks the handoff lines`);
       const from = lines.indexOf("## Deliver");
       assert.notEqual(from, -1, `${template} has no \`## Deliver\` block`);
-      for (const section of PHASE_ARTIFACTS.get(check).sections) {
+      for (const section of gateSections(check)) {
         assert.ok(lines.some((line, index) => index > from && line.startsWith(section)), `${template}: ${section} (run check ${check}) is not delivered after ## Deliver`);
       }
     }
   }
 });
 
-test("the prover renders only its verdict branch, and only the fix-loop coder renders the fix-loop block", () => {
+test("the prover renders only its round branch, and only the fix-loop coder renders the fix-loop block", () => {
   const prover = renderTemplate("qa-prover", FULL).split("\n");
-  assert.ok(prover.includes("## Deliver"), "the prover request has no `## Deliver` block");
-  for (const heading of PHASE_ARTIFACTS.get("05").sections) assert.equal(prover.includes(heading), false, `the prover renders the report heading ${heading}`);
+  const from = prover.indexOf("## Deliver");
+  assert.notEqual(from, -1, "the prover request has no `## Deliver` block");
+  for (const heading of PROVER_ROUND_HEADINGS) assert.ok(prover.indexOf(heading) > from, `the prover round lacks ${heading}`);
+  assert.equal(prover.includes("## Invalidated assumptions"), false, "the prover renders the full report");
   const values = { ...FULL, FIX_LOOP: "" };
   assert.ok(renderTemplate("coder-fix", FULL).includes("### Fix loop 1 — what was wrong / what changed\n"), "the fix-loop coder lost its block");
   assert.equal(renderTemplate("coder", values).includes("### Fix loop"), false, "coder renders the fix-loop block");
@@ -311,7 +325,7 @@ test("the lesson target of each context block is the one the old placeholder ord
 
 test("no render leaves a placeholder behind, whatever the type, the coverage and the optional values", () => {
   const empty = Object.fromEntries(Object.entries(FULL).map(([key, value]) => [key, typeof value === "boolean" ? false : value]));
-  for (const optional of ["CLAUDE_MD", "CONTEXT_BLOCK", "INDEX_MAP", "ORIGIN", "DELIVERY_CONSTRAINTS", "STAGE", "NOTE", "ROUND", "FIX_LOOP"]) empty[optional] = "";
+  for (const optional of ["CLAUDE_MD", "CONTEXT_BLOCK", "INDEX_MAP", "ORIGIN", "DELIVERY_CONSTRAINTS", "STAGE", "NOTE", "DRAFT_PATH", "GROUP_ID", "ROUND", "FIX_LOOP"]) empty[optional] = "";
   for (const template of TEMPLATES) {
     for (const base of [FULL, empty]) {
       for (const IS_BUG of [true, false]) {
@@ -565,15 +579,39 @@ test("the runtime lane may write another artifact of the run, which then has no 
 });
 
 test("a `group` on a QA target other than the prover is refused, so its lane never loses its .md report", async (t) => {
-  const { env, run } = makeRun(t, "phase-prompt-group-leak");
+  const { env, run, dir } = makeRun(t, "phase-prompt-group-leak");
   for (const target of ["qa-lite", "qa-analyst"]) {
     await assert.rejects(phasePrompt({ target, group: "H1,H2" }, { run, env }), /`group` is only accepted with `target: "qa-prover"`/);
     const own = await phasePrompt({ target }, { run, env });
-    assert.match(own.prompt, /## Proven breaks/);
-    assert.doesNotMatch(own.prompt, /no \.md artifact of your own/);
+    assert.match(own.prompt, /## Invalidated assumptions/);
+    assert.doesNotMatch(own.prompt, /nightqueue run append 05 --group/);
   }
   const prover = await phasePrompt({ target: "qa-prover", group: "H1,H2" }, { run, env });
-  assert.match(prover.prompt, /no \.md artifact of your own/);
+  assert.match(prover.prompt, /nightqueue run append 05 --group \S+ --from /);
+  assert.equal(prover.artifact, join(dir, "05-qa.md"));
+  assert.equal(prover.check, null);
+});
+
+test("each prover group gets its own round draft under poc/, even when two groups slug the same", async (t) => {
+  const { env, run, dir } = makeRun(t, "phase-prompt-draft-path");
+  const draftOf = async (group) => (await phasePrompt({ target: "qa-prover", group }, { run, env })).prompt.match(/run append 05 --group \S+ --from ([^\s`]+)/)[1];
+  const [first, second] = [await draftOf("H1 / H2"), await draftOf("H1 - H2")];
+  assert.ok(first.startsWith(join(dir, "poc", "qa-round-h1-h2-")), first);
+  assert.ok(second.startsWith(join(dir, "poc", "qa-round-h1-h2-")), second);
+  assert.notEqual(first, second);
+});
+
+test("the prover's `--group` is the GROUP_ID the runtime accepts, the stem of its draft, and empty for the analyst", async (t) => {
+  const { env, run } = makeRun(t, "phase-prompt-group-id");
+  for (const group of ["H1, H2 (group: parsing)", "cache · H1", "---", "Ünïcode!"]) {
+    const { prompt } = await phasePrompt({ target: "qa-prover", group }, { run, env });
+    const [, id, draft] = prompt.match(/run append 05 --group (\S+) --from ([^\s`]+)/);
+    assert.match(id, /^[a-z0-9][a-z0-9-]{0,63}$/, group);
+    assert.equal(basename(draft), `qa-round-${id}.md`);
+  }
+  assert.notEqual(groupIdOf("cache · H1"), groupIdOf("cache · H2"));
+  const analyst = await phasePrompt({ target: "qa-analyst" }, { run, env });
+  assert.doesNotMatch(analyst.prompt, /--group/);
 });
 
 test("a round artifact's prompt names the next `## Round`, counted by the runtime from the file on disk", async (t) => {
@@ -585,7 +623,12 @@ test("a round artifact's prompt names the next `## Round`, counted by the runtim
   assert.ok(third.prompt.includes("(append-only: this launch is ## Round 3)\n"), third.prompt);
   assert.ok(third.prompt.includes("otherwise create it with `## Round 3`."), third.prompt);
   const runtime = await phasePrompt({ target: "runtime" }, { run, env });
-  assert.ok(runtime.prompt.includes("06-runtime.md (append-only: this launch is ## Round 1)\n"), runtime.prompt);
+  assert.ok(runtime.prompt.includes("07-runtime.md (append-only: this launch is ## Round 1)\n"), runtime.prompt);
+  assert.equal(runtime.check, "07");
+  writeFileSync(join(dir, "05-qa.md"), "## Round 1\n## Verdict\nAPPROVED\n\n```\n## Round 7\n```\n");
+  const analyst = await phasePrompt({ target: "qa-analyst" }, { run, env });
+  assert.ok(analyst.prompt.includes("05-qa.md (append-only: this launch is ## Round 2)\n"), analyst.prompt);
+  assert.equal(analyst.check, "05 --stage analyst");
   const architect = await phasePrompt({ target: "architect" }, { run, env });
   assert.equal(architect.prompt.includes("## Round"), false, architect.prompt);
 });

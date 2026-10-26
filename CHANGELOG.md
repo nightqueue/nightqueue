@@ -109,6 +109,49 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **The phases are whole numbers, 0 to 10, one artifact each.** The runtime phase is now
+  Phase 7 (`07-runtime.md`, `nightqueue run check 07`), commit/PR Phase 8, the report Phase 9 and
+  the reflector Phase 10; the old `06.5`/`06-runtime.md` are gone. The QA analyst no longer has
+  an artifact of its own (`05a-qa-analyst.md`): it writes its round into `05-qa.md`, and its gate
+  is `nightqueue run check 05 --stage analyst`, which answers `QA-STAGE: provers|skip` and
+  records the `qa_stage_a` marker with no phase; it requires every section check `05` reads,
+  `## Generated PoCs` included. Each prover appends its own round with the new
+  `nightqueue run append 05 --group <GROUP_ID> --from <draft>`, numbered under the run lock, so
+  concurrent provers never lose a round nor share a number; the runtime stamps the round's
+  group from `--group`, never from the lane's text, and refuses a draft with a `## Round` line or
+  an unclosed fence or comment. `nightqueue run check 05` writes the consolidated round itself
+  (`source: runtime consolidation`), merging the analyst's and the latest prover round of each
+  group byte for byte, with an aggregate verdict that counts proof (a proven break anywhere →
+  `NEEDS FIX`; else the provers' verdicts, where every analyst `H<n>` needs a prover `H<n>:`
+  line — a missing id or `INCONCLUSIVE` → `NEEDS DISCUSSION`, a `BROKE` → `NEEDS FIX`, the note
+  naming the ids; with no prover, open hypotheses → `NEEDS DISCUSSION`), and answers over it; a
+  second check writes nothing. A `## Round` heading inside fenced code never counts as a round;
+  one inside an HTML comment counts only as the next number in sequence (closing the comment).
+  The rounds a gate reads are validated when they are written: a round artifact that ends inside
+  an open code fence is closed by the runtime (`run check` and `run append` append the fence's
+  marker and print `REPAIRED: …`), and a column-0 `## Round <next>` inside a fence, a `<!--` a
+  round leaves open or a round heading inside a comment the round closes answers one `MISSING:`
+  line asking the lane to append a new round — never consolidated, so a gate never reads an
+  older round or a phantom tail. Fence lines follow CommonMark (```` ```node --test``` ```` is
+  inline code; ```` ```js ```` never closes a fence). The gates, the round splitter, `run append`,
+  the consolidation's section reader and the `04` file list read comments with one scanner that
+  keeps code spans and fenced lines, and a `<!--` that never closes is literal text. Prover lines
+  accept `REFUTED` as `HELD` (`run append` writes `HELD (REFUTED)`) and `PROVEN` as `BROKE`, or as
+  `HELD` on a `type=regression` hypothesis. A `## Proven breaks` that says `No proven breaks.`,
+  `(none)`, `N/A`, `—` (a none spelling is the whole line, never a prefix of `None of the
+  callers…`), a None with a prose explanation, a header-only table or a regression that passed,
+  in any wording, no longer turns the aggregate into `NEEDS FIX`. `run check 05` validates the
+  consolidated round it builds and writes nothing when the final check would refuse it.
+  On a consolidated round, `usage-coverage-held-on-pipeline` reads only the analyst's risk lines.
+  `run check 06.5` and `run check 05a` exit 1 with the one line `renumbered: use 07` /
+  `renumbered: use 05`. A run whose directory holds `06-runtime.md` or `05a-qa-analyst.md` is
+  never resumed: `queue retry` is refused with ``run started before the renumbering; retry with
+  `fresh` ``, the runner gates a claimed or swept job as `pre-renumbering-run` (notice: retry
+  with `--fresh`) before any spawn, and `run start` refuses the same; there is no alias layer. A resume re-enters the QA at stage B only while the stage
+  A marker names `05-qa.md` and is newer than the last implementation. `run report` prints
+  `7 Runtime`, `8 Commit/PR` and a `9 Report ⏳` row that never counts against Happy. The
+  `/resolve` skill numbers Phase 0 as a plain 1 to 12 list. The canonical phase names in
+  `state.json` are unchanged.
 - **One pipeline, no risk tier.** Every run executes every phase (triager, exploration,
   architect, coder, QA, verifier, runtime unless the change is purely static), with at most 2
   fix iterations; the trivial/simple fast tracks and the `coder-fast`/`verifier-fast` prompts

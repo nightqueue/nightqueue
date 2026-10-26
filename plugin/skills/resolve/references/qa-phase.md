@@ -4,7 +4,8 @@ Read via Read by the /resolve orchestrator in Phase 5, before launching any qa-g
 the single home of the Stage A gate and the consolidation. The QA attack brief and the LITE/ANALYST/PROVER prompts live in `prompts/`
 (`_qa-attack-brief.md`, `qa-lite.md`, `qa-analyst.md`, `qa-prover.md`): the pipeline gets them
 rendered by `phase_prompt` (`qa-lite`, `qa-analyst`, `qa-prover`), never assembled by hand. The
-shared report format they all deliver is `deliverables/qa-report.md`.
+shared report format they all deliver is `deliverables/qa-report.md`. Every lane writes into ONE
+artifact, `05-qa.md`, one `## Round <n>` per launch.
 
 **Mode — read from `run check 03`:** the `QA: lite|full` line of the last
 `nightqueue run check 03` answer decides, and nothing else (on a resume, run the check again:
@@ -14,7 +15,7 @@ it is a pure read of the plan). The check answers `full` when the plan declares
 
 **lite → one lane:** launch 1 qa-guardian — `phase_prompt` with `target: "qa-lite"`, then
 `Agent` with the answered `subagent_type`, `model` and `prompt` verbatim — header
-`🛡️ QA-GUARDIAN · LITE · ...`. It writes `05-qa.md` (its own `## Round <n>`); then run
+`🛡️ QA-GUARDIAN · LITE · ...`. It writes its own `## Round <n>` of `05-qa.md`; then run
 `nightqueue run check 05`. Stages A and B and the consolidation below do not apply.
 
 **full → two stages (analyst → parallel provers):** the analysis stays in a single
@@ -25,42 +26,41 @@ below replace the single launch.
 
 **Stage A — Analyst (full):** launch 1 qa-guardian — `phase_prompt` with
 `target: "qa-analyst"`, then `Agent` with the answered `subagent_type`, `model` and `prompt`
-verbatim — header `🛡️ QA-GUARDIAN · ANALYST · ...`.
+verbatim — header `🛡️ QA-GUARDIAN · ANALYST · ...`. It writes its round into `05-qa.md`.
 
-**Stage A gate:** run `nightqueue run check 05a` (the artifact gate, step 5.2) over
-`05a-qa-analyst.md`, which must carry the sections of the analyst request's `## Deliver` — on
-`MISSING`, relaunch the analyst (🔁) once; if it persists, terminate and inform the user. Zero
-runtime hypotheses → skip stage B and go straight to the consolidation.
-
-When that gate closes, the check records the marker itself (`recorded: qa_stage_a <verdict>`,
-over `05a-qa-analyst.md`) BEFORE launching stage B — never by writing the file: this is what
-makes a resume skip the analyst if the provers die halfway.
+**Stage A gate:** run `nightqueue run check 05 --stage analyst` (the artifact gate, step 9),
+which reads the analyst's round for the sections of the analyst request's `## Deliver` — on
+`MISSING`, relaunch the analyst (🔁) once with the check's lines as `note`; if it persists, terminate and inform the user. It
+answers `QA-STAGE: provers|skip` and records the marker itself (`recorded: qa_stage_a <verdict>`)
+BEFORE stage B — never by writing a file: this is what makes a resume skip the analyst if the
+provers die halfway. On `QA-STAGE: skip` (zero runtime hypotheses), go straight to
+`nightqueue run check 05`.
 
 **Stage B — Provers (full):** launch **N qa-guardian in parallel, all in a single message**
 (the `subagent_type` and `model` `phase_prompt` answers, `mode: "bypassPermissions"`) — one
 per root group of the hypotheses (never one per symptom). The `description` of each prover's Agent call MUST start with
 `H<N> (group: <group>): ` — the cockpit identifies each prover lane and its verdict by that
-prefix. Single header of the phase: `🛡️ QA-GUARDIAN · PROVERS ×N · ...`. On a resume
-whose block says `From stage: qa-stage-b`, `05a-qa-analyst.md` is already on disk: read its last `## Round` and
-start from here, without rebuilding stage A. The prompt of each one: `phase_prompt` with
-`target: "qa-prover"` and `group` = the IDs/label of its same-root group, passed verbatim.
+prefix. Single header of the phase: `🛡️ QA-GUARDIAN · PROVERS ×N · ...`. The prompt of each
+one: `phase_prompt` with `target: "qa-prover"` and `group` = the IDs/label of its same-root
+group, passed verbatim. Each prover appends its own round through `nightqueue run append 05`.
+A return without an `APPENDED:` line, or with an `INCONCLUSIVE` hypothesis, relaunches that
+prover once (🔁) with what was missing; its new round supersedes the old one of its group. An
+`INCONCLUSIVE` **never becomes HELD**: if it remains, it is an ⚠️ open item. The runtime checks
+that every `H<n>` of the analyst has a prover `H<n>:` line: a missing id or an `INCONCLUSIVE`
+gives `NEEDS DISCUSSION` (the note names the ids), a `BROKE` gives `NEEDS FIX`. A prover still
+without `APPENDED:` after its relaunch is an ⚠️ open item.
 
-**Consolidation (inline, by yourself — no subagent):** assemble the single report in the
-contract that Phase 6 consumes:
-- `## Proven breaks` = the analyst's static ones + the `PROVEN` hypotheses of the provers,
-  keeping the analyst's grouping by root (same root = 1 item with its PoCs).
-- `## Validated risks` = the analyst's, resolving each "→ hypothesis H<n>" to HELD (REFUTED)
-  or BROKE (PROVEN).
-- `## Generated PoCs` = the provers' files + a note that the without-fix proof via stash was
-  delegated to the verifier.
-- `## Invalidated assumptions` = the analyst's.
-- `## Verdict` = the aggregate verdict (below).
-- `INCONCLUSIVE` **never becomes HELD**: relaunch ONE prover (🔁) for that hypothesis with
-  what was missing; if it remains inconclusive, record an ⚠️ open item.
-- Aggregate verdict: any proven break → `NEEDS FIX`; nothing proven and no open item →
-  `APPROVED`.
+On a resume whose block says `From stage: qa-stage-b`, the analyst's round is already in
+`05-qa.md`: read it (its last `## Round` carrying `## Break hypotheses`) and start Stage B,
+without rebuilding stage A.
 
-If `05-qa.md` exists, Read it and Write it back with its earlier rounds unchanged plus
-`## Round <n>` (n = its highest round + 1) holding this consolidation; otherwise `## Round 1`.
-Then run `nightqueue run check 05` (the artifact gate, step 5.2, which reads the last round) —
-the artifact Phase 6 and Phase 8 re-read via Read, its last `## Round`.
+**Consolidation — by the runtime:** `nightqueue run check 05` merges every round since the
+analyst's (the later round of a prover group wins), writes `## Round <n+1>` marked
+`source: runtime consolidation` and answers over it. Never write or edit `05-qa.md` yourself.
+The aggregate verdict counts proof: any merged round with a non-`None` `## Proven breaks` →
+`NEEDS FIX`; else the provers' verdicts plus the coverage of the analyst's `H<n>` ids (any
+`NEEDS FIX` or `BROKE` line → `NEEDS FIX`, else any `NEEDS DISCUSSION`, unreadable verdict,
+`INCONCLUSIVE` line or id with no prover line → `NEEDS DISCUSSION`, else `APPROVED`); with no prover
+round, open hypotheses → `NEEDS DISCUSSION`, and no hypothesis → the analyst's verdict. A `GATE:` line relaunches the QA once,
+from the analyst. The check (the artifact gate, step 9) reads the last round — the artifact
+Phase 6 and Phase 9 re-read via Read, its last `## Round`.

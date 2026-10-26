@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { UserError } from "../config/errors.mjs";
@@ -26,10 +27,10 @@ const TARGETS = {
   coder: { agent: "nightqueue:coder", model: "coder", phase: "implementation", artifact: "04-implementation.md", check: "04" },
   "coder-fix": { agent: "nightqueue:coder", model: "coder", phase: "implementation", artifact: "04-implementation.md", check: "04" },
   verifier: { agent: "nightqueue:verifier", model: "verifier", phase: "verification", artifact: "06-verification.md", check: "06" },
-  runtime: { agent: "nightqueue:verifier", model: "verifier", phase: "runtime", artifact: "06-runtime.md", check: "06.5" },
+  runtime: { agent: "nightqueue:verifier", model: "verifier", phase: "runtime", artifact: "07-runtime.md", check: "07" },
   "qa-lite": { agent: "nightqueue:qa-guardian", model: "qa-analyst", phase: "qa", artifact: "05-qa.md", check: "05" },
-  "qa-analyst": { agent: "nightqueue:qa-guardian", model: "qa-analyst", phase: "qa", artifact: "05a-qa-analyst.md", check: "05a" },
-  "qa-prover": { agent: "nightqueue:qa-guardian", model: "qa-prover", phase: "qa", artifact: null, check: null },
+  "qa-analyst": { agent: "nightqueue:qa-guardian", model: "qa-analyst", phase: "qa", artifact: "05-qa.md", check: "05 --stage analyst" },
+  "qa-prover": { agent: "nightqueue:qa-guardian", model: "qa-prover", phase: "qa", artifact: "05-qa.md", check: null },
   reflector: { agent: "nightqueue:reflector", model: "reflector", phase: null, artifact: null, check: null },
 };
 
@@ -146,7 +147,7 @@ function planHasUsageCoverage(dir) {
   }
 }
 
-// The artifact the runtime lane writes: its own by default, or the one the call names (the post-merge measure of step 0.6).
+// The artifact the runtime lane writes: its own by default, or the one the call names (the post-merge measure of step 3 of Phase 0).
 function runtimeArtifact(target, artifact) {
   const name = typeof artifact === "string" ? artifact.trim() : "";
   if (!name) return TARGETS.runtime.artifact;
@@ -167,6 +168,23 @@ function readHandoff(dir, file) {
 // The `## Round` number this launch appends to its append-only artifact, or an empty text for a target that writes none.
 function roundOf(target, dir, artifact) {
   return ROUND_TARGETS.includes(target) ? String(nextRound(readHandoff(dir, artifact))) : "";
+}
+
+// The id the runtime stamps on a prover's round: the group's slug plus a hash of the group, so two groups never share it.
+export function groupIdOf(group) {
+  const slug = String(group ?? "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40);
+  const hash = createHash("sha256").update(String(group ?? "")).digest("hex").slice(0, 8);
+  return slug === "" ? hash : `${slug}-${hash}`;
+}
+
+// The group id of a prover's launch, or an empty text for any other target.
+function groupIdValue(target, group) {
+  return target === "qa-prover" ? groupIdOf(group) : "";
+}
+
+// The draft a prover writes its round to before `run append 05`, named by its group id; an empty text for any other target.
+function draftPathOf(target, dir, group) {
+  return target === "qa-prover" ? join(dir, "poc", `qa-round-${groupIdOf(group)}.md`) : "";
 }
 
 // The `### Fix loop` number a fix-loop coder appends to the implementation artifact, or an empty text for any other target.
@@ -295,6 +313,8 @@ async function promptValues({ args, template, run, state, env, openItems }) {
     ARTIFACT: artifact,
     ROUND: roundOf(args.target, dir, ownArtifact),
     FIX_LOOP: fixLoopOf(args.target, dir),
+    DRAFT_PATH: draftPathOf(args.target, dir, text(args.group)),
+    GROUP_ID: groupIdValue(args.target, text(args.group)),
     ...(await reflectorValues({ template, run, state, env, openItems })),
   };
 }

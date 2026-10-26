@@ -2,7 +2,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { UserError } from "../config/errors.mjs";
 import { PIPELINE_TASK_TYPES } from "../memory/runs.mjs";
 import { COMMIT_TYPES } from "../queue/branch-name.mjs";
-import { isSafeSegment, isStateObject, readRunState } from "../queue/resume.mjs";
+import { isSafeSegment, isStateObject, PRE_RENUMBERING_REFUSAL, preRenumberingArtifact, readRunState } from "../queue/resume.mjs";
 import { callerJobId } from "../queue/retry.mjs";
 import { agentModels, modelTable, phasesFor } from "../queue/routing.mjs";
 import { recordPrTemplate, recordRunFields } from "../queue/run-state.mjs";
@@ -86,7 +86,7 @@ function recordType(run, type, ctx) {
   if (recorded.status !== "written") ctx.err(`nightqueue: the type was not recorded on the run: ${recorded.reason}`);
 }
 
-// Finds and records the pull request template in effect, the one Phase 7 writes the body for.
+// Finds and records the pull request template in effect, the one Phase 8 writes the body for.
 function recordTemplate(run, cwd, ctx) {
   const template = findPrTemplate(cwd);
   const recorded = recordPrTemplate({ projectId: run.projectId, slug: run.slug, template, env: ctx.env });
@@ -115,6 +115,7 @@ export async function runStart(argv, ctx) {
   const options = startOptions(argv);
   await awaitDeclaredSlug(options.expected, ctx);
   const run = await resolveRun(options.values, ctx);
+  if (preRenumberingArtifact({ projectId: run.projectId, slug: run.slug, env: ctx.env }) !== null) throw new UserError(PRE_RENUMBERING_REFUSAL);
   const prior = readRunState({ projectId: run.projectId, slug: run.slug, env: ctx.env });
   const type = effectiveType(prior, options.type);
   recordType(run, type, ctx);

@@ -33,7 +33,7 @@ import { holdRunnerAwake } from "./keep-awake.mjs";
 import { killProcess, ownRunnerRecord } from "./registry.mjs";
 import { runMaintenance } from "./maintenance.mjs";
 import { appendPendingWrite, PENDING_KEYS, replayPendingWrites } from "./pending-writes.mjs";
-import { clearRunOutcome, decideResume, isRunPath, isSafeSegment, ownRunState, readRunState, resumeHandoff, writeRunTerminal } from "./resume.mjs";
+import { clearRunOutcome, decideResume, isRunPath, isSafeSegment, ownRunState, PRE_RENUMBERING_REFUSAL, preRenumberingArtifact, readRunState, resumeHandoff, writeRunTerminal } from "./resume.mjs";
 import { adoptRunSlug, followRunSlug, slugRefusal } from "./run-slug.mjs";
 import { JOB_BLOCK_ALREADY_RECORDED, recordJobBlock, recordPrUrl, recordResume, recordRunFields } from "./run-state.mjs";
 import { DISABLED_BACKGROUND_ESCAPE_LINE } from "./run-notice.mjs";
@@ -997,6 +997,11 @@ async function preflightJob(job, { store, env, deps }) {
   return preflight({ job, env, gitImpl: deps.gitImpl, existsImpl: deps.existsImpl, resolveBinImpl: deps.resolveBinImpl, openWorktrees });
 }
 
+// The block of a job whose run directory was written under the old phase numbering: only a fresh retry starts it over.
+function preRenumberingBlock(file) {
+  return { ok: false, code: BLOCK_CODES.PRE_RENUMBERING_RUN, message: `${PRE_RENUMBERING_REFUSAL} (${file} is in the run directory)`, fresh: true };
+}
+
 // Everything before the spawn - preflight, run slug, job block, worktree - each store step waiting out an outage; answers what the spawn needs, or the report that ends the job.
 async function prepareJob(claimed, ctx) {
   const { env, deps } = ctx;
@@ -1006,6 +1011,8 @@ async function prepareJob(claimed, ctx) {
   const openPrs = await openPrsForJob(claimed, { env, deps });
   const job = await withRunSlug(claimed, ctx, check.cwd);
   if (job === OUTAGE_STOPPED) return { report: stoppedInOutage(claimed, env) };
+  const stale = preRenumberingArtifact({ projectId: job.project_id, slug: job.slug, env });
+  if (stale !== null) return { report: await gateJob(job, preRenumberingBlock(stale), ctx) };
   ensureRunDir(job, env);
   if ((await recordJob(job, ctx)) === OUTAGE_STOPPED) return { report: stoppedInOutage(job, env) };
   if ((await enrichOrigin(job, ctx)) === OUTAGE_STOPPED) return { report: stoppedInOutage(job, env) };

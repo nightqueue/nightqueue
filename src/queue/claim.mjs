@@ -106,9 +106,11 @@ export async function release(job, result, env = process.env, blockedCode = null
   return await openStore(env).jobs.releaseJob(job.id, { worker: job.worker, result, blockedCode, ...measures });
 }
 
-// The notice of a job a preflight block stopped: the block first, then the retry that answers it.
+// The notice of a job a preflight block stopped: the block first, then the retry that answers it (a fresh one when only starting over can).
 export function preflightNotice(job, check) {
-  const fix = `The runner did not start this job. Fix the cause, then send it back: nightqueue queue retry ${jobRef(job.id)} (no note needed)`;
+  const fix = check.fresh === true
+    ? `The runner did not start this job. Start it over: nightqueue queue retry ${jobRef(job.id)} --fresh (MCP: queue_retry with fresh: true)`
+    : `The runner did not start this job. Fix the cause, then send it back: nightqueue queue retry ${jobRef(job.id)} (no note needed)`;
   return `${check.code}: ${check.message}\n${fix}`;
 }
 

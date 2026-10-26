@@ -1,7 +1,6 @@
 import { sameBranch } from "./branch-name.mjs";
 import { insideRoots, orchestratorBashAllowed, readTarget } from "./orchestrator-scope.mjs";
 
-const FENCE_LINE_RE = /^\s{0,3}(`{3,}|~{3,})/;
 const QUOTED_LINE_RE = /^\s*\d+\t/;
 const GATE_HEADING_RE = /^#{1,6}\s+Requires user confirmation\s*$/i;
 const NOTICE_HEADING_RE = /^#{1,6}\s+Notice\s*$/i;
@@ -65,29 +64,149 @@ function orchestratorTextFromLine(rawLine) {
   return orchestratorText(parseEventLine(rawLine));
 }
 
-// Tells whether a fence marker closes the open one: same character and at least as long, as markdown requires.
-function closesFence(open, marker) {
-  return marker[0] === open[0] && marker.length >= open.length;
+// One line against the open code fence, by the CommonMark rules: the fence open after it and whether the line is a fence opener or closer.
+export function fenceStep(open, line) {
+  const text = String(line ?? "");
+  if (open === null) {
+    const opener = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(text);
+    if (opener === null || (opener[1][0] === "`" && opener[2].includes("`"))) return { open: null, fenceLine: false };
+    return { open: opener[1], fenceLine: true };
+  }
+  const closer = /^ {0,3}(`{3,}|~{3,})[ \t]*$/.exec(text);
+  const closes = closer !== null && closer[1][0] === open[0] && closer[1].length >= open.length;
+  return closes ? { open: null, fenceLine: true } : { open, fenceLine: false };
 }
 
 // Splits a text into lines flagged with whether they lie inside a markdown code fence, nesting included.
-function linesWithFenceState(text) {
+export function linesWithFenceState(text) {
   const scanned = [];
   let open = null;
   for (const line of String(text ?? "").replace(/\r\n?/g, "\n").split("\n")) {
-    const marker = FENCE_LINE_RE.exec(line)?.[1] ?? null;
-    if (marker && (open === null || closesFence(open, marker))) {
-      open = open === null ? marker : null;
-      scanned.push({ line, inFence: true });
-      continue;
-    }
-    scanned.push({ line, inFence: open !== null });
+    const step = fenceStep(open, line);
+    scanned.push({ line, inFence: step.fenceLine || open !== null });
+    open = step.open;
   }
   return scanned;
 }
 
+// The length of the backtick run at a position of the text.
+export function backtickRunAt(text, at) {
+  let end = at;
+  while (text[end] === "`") end += 1;
+  return end - at;
+}
+
+// The index just past the code span opened by a backtick run, or -1 when no run of the same length closes it.
+export function codeSpanEnd(text, at, run) {
+  let cursor = at + run;
+  while (cursor < text.length) {
+    const next = text.indexOf("`", cursor);
+    if (next < 0) return -1;
+    const closing = backtickRunAt(text, next);
+    if (closing === run) return next + run;
+    cursor = next + closing;
+  }
+  return -1;
+}
+
+// One line read left to right: its text outside HTML comments (code spans kept verbatim, a `<!--` at or past `literalFrom` kept as text), whether a comment is open at its end and where that comment opened (-1 when none opened on the line).
+function outsideComments(line, inComment, literalFrom = Infinity) {
+  let visible = "";
+  let open = inComment;
+  let openedAt = -1;
+  let at = 0;
+  while (at < line.length) {
+    if (open) {
+      const close = line.indexOf("-->", at);
+      if (close < 0) break;
+      [open, openedAt, at] = [false, -1, close + 3];
+    } else if (line[at] === "`") {
+      const run = backtickRunAt(line, at);
+      const end = codeSpanEnd(line, at, run);
+      const next = end < 0 ? at + run : end;
+      visible += line.slice(at, next);
+      at = next;
+    } else if (at < literalFrom && line.startsWith("<!--", at)) {
+      [open, openedAt, at] = [true, at, at + 4];
+    } else {
+      visible += line[at];
+      at += 1;
+    }
+  }
+  return { visible, inComment: open, openedAt };
+}
+
+// The column from which a `<!--` of the 1-based line is literal text: none before `literalFrom`, all of them after its line.
+function literalColumnOf(literalFrom, lineNumber) {
+  if (literalFrom === null || lineNumber < literalFrom.line) return Infinity;
+  return lineNumber === literalFrom.line ? literalFrom.column : 0;
+}
+
+// A line-by-line markdown scanner: each step answers its 1-based line, the fence and comment state at the line's start, the line's text outside comments, whether a comment is open at its end and the fence marker open after it.
+export function createMarkdownScanner({ literalFrom = null, inComment: startsInComment = false } = {}) {
+  let fence = null;
+  let inComment = startsInComment;
+  let lineNumber = 0;
+  return {
+    step(line) {
+      lineNumber += 1;
+      const start = { line: lineNumber, inFence: fence !== null, inComment };
+      const fenced = inComment ? { open: null, fenceLine: false } : fenceStep(fence, line);
+      if (fenced.fenceLine) {
+        fence = fenced.open;
+        return { ...start, inFence: true, visible: line, endsInComment: false, fence, fenceLine: true, openedAt: -1 };
+      }
+      if (fence !== null) return { ...start, visible: line, endsInComment: false, fence, fenceLine: false, openedAt: -1 };
+      const scanned = outsideComments(line, inComment, literalColumnOf(literalFrom, lineNumber));
+      inComment = scanned.inComment;
+      return { ...start, visible: scanned.visible, endsInComment: inComment, fence: null, fenceLine: false, openedAt: scanned.openedAt };
+    },
+    resetComment() {
+      inComment = false;
+    },
+  };
+}
+
+// Where the HTML comment still open at the end of the lines opened (1-based line and column), or null when every comment closes.
+function unclosedCommentOpener(lines) {
+  const scanner = createMarkdownScanner();
+  let opener = null;
+  let endsInComment = false;
+  for (const line of lines) {
+    const step = scanner.step(line);
+    if (step.openedAt >= 0) opener = { line: step.line, column: step.openedAt };
+    endsInComment = step.endsInComment;
+  }
+  return endsInComment ? opener : null;
+}
+
+// The code fence open at the end of the scanned steps (its marker and the 1-based line it opened at), or null.
+function openFenceOfSteps(steps) {
+  let open = null;
+  for (const step of steps) {
+    if (step.fence === null) open = null;
+    else open ??= { marker: step.fence, line: step.line };
+  }
+  return open;
+}
+
+// A whole text read by the one markdown scanner: a `<!--` that never closes opens nothing (it and all after it are literal text); answers the lines, their steps, that unclosed `<!--` and the fence open at the end.
+export function scanMarkdown(text) {
+  const lines = String(text ?? "").replace(/\r\n?/g, "\n").split("\n");
+  const opener = unclosedCommentOpener(lines);
+  const scanner = createMarkdownScanner({ literalFrom: opener });
+  const steps = lines.map((line) => scanner.step(line));
+  return { lines, steps, unclosedComment: opener === null ? null : { line: opener.line }, openFence: openFenceOfSteps(steps) };
+}
+
+// The text without its HTML comments, read by the markdown scanner: code spans and fenced lines are kept byte for byte, and a `<!--` that never closes is kept as literal text.
+export function withoutHtmlComments(text) {
+  const { steps } = scanMarkdown(text);
+  return steps.map((step, at) => step.visible + (step.endsInComment || at === steps.length - 1 ? "" : "\n")).join("");
+}
+
 // Tells whether a scanned line can carry a marker: outside a fence and not a `cat -n` style quotation.
-function isMarkerCandidate({ line, inFence }) {
+export function isMarkerCandidate({ line, inFence }) {
   return !inFence && !QUOTED_LINE_RE.test(line);
 }
 

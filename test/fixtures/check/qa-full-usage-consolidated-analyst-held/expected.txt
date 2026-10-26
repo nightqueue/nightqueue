@@ -1,0 +1,4 @@
+OK
+VERDICT: APPROVED
+GATE: usage-coverage-held-on-pipeline — - export csv: HELD — the export still returns all rows
+recorded: none (GATE: usage-coverage-held-on-pipeline — - export csv: HELD — the export still returns all rows)

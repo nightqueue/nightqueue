@@ -134,7 +134,10 @@ test("the closed list is frozen data, and its rendering names every rule", () =>
   for (const { argv } of ORCHESTRATOR_BASH_RULES) assert.ok(rendered.includes(argv.join(" ")), `${argv.join(" ")} missing from ${rendered}`);
 });
 
-test("every `nightqueue run <sub>` the skill names is allowed and is a real run subcommand", () => {
+// The run subcommands the skill names for a lane, never for the orchestrator: a prover appends its own QA round.
+const LANE_ONLY_SUBCOMMANDS = new Set(["append"]);
+
+test("every `nightqueue run <sub>` the skill names is a real run subcommand, allowed unless only a lane runs it", () => {
   const skill = readFileSync(join(packageRoot(), "plugin", "skills", "resolve", "SKILL.md"), "utf8");
   const named = new Set([...skill.matchAll(/nightqueue run ([a-z0-9-]+)/g)].map((match) => match[1]));
   const runSource = readFileSync(join(packageRoot(), "src", "cli", "run.mjs"), "utf8");
@@ -144,7 +147,8 @@ test("every `nightqueue run <sub>` the skill names is allowed and is a real run 
   assert.ok(named.size > 0, "the skill names no `nightqueue run` subcommand");
   for (const sub of named) {
     assert.ok(real.has(sub), `the skill names \`nightqueue run ${sub}\`, which src/cli/run.mjs does not have`);
-    assert.equal(orchestratorBashAllowed(`nightqueue run ${sub}`), true, `the closed list refuses \`nightqueue run ${sub}\``);
+    const allowed = !LANE_ONLY_SUBCOMMANDS.has(sub);
+    assert.equal(orchestratorBashAllowed(`nightqueue run ${sub}`), allowed, `the closed list ${allowed ? "refuses" : "allows"} \`nightqueue run ${sub}\``);
   }
 });
 
@@ -160,7 +164,7 @@ const SKILL_PRESCRIBED = [
   ["gh pr list\n   --head <branch>", "gh pr list --head feat/slug"],
   ["gh pr view|list|status|checks|create", "gh pr view 3"],
   ["gh pr create", "gh pr create --title t --body-file /runs/p/s/pr-body.md"],
-  ["nightqueue run check <NN>", "nightqueue run check 06.5"],
+  ["nightqueue run check <NN>", "nightqueue run check 07"],
   ["nightqueue run start", "nightqueue run start"],
   ["nightqueue run start --routing", "nightqueue run start --routing"],
   [

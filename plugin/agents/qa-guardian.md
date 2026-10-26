@@ -52,15 +52,16 @@ What the request asks decides the scope of the attack:
   `bun test --preload ./test-setup/...`), naming conventions and the project's gotchas, so the
   provers do not rediscover it.
 - **(iv) Proving an assigned group of hypotheses** (other provers run in parallel in the SAME
-  working tree): write ONLY the PoC files with the assigned names, with the test recipe given —
+  working tree): write ONLY the PoC files with the assigned names and the report file the request names, with the test recipe given —
   do not rediscover the setup. **`git stash`/`checkout`/`reset` or any command that changes
   the git state is FORBIDDEN**, so the without-fix proof of §2c is left for whoever runs the
   PoCs later. Hypothesis `type=break`: iterate until the PoC FAILS against the current code by
   the real break (not by setup). A PoC that passes = a REFUTED hypothesis or a badly built PoC —
   investigate before deciding. Hypothesis `type=regression`: build the test of the exact bug
   scenario and iterate until it PASSES against the current (fixed) code. The verdict per
-  hypothesis is `PROVEN` (PoC + the failure output) | `REFUTED` (evidence that the code holds)
-  | `INCONCLUSIVE` (what was missing) — NEVER `PROVEN` without the output of a real failure.
+  hypothesis is written `H<n>: BROKE (PROVEN)` (PoC + the failure output) | `H<n>: HELD (REFUTED)`
+  (evidence that the code holds) | `H<n>: INCONCLUSIVE` (what was missing) — NEVER `PROVEN`
+  without the output of a real failure.
 
 Without a request that scopes you, generate the risk matrix yourself from the target — a PR
 (`gh pr diff <n>`), the current diff (`git diff`), a module or a folder — and RUN every PoC you

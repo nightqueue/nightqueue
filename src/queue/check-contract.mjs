@@ -1,10 +1,10 @@
 import { PIPELINE_TASK_TYPES } from "../memory/runs.mjs";
-import { lastRound, PHASE_ARTIFACTS } from "./phase-artifacts.mjs";
-import { hasGateMarker, sectionOf, unfencedLines } from "./stream.mjs";
+import { consolidatedRoundsOf, lastRound, nextRound, PHASE_ARTIFACTS, QA_ANALYST_STAGE, roundDefects, roundsOf } from "./phase-artifacts.mjs";
+import { backtickRunAt, codeSpanEnd, hasGateMarker, sectionOf, unfencedLines, withoutHtmlComments } from "./stream.mjs";
 import { briefGates, briefType } from "./triage-brief.mjs";
 
 // The contract of `nightqueue run check`: one fact per line, in this order, each with a stable prefix.
-// OK | MISSING: <sections> | GENERATED, then VERDICT:, GATE:, OPEN:, TYPE-MISMATCH:, CONFIRM:, QA:, INVALIDATED:, DIFF-APPLIES:,
+// OK | MISSING: <sections> | GENERATED, then VERDICT:, GATE:, OPEN:, TYPE-MISMATCH:, CONFIRM:, QA:, QA-STAGE:, INVALIDATED:, DIFF-APPLIES:,
 // NEEDS-DEVICE, and last of all SCRIPT: with the device script verbatim. A MISSING first line prints nothing else.
 
 const BUG = "bug/error";
@@ -33,15 +33,13 @@ const LIST_ITEM_RE = /^(?:[-*+]|\d+[.)])\s/;
 const RISK_ID_RE = /^(?:\*\*)?(?:\[R\d+\]|\(R\d+\))/;
 const SEVERITY_RE = /🔴|🟡|🟢/u;
 // The verdicts that send the pipeline back instead of completing the phase.
-const LOOP_BACK = { "06": ["FAILED"], "06.5": ["NOT-MET", "SYMPTOM-PERSISTS"] };
+const LOOP_BACK = { "06": ["FAILED"], "07":["NOT-MET", "SYMPTOM-PERSISTS"] };
 // The verdicts a check memo keeps as its notable line when nothing else fired.
 const FAILING = { ...LOOP_BACK, "05": ["NEEDS FIX"] };
 
 // The text as the gates read it: one kind of line break and no HTML comment, so a commented-out heading never counts.
 function normalize(text) {
-  return String(text ?? "")
-    .replace(/\r\n?/g, "\n")
-    .replace(/<!--[\s\S]*?-->/g, "");
+  return withoutHtmlComments(text);
 }
 
 // One trimmed line of evidence, at most 160 code points.
@@ -112,26 +110,6 @@ function isFilled(value) {
   return plain !== "" && !/^<.*>$/.test(plain) && !/^(?:n\/a|not applicable)$/i.test(plain);
 }
 
-// The length of the backtick run at a position of the text.
-function backtickRunAt(text, at) {
-  let end = at;
-  while (text[end] === "`") end += 1;
-  return end - at;
-}
-
-// The index just past the code span opened by a backtick run, or -1 when no run of the same length closes it.
-function codeSpanEnd(text, at, run) {
-  let cursor = at + run;
-  while (cursor < text.length) {
-    const next = text.indexOf("`", cursor);
-    if (next < 0) return -1;
-    const closing = backtickRunAt(text, next);
-    if (closing === run) return next + run;
-    cursor = next + closing;
-  }
-  return -1;
-}
-
 // The row without its one leading and one trailing unescaped `|`.
 function rowBody(line) {
   const trimmed = line.trim();
@@ -200,7 +178,7 @@ function verdictIn(text, values) {
 }
 
 // The verdict of the artifact, read where its phase writes it; null when it is none of the accepted values.
-function readVerdict(text, spec) {
+export function readVerdict(text, spec) {
   if (spec.from === "first-line") return verdictIn(firstLineUnder(text, spec.heading) ?? "", spec.values);
   const line = unfencedLines(text).find((candidate) => candidate.trimEnd().startsWith(spec.heading));
   return line === undefined ? null : verdictIn(line.slice(spec.heading.length).replace(/^\s*:/, ""), spec.values);
@@ -510,14 +488,15 @@ function auditsUsage(plan) {
   return sectionOf(plan, "## Usage coverage") !== null || declaresAlwaysGate(plan);
 }
 
-// The usage-coverage gates of the QA and its open unconfirmed decisions.
+// The usage-coverage gates of the QA and its open unconfirmed decisions; the held-on-pipeline gate reads only the analyst's risk lines.
 function usageAudit(ctx, risks) {
   if (!auditsUsage(ctx.plan)) return { gates: [], open: [] };
   const scenarios = (bodyLines(ctx.plan, "## Usage coverage") ?? []).filter((line) => line.startsWith("- "));
   const value = labelledValue(risks, "Usage coverage:");
   const unconfirmed = usageField(value, "unconfirmed decisions:");
+  const analystRisks = bodyLines(ctx.analystText, "## Validated risks") ?? [];
   return {
-    gates: [...usageCountGates(ctx, { value, scenarios }), ...usageFieldGates(value), ...heldOnPipelineGates(ctx, { risks, scenarios })],
+    gates: [...usageCountGates(ctx, { value, scenarios }), ...usageFieldGates(value), ...heldOnPipelineGates(ctx, { risks: analystRisks, scenarios })],
     open: unconfirmed && !/^none$/i.test(unconfirmed) ? [`unconfirmed decisions — ${unconfirmed}`] : [],
   };
 }
@@ -593,7 +572,7 @@ function runtimeFacts(ctx) {
   };
 }
 
-const PHASE_FACTS = { "01": triageFacts, "03": planFacts, "05": qaFacts, "06.5": runtimeFacts };
+const PHASE_FACTS = { "01": triageFacts, "03": planFacts, "05": qaFacts, "07": runtimeFacts };
 
 // The sections the verdict's next step reads that the artifact lacks or leaves without an item.
 function verdictSectionGaps(ctx) {
@@ -627,6 +606,7 @@ function contractLines(first, facts) {
     ...(facts.typeMismatch ? [`TYPE-MISMATCH: ${facts.typeMismatch}`] : []),
     ...(facts.confirm ? [CONFIRM_LINE] : []),
     ...(facts.qaMode ? [`QA: ${facts.qaMode}`] : []),
+    ...(facts.qaStage ? [`QA-STAGE: ${facts.qaStage}`] : []),
     ...(facts.invalidated ?? []).map((text) => `INVALIDATED: ${flatLine(text)}`),
     ...(facts.diffApplies ? [`DIFF-APPLIES: ${facts.diffApplies}`] : []),
     ...(facts.needsDevice ? ["NEEDS-DEVICE"] : []),
@@ -665,20 +645,73 @@ export function fileListResult(first, evaluated = "") {
   return resultOf({ check: "04", first, evaluated: normalize(evaluated) });
 }
 
-// Evaluates the artifact of one phase against the check contract; `texts` maps each run file name to its content, `state` is the run's state.json.
-export function evaluateCheck({ check, texts = {}, state = null }) {
-  const artifact = PHASE_ARTIFACTS.get(check);
+// The artifact spec a check evaluates: the phase's own, or the analyst stage of the QA; an unknown check or stage throws.
+function checkedArtifact(check, stage) {
+  if (stage !== null && !(stage === "analyst" && check === "05")) throw new Error(`unknown stage \`${stage}\` of check \`${check}\`; the only stage is \`05 --stage analyst\``);
+  const artifact = stage === "analyst" ? QA_ANALYST_STAGE : PHASE_ARTIFACTS.get(check);
   if (!artifact) throw new Error(`unknown check \`${check}\`; the contract covers: ${[...PHASE_ARTIFACTS.keys()].join(", ")}`);
+  return artifact;
+}
+
+// How a defect or a repair names the round holding it.
+function roundName(round) {
+  return round === null ? "the text before the first round" : `round ${round}`;
+}
+
+const INDENT_QUOTES = "indent by one space any `## Round` line you quote";
+
+// What every defect asks the lane to do: append a whole new round, never edit an earlier one.
+function appendARound(next) {
+  return `append a new \`## Round ${next}\` with your whole round`;
+}
+
+// The text of one defect of a round artifact: where it is and what the lane appends to fix it.
+function defectPart(file, defect, next) {
+  if (defect.kind === "open-fence") return `the code fence of ${roundName(defect.round)} opened at line ${defect.line} of ${file} never closes (append \`${defect.marker}\` on its own line at the end of the file)`;
+  if (defect.kind === "fenced-heading") return `line ${defect.line} of ${file} is a column-0 \`## Round ${defect.number}\` inside the code fence opened at line ${defect.fenceLine} (${roundName(defect.round)}): ${appendARound(next)}, and ${INDENT_QUOTES}`;
+  if (defect.kind === "open-comment") return `${roundName(defect.round)} of ${file} leaves the HTML comment opened at line ${defect.line} open: ${appendARound(next)}, closing every \`<!--\` with \`-->\` or writing a literal \`<!--\` in backticks`;
+  return `line ${defect.line} of ${file} (\`## Round ${defect.round}\`) sits inside the HTML comment opened at line ${defect.openedAt} and closed at line ${defect.closedAt}: ${appendARound(next)}, and ${INDENT_QUOTES}`;
+}
+
+// The `MISSING:` parts of the rounds a gate reads (the last one, or the given numbers): one text per defect, earliest line first.
+export function roundDefectParts(file, raw, numbers = null) {
+  const next = nextRound(raw ?? "");
+  return roundDefects(raw ?? "", numbers).map((defect) => defectPart(file, defect, next));
+}
+
+// The `REPAIRED:` line of a code fence the runtime closed at the end of a round artifact.
+export function repairedLine(file, closed) {
+  return `REPAIRED: the code fence of ${roundName(closed.round)} opened at line ${closed.line} of ${file} never closed; the runtime appended \`${closed.marker}\` at line ${closed.at}`;
+}
+
+// The text the held-on-pipeline gate reads: the analyst's round a consolidation lists first, else the round read.
+function analystTextOf(raw, text) {
+  const numbers = consolidatedRoundsOf(lastRound(raw));
+  if (numbers === null) return text;
+  const analyst = roundsOf(raw).find((round) => round.number === numbers[0]);
+  return analyst === undefined ? text : normalize(analyst.text);
+}
+
+// The facts of the QA analyst stage: its verdict and whether stage B has provers to launch.
+function analystFacts(ctx) {
+  return { verdict: ctx.verdict, qaStage: firstItem(ctx.text, "## Break hypotheses") === null ? "skip" : "provers" };
+}
+
+// Evaluates the artifact of one phase (or the analyst stage of check 05) against the check contract; `texts` maps each run file name to its content, `state` is the run's state.json.
+export function evaluateCheck({ check, stage = null, texts = {}, state = null, gaps = [] }) {
+  const artifact = checkedArtifact(check, stage);
   const read = (file) => normalize(texts[file]);
-  const whole = read(artifact.file);
-  const text = artifact.rounds ? lastRound(whole) : whole;
+  const raw = texts[artifact.file] ?? "";
+  const text = artifact.rounds ? normalize(lastRound(raw)) : read(artifact.file);
   const triage = read("01-triage.md");
   const type = (check === "01" ? briefType(text) : null) ?? runType(state, triage);
   const base = { check, artifact, text, triage, brief: read("00-brief.md"), explore: read("02-explore.md"), plan: read("03-plan.md"), type };
-  const ctx = { ...base, verdict: artifact.verdict ? readVerdict(text, artifact.verdict) : null };
+  const ctx = { ...base, analystText: artifact.rounds ? analystTextOf(raw, text) : text, verdict: artifact.verdict ? readVerdict(text, artifact.verdict) : null };
+  const common = { check: stage === null ? check : `${check}-${stage}`, type: ctx.type, evaluated: text };
+  const defects = artifact.rounds ? [...new Set([...gaps, ...roundDefectParts(artifact.file, raw)])] : gaps;
+  if (defects.length > 0) return resultOf({ ...common, first: `MISSING: ${defects.join("; ")}` });
   const missing = missingParts(ctx);
-  const common = { check, type: ctx.type, evaluated: text };
   if (missing.length > 0) return resultOf({ ...common, first: `MISSING: ${missing.join(", ")}` });
-  const facts = { verdict: ctx.verdict, ...(PHASE_FACTS[check]?.(ctx) ?? {}) };
+  const facts = stage === "analyst" ? analystFacts(ctx) : { verdict: ctx.verdict, ...(PHASE_FACTS[check]?.(ctx) ?? {}) };
   return resultOf({ ...common, first: "OK", facts });
 }
