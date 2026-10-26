@@ -303,17 +303,32 @@ test("the agent measures no time: no clock, no arithmetic, no timestamp", () => 
   assert.ok(FLOW.includes("Never compute a duration and never write a timestamp"), "Phase 9 lost the rule about the times");
 });
 
-test("the tables of Phase 9 and their Time column come from the command the CLI really offers", () => {
+test("the one table of Phase 9 and its Time column come from the command the CLI really offers", () => {
   const report = passageAt("**Open the report with `nightqueue run report`, pasted verbatim**", PHASE_9);
-  assert.ok(report.includes("Time column the\nruntime measured and its `**Total:**`"), "the Phase 9 table no longer reads the runtime's measurement");
+  assert.ok(/Time column the\s+runtime measured and\s+its `\*\*Total:\*\*`/.test(report), "the Phase 9 table no longer reads the runtime's measurement");
   assert.ok(report.includes("may only turn a `Happy: yes` into not\nhappy — never the reverse"), "the agent may override the fail-safe verdict of the report");
   assert.ok(CLI_RUN.includes("nightqueue run report [--json]"), "the CLI no longer offers the command the skill pastes from");
-  assert.ok(REPORT_LAYOUT.includes("**Total:** ⏱️"), "the report layout no longer prints the Total the report carries");
   assert.ok(CLI_RUN.includes('renderSkillTemplate(skillReferencesDir(), "report"'), "`run report` no longer renders its one layout, references/report.md");
-  assert.equal(CLI_RUN.includes("| Step | Agent | Status |"), false, "the CLI carries a copy of the table layout of references/report.md");
+  for (const header of ["| Step | Agent | Result |", "| Step | Agent | Status |"]) {
+    assert.equal(CLI_RUN.includes(header), false, "the CLI carries a copy of the table layout of references/report.md");
+    assert.equal(SKILL.includes(header), false, "the skill still carries the table model the report prints");
+  }
+  assert.equal(REPORT_LAYOUT.split("| Step | Agent | Result | Note | Time |").length, 2, "the report layout prints the one table header once");
+  assert.ok(REPORT_LAYOUT.includes("{{ROWS}}"), "the report layout no longer takes the rows of the one table");
+  assert.ok(REPORT_LAYOUT.indexOf("**Total:** ⏱️") >= 0 && REPORT_LAYOUT.indexOf("**Total:** ⏱️") < REPORT_LAYOUT.indexOf("{{HAPPY_LINE}}"), "the Total no longer precedes the Happy line");
+  for (const gone of ["{{^HAPPY}}", "{{/HAPPY}}", "EXECUTION_ROWS", "STEP_ROWS", "Highlight", "Summary"]) {
+    assert.equal(REPORT_LAYOUT.includes(gone), false, `the report layout still carries the two-table layout: ${gone}`);
+  }
   assert.equal(CLI_RUN.includes("Lessons saved"), false, "the CLI still prints the lesson-capture audit line Phase 10 replaced");
   assert.equal(REPORT_LAYOUT.includes("LESSONS_LINE"), false, "the report layout still carries the lesson-capture audit line");
-  assert.equal(SKILL.includes("| Step | Agent | Status | Highlight |"), false, "the skill still carries the table model the report prints");
+});
+
+test("the skill describes the one report table, never the execution table it replaced", () => {
+  assert.equal(/execution table/i.test(FLOW), false, "the skill still names the execution table `run report` no longer prints");
+  assert.ok(PHASE_9.includes("one row per recorded execution"), "Phase 9 no longer says what the rows of the table are");
+  assert.ok(PHASE_9.includes("`🔁N`"), "Phase 9 no longer names the re-run rows");
+  assert.ok(PHASE_9.includes("Do NOT print the detail sections below"), "the happy path no longer keeps the detail sections out");
+  assert.ok(INTERACTIVE.includes("Do not repeat the report table here"), "an interactive Phase 8 no longer leaves the table to `run report`");
 });
 
 // The text of Phase 8: the SKILL.md stub must send the run to references/phase-8.md, which carries the steps.

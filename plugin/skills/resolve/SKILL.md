@@ -132,7 +132,7 @@ An `## Intent note` or `## Depth note` never blocks the advance.
 **A Brief with numbered stages** (its `**Stages:**` field). Each stage is a unit of the run and
 the order is binding: the Phase 3 plan is written per stage, Phase 4 implements stage by stage
 with the verifier between stages (a failing stage is fixed before the next starts), and the
-execution table and PR list the stages with their status. Stages never split the delivery:
+report table and PR list the stages with their status. Stages never split the delivery:
 still one branch and ONE pull request.
 
 ### Phase 2 — Exploration

@@ -88,27 +88,32 @@ already happened (every listed path clean and the branch ahead of its base) prin
 It prints the same `CONVENTION:`, `COMMITTED:`, `BRANCH:`, `PR:` and `WORKTREE:`
 lines as the two commands, which keep working unchanged.
 
-`run report [--json]` renders the tables of Phase 9 from `state.json`, the job log
-and `03-plan.md`: the step table, one row per step (`7 Runtime`, `8 Commit/PR`, and a last
-`9 Report` row that is always `⏳ this report` and never counts against Happy; `⏭️` only for
-the runtime phase after a PASSED verification, a purely static change), a `Happy: yes|no —
-<first failing gate>` line decided by the fail-safe rule (a termination, a failed
-verdict, a re-run, a planned phase never recorded, a plan with `## Requires user
-confirmation`, no delivery recorded), and, when not happy, the execution table with
-the measured Time column and the `**Total:**`, and last a `## Open items` section: one
-`- <item>` line per `dedicated ticket: yes` suggestion of the last QA round
-(`dedicated ticket: <suggestion>`) and per `OPEN:` line `run check 05`/`07` would print
-(`05 open: …`, `07 open: …`), or `- none`. The layout it fills is
-`plugin/skills/resolve/references/report.md`, rendered by the same template engine
-as `phase_prompt`; the orchestrator never reads that file, it pastes the output. The
+`run report [--json]` renders the table of Phase 9 from `state.json`, the job log
+and `03-plan.md`: ONE table, `Step | Agent | Result | Note | Time`, one row per execution
+recorded in `state.json` in the order recorded (a re-run of a phase is its own row, its Step
+suffixed `🔁N`), plus one row per planned step with no record at its nominal position
+(`⚠️ not recorded`; `⏭️ purely static change` for the runtime phase after a PASSED
+verification; `8 Commit/PR` reads the recorded delivery; a last `9 Report` row that is
+always `⏳ this report` and never counts against Happy). `Result` is the status icon plus
+the verdict word; `Note` the reason and note recorded, `-` when empty; `Time` the measured
+duration, `-` when none. Then the `**Total:**`, then a `Happy: yes|no — <first failing
+gate>` line decided by the fail-safe rule (a termination, a failed verdict, a re-run, a
+planned phase never recorded, a plan with `## Requires user confirmation`, no delivery
+recorded), and last a `## Open items` section: one `- <item>` line per `dedicated ticket:
+yes` suggestion of the last QA round (`dedicated ticket: <suggestion>`) and per `OPEN:`
+line `run check 05`/`07` would print (`05 open: …`, `07 open: …`), or `- none`. The layout
+it fills is `plugin/skills/resolve/references/report.md`, rendered by the same template
+engine as `phase_prompt`; the orchestrator never reads that file, it pastes the output. The
 command also records the run's telemetry (the row `pipeline_log` used to write), in both
 modes: the phases come from `state.json`, the outcome and the gate stop are derived from
 it (`pr_opened`, `local_commit` or `no_commit`; `user` for a gate, none for a
 `NO-CHANGE-NEEDED` run, else the terminated or failed phase), and inside a job a run
 already recorded in this attempt is not recorded twice; outside a job, or in a job with no
 recorded attempt start, a run whose last record carries the same outcome and phase count is
-not recorded twice. `--json` adds `openItems` and `recorded` (`recorded`, `already
-recorded`, `queued` when the database is unavailable, or `not recorded: <reason>`). A failed
+not recorded twice. `--json` prints `rows` (objects with `phase`, `step`, `agent`,
+`launch`, `icon`, `word`, `note`, `durationS`), `happy`, `reason`, `durationS`, `openItems`
+and `recorded` (`recorded`, `already recorded`, `queued` when the database is unavailable,
+or `not recorded: <reason>`). A failed
 record is the fixed open item `the run was not recorded in the telemetry` (the reason stays
 only in `recorded`), never a non-zero exit.
 

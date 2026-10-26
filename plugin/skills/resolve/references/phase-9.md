@@ -4,10 +4,11 @@ Use the visual identity of the legend and the status icons throughout the report
 
 **Open the report with `nightqueue run report`, pasted verbatim** (Bash, inside the job; outside
 one, with `--project <project> --slug <slug>`). It prints the `## 🗂️ Report — <slug>` header, then
-the summary table per step — every step, `⏭️` only for a step the run legitimately skipped; then a
-`Happy: yes|no — <first failing gate>` line decided from the run's
-own records and, when the run is not happy, the complete execution table with the Time column the
-runtime measured and its `**Total:**`. Your judgment may only turn a `Happy: yes` into not
+ONE table — one row per recorded execution, in order: every step, a re-run as its own row
+(`🔁N`, N its launch number), `⏭️` only for a step the run legitimately skipped, `⚠️ not
+recorded` for a planned step with no record — with the Time column the runtime measured and
+its `**Total:**`; then a `Happy: yes|no — <first failing gate>` line decided from the run's
+own records. Your judgment may only turn a `Happy: yes` into not
 happy — never the reverse — and then names the gate right below the pasted output.
 
 **Fail-safe.** `run report` decides Happy from the records; in doubt about any gate, the run is
@@ -18,24 +19,23 @@ right after, the section **🎯 Objective met**: repeat the `Expected outcome` o
 and the concrete evidence that proves it was met (a without-fix/with-fix proof, a screenshot,
 or the acceptance gate item by item), closing with the PR link (or "local commit,
 no PR" when applicable). Re-read only `01-triage.md` (## Validated brief, ## Diagnosis if a bug)
-and the evidence in `06-verification.md`. Do NOT print the complete execution table nor the
-detail sections below. Print also the `🪞 Reflection:` line (Phase 10) and the `## Notice`
-section; both are mandatory and do not enter the ~30-line cap.
+and the evidence in `06-verification.md`. Do NOT print the detail sections below. Print also
+the `🪞 Reflection:` line (Phase 10) and the `## Notice` section; both are mandatory and do not
+enter the ~30-line cap.
 
-**Non-happy path (any ⚠️, ❌, 🔁 or gate_stop):** the `run report` output already carries the
-complete execution table, with the Time column the runtime measured and its `**Total:**`.
-Never compute a duration and never write a timestamp: the times belong to the runtime.
+**Non-happy path (any ⚠️, ❌, 🔁 or gate_stop):** the table already carries every execution
+with its Time and the `**Total:**`. Never compute a duration and never write a timestamp: the times belong to the runtime.
 Re-read the artifacts via Read for the detail (the handoff dropped them from context):
 `01-triage.md`, `05-qa.md` (last round), `06-verification.md` and `03-plan.md` when necessary.
 A missing artifact → a ⚠️ open item on its line, never a reconstruction nor a failed report.
-After the tables, detail only what needs more than one line:
+After the table, detail only what needs more than one line:
 
 0. **🎯 Objective met**: the `Expected outcome` of Phase 0 and the evidence item by item; an item
    left NOT MET is said in the first line — never declare success against another criterion.
 1. **🔍 Diagnosis (bug only)**: the triager's `## Diagnosis` — the hypotheses, how each was
    validated, and the confirmed root cause with its direct evidence.
 2. **QA — proven breaks**: what the qa-guardian broke, its PoCs and each `## Validated risks`
-   item with severity 🔴🟡🟢; reference the 🔁 fix iterations of Phase 6.
+   item with severity 🔴🟡🟢; reference the `🔁N` rows of the table.
 3. **Verification**: the checks + the QA's PoCs run, the final result, the 🔁 count.
 4. **🛡️ Prevention**: the QA's recommendations to avoid recurrence.
 

@@ -1,18 +1,12 @@
 ## 🗂️ Report — {{SLUG}}
 
-| Step | Agent | Status | Highlight |
-|-------|--------|--------|----------|
-{{STEP_ROWS}}
-
-{{HAPPY_LINE}}
-{{^HAPPY}}
-
-| Step | Agent | Status | Summary | Time |
-|-------|--------|--------|--------|-------|
-{{EXECUTION_ROWS}}
+| Step | Agent | Result | Note | Time |
+|-------|--------|--------|------|-------|
+{{ROWS}}
 
 **Total:** ⏱️ {{TOTAL}}
-{{/HAPPY}}
+
+{{HAPPY_LINE}}
 
 ## Open items
 
