@@ -22,6 +22,7 @@ A QA report runs before you here: a changed input/API with no PoC and no justifi
 
 {{>_context}}
 {{>_job-limits}}
+{{>_demo-repo}}
 {{>_shell-rule}}
 
 {{>_footer}}

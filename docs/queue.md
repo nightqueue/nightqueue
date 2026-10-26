@@ -535,7 +535,8 @@ queue close <id>``), so a job is never closed by hand, by a flip of its status o
 
 **A run that produced nothing is `cancelled`, not `failed`.** When an attempt exits cleanly
 with no pull request and no gate, and the run logged `no_commit` for THIS attempt (a
-`pipeline_runs` row of the job's project and slug written after the attempt started), the job
+`pipeline_runs` row of the job's project and slug written after the attempt started, which
+`nightqueue run report` derives from `state.json` in Phase 9), the job
 ends `cancelled` and its notice gains `nothing to close: the run produced no pull request`,
 as its own paragraph after the run's reason. A run that logged `local_commit`, or that logged
 nothing, stays `failed` as before; the worktree of a `cancelled` finish is kept or named by

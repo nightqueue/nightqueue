@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { UserError } from "../../src/config/errors.mjs";
 import { closeDb, openDb } from "../../src/memory/db.mjs";
-import { logPipelineRun, updateRunTelemetry } from "../../src/memory/runs.mjs";
+import { logPipelineRun, logPipelineRunUnlessSame, updateRunTelemetry } from "../../src/memory/runs.mjs";
 import { makeHome, makeProject, projectIdOf } from "../../test-support/memory.mjs";
 
 // Rows of the two telemetry tables, in insertion order.
@@ -242,4 +242,22 @@ test("the model and the session come from the environment of the process, never 
       ["second-run", null, null],
     ],
   );
+});
+
+test("a run whose latest record has the same outcome and phase count is skipped; any other difference inserts", (t) => {
+  const env = makeHome(t, "runs-unless-same");
+  makeProject(t, env, "alpha");
+  makeProject(t, env, "beta");
+  const phases = [{ phase: "triage" }];
+
+  assert.equal(Number.isInteger(logPipelineRunUnlessSame(run(env, { phases }), env).runId), true);
+  assert.equal(logPipelineRunUnlessSame(run(env, { phases }), env).skipped, true);
+  assert.equal(logPipelineRunUnlessSame(run(env, { phases, outcome: "no_commit" }), env).skipped, undefined);
+  assert.equal(logPipelineRunUnlessSame(run(env, { phases: [...phases, { phase: "commit" }], outcome: "no_commit" }), env).skipped, undefined);
+  assert.equal(logPipelineRunUnlessSame(run(env, { phases, slug: "another-run" }), env).skipped, undefined);
+  assert.equal(logPipelineRunUnlessSame(run(env, { phases, projectId: projectIdOf(env, "beta") }), env).skipped, undefined);
+  assert.equal(logPipelineRunUnlessSame(run(env, { phases, projectId: null, slug: "global-run" }), env).skipped, undefined);
+  assert.equal(logPipelineRunUnlessSame(run(env, { phases, projectId: null, slug: "global-run" }), env).skipped, true);
+
+  assert.equal(telemetry(env).runs.length, 6);
 });

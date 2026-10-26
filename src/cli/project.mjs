@@ -1,8 +1,17 @@
-import { existsSync, rmSync } from "node:fs";
+import { existsSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { UserError } from "../config/errors.mjs";
 import { requireOrg } from "../config/orgs.mjs";
-import { registerProject as registerInStore, renameProject, requireGitPath, requireProject, setProjectKey } from "../config/projects.mjs";
+import {
+  mainCheckoutOf,
+  normalizePath,
+  pathContains,
+  registerProject as registerInStore,
+  renameProject,
+  requireGitPath,
+  requireProject,
+  setProjectKey,
+} from "../config/projects.mjs";
 import { runsDir } from "../config/paths.mjs";
 import { loadConfig } from "../config/store.mjs";
 import { changeProjectIntegrations, integrationLines, integrationsView } from "../integrations/settings.mjs";
@@ -305,6 +314,62 @@ async function runModels(argv, ctx) {
   await changeModels(ctx, { name: positionals[0], set, unset, json });
 }
 
+const DEMO_REPO_USAGE = "nightqueue project demo-repo <project> [--set <path>] [--json]";
+
+// Prints a project's demo repository, as one line or as the JSON answer.
+function printDemoRepo(ctx, { project, demoRepo, json }) {
+  if (json) {
+    ctx.out(JSON.stringify({ project: project.name, demoRepo }));
+    return;
+  }
+  ctx.out(demoRepo ?? "none configured");
+}
+
+// Tells whether a directory is the project's own repository: its checkout, one of its worktrees, inside it or around it.
+function isOwnRepository(absolute, project) {
+  if (typeof project?.path !== "string" || !project.path) return false;
+  const own = mainCheckoutOf(normalizePath(project.path));
+  return mainCheckoutOf(absolute) === own || pathContains(own, absolute) || pathContains(absolute, own);
+}
+
+// The canonical path of a git repository that is not the project's own, or a refusal naming the path.
+function requireDemoRepository(path, project) {
+  const absolute = normalizePath(path);
+  if (!existsSync(absolute) || !statSync(absolute).isDirectory()) throw new UserError(`the demo repository \`${absolute}\` is not an existing directory`);
+  if (!existsSync(join(absolute, ".git"))) throw new UserError(`the demo repository \`${absolute}\` is not a git repository`);
+  if (isOwnRepository(absolute, project)) {
+    throw new UserError(`the demo repository \`${absolute}\` is the project's own repository: real pull requests are never opened there`);
+  }
+  return absolute;
+}
+
+// Runs `project demo-repo <project>` without `--set`: reads only.
+async function showDemoRepo(ctx, { name, json }) {
+  const store = await openRegistryReader(ctx.env);
+  if (!store) throw new UserError(`unknown project \`${name}\`; no project is registered yet`);
+  const project = await requireProject(store, name);
+  printDemoRepo(ctx, { project, demoRepo: await store.projects.demoRepo(project.id), json });
+}
+
+// Runs `project demo-repo <project> --set <path>`: the path validated before the one write, refused inside a job.
+async function changeDemoRepo(ctx, { name, path, json }) {
+  refuseHomeWriteInsideJob(ctx.env);
+  const store = await openRegistryWriter(ctx.env);
+  const project = await requireProject(store, name);
+  const demoRepoPath = requireDemoRepository(path, project);
+  printDemoRepo(ctx, { project, demoRepo: await store.projects.setDemoRepo(project.id, demoRepoPath), json });
+}
+
+// Runs `project demo-repo`: shows or sets the repository where verifications may open real pull requests.
+async function runDemoRepo(argv, ctx) {
+  const { values, positionals } = parseCommand(argv, { set: { type: "string" }, json: { type: "boolean" } });
+  checkArgs(positionals, { min: 1, max: 1, usage: DEMO_REPO_USAGE });
+  const json = values.json === true;
+  if (values.set === undefined) return await showDemoRepo(ctx, { name: positionals[0], json });
+  if (!values.set) throw new UserError(`\`--set\` needs a path; usage: ${DEMO_REPO_USAGE}`);
+  await changeDemoRepo(ctx, { name: positionals[0], path: values.set, json });
+}
+
 const SUBCOMMANDS = new Map([
   ["add", runAdd],
   ["list", runList],
@@ -314,6 +379,7 @@ const SUBCOMMANDS = new Map([
   ["move", runMove],
   ["integrations", runIntegrations],
   ["models", runModels],
+  ["demo-repo", runDemoRepo],
 ]);
 
 export const SUBCOMMAND_NAMES = Object.freeze([...SUBCOMMANDS.keys()]);

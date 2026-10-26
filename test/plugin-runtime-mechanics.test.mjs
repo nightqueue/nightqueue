@@ -7,7 +7,8 @@ import { fileURLToPath } from "node:url";
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
 const AGENTS = ["coder", "qa-guardian", "verifier", "triager", "explore", "architect"];
 const SKILL = join(ROOT, "plugin/skills/resolve/SKILL.md");
-const QA_PHASE = join(ROOT, "plugin/skills/resolve/references/qa-phase.md");
+const REFERENCES = join(ROOT, "plugin/skills/resolve/references");
+const QA_PHASE = join(REFERENCES, "qa-phase.md");
 const PROMPTS = join(ROOT, "plugin/skills/resolve/references/prompts");
 const REPOSITORY_LINE = "Repository: {{REPOSITORY}}";
 const PROJECT_LINE = "Project: {{PROJECT}}";
@@ -95,7 +96,9 @@ test("each Repository template of the skill carries a Project line", () => {
     const named = text.includes("{{>_footer}}") || (text.includes("project: {{PROJECT}}") && text.includes("repo_root: {{REPOSITORY}}"));
     assert.ok(named, `${name} names neither the repository nor the project`);
   }
-  for (const file of [SKILL, QA_PHASE]) {
+  const references = readdirSync(REFERENCES).filter((name) => name.endsWith(".md")).map((name) => join(REFERENCES, name));
+  assert.ok(references.includes(QA_PHASE), "the skill's top-level references were not found");
+  for (const file of [SKILL, ...references]) {
     assert.equal(readFileSync(file, "utf8").includes("Repository: [CWD PATH]"), false, `${file} still carries a hand-filled prompt template`);
   }
 });

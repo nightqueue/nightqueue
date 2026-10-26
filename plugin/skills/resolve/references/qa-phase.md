@@ -28,7 +28,7 @@ below replace the single launch.
 `target: "qa-analyst"`, then `Agent` with the answered `subagent_type`, `model` and `prompt`
 verbatim — header `🛡️ QA-GUARDIAN · ANALYST · ...`. It writes its round into `05-qa.md`.
 
-**Stage A gate:** run `nightqueue run check 05 --stage analyst` (the artifact gate, step 9),
+**Stage A gate:** run `nightqueue run check 05 --stage analyst` (the Phase 0 artifact gate),
 which reads the analyst's round for the sections of the analyst request's `## Deliver` — on
 `MISSING`, relaunch the analyst (🔁) once with the check's lines as `note`; if it persists, terminate and inform the user. It
 answers `QA-STAGE: provers|skip` and records the marker itself (`recorded: qa_stage_a <verdict>`)
@@ -36,11 +36,11 @@ BEFORE stage B — never by writing a file: this is what makes a resume skip the
 provers die halfway. On `QA-STAGE: skip` (zero runtime hypotheses), go straight to
 `nightqueue run check 05`.
 
-**Stage B — Provers (full):** launch **N qa-guardian in parallel, all in a single message**
-(the `subagent_type` and `model` `phase_prompt` answers, `mode: "bypassPermissions"`) — one
-per root group of the hypotheses (never one per symptom). The `description` of each prover's Agent call MUST start with
+**Stage B — Provers (full):** launch **N qa-guardian in parallel**
+(the `subagent_type` and `model` `phase_prompt` answers) — one
+per root group of the hypotheses (never one per symptom). The `description` of each prover's launch MUST start with
 `H<N> (group: <group>): ` — the cockpit identifies each prover lane and its verdict by that
-prefix. Single header of the phase: `🛡️ QA-GUARDIAN · PROVERS ×N · ...`. The prompt of each
+prefix. The prompt of each
 one: `phase_prompt` with `target: "qa-prover"` and `group` = the IDs/label of its same-root
 group, passed verbatim. Each prover appends its own round through `nightqueue run append 05`.
 A return without an `APPENDED:` line, or with an `INCONCLUSIVE` hypothesis, relaunches that
@@ -62,5 +62,5 @@ The aggregate verdict counts proof: any merged round with a non-`None` `## Prove
 `NEEDS FIX` or `BROKE` line → `NEEDS FIX`, else any `NEEDS DISCUSSION`, unreadable verdict,
 `INCONCLUSIVE` line or id with no prover line → `NEEDS DISCUSSION`, else `APPROVED`); with no prover
 round, open hypotheses → `NEEDS DISCUSSION`, and no hypothesis → the analyst's verdict. A `GATE:` line relaunches the QA once,
-from the analyst. The check (the artifact gate, step 9) reads the last round — the artifact
+from the analyst. The check (the Phase 0 artifact gate) reads the last round — the artifact
 Phase 6 and Phase 9 re-read via Read, its last `## Round`.

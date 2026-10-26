@@ -79,6 +79,7 @@
  * @typedef {object} RunsDomain
  * @property {(run: object) => Promise<object>} logPipelineRun
  * @property {(run: object, options: {since: string}) => Promise<object>} logPipelineRunOnce the replay of a queued run: writes it unless a run of the same project and slug was recorded since `since`, then answers `{skipped: true}`
+ * @property {(run: object) => Promise<object>} logPipelineRunUnlessSame writes the run unless the latest run of the same project and slug records the same outcome and phases; answers `{skipped: true}`
  * @property {(spec: object) => Promise<string|null>} latestRunOutcome the outcome of the latest run recorded for a project and slug at or after an instant, or null when there is none
  * @property {(spec: {projectId: string|null, slug: string, since?: string|null}) => Promise<{seq: number, phase: string, model: string|null, status: string, retry: boolean, reason: string|null}[]>} runTimeline the phases of the latest run of a project and slug (at or after `since` when given), in order, read-only; no run answers an empty list
  * @property {(telemetry: object) => Promise<object>} updateRunTelemetry fills the durations and the models the RUNTIME measured in the stream over the row the agent recorded: the measured value wins, the agent's survives only where there is none, and a run the agent never recorded is never inserted
@@ -142,6 +143,8 @@
  * @property {(id: string, value: object|null) => Promise<object|null>} setIntegrations writes the project's `integrations`; null or an empty object stores NULL, the project without integrations again
  * @property {(id: string) => Promise<object|null>} agents the project's agent model overrides (`{ <agent>: { model } }`, kept under `agents` in the same JSON, never shown by `integrations`); null when it has none
  * @property {(id: string, value: object|null) => Promise<object|null>} setAgents writes the project's agent model overrides, keeping its integrations; null or an empty object removes them
+ * @property {(id: string) => Promise<string|null>} demoRepo the project's demo repository path (`verification.demoRepo` in the same JSON, never shown by `integrations`); null when none is configured
+ * @property {(id: string, value: string) => Promise<string|null>} setDemoRepo writes the project's demo repository path, keeping every other setting
  * @property {(cwd: string) => Promise<object|null>} at the project whose checkout contains the directory
  * @property {(orgId: string) => Promise<object[]>} ofOrg
  * @property {(spec: {name: string, path: string|null, orgId: string, key?: string|null}) => Promise<object>} add the key asked for, or a free one derived from the name
@@ -259,7 +262,7 @@ export const STORE_CONTRACT = Object.freeze({
     "listCloses",
     "lastLogResults",
   ],
-  runs: ["logPipelineRun", "logPipelineRunOnce", "updateRunTelemetry", "latestRunOutcome", "runTimeline"],
+  runs: ["logPipelineRun", "logPipelineRunOnce", "logPipelineRunUnlessSame", "updateRunTelemetry", "latestRunOutcome", "runTimeline"],
   lessons: [
     "saveLesson",
     "getLesson",
@@ -277,7 +280,7 @@ export const STORE_CONTRACT = Object.freeze({
   memory: ["saveMemory", "saveMemoryDeduped", "deleteMemory","recentMemories", "searchMemories", "memoryByKey", "recallMemories"],
   index: ["saveProjectIndex", "fillProjectIndex", "recallProjectIndex"],
   orgs: ["list", "byName", "byId", "add", "rename", "setKey", "suggestKey", "keyAliases", "remove"],
-  projects: ["list", "byName", "byId", "integrations", "setIntegrations", "agents", "setAgents", "at", "ofOrg", "add", "rename", "setKey", "suggestKey", "keyAliases", "move", "remove", "footprint", "purge"],
+  projects: ["list", "byName", "byId", "integrations", "setIntegrations", "agents", "setAgents", "demoRepo", "setDemoRepo", "at", "ofOrg", "add", "rename", "setKey", "suggestKey", "keyAliases", "move", "remove", "footprint", "purge"],
   db: ["files", "quickCheck", "quickCheckMainAlone", "integrityCheck", "checkpointTruncate"],
   "": ["health", "connect", "close", "checkpoint", "requireCurrentSchema"],
 });
@@ -318,6 +321,7 @@ export const READ_ONLY_METHODS = Object.freeze([
   "projects.byId",
   "projects.integrations",
   "projects.agents",
+  "projects.demoRepo",
   "projects.at",
   "projects.ofOrg",
   "projects.keyAliases",

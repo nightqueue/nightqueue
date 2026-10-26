@@ -697,6 +697,9 @@ function analystFacts(ctx) {
   return { verdict: ctx.verdict, qaStage: firstItem(ctx.text, "## Break hypotheses") === null ? "skip" : "provers" };
 }
 
+// The run files a check may read besides its own artifact: the request, the triage, the explore map and the plan.
+export const CHECK_CONTEXT_FILES = Object.freeze(["00-brief.md", "01-triage.md", "02-explore.md", "03-plan.md"]);
+
 // Evaluates the artifact of one phase (or the analyst stage of check 05) against the check contract; `texts` maps each run file name to its content, `state` is the run's state.json.
 export function evaluateCheck({ check, stage = null, texts = {}, state = null, gaps = [] }) {
   const artifact = checkedArtifact(check, stage);

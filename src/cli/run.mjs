@@ -3,7 +3,7 @@ import { basename, dirname, join, resolve } from "node:path";
 import { UserError } from "../config/errors.mjs";
 import { writeFileAtomic } from "../config/store.mjs";
 import { FILE_LIST } from "../queue/file-list.mjs";
-import { evaluateCheck, fileListResult, repairedLine, roundDefectParts } from "../queue/check-contract.mjs";
+import { CHECK_CONTEXT_FILES, evaluateCheck, fileListResult, repairedLine, roundDefectParts } from "../queue/check-contract.mjs";
 import { PHASE_ARTIFACTS, withClosedFence } from "../queue/phase-artifacts.mjs";
 import { defaultGitImpl } from "../queue/preflight.mjs";
 import { consolidationNumbersOf, consolidationOf } from "../queue/qa-rounds.mjs";
@@ -131,9 +131,6 @@ function checkFileList(run, path, text, ctx) {
   return "GENERATED";
 }
 
-// The run files a check may read besides its own artifact: the request, the triage, the explore map and the plan.
-const CONTEXT_FILES = ["00-brief.md", "01-triage.md", "02-explore.md", "03-plan.md"];
-
 // Writes a round artifact atomically, naming what was being written when it fails.
 function writeRoundArtifact(path, text, what) {
   try {
@@ -188,7 +185,7 @@ function checkArtifact({ run, check, stage, state, ctx }) {
   }
   const repaired = artifact.rounds ? repairRoundArtifact(run, path, ctx.env) : null;
   const gaps = check === "05" && stage === null ? consolidateQa(run, path, ctx.env) : [];
-  const files = [...new Set([...CONTEXT_FILES, artifact.file])];
+  const files = [...new Set([...CHECK_CONTEXT_FILES, artifact.file])];
   const texts = Object.fromEntries(files.map((file) => [file, readArtifact(join(run.runDir, file))]));
   return { ...evaluateCheck({ check, stage, texts, state, gaps }), repaired };
 }

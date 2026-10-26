@@ -34,7 +34,7 @@ nightqueue run log --json     # the same table as the only thing on stdout
 nightqueue run commit --message-file msg.txt   # stage what the implementation listed, and commit it
 nightqueue run pr --template                   # print and record the PR template in effect
 nightqueue run pr --body-file body.md          # check the body, push and open the pull request
-nightqueue run start                           # the run's agent models, phases and tasks, as JSON
+nightqueue run start                           # the run's agent models and phases, as JSON
 nightqueue run start --routing                 # the default agent model table, as markdown
 nightqueue run publish --message-file msg.txt --body-file body.md      # check the body, commit once, push and open the PR
 nightqueue run report                          # the tables of the final report, from the run's own records
@@ -54,8 +54,8 @@ recorded (it never creates a worktree), `type` (the recorded one, else the reque
 one, else null), `commitType` (the requested one, else the recorded one, else null),
 `models` (`{<agent>: <model>}`, the defaults of `src/queue/routing.mjs` with the
 project's overrides of `project models` applied; a store that cannot be read answers
-the defaults and says so on stderr), the `phases` and `tasks` (every phase of the one
-pipeline), `prTemplate`, `commitConvention` and `commitTemplate`
+the defaults and says so on stderr), the `phases` (every phase of the one
+pipeline; there is no `tasks` field), `prTemplate`, `commitConvention` and `commitTemplate`
 (`{source, path, label}`: the commit message template in effect, first match wins - `config`,
 git's own `commit.template` read in the run's checkout when it names an existing file; `repo`,
 the repository's convention file (`.gitmessage` gives `path`); else `nightqueue`, the fallback
@@ -95,9 +95,22 @@ the runtime phase after a PASSED verification, a purely static change), a `Happy
 <first failing gate>` line decided by the fail-safe rule (a termination, a failed
 verdict, a re-run, a planned phase never recorded, a plan with `## Requires user
 confirmation`, no delivery recorded), and, when not happy, the execution table with
-the measured Time column and the `**Total:**`. The layout it fills is
+the measured Time column and the `**Total:**`, and last a `## Open items` section: one
+`- <item>` line per `dedicated ticket: yes` suggestion of the last QA round
+(`dedicated ticket: <suggestion>`) and per `OPEN:` line `run check 05`/`07` would print
+(`05 open: …`, `07 open: …`), or `- none`. The layout it fills is
 `plugin/skills/resolve/references/report.md`, rendered by the same template engine
-as `phase_prompt`; the orchestrator never reads that file, it pastes the output.
+as `phase_prompt`; the orchestrator never reads that file, it pastes the output. The
+command also records the run's telemetry (the row `pipeline_log` used to write), in both
+modes: the phases come from `state.json`, the outcome and the gate stop are derived from
+it (`pr_opened`, `local_commit` or `no_commit`; `user` for a gate, none for a
+`NO-CHANGE-NEEDED` run, else the terminated or failed phase), and inside a job a run
+already recorded in this attempt is not recorded twice; outside a job, or in a job with no
+recorded attempt start, a run whose last record carries the same outcome and phase count is
+not recorded twice. `--json` adds `openItems` and `recorded` (`recorded`, `already
+recorded`, `queued` when the database is unavailable, or `not recorded: <reason>`). A failed
+record is the fixed open item `the run was not recorded in the telemetry` (the reason stays
+only in `recorded`), never a non-zero exit.
 
 `run check <NN> [--stage analyst]` is the artifact gate of a phase: it reads
 `<RUN_DIR>/<NN-phase>.md` and prints `OK` or `MISSING: <sections>` - the
@@ -360,6 +373,8 @@ nightqueue project integrations api unset <kind>.<key> ...         # the last ke
 nightqueue project models api [--json]             # one <agent>=<model> (default|project) line per agent
 nightqueue project models api --set coder=sonnet   # the project's coder runs on sonnet; --set repeats
 nightqueue project models api --unset coder        # back to the default model; --unset repeats
+nightqueue project demo-repo api [--json]          # the demo repository, or "none configured"
+nightqueue project demo-repo api --set ../demo     # where verifications may open real pull requests
 
 echo "$SENTRY_AUTH_TOKEN" | nightqueue connection add sn --type sentry --set org=acme [--set url=https://sentry.example.com]
 nightqueue connection test sn                      # prints org=<slug>, never the token
@@ -444,6 +459,19 @@ the project's settings under `agents.<agent>.model`, apart from what `project in
 shows and keeps (a `set`/`unset` of integrations never drops it). `phase_prompt` answers the
 resolved `model` for each agent and `run start` answers them under `models`. `--set` and
 `--unset` are refused from inside a job.
+
+**Project demo repository.** `project demo-repo <project> [--set <path>] [--json]` shows
+or sets the only repository where a verification may create, merge or close a real pull
+request. With no option it prints the path or `none configured`; `--json` gives
+`{project, demoRepo}` (`null` when none). `--set` resolves the path against the current
+directory and refuses one that is not an existing directory, not a git repository, or the
+project's own repository (its checkout, a worktree of it, a directory inside it or around
+it); it is refused from inside a
+job, and the operator agent may not run it. The value is stored in the project's settings
+under `verification.demoRepo`, kept by `project models` and `project integrations` writes
+and never shown by `project integrations`. The verifier, runtime and QA requests render
+it as `{{DEMO_REPO}}` (`none configured` without one: no real pull request, the scenario
+is reported as a gate).
 
 A path that starts with `-` has to come after `--` (`nightqueue init -- -weird-dir`),
 otherwise it is parsed as an unknown option and rejected.

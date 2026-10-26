@@ -52,7 +52,7 @@ function answerOf(result) {
 
 const EVERY_PHASE = ["triage", "explore", "architecture", "implementation", "qa", "verification", "runtime", "commit"];
 
-test("`run start` answers the run, its agent models, every phase and the tasks, and records the type and no tier", async (t) => {
+test("`run start` answers the run, its agent models, and every phase but no tasks, and records the type and no tier", async (t) => {
   const env = { ...makeQueue(t, "run-start-happy"), GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_SYSTEM: "/dev/null" };
   const id = boundJob(env);
 
@@ -70,7 +70,6 @@ test("`run start` answers the run, its agent models, every phase and the tasks, 
     "commitType",
     "models",
     "phases",
-    "tasks",
     "prTemplate",
     "commitConvention",
     "commitTemplate",
@@ -81,7 +80,7 @@ test("`run start` answers the run, its agent models, every phase and the tasks, 
   assert.equal(answer.commitType, "feat");
   assert.deepEqual(answer.models, { ...AGENT_MODELS });
   assert.deepEqual(answer.phases, EVERY_PHASE);
-  assert.deepEqual(answer.tasks, EVERY_PHASE);
+  assert.equal("tasks" in answer, false, "run start still answers tasks");
   assert.deepEqual(answer.prTemplate, { source: "nightqueue", label: "nightqueue (fallback)", headings: ["## Report", "## Cause", "## Changes", "## QA"] });
   assert.equal(typeof answer.commitConvention, "string");
   assert.deepEqual(answer.commitTemplate, { source: "nightqueue", path: null, label: "nightqueue (fallback)" });
@@ -140,7 +139,7 @@ test("a bare `run start` answers every phase with no type nor commit type, and r
   assert.equal(answer.commitType, null);
   assert.deepEqual(answer.models, { ...AGENT_MODELS });
   assert.deepEqual(answer.phases, EVERY_PHASE);
-  assert.deepEqual(answer.tasks, EVERY_PHASE);
+  assert.equal("tasks" in answer, false, "run start still answers tasks");
   const state = readRunState({ projectId: ensureProject(env, "alpha"), slug: SLUG, env });
   assert.equal("tier" in state, false, "run start recorded a tier");
   assert.equal("type" in state, false, "run start recorded a type it was never given");

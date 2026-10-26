@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
@@ -50,6 +50,20 @@ test("each pipeline-independent agent file names nothing of the pipeline", () =>
       assert.equal(text.includes(term), false, `${agent} names the pipeline: ${term}`);
     }
   }
+});
+
+const LOCAL_PATH = /~\/(?!\.claude\/)|\/Users\/|\/home\/|nstest-demo/;
+
+// No agent file names a path of one machine: a home-relative path (the host's own `~/.claude/` aside), a user directory or the old demo checkout.
+test("no agent file names a local path", () => {
+  const agents = readdirSync(join(ROOT, "plugin/agents")).filter((name) => name.endsWith(".md"));
+  assert.ok(agents.length >= INDEPENDENT.length, "no agent files found");
+  for (const name of agents) {
+    const hits = readFileSync(join(ROOT, "plugin/agents", name), "utf8").split("\n").filter((line) => LOCAL_PATH.test(line));
+    assert.deepEqual(hits, [], `${name} names a local path`);
+  }
+  assert.equal(LOCAL_PATH.test("run it in `~/Dev/nstest-demo`"), true, "the pattern misses a home path");
+  assert.equal(LOCAL_PATH.test("secrets live in `~/.claude/`"), false, "the pattern refuses the host's config dir");
 });
 
 const EVIDENCE_CAP = "When the request forbids writing or running, the evidence level is capped at 2 and the verdict says so.";

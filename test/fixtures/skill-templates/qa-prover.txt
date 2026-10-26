@@ -33,6 +33,8 @@ One line per hypothesis: `H<n>: BROKE (PROVEN) | HELD (REFUTED) | INCONCLUSIVE �
 ## Verdict
 NEEDS FIX (any PROVEN) | NEEDS DISCUSSION (any INCONCLUSIVE) | APPROVED
 
+Demo repository: [DEMO REPO — the project's configured path, or `none configured`] — the only repository where a verification may create, merge or close a real pull request; `none configured` → no real pull request: report that scenario as a gate.
+
 Repository: [CWD PATH]
 Project: [PROJECT — the name on the Project: line of the prompt]
 [Include the three lines only if [PLUGIN_ROOT] resolved:]

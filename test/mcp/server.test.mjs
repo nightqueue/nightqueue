@@ -573,7 +573,7 @@ test("memory_recall answers empty and pipeline_log holds the contract of its enu
     }),
   );
   assert.equal(logged.ok, true);
-  assert.equal(logged.phases, 2);
+  assert.equal(logged.phases, 0, "the sent phases were recorded instead of the run's state.json ones");
   assert.ok(Number.isInteger(logged.runId));
 
   const rejected = await client.callTool({

@@ -50,6 +50,7 @@ This request also delivers, right after ## Proven breaks (the artifact gate requ
 and writes ## Generated PoCs as `None — this request writes no runtime PoC`.
 
 {{>_context}}
+{{>_demo-repo}}
 {{>_shell-rule}}
 
 {{>_footer}}

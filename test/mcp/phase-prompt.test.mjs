@@ -13,7 +13,7 @@ import { recordRunFields } from "../../src/queue/run-state.mjs";
 import { RUNTIME_PROMPT_RE } from "../../src/queue/narrate.mjs";
 import { PHASE_ARTIFACTS, QA_ANALYST_STAGE } from "../../src/queue/phase-artifacts.mjs";
 import { renderSkillTemplate } from "../../src/queue/skill-template.mjs";
-import { setProjectAgents } from "../../src/memory/registry.mjs";
+import { setProjectAgents, setProjectDemoRepo } from "../../src/memory/registry.mjs";
 import { AGENT_MODELS } from "../../src/queue/routing.mjs";
 import { ensureProject, makeHome, makeProject, projectIdOf, projectPathOf } from "../../test-support/memory.mjs";
 
@@ -57,6 +57,7 @@ const FULL = {
   GROUP_ID: "h1-h2-group-parsing-0a1b2c3d",
   ROUND: "2",
   FIX_LOOP: "1",
+  DEMO_REPO: "/demo/checkout",
 };
 
 // The template each golden fixture was moved into; the attack brief lives inside both QA prompts that paste it.
@@ -410,6 +411,20 @@ test("the verifier renders its one template for a run with no tier recorded", as
   assert.equal(/\bTier\b/.test(answer.prompt), false, answer.prompt);
 });
 
+test("the verification and QA requests render the project's demo repository, or `none configured` without one", async (t) => {
+  const { env, home, run } = makeRun(t, "phase-prompt-demo-repo");
+  const demoLine = (path) => `Demo repository: ${path} — the only repository where a verification may create, merge or close a real pull request;`;
+  for (const target of ["verifier", "runtime", "qa-lite", "qa-analyst", "qa-prover"]) {
+    const { prompt } = await promptOf(target, { run, env });
+    assert.ok(prompt.includes(demoLine("none configured")), `${target}: ${prompt}`);
+  }
+  setProjectDemoRepo(openDb(home), { id: run.projectId, value: "/demo/checkout" });
+  for (const target of ["verifier", "qa-lite"]) {
+    const { prompt } = await promptOf(target, { run, env });
+    assert.ok(prompt.includes(demoLine("/demo/checkout")), `${target}: ${prompt}`);
+  }
+});
+
 test("`phase_prompt` refuses a run whose Brief was never written, naming the path and `run check 01`", async (t) => {
   const { env, run, dir } = makeRun(t, "phase-prompt-no-brief", { brief: false });
   for (const target of ["explore", "architect", "coder"]) {
@@ -567,14 +582,15 @@ test("a QA target the plan's QA mode does not ask is rendered anyway, with an op
   assert.deepEqual(modeItem(await promptOf("coder", { run, env })), [], "a non-QA target never reads the mode");
 });
 
-test("the runtime lane may write another artifact of the run, which then has no phase gate", async (t) => {
+test("an `artifact` argument from an older plugin is ignored: the runtime lane always writes 07-runtime.md under its gate", async (t) => {
   const { env, run, dir } = makeRun(t, "phase-prompt-runtime");
   const measure = await phasePrompt({ target: "runtime", artifact: "00-main-measure.md" }, { run, env });
-  assert.equal(measure.artifact, join(dir, "00-main-measure.md"));
-  assert.equal(measure.check, null);
-  assert.ok(measure.prompt.includes(`ARTIFACT_PATH: ${join(dir, "00-main-measure.md")} (append-only: this launch is ## Round 1)\n`));
-  await assert.rejects(phasePrompt({ target: "runtime", artifact: "../x.md" }, { run, env }), /invalid `artifact`/);
-  await assert.rejects(phasePrompt({ target: "coder", artifact: "x.md" }, { run, env }), /only accepted with `target: "runtime"`/);
+  assert.equal(measure.artifact, join(dir, "07-runtime.md"));
+  assert.equal(measure.check, "07");
+  assert.ok(measure.prompt.includes(`ARTIFACT_PATH: ${join(dir, "07-runtime.md")} (append-only: this launch is ## Round 1)\n`));
+  assert.ok(!measure.prompt.includes("00-main-measure"));
+  const coder = await phasePrompt({ target: "coder", artifact: "x.md" }, { run, env });
+  assert.equal(coder.artifact, join(dir, "04-implementation.md"));
   await assert.rejects(phasePrompt({ target: "qa-prover" }, { run, env }), /`group` is required/);
 });
 
