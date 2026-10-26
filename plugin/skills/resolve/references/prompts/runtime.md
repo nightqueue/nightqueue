@@ -1,5 +1,5 @@
 ## File handoff (contract — read first)
-ARTIFACT_PATH: {{RUN_DIR}}/{{ARTIFACT}} (append-only: this launch is ## Round {{ROUND}})
+ARTIFACT_PATH: {{RUN_DIR}}/07-runtime.md (append-only: this launch is ## Round {{ROUND}})
 Read before acting (via Read): {{RUN_DIR}}/01-triage.md (## Validated brief, ## Diagnosis on a bug) ·
 {{RUN_DIR}}/03-plan.md (## Implementation plan, ## Usage coverage when present) · {{RUN_DIR}}/04-implementation.md ·
 {{RUN_DIR}}/06-verification.md (its last `## Round`)
@@ -13,11 +13,11 @@ Type: {{TYPE}}
 Bug account: {{BUG_ACCOUNT}}
 Expected outcome: {{EXPECTED_OUTCOME}}
 
-Steps 1–2.7 of your method already ran in the verification before this lane: prove the change by running it (your `## Proving by execution`), cases (a)–(d2) — gate (d) runs when Type = feature/refactor, gate (d2) when Type = bug/error with `## Usage coverage` in `03-plan.md`; every manual CLI/MCP run goes through `nightqueue sandbox <cmd>`. When ARTIFACT_PATH is `00-main-measure.md` (main measured after a merge) there is no diff: run the operator's scenarios and write `Diff applies plan: n/a`.
+Steps 1–2.7 of your method already ran in the verification before this lane: prove the change by running it (your `## Proving by execution`), cases (a)–(d2) — gate (d) runs when Type = feature/refactor, gate (d2) when Type = bug/error with `## Usage coverage` in `03-plan.md`; every manual CLI/MCP run goes through `nightqueue sandbox <cmd>`.
 
 ## Deliver
 
-Write ARTIFACT_PATH as this launch's `## Round`, in this order; `## Runtime verdict` is mandatory (`nightqueue run check 06.5`).
+Write ARTIFACT_PATH as this launch's `## Round`, in this order; `## Runtime verdict` is mandatory (`nightqueue run check 07`).
 
 ## Runtime verdict
 Its first line is exactly one of:
@@ -36,6 +36,7 @@ Then the commands run, each with its evidence (structure only — never a token/
 Evidence files go under `{{RUN_DIR}}/evidence/`, named `api-<name>.log`, `browser-<name>.png|.log` or `emulator-<name>.png|.log`.
 
 {{>_job-limits}}
+{{>_demo-repo}}
 {{>_shell-rule}}
 
 {{>_footer}}

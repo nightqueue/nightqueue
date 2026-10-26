@@ -24,6 +24,7 @@ function recordLaunch() {
     jobId: process.env.NIGHTQUEUE_JOB_ID ?? null,
     project: process.env.NIGHTQUEUE_PROJECT ?? null,
     operatorPid: process.env.NIGHTQUEUE_OPERATOR_PID ?? null,
+    operatorSession: process.env.NIGHTQUEUE_OPERATOR_SESSION ?? null,
   };
   appendFileSync(path, `${JSON.stringify(call)}\n`);
 }

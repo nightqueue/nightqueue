@@ -9,8 +9,6 @@ import {
   PRIORITIES,
   queueJob,
   removeOrigin,
-  TIERS,
-  type Tier,
 } from "../lib/addJob";
 import { useProjects } from "../lib/api";
 import { runnersOnlineLabel } from "../lib/queue";
@@ -18,7 +16,7 @@ import type { JobOrigin } from "../lib/types";
 import { useEscape } from "../lib/useEscape";
 import { useSubmit } from "../lib/useSubmit";
 import { ProjectPicker } from "./ProjectPicker";
-import { Button, FIELD_CLASS, Segmented } from "./ui";
+import { Button, FIELD_CLASS } from "./ui";
 
 interface AddJobDrawerProps {
   runnersOnline: number;
@@ -33,8 +31,6 @@ interface AddJobDrawerProps {
 type SetField = <K extends keyof AddJobForm>(key: K, value: AddJobForm[K]) => void;
 
 const INPUT_CLASS = `${FIELD_CLASS} min-h-9 w-full px-2.5`;
-
-const TIER_OPTIONS = TIERS.map((tier) => ({ value: tier, label: tier }));
 
 // A labelled field of the drawer, with an optional dim aside after the label.
 function Field({ id, label, aside, children }: { id?: string; label: string; aside?: string; children: ReactNode }) {
@@ -98,23 +94,18 @@ function BriefField({ form, set }: { form: AddJobForm; set: SetField }) {
   );
 }
 
-// Tier and priority of the job.
-function RunFields({ form, set }: { form: AddJobForm; set: SetField }) {
+// The priority of the job.
+function PriorityField({ form, set }: { form: AddJobForm; set: SetField }) {
   return (
-    <>
-      <Field label="Tier" aside="(auto = the pipeline decides)">
-        <Segmented<Tier> label="tier" options={TIER_OPTIONS} value={form.tier} onChange={(tier) => set("tier", tier)} />
-      </Field>
-      <Field id="add-priority" label="Priority">
-        <select id="add-priority" className={INPUT_CLASS} value={form.priority} onChange={(event) => set("priority", Number(event.target.value))}>
-          {PRIORITIES.map((priority) => (
-            <option key={priority} value={priority}>
-              {priority === 1 ? "1 · urgent" : priority === DEFAULT_PRIORITY ? `${priority} · default` : priority}
-            </option>
-          ))}
-        </select>
-      </Field>
-    </>
+    <Field id="add-priority" label="Priority">
+      <select id="add-priority" className={INPUT_CLASS} value={form.priority} onChange={(event) => set("priority", Number(event.target.value))}>
+        {PRIORITIES.map((priority) => (
+          <option key={priority} value={priority}>
+            {priority === 1 ? "1 · urgent" : priority === DEFAULT_PRIORITY ? `${priority} · default` : priority}
+          </option>
+        ))}
+      </select>
+    </Field>
   );
 }
 
@@ -129,7 +120,7 @@ function CallPreview({ args, runnersOnline, problem }: { args: Record<string, un
   );
 }
 
-// The Add job drawer: one form (project, brief, tier, priority, optional origin); queues with `queue_add`, optionally starting a runner.
+// The Add job drawer: one form (project, brief, priority, optional origin); queues with `queue_add`, optionally starting a runner.
 export function AddJobDrawer({ runnersOnline, onClose, onQueued, ...initial }: AddJobDrawerProps) {
   const projects = useProjects();
   const [draft, setDraft] = useState<AddJobForm>(() => initialDraft(initial));
@@ -157,7 +148,7 @@ export function AddJobDrawer({ runnersOnline, onClose, onQueued, ...initial }: A
           </Field>
           <OriginChips origins={form.origin} onRemove={(index) => setDraft(removeOrigin(form, index))} />
           <BriefField form={form} set={set} />
-          <RunFields form={form} set={set} />
+          <PriorityField form={form} set={set} />
           <CallPreview args={args} runnersOnline={runnersOnline} problem={problem} />
         </div>
         <div className="flex flex-wrap gap-2 border-t border-line px-5 py-4">

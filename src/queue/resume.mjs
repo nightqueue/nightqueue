@@ -17,10 +17,15 @@ export const RESUME_PHASE_ORDER = [
 ];
 
 export const RESUME_SCHEMA_VERSION = 1;
-export const TERMINAL_VERDICT_LABELS = ["NO-CHANGE-NEEDED", "NOT-REPRODUCIBLE", "NEEDS-CLARIFICATION"];
+export const TERMINAL_VERDICT_LABELS = ["NO-CHANGE-NEEDED", "NOT-REPRODUCIBLE", "NEEDS-CLARIFICATION", "PROPOSE-ALTERNATIVE"];
 export const DEFAULT_MAX_RESUMES = 1;
+// The artifacts only a run started under the old phase numbering holds, and the one answer a resume of such a run gets.
+export const PRE_RENUMBERING_ARTIFACTS = ["06-runtime.md", "05a-qa-analyst.md"];
+export const PRE_RENUMBERING_REFUSAL = "run started before the renumbering; retry with `fresh`";
 
 const SEGMENT_RE = /^[A-Za-z0-9][A-Za-z0-9._+-]{0,79}$/;
+// The one artifact a QA stage A marker may name: the analyst's round lives in the QA's own artifact.
+const QA_ARTIFACT = "05-qa.md";
 
 // Tells whether a value coming from the database is safe as a single path segment.
 export function isSafeSegment(value) {
@@ -52,11 +57,19 @@ function hasTerminalVerdict(entry) {
   return TERMINAL_VERDICT_LABELS.some((label) => normalized === label || normalized.startsWith(`${label}-`));
 }
 
-// Artifact of the QA stage A marker; an invalid shape is ignored, never invalidating the whole state.
-function qaStageArtifact(parsed) {
+// The `at` of the last recorded entry of a phase, or an empty text when it has none.
+function lastPhaseAt(phases, phase) {
+  const entry = (Array.isArray(phases) ? phases : []).findLast((candidate) => candidate?.phase === phase);
+  return typeof entry?.at === "string" ? entry.at : "";
+}
+
+// Whether the QA stage A marker still holds: on `05-qa.md` and newer than the last implementation; an invalid shape or a missing `at` never does.
+function qaStageAHolds(parsed) {
   const marker = parsed?.qaStageA;
-  if (!marker || typeof marker !== "object" || Array.isArray(marker)) return null;
-  return typeof marker.artifact === "string" && marker.artifact.trim() ? marker.artifact.trim() : null;
+  if (!marker || typeof marker !== "object" || Array.isArray(marker)) return false;
+  if (marker.artifact !== QA_ARTIFACT || typeof marker.at !== "string" || marker.at === "") return false;
+  const implementedAt = lastPhaseAt(parsed.phases, "implementation");
+  return implementedAt !== "" && marker.at > implementedAt;
 }
 
 // Refusal to resume, always with the same shape as an acceptance.
@@ -71,7 +84,7 @@ function lastCompletedPhase(phases) {
   for (const candidate of phases) {
     const position = RESUME_PHASE_ORDER.indexOf(candidate?.phase);
     if (position < 0) return null;
-    if (position > index) {
+    if (position >= index) {
       index = position;
       entry = candidate;
     }
@@ -174,7 +187,7 @@ export function decideResume({ state, maxResumes = DEFAULT_MAX_RESUMES } = {}) {
     {
       resume: true,
       fromPhase,
-      fromStage: fromPhase === "qa" && qaStageArtifact(parsed) ? "qa-stage-b" : null,
+      fromStage: fromPhase === "qa" && qaStageAHolds(parsed) ? "qa-stage-b" : null,
       reuseWorktree: Boolean(parsed.branch || parsed.worktree),
       reason: "resume",
       resumeCount: resumeCount + 1,
@@ -210,6 +223,13 @@ export function resumeHandoff({ job, resume, state, env = process.env } = {}) {
 // Tells whether a run can be addressed on disk at all: a project that is an id and a slug that is one safe segment.
 export function isRunPath(projectId, slug) {
   return isId(projectId) && isSafeSegment(slug);
+}
+
+// The first artifact of the old phase numbering present in a run directory, or null (an unsafe path included); it never throws.
+export function preRenumberingArtifact({ projectId, slug, env = process.env } = {}) {
+  if (!isRunPath(projectId, slug)) return null;
+  const dir = runDir(projectId, slug, env);
+  return PRE_RENUMBERING_ARTIFACTS.find((file) => existsSync(join(dir, file))) ?? null;
 }
 
 // Reads the state.json of a run; an unsafe segment, a missing file or broken JSON all return null.

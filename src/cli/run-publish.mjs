@@ -1,14 +1,14 @@
-import { existsSync, readFileSync } from "node:fs";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { UserError } from "../config/errors.mjs";
-import { ghPrCreate } from "../host/gh.mjs";
+import { ghPrCreate, ghPrEditBody, ghPrUrlOfBranch } from "../host/gh.mjs";
 import { runGit } from "../host/git.mjs";
 import { commitTypeOf, publishedBranchName } from "../queue/branch-name.mjs";
 import { FILE_LIST, listedFiles } from "../queue/file-list.mjs";
 import { publishedBodyFile } from "../queue/pr-footer.mjs";
 import { readRunState } from "../queue/resume.mjs";
-import { recordOutcome, recordPrUrl, recordRunFields } from "../queue/run-state.mjs";
+import { recordOutcome, recordPhaseDone, recordPrUrl, recordRunFields, RUNTIME_AUTHOR } from "../queue/run-state.mjs";
 import { checkArgs, parseCommand } from "./args.mjs";
+import { commitMessageProblems, conventionFile, CONVENTIONAL_SUBJECT_RE, findCommitTemplate } from "./commit-template.mjs";
 import { bodyProblems } from "./pr-body.mjs";
 import { lockfileRule } from "./lockfile-rule.mjs";
 import { findPrTemplate } from "./pr-template.mjs";
@@ -20,6 +20,8 @@ export const PUBLISH_USAGE =
 
 const BASE_REFS = ["refs/remotes/origin/HEAD", "origin/main", "origin/master", "main", "master"];
 
+const ALREADY_EXISTS = /already exists/i;
+
 // Directories the pipeline never commits from, whoever asked for it: the host's own configuration and the scratch space of the run.
 const NEVER_COMMITTED_DIRS = [".claude", "tmp"];
 
@@ -27,25 +29,6 @@ const NEVER_COMMITTED_DIRS = [".claude", "tmp"];
 export const EXTRA_IS_NOT_AN_OVERRIDE =
   "`--extra` adds files to the list, it never overrides this refusal: stop here and record it as an open item of the report, " +
   "instead of calling the command again with the same path";
-
-// Files a repository declares its commit convention in, the most explicit first.
-const CONVENTION_FILES = [
-  "commitlint.config.js",
-  "commitlint.config.cjs",
-  "commitlint.config.mjs",
-  "commitlint.config.ts",
-  ".commitlintrc",
-  ".commitlintrc.json",
-  ".commitlintrc.js",
-  ".commitlintrc.yml",
-  ".commitlintrc.yaml",
-  ".husky",
-  ".gitmessage",
-  "CONTRIBUTING.md",
-  "CONTRIBUTING",
-];
-
-const CONVENTIONAL_SUBJECT_RE = /^[a-z]+(\([^)]*\))?!?: \S/;
 
 // A `Refs:` trailer line, a reserved trailer `run commit` refuses in the agent's message.
 const REFS_TRAILER = /^Refs\s*:/i;
@@ -114,17 +97,6 @@ export function refusedLines(refused) {
   return [`REFUSED: ${refused.map((entry) => `${entry.path} (${entry.reason})`).join(", ")}`, EXTRA_IS_NOT_AN_OVERRIDE];
 }
 
-// The file of the repository that declares how a commit message is written, or null when no file does.
-function conventionFile(cwd) {
-  const declared = CONVENTION_FILES.find((name) => existsSync(join(cwd, name)));
-  if (declared) return declared;
-  try {
-    return "commitlint" in JSON.parse(readFileSync(join(cwd, "package.json"), "utf8")) ? "package.json (commitlint)" : null;
-  } catch {
-    return null;
-  }
-}
-
 // The shape the last commits of the repository really have, which is what the message must look like when no file declares it.
 function inferredConvention(cwd, env) {
   const subjects = outputLines(runGit({ args: ["log", "--format=%s", "-30"], cwd, env }));
@@ -184,6 +156,12 @@ function problemLine(problem) {
 // The violation lines of a pull request body against the template in effect.
 export function bodyProblemLines({ run, template, body }) {
   return bodyProblems({ body, template, evidenceDir: join(run.runDir, "evidence"), slug: run.slug, jobId: run.jobId }).map(problemLine);
+}
+
+// One `REJECTED: commit message — <reason>` line per violation of the message against the commit template in effect.
+export function messageProblemLines(cwd, messageFile, env) {
+  const message = readRequiredFile(messageFile, "--message-file");
+  return commitMessageProblems(message, findCommitTemplate(cwd, env)).map((reason) => `REJECTED: commit message — ${reason}`);
 }
 
 // The first ref among the remote and local default branches that exists in the worktree: the base the branch is compared with.
@@ -251,12 +229,29 @@ function recordPublishedBranch({ run, branch, ctx }) {
 function publishBranch({ run, cwd, branch, title, bodyFile, env }) {
   const pushed = runGit({ args: ["push", "-u", "origin", branch], cwd, env });
   if (!pushed.ok) throw new UserError(`git could not push \`${branch}\`: ${failureLine(pushed)}`);
+  const url = openOrUpdatePr({ branch, title, bodyFile, cwd, env });
+  const recorded = recordOutcome({ projectId: run.projectId, slug: run.slug, status: "done", env });
+  const prRecorded = recordPrUrl({ projectId: run.projectId, slug: run.slug, prUrl: url, prTitle: title, env });
+  return { url, recorded, prRecorded };
+}
+
+// The URL of the pull request of the branch: the one gh opens, or the one the branch already has, whose body is then replaced.
+function openOrUpdatePr({ branch, title, bodyFile, cwd, env }) {
   const created = ghPrCreate({ title, bodyFile, head: branch, cwd, env });
   if (created.missing) throw new UserError(`\`${branch}\` is pushed, but the GitHub CLI is not installed: open the pull request by hand`);
-  if (!created.ok) throw new UserError(`\`${branch}\` is pushed, but gh could not open the pull request: ${failureLine(created)}`);
-  const recorded = recordOutcome({ projectId: run.projectId, slug: run.slug, status: "done", env });
-  const prRecorded = recordPrUrl({ projectId: run.projectId, slug: run.slug, prUrl: created.url, prTitle: title, env });
-  return { url: created.url, recorded, prRecorded };
+  if (created.ok) return created.url;
+  if (!ALREADY_EXISTS.test(created.stderr)) throw new UserError(`\`${branch}\` is pushed, but gh could not open the pull request: ${failureLine(created)}`);
+  const existing = ghPrUrlOfBranch({ head: branch, cwd, env });
+  if (!existing.url) throw new UserError(`\`${branch}\` is pushed and gh says its pull request exists, but no pull request with that head branch was found: ${failureLine(existing)}`);
+  const edited = ghPrEditBody({ url: existing.url, bodyFile, cwd, env });
+  if (!edited.ok) throw new UserError(`\`${branch}\` is pushed, but gh could not update its pull request ${existing.url}: ${failureLine(edited)}`);
+  return existing.url;
+}
+
+// Records the commit phase on the run once its pull request is open; a refused record is reported, never fatal.
+function recordCommitPhase(run, ctx) {
+  const recorded = recordPhaseDone({ projectId: run.projectId, slug: run.slug, phase: "commit", verdict: "PR opened", by: RUNTIME_AUTHOR, env: ctx.env });
+  if (recorded.status !== "written") ctx.err(`nightqueue: the commit phase was not recorded on the run: ${recorded.reason}`);
 }
 
 // Removes the worktree of the run from the checkout that owns it; the pull request is already open, so a refusal is reported, never fatal.
@@ -278,6 +273,7 @@ export async function openPullRequest({ run, cwd, bodyFile, body, title, removeW
   ctx.out(`PR: ${url ?? "opened"}`);
   if (recorded.status !== "written") ctx.err(`nightqueue: the run was not recorded as done: ${recorded.reason}`);
   if (prRecorded.status !== "written") ctx.err(`nightqueue: the pull request was not recorded on the run: ${prRecorded.reason}`);
+  recordCommitPhase(run, ctx);
   ctx.out(`WORKTREE: ${cwd}`);
   if (removeWorktree) ctx.out(worktreeRemoval(run, cwd, ctx.env));
   return 0;
@@ -334,7 +330,7 @@ function publishTitle(given, body, messageFile) {
   return prTitle(subject, body);
 }
 
-// Runs `run publish`: checks the body, commits the list once, refuses scratch files, then pushes and opens the pull request.
+// Runs `run publish`: checks the message and the body, commits the list once, refuses scratch files, then pushes and opens the pull request.
 export async function runPublish(argv, ctx) {
   const values = publishOptions(argv);
   const messageFile = requireMessageFile(values["message-file"], PUBLISH_USAGE);
@@ -343,7 +339,7 @@ export async function runPublish(argv, ctx) {
   const bodyFile = resolve(values["body-file"]);
   const body = readRequiredFile(bodyFile, "--body-file");
   const title = publishTitle(values.title, body, messageFile);
-  const problems = bodyProblemLines({ run, template: findPrTemplate(cwd), body });
+  const problems = [...messageProblemLines(cwd, messageFile, ctx.env), ...bodyProblemLines({ run, template: findPrTemplate(cwd), body })];
   if (problems.length > 0) return refuse(problems, ctx);
   const { listed } = listedFromArtifact(run, values["files-from"]);
   const { paths, refused } = stageable({ cwd, listed, extras: values.extra ?? [], env: ctx.env });

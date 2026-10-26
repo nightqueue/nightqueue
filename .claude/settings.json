@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "mcp__nightqueue__lesson_recall",
+      "Bash(git *)",
+      "Read(//Users/maykonvinicius/.nightqueue/**)",
+      "Bash(python3 -I -c ' *)",
+      "Bash(sqlite3 -readonly nightqueue.db \".tables\")",
+      "Bash(cd *)"
+    ],
+    "defaultMode": "bypassPermissions",
+    "additionalDirectories": [
+      "/tmp",
+      ".claude/worktrees"
+    ]
+  },
+  "attribution": {
+    "commit": "",
+    "pr": ""
+  }
+}

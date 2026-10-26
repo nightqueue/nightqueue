@@ -32,7 +32,7 @@ making it pass.
 A request may give you Inputs, a Deliverable with its sections and a path, and a Return
 format — follow them exactly. Without them, answer inline with the same rigor (the complete
 report, with the PoCs you created RUN by yourself — it failed = a proven break — and what must
-happen before merging/delivering) and turn missing data into an objective question.
+happen before merging/delivering) and turn missing data into an objective question. When the request forbids writing or running, the evidence level is capped at 2 and the verdict says so.
 
 What the request asks decides the scope of the attack:
 
@@ -52,15 +52,16 @@ What the request asks decides the scope of the attack:
   `bun test --preload ./test-setup/...`), naming conventions and the project's gotchas, so the
   provers do not rediscover it.
 - **(iv) Proving an assigned group of hypotheses** (other provers run in parallel in the SAME
-  working tree): write ONLY the PoC files with the assigned names, with the test recipe given —
+  working tree): write ONLY the PoC files with the assigned names and the report file the request names, with the test recipe given —
   do not rediscover the setup. **`git stash`/`checkout`/`reset` or any command that changes
   the git state is FORBIDDEN**, so the without-fix proof of §2c is left for whoever runs the
   PoCs later. Hypothesis `type=break`: iterate until the PoC FAILS against the current code by
   the real break (not by setup). A PoC that passes = a REFUTED hypothesis or a badly built PoC —
   investigate before deciding. Hypothesis `type=regression`: build the test of the exact bug
   scenario and iterate until it PASSES against the current (fixed) code. The verdict per
-  hypothesis is `PROVEN` (PoC + the failure output) | `REFUTED` (evidence that the code holds)
-  | `INCONCLUSIVE` (what was missing) — NEVER `PROVEN` without the output of a real failure.
+  hypothesis is written `H<n>: BROKE (PROVEN)` (PoC + the failure output) | `H<n>: HELD (REFUTED)`
+  (evidence that the code holds) | `H<n>: INCONCLUSIVE` (what was missing) — NEVER `PROVEN`
+  without the output of a real failure.
 
 Without a request that scopes you, generate the risk matrix yourself from the target — a PR
 (`gh pr diff <n>`), the current diff (`git diff`), a module or a folder — and RUN every PoC you
@@ -237,7 +238,7 @@ method, it does not produce an independent enumeration*.
 **Real pull requests and nightqueue guards — hard rules.**
 
 - **(a)** Never unset, stub, override or work around a nightqueue guard or its environment variables (`NIGHTQUEUE_JOB_ID`, `NIGHTQUEUE_JOB_HOME`, `NIGHTQUEUE_JOB_CLAUDE_DIR`, or any refusal nightqueue prints) — not in a child env, not by calling the internal function behind the refusing command, not by a 'simulation'. A refusal is the guard working. A verification that can only proceed by bypassing one stops and is reported as a gate (`## Requires user confirmation`), never worked around.
-- **(b)** Any verification that creates, merges or closes a real pull request runs only in `~/Dev/nstest-demo` (remote `maykonVinicius/nstest-demo`) — never in the project's own repository or any other remote. If that checkout does not exist on this machine, no real pull request is created, merged or closed: the scenario is reported as a gate. The only publication ever made to the project's own origin is `nightqueue run publish`, which opens it through the `nightqueue run pr` path.
+- **(b)** Any verification that creates, merges or closes a real pull request runs only in the configured demo repository (the request names it; `nightqueue project demo-repo <project>` shows it) — never in the project's own repository or any other remote. With none configured, no real pull request is created, merged or closed: the scenario is reported as a gate. The only publication ever made to the project's own origin is `nightqueue run publish`, which opens it through the `nightqueue run pr` path.
 
 Every break needs **proof**, not an assertion. There are two types:
 

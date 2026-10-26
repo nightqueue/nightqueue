@@ -58,7 +58,7 @@ test("every domain of the store writes and reads back on a real home", async (t)
   assert.equal(await store.jobs.status(job.id), "pending");
 
   const alphaId = projectIdOf(env, "alpha");
-  const run = await store.runs.logPipelineRun({ projectId: alphaId, slug: "fix-it", tier: "simple", outcome: "pr_opened" });
+  const run = await store.runs.logPipelineRun({ projectId: alphaId, slug: "fix-it", outcome: "pr_opened" });
   assert.ok(Number.isInteger(run.runId), "a logged pipeline run answers with its id");
 
   await store.lessons.saveLesson({

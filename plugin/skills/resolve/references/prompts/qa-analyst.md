@@ -1,5 +1,5 @@
 ## File handoff (contract — read first)
-ARTIFACT_PATH: {{RUN_DIR}}/05a-qa-analyst.md (append-only: this launch is ## Round {{ROUND}})
+ARTIFACT_PATH: {{RUN_DIR}}/05-qa.md (append-only: this launch is ## Round {{ROUND}})
 {{>_round}}
 Read before acting (via Read):
 - `{{RUN_DIR}}/04-implementation.md` — ## Modified files (the files to attack).
@@ -50,6 +50,7 @@ This request also delivers, right after ## Proven breaks (the artifact gate requ
 and writes ## Generated PoCs as `None — this request writes no runtime PoC`.
 
 {{>_context}}
+{{>_demo-repo}}
 {{>_shell-rule}}
 
 {{>_footer}}

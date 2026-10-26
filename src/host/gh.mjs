@@ -290,6 +290,27 @@ export function ghPrCreate({ title, bodyFile, head, base, cwd, env = process.env
   return { ok: result.ok, url: result.ok ? (lines.at(-1) ?? null) : null, stderr: result.stderr, missing: result.missing };
 }
 
+// The URL of the pull request whose head branch is exactly `head` (the OPEN one before any other), or null when gh finds none or answers anything unexpected.
+export function ghPrUrlOfBranch({ head, cwd, env = process.env, spawnSyncImpl = spawnSync } = {}) {
+  const result = runGh(["pr", "list", "--head", String(head ?? ""), "--state", "all", "--json", "url,headRefName,state"], { env, spawnSyncImpl, cwd });
+  if (!result.ok) return { url: null, stderr: result.stderr };
+  let payload;
+  try {
+    payload = JSON.parse(result.stdout);
+  } catch {
+    return { url: null, stderr: "gh answered a pull request list that is not json" };
+  }
+  const matching = Array.isArray(payload) ? payload.filter((item) => item?.headRefName === head && typeof item?.url === "string") : [];
+  const found = matching.find((item) => item.state === "OPEN") ?? matching[0] ?? null;
+  return { url: found ? found.url.trim() : null, stderr: "" };
+}
+
+// Replaces the body of an existing pull request with the content of a file.
+export function ghPrEditBody({ url, bodyFile, cwd, env = process.env, spawnSyncImpl = spawnSync } = {}) {
+  const result = runGh(["pr", "edit", String(url ?? ""), "--body-file", String(bodyFile ?? "")], { env, spawnSyncImpl, cwd });
+  return { ok: result.ok, stderr: result.stderr };
+}
+
 // Trimmed text of a field of the json, or the placeholder when gh answered without it.
 function prField(value) {
   const text = typeof value === "string" ? value.trim() : "";

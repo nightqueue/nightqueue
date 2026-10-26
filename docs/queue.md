@@ -13,7 +13,6 @@ nightqueue queue add api "fix the flaky worker" --priority 2   # enqueue a job
 nightqueue queue add "fix the flaky worker"                    # same, for the project of the current directory
 nightqueue queue add fix the flaky worker --run                # enqueue and start the runner on it, detached
 nightqueue queue add "fix the flaky worker" --yes              # register the repository of the current directory without asking
-nightqueue queue add "fix the flaky worker" --tier simple      # declare the risk tier; the pipeline may only raise it
 nightqueue queue add "fix it" --origin <kind>:<ref>...         # name the services the job came from (repeatable) instead of detecting them
 nightqueue queue status [--limit 10] [--json]                  # the state of the runner, the table of the queue and the counts
 nightqueue queue status --follow [2] [--until-idle]            # the same table, redrawn in place until Ctrl-C (or until the queue is idle)
@@ -208,26 +207,18 @@ resolved without change has no pull request: its reply and its log carry `Resolv
 code change.` followed by the run's conclusion, with no PR field, no link and the footer
 `resolved without a code change`.
 
-**`--tier` declares the risk of the job.** `queue add --tier trivial|simple|complex`
-(and the `tier` parameter of `queue_add`) records the tier on
-the job, and the unattended prompt carries it into the run as
-`Tier: <tier> (set by the operator - the pipeline may only raise it, with evidence,
-never lower it)`. Each tier is a track: `trivial` is a coder plus a verifier that runs
-tsc, lint and the tests of the touched files, **under 5 minutes**, for a result the
-prompt fully describes (docs, copy, config values, a rename, a test-only change);
-`simple` is a triager only when the request is a bug, then a coder and a verifier that
-runs the FULL test suite, **under 15 minutes**, for a local change whose behaviour the
-prompt defines, in one subsystem; `complex` is the whole pipeline (triager, exploration,
-architect, coder, QA and verifier), for a design decision, a concurrency/security/money
-surface, more than one subsystem or a brief that needs stages. The pipeline **raises** a
-tier only on evidence it finds — a stack trace, a security/concurrency/money surface, a
-schema/contract/tool change the brief did not name, or an ambiguous brief — and writes
-the raise into the Brief as `Tier raised: <from> -> <to>: <evidence>`. It never lowers
-one, and it never raises on the shape of the change. A value that is not one of the
-three is a usage error naming the three accepted values, and nothing is queued.
-A job with no tier keeps the pipeline's
-own classification. The tier shows up in `nightqueue queue status <id>` and in the
-`--json` of both the list and the detail; a job with no tier simply has no `tier` line.
+**Every job runs the one pipeline.** There is no risk tier: every run executes every
+phase (triager, exploration, architect, coder, QA and verifier), each agent on its own
+model (the defaults of `src/queue/routing.mjs`, overridable per project with
+`nightqueue project models`, see [CLI](cli.md)). How deep the QA goes is decided by the
+plan, not by the operator: `run check 03` answers `QA: full` when the plan holds two or
+more 🔴 risks or declares an always-gate class, else `QA: lite`. `queue add --tier` and
+the `tier` parameter of `queue_add` were removed: a value is refused with
+``\`tier\` was removed: every job runs the one /resolve pipeline (one model per agent, QA
+mode chosen by `run check 03`); drop it - a client still sending it is an older
+nightqueue plugin, update it``, and nothing is registered or queued. A prompt queued by an
+older runtime may still carry a `Tier:` line; the title ignores it and the run does not
+read it.
 
 ### Running the queue
 
@@ -544,7 +535,8 @@ queue close <id>``), so a job is never closed by hand, by a flip of its status o
 
 **A run that produced nothing is `cancelled`, not `failed`.** When an attempt exits cleanly
 with no pull request and no gate, and the run logged `no_commit` for THIS attempt (a
-`pipeline_runs` row of the job's project and slug written after the attempt started), the job
+`pipeline_runs` row of the job's project and slug written after the attempt started, which
+`nightqueue run report` derives from `state.json` in Phase 9), the job
 ends `cancelled` and its notice gains `nothing to close: the run produced no pull request`,
 as its own paragraph after the run's reason. A run that logged `local_commit`, or that logged
 nothing, stays `failed` as before; the worktree of a `cancelled` finish is kept or named by
@@ -564,7 +556,7 @@ is never sent to the origins. The kind is the row's own marker (`result.resoluti
 "no-change"`, written only from that record), never the missing pull request alone: a PR-less
 `done` written by a repair, a reclassify or a recovery without the record is still refused
 with `nothing to close: the job has no pull request`. The record is the
-only way in: a `NOT-REPRODUCIBLE` or `NEEDS-CLARIFICATION` run, and a `no_commit` exit without
+only way in: a `NOT-REPRODUCIBLE`, `NEEDS-CLARIFICATION` or `PROPOSE-ALTERNATIVE` run, and a `no_commit` exit without
 it, still end `cancelled`; the same record on an exit that failed, timed out or was stopped
 still ends `failed` or `cancelled`, and one without a notice is `failed`.
 
@@ -585,7 +577,9 @@ only where the notice holds exactly the line its checklist recorded.
 
 A `gate` job the preflight refused to start also carries a reason, in its own
 `blocked_code` column (a job whose worktree the runtime could not place gates the same way,
-with `worktree-failed`) - it answers a different question than `status`: not where
+with `worktree-failed`, and a job whose run directory was written under the old phase
+numbering with `pre-renumbering-run`, whose notice answers with `queue retry <ref> --fresh`
+because a plain retry is refused) - it answers a different question than `status`: not where
 the job is, but why the runner never started it, and it is what lets `queue retry`
 send that job back without a `--note`. See **What the runner requires of the
 checkout** below for what sets and clears it.
@@ -732,10 +726,10 @@ tracked `.gitignore` (an operator commit; nightqueue never writes it). The
 `/.claude/worktrees/` and `/.claude/settings.local.json` lines an older nightqueue wrote into
 a checkout's `.git/info/exclude` are harmless, but they hide interactive worktrees from the
 dirty check too; delete them by hand once no job that started before the upgrade is open, and
-from then on an interactive worktree gates as above. The operator's QA worktrees live
+from then on an interactive worktree gates as above. QA worktrees live
 apart from every job's, at `<NIGHTQUEUE_HOME>/qa/<project_id>/<id>`: outside the checkout, so
 they never gate a job, and ephemeral - `nightqueue sandbox worktree` creates and drops them, and
-`nightqueue open`, `nightqueue doctor --fix` and the operator's SubagentStop hook sweep them (see
+`nightqueue open` and `nightqueue doctor --fix` sweep them (see
 [the CLI](cli.md#sandbox)). An operator before the generalist operator left its own under
 `<NIGHTQUEUE_HOME>/operator-qa/`, which `nightqueue doctor` reports as legacy leftovers.
 Two same-project jobs whose slugs collide on one branch name fail safely, one job at a
@@ -991,8 +985,9 @@ hangs off the project's id, not its name, so a `nightqueue project rename`
 never moves it, while `Project:` carries the current name. A session that has
 no `RUN_DIR:` line asks for it with `nightqueue run dir` (inside a job) or
 `nightqueue run dir --project <name> --slug <slug>`, and never builds the path
-from the name. The pipeline renames the run once, by printing
-`SLUG: <slug> TYPE: <type>` on a line of its own, and the runtime moves the
+from the name. The run is renamed once, by `nightqueue run check 01` when the triager's
+Brief names a `**Slug:**` for a run still on its provisional slug (an older plugin prints
+`SLUG: <slug> TYPE: <type>` on a line of its own instead), and the runtime moves the
 directory with the artifacts already inside it. Everything the run records lands in
 the `state.json` of that directory, written by the runtime alone (see
 [Runtime contract](runtime-contract.md)).
@@ -1014,7 +1009,14 @@ Run `git status --short` in the worktree first.
 
 `Branch`, `Worktree` and `From stage` read `none` when the run recorded none;
 `From stage: qa-stage-b` is the one sub-phase with a marker of its own, so a run
-that died in the QA does not pay the analyst twice. A run the decision refuses -
+that died in the QA does not pay the analyst twice: it is given only while the stage A marker
+names `05-qa.md` and is newer than the last `implementation` record, so a re-implemented run
+never re-enters with the analyst round of its old implementation. A run that started before
+the phases became whole numbers is never resumed, on any path: a retry is refused with
+``run started before the renumbering; retry with `fresh` `` (nothing written), the runner
+gates a claimed job (a swept or re-queued one included) as `pre-renumbering-run` before it
+writes anything or spawns, and `run start` on such a run directory refuses with the same
+line; `fresh` starts it clean. A run the decision refuses -
 no state, a deliberate termination, a resume budget already spent - gets no block
 at all and starts clean, and the runtime counts the resume in `state.json` itself:
 the pipeline never touches that file. With `queue.resumeSession: true` in
@@ -1412,8 +1414,10 @@ resumes on the next run.
 One job is one self-contained deliverable that can be reviewed and merged on its
 own. Large work is ONE job with numbered stages written in the prompt — never
 several jobs that depend on each other. A job that needs another job's pull
-request merged first is cut wrong: fold it into that job. Independent jobs may
-run in parallel and merge in any order.
+request merged first is cut wrong: fold it into that job. `queue add` (like the MCP
+`queue_add`) refuses a prompt that conditions the work on another job (`after J-12 …`), with
+the same message; a bare `J-12` mention, or one inside fenced code, is accepted. Independent
+jobs may run in parallel and merge in any order.
 
 ```sh
 nightqueue queue add "Self-contained install. Stages: 1) runtime under ~/.nightqueue; 2) shim + PATH prompt; 3) embedding opt-in; 4) rename bin to ns. Each stage verified before the next; one PR."
@@ -1431,11 +1435,6 @@ never sees is merged.
 
 **Branch chains are v1.1**, and only for work that genuinely does not fit in one
 run. Until then, the answer to "this depends on that" is one job with stages.
-
-**The tier is yours to set.** `--tier trivial|simple|complex` on `queue add` (or the
-`tier` parameter of `queue_add`) tells the pipeline how much risk the job carries, and
-the run executes the track of that tier. The criteria of each one, their time targets
-and what raises a tier are in [Queue](queue.md).
 
 `nightqueue queue add --help` prints this rule and the example.
 

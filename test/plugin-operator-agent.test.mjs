@@ -1,16 +1,15 @@
 import assert from "node:assert/strict";
-import { readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { OPERATOR_AGENT, operatorAgentPath } from "../src/host/operator.mjs";
-import { newId } from "../src/config/ids.mjs";
-import { OPERATOR_CLI_COMMANDS, OPERATOR_ROLES, qaBashAllowed } from "../src/queue/operator-scope.mjs";
+import { OPERATOR_CLI_COMMANDS, PIPELINE_AGENTS } from "../src/queue/operator-scope.mjs";
 import { pluginDir } from "../src/queue/spawn.mjs";
 
 const AGENTS_DIR = join(pluginDir(), "agents");
 const OPERATOR = readFileSync(operatorAgentPath(), "utf8");
 const TRIAGER = readFileSync(join(AGENTS_DIR, "triager.md"), "utf8");
-const QA = readFileSync(join(AGENTS_DIR, "qa.md"), "utf8");
+const DELEGATED = ["triager", "explore", "architect", "qa-guardian", "verifier", "coder", "reviewer"];
 
 // The value of one key of the leading frontmatter block, or null when the key is absent.
 function frontmatterValue(text, key) {
@@ -24,9 +23,9 @@ function toolsOf(text) {
   return (frontmatterValue(text, "tools") ?? "").split(",").map((tool) => tool.trim()).filter(Boolean);
 }
 
-// Reads one agent file of the plugin by its file name.
-function readAgent(name) {
-  return readFileSync(join(AGENTS_DIR, `${name}.md`), "utf8");
+// The body of one `## <heading>` section of operator.md, or "" when it is absent.
+function sectionOf(heading) {
+  return OPERATOR.split(`\n## ${heading}\n`)[1]?.split("\n## ")[0] ?? "";
 }
 
 test("the operator agent is `nightqueue-operator`, and `nightqueue open` addresses it by its plugin-scoped name", () => {
@@ -35,26 +34,56 @@ test("the operator agent is `nightqueue-operator`, and `nightqueue open` address
   assert.equal(OPERATOR_AGENT, `nightqueue:${name}`);
 });
 
-test("the operator's tools carry no edit tool, and the two web reads: it coordinates and never edits", () => {
-  assert.deepEqual(toolsOf(OPERATOR), ["Agent", "Read", "Grep", "Glob", "Bash", "WebFetch", "WebSearch", "TodoWrite", "SendMessage", "Skill", "mcp__nightqueue__*"]);
+test("the operator's tools carry the four edit tools, which the guard holds to a consent, and the two web reads", () => {
+  assert.deepEqual(toolsOf(OPERATOR), [
+    "Agent", "Read", "Grep", "Glob", "Bash", "Edit", "Write", "MultiEdit", "NotebookEdit",
+    "WebFetch", "WebSearch", "TodoWrite", "SendMessage", "Skill", "mcp__nightqueue__*",
+  ]);
 });
 
 test("the operator offers the reflect skill in its Reflect section, saving with `project`", () => {
-  const section = OPERATOR.split("\n## Reflect\n")[1]?.split("\n## ")[0] ?? "";
+  const section = sectionOf("Reflect");
   assert.ok(section.includes("`nightqueue:reflect`"), "operator.md has no Reflect section naming nightqueue:reflect");
   assert.ok(section.includes("Only confirmed candidates are saved."));
   assert.ok(OPERATOR.includes("`lesson_save`, `memory_save`,"));
 });
 
-test("operator.md is at most 170 lines, names the operator guard and its three subagents, and holds nothing of the operator runs or the decisions", () => {
-  assert.ok(OPERATOR.split("\n").length <= 170, `operator.md has ${OPERATOR.split("\n").length} lines`);
+// The cap went from 170 to 200 when the three-band table, the seven delegated agents and the direct-change steps landed.
+test("operator.md is at most 200 lines, names the operator guard, and holds nothing of the operator runs, the decisions or the deleted agents", () => {
+  assert.ok(OPERATOR.split("\n").length <= 200, `operator.md has ${OPERATOR.split("\n").length} lines`);
   assert.ok(OPERATOR.includes("## The operator guard contract (read first)"));
   assert.ok(OPERATOR.includes("starts with `operator guard:`"));
   assert.ok(OPERATOR.includes("## Operator decisions (binding)"));
   assert.equal(/\bD-\d+/.test(OPERATOR), false, "operator.md still cites a D-<n> ref");
-  for (const role of OPERATOR_ROLES) assert.ok(OPERATOR.includes(`nightqueue:${role}`), `operator.md does not name nightqueue:${role}`);
-  for (const gone of ["RUN_DIR", "run_set", "PRIOR RUN", "operator-qa", "run check", "nightqueue:triager", "nightqueue:architect", "nightqueue:verifier", "decision_", "Standing decisions", "decision export"]) {
+  for (const gone of ["RUN_DIR", "run_set", "PRIOR RUN", "operator-qa", "run check", "decision_", "Standing decisions", "decision export", "nightqueue:qa`", "nightqueue:triage`", "QA_WORKTREE"]) {
     assert.equal(OPERATOR.includes(gone), false, `operator.md still names ${gone}`);
+  }
+});
+
+test("operator.md states the three bands, never the old never-edits contract, and says what needs consent", () => {
+  assert.equal(/never (edits?|executes?)\b/i.test(OPERATOR), false, "operator.md still says it never edits or executes");
+  const bands = sectionOf("What you may do");
+  for (const band of ["| **Free** |", "| **With consent** |", "| **Never** |"]) assert.ok(bands.includes(band), `the table has no ${band} row`);
+  for (const kind of ["`edit`", "`create`", "`run`", "`git-write`", "`connection-write`", "`operator_consent`", "`revoke: true`"]) {
+    assert.ok(bands.includes(kind), `What you may do does not name ${kind}`);
+  }
+  const flat = OPERATOR.replace(/\s+/g, " ");
+  assert.ok(flat.includes("say what needs the person's consent"));
+  assert.ok(flat.includes("The runtime record is the audit and the guard; the host's permission prompt is the barrier for Edit, Write and Bash only"));
+  assert.ok(flat.includes("`operator_consent` and `connection_call` are pre-approved: for them the guard's record is the only control"));
+  assert.ok(flat.includes("`git push origin` covers every ref, so the ask shows that reach"), "operator.md does not state the prefix semantics");
+  assert.equal(/tier/i.test(OPERATOR), false, "operator.md still queues a tier");
+});
+
+test("operator.md delegates to the seven pipeline agents with an inline request, and lists the direct-change steps", () => {
+  const delegation = sectionOf("Delegation");
+  for (const agent of DELEGATED) assert.ok(delegation.includes(`\`nightqueue:${agent}\``), `Delegation does not name nightqueue:${agent}`);
+  for (const part of ["**Inputs**", "**Deliver**", "**Return**", "capped at 2", "`cd <checkout> && <command>`"]) {
+    assert.ok(delegation.includes(part), `Delegation does not name ${part}`);
+  }
+  const direct = sectionOf("Direct changes");
+  for (const step of ["`operator_consent`", "`nightqueue:coder`", "no worktree", "`git -C <checkout> diff --stat`", "`git-write`", "`/nightqueue:reflect`"]) {
+    assert.ok(direct.includes(step), `Direct changes does not name ${step}`);
   }
 });
 
@@ -72,56 +101,18 @@ test("the operator opens naming itself and the projects, and asks for project an
     "`lesson_recall` once, with that `project`",
     "1. Queue from the brief.",
     "call `queue_add` with `project`",
-    "(set by the operator - the pipeline may only raise it, with evidence, never lower it)",
     "`nightqueue memory unavailable: run nightqueue doctor --fix and retry`",
   ]) {
     assert.ok(OPERATOR.replace(/\s+/g, " ").includes(named), `operator.md does not name ${named}`);
   }
 });
 
-test("triage, qa and reviewer parse, carry their own names, and collide with no other agent", () => {
+test("PIPELINE_AGENTS is the plugin's agents but the operator, every agent name is unique, and triage.md and qa.md are gone", () => {
   const files = readdirSync(AGENTS_DIR).filter((file) => file.endsWith(".md"));
   const names = files.map((file) => frontmatterValue(readFileSync(join(AGENTS_DIR, file), "utf8"), "name"));
   assert.equal(new Set(names).size, names.length, `duplicate agent names: ${names.join(", ")}`);
-  for (const role of OPERATOR_ROLES) {
-    const text = readAgent(role);
-    assert.equal(frontmatterValue(text, "name"), role);
-    assert.ok(frontmatterValue(text, "description"), `${role}.md has no description`);
-    assert.ok(toolsOf(text).length > 0, `${role}.md has no tools`);
-  }
-});
-
-test("only qa may edit among the operator's subagents", () => {
-  assert.ok(toolsOf(QA).includes("Edit") && toolsOf(QA).includes("Write"));
-  for (const role of ["triage", "reviewer"]) {
-    for (const writer of ["Edit", "Write", "MultiEdit", "NotebookEdit"]) assert.equal(toolsOf(readAgent(role)).includes(writer), false, `${role} ${writer}`);
-  }
-});
-
-test("qa.md states the anchor is not a sandbox, and the only Bash shapes the guard accepts", () => {
-  const flat = QA.replace(/\s+/g, " ");
-  for (const named of [
-    "**anchor, not a sandbox**",
-    "`nightqueue sandbox worktree <project>`",
-    "`nightqueue sandbox worktree --drop <path>`",
-    "`cd <path> && <command>`",
-    "a bare command is refused",
-    "`QA_WORKTREE: <path>`",
-  ]) {
-    assert.ok(flat.includes(named), `qa.md does not name ${named}`);
-  }
-});
-
-test("every command qa.md shows is one the qa guard accepts, and a bare command is refused", () => {
-  const env = { NIGHTQUEUE_HOME: "/tmp/nightqueue-plugin-agent-home" };
-  const path = join(env.NIGHTQUEUE_HOME, "qa", newId(), newId());
-  const shown = [...QA.matchAll(/`((?:cd <path> && |nightqueue sandbox worktree )[^`]*)`/g)].map((match) => match[1]);
-  assert.ok(shown.length >= 5, `only ${shown.length} commands found in qa.md`);
-  for (const command of shown.filter((text) => !text.includes("<command>") && text.trim() !== "cd <path> &&")) {
-    const concrete = command.replaceAll("<path>", path).replace("<project>", "demo").replace("…", "npm test");
-    assert.equal(qaBashAllowed(concrete, env), true, concrete);
-  }
-  assert.equal(qaBashAllowed("npm test", env), false);
+  assert.deepEqual([...PIPELINE_AGENTS].sort(), names.filter((name) => name !== "nightqueue-operator").sort());
+  for (const gone of ["triage.md", "qa.md"]) assert.equal(existsSync(join(AGENTS_DIR, gone)), false, `${gone} still exists`);
 });
 
 test("the triager's request opens its verdict with `Evidence level: <1-4>`, and the 0-4 scale is gone", () => {

@@ -5,7 +5,7 @@ Read before acting (via Read):
   attack this cause; its symptom proof is the baseline the runtime validation re-runs
   without-fix vs with-fix); ## Intent note and ## Depth note when present (the intent note of
   your Step 1, the depth note of your Step 1.5); ## Intent signals and ## Request gaps (axis 3).
-- `{{RUN_DIR}}/02-explore.md` when it exists (the complex tier) — ## File map (the file map of
+- `{{RUN_DIR}}/02-explore.md` when it exists — ## File map (the file map of
   your Step 2), ## Access map with its `unimplemented intent` lines (the access map of axis 3),
   ## Third-party libraries (the installed versions of Step 3).
 - `{{REPOSITORY}}/CLAUDE.md` when it exists — the project conventions.
@@ -102,7 +102,8 @@ A likely cause with neither a mitigation nor a justification means the plan is n
 
 ## Identified risks
 Every scenario the change can break or degrade, even a low-probability one, concrete and testable — it feeds whoever attacks the plan:
-- [R1] <failure scenario> — how to test it: <minimum steps>
+- [R1] 🔴|🟡|🟢 <failure scenario> — how to test it: <minimum steps>
+Each risk line carries ONE severity marker: 🔴 high (breaks a contract, data, security or a primary flow), 🟡 medium, 🟢 low. `run check 03` counts the 🔴 lines: two or more → the QA runs `full`, else `lite`.
 Or `- None`; never omit the section.
 
 {{>_shell-rule}}

@@ -34,8 +34,11 @@ import { liveRunnersReport, unreadableRegistry } from "../queue/registry.mjs";
 import { failedCoreSection, jobDetailView, prUrlsOf, queueView } from "../queue/view.mjs";
 import { isSafeSegment, readRunState, RESUME_PHASE_ORDER } from "../queue/resume.mjs";
 import { resolveJobRun } from "../queue/job-run.mjs";
-import { appendPendingWrite, PENDING_KEYS } from "../queue/pending-writes.mjs";
+import { composeGateNotice } from "../queue/gate-notice.mjs";
+import { runDir as runDirOf } from "../config/paths.mjs";
+import { attemptSince, recordPipelineRun, statePipelinePhases } from "../queue/pipeline-record.mjs";
 import { applyRetry, callerJobId } from "../queue/retry.mjs";
+import { refuseDependentPrompt } from "../queue/dependent-prompt.mjs";
 import { resolveJobSession } from "../queue/session.mjs";
 import { startCloseDetached } from "../queue/close-start.mjs";
 import { cancelJobAndWorktree, stopAndCancelJob } from "../queue/cancel.mjs";
@@ -55,15 +58,14 @@ import {
   OPERATOR_PIPELINE_OUTCOMES,
   PIPELINE_GATE_STOPS,
   PIPELINE_OUTCOMES,
-  PIPELINE_PHASE_STATUSES,
   PIPELINE_TASK_TYPES,
-  PIPELINE_TIERS,
 } from "../memory/runs.mjs";
 import { ensureStoreExists, openStore, withReadOnlyStore } from "../store/open.mjs";
 import { coverageField, coverageLabel, jobOriginCoverage } from "../integrations/coverage.mjs";
 import { changeProjectIntegrations, INTEGRATION_ACTIONS, integrationsView } from "../integrations/settings.mjs";
 import { redactSecrets, redactValue } from "../integrations/redact.mjs";
 import { CONNECTION_CALL_BOUNDS, connectionCall } from "../integrations/connection-call.mjs";
+import { CONSENT_KINDS, operatorSession, recordConsent } from "../queue/operator-consent.mjs";
 import {
   TRACKER_BOUNDS,
   TRACKER_LIMIT,
@@ -91,12 +93,18 @@ import {
 } from "./tool-contract.mjs";
 
 const SERVER_NAME = "nightqueue";
-const SERVER_INSTRUCTIONS = [
+const OPERATE_THROUGH_TOOLS = "Operate nightqueue through these MCP tools only - never the CLI, the database file, the home directory or the project's files.";
+const OPERATOR_MODE_LINE =
+  "In a `nightqueue open` session the operator reads freely, and edits, creates, runs or writes git in a registered checkout only after the person's explicit answer recorded with `operator_consent` (kind and scope exactly as consented); it never deletes files, force-pushes, writes the nightqueue home or touches Claude/Codex settings.";
+const OPERATOR_CONNECTION_LINE =
+  "In a `nightqueue open` session `connection_call` sends a POST, PATCH or PUT only when a live `operator_consent` of kind `connection-write` (`<connection> <METHOD> <path>`) covers it, else it answers `needs-consent` and sends nothing.";
+const SERVER_INSTRUCTION_LINES = [
   `tool contract ${TOOL_CONTRACT}: every answer carries \`contract\`; a tool refused with "your client has the tool definitions of an older nightqueue" means this session cached old definitions - start a new session or restart the MCP client.`,
   "nightqueue is a backlog of unattended coding jobs, not a synchronous executor: `queue_add` records work, it never runs it.",
   "Never queue a job on your own initiative: present the brief first (title and detail) and call `queue_add` only after the person gives an explicit go.",
   "One job is one self-contained deliverable, and a large plan is ONE job with numbered stages written in the prompt, never several jobs that depend on each other.",
-  "Operate nightqueue through these MCP tools only - never the CLI, the database file, the home directory or the project's files.",
+  "`queue_add` refuses a prompt that conditions the work on another job or pull request (`after J-<n>`, `once PR #<n> is merged`, `depends on J-<n>`/`depends on job`, `when #<n> lands`), and `queue_retry` refuses a closed job or a done job whose pull request merged: queue a new one.",
+  OPERATE_THROUGH_TOOLS,
   "Start a single job now, with `queue_run` and its `job_id`, only when the person asks for that one job now; the whole batch starts with `queue_run` without `job_id`.",
   "Every job ends as an open pull request (`done`), as `done` with no pull request when the run concluded on purpose that no code change is needed (its conclusion in `notice_md`), or stopped at a gate with its reason in `notice_md`.",
   "At a gate, read `notice_md` whole with `queue_status`, present it to the person, and answer with `queue_retry` only after the person answers; a done job is closed with `queue_close`.",
@@ -105,7 +113,14 @@ const SERVER_INSTRUCTIONS = [
   "At the end of a session that changed or learned something, offer `/nightqueue:reflect` once: it proposes lessons and memories and saves only the ones the person confirms.",
   ...trackerInstructionLines(),
   "`connection_call` calls the API behind a stored connection by its name, with the secret injected by the runtime and never shown; a GET reads, any other method only after the person said yes to the exact request (connection, method, path, body), and it is refused inside a queue job",
-].join("\n");
+];
+
+// The server's instructions: the operator-mode lines in place of the tools-only line when the server serves a `nightqueue open` session, else the plain ones.
+function serverInstructions(env) {
+  if (operatorSession(env) === null) return SERVER_INSTRUCTION_LINES.join("\n");
+  const lines = SERVER_INSTRUCTION_LINES.map((line) => (line === OPERATE_THROUGH_TOOLS ? OPERATOR_MODE_LINE : line));
+  return [...lines, OPERATOR_CONNECTION_LINE].join("\n");
+}
 const PROMPT_SOURCE_MISSING = "queue_add needs `prompt`, the whole request as prose";
 const RECALL_LIMIT = 8;
 const INDEX_LIMIT = 40;
@@ -116,18 +131,9 @@ const serverPrStates = createPrStateCache();
 
 const target = z.enum(LESSON_TARGETS).nullable().optional();
 const optionalText = z.string().nullable().optional();
+const ignoredOldField = z.unknown().optional().describe("ignored: accepted from an older plugin");
 const jobRefInput = z.union([z.number().int().min(1), z.string()]);
 const jobIdField = jobRefInput.describe("The job's ref (`J-77`) or its plain id.");
-
-const phaseSchema = z.object({
-  phase: z.string(),
-  model: z.string().nullable().optional(),
-  status: z.enum(PIPELINE_PHASE_STATUSES).nullable().optional(),
-  retry: z.boolean().nullable().optional(),
-  duration_s: z.number().int().min(0).nullable().optional(),
-  note: z.string().nullable().optional(),
-  reason: z.string().nullable().optional(),
-});
 
 // The registered project a lesson, memory, index or run call scopes to: a name, or an absolute path inside a checkout; null (global) for
 // a path inside none, and an unknown name refused, so nothing is ever written under a project that does not exist.
@@ -223,70 +229,16 @@ async function pipelineLogRun(args, env) {
 function runFacts({ projectId, slug }, env) {
   const state = readRunState({ projectId, slug, env });
   return {
-    tier: state?.tier ?? null,
     taskType: state?.type ?? null,
-    tierRaiseReason: state?.tierRaiseReason ?? null,
-    phases: Array.isArray(state?.phases) ? state.phases : [],
+    phases: statePipelinePhases(state),
   };
 }
 
-// The `reason` each recorded phase carries, queued per phase name in the order the run recorded them.
-function recordedReasonsByPhase(recordedPhases) {
-  const queues = new Map();
-  for (const entry of recordedPhases) {
-    const name = typeof entry?.phase === "string" ? entry.phase : "";
-    const reason = typeof entry?.reason === "string" && entry.reason.trim() !== "" ? entry.reason : null;
-    queues.set(name, [...(queues.get(name) ?? []), reason]);
-  }
-  return queues;
-}
-
-// The trimmed phase name of a sent `pipeline_log` row.
-function sentPhaseName(phase) {
-  return String(phase?.phase ?? "").trim();
-}
-
-// The phase names whose recorded reasons cannot be paired: the call lists a different number of launches than the run recorded.
-function unpairedPhaseNames(phases, queues) {
-  const sentCounts = new Map();
-  for (const phase of phases) sentCounts.set(sentPhaseName(phase), (sentCounts.get(sentPhaseName(phase)) ?? 0) + 1);
-  return [...queues]
-    .filter(([name, reasons]) => (sentCounts.get(name) ?? 0) !== reasons.length)
-    .filter(([, reasons]) => reasons.some((reason) => reason !== null))
-    .map(([name]) => name);
-}
-
-// The sent phases with the reason state.json recorded for each, paired in order only when both sides list the same launches; a sent reason wins.
-function withRecordedReasons(phases, recordedPhases) {
-  const queues = recordedReasonsByPhase(recordedPhases);
-  const unpaired = unpairedPhaseNames(phases, queues);
-  const paired = phases.map((phase) => {
-    const name = sentPhaseName(phase);
-    const recorded = unpaired.includes(name) ? null : (queues.get(name)?.shift() ?? null);
-    const sent = typeof phase?.reason === "string" && phase.reason.trim() !== "" ? phase.reason : null;
-    return sent !== null || recorded === null ? phase : { ...phase, reason: recorded };
-  });
-  return { phases: paired, unpaired };
-}
-
-// Queues a pipeline run the unavailable database refused into the run's pending-writes file, fully resolved, and answers ok with the warning;
-// any other failure, or a run it cannot be queued into, is raised as it came.
-function queuedPipelineLog(err, spec, env) {
-  if (!(err instanceof StoreUnavailableError)) throw err;
-  const at = new Date().toISOString();
-  const payload = { ...spec, model: env?.NIGHTQUEUE_MODEL ?? null, sessionId: env?.NIGHTQUEUE_SESSION_ID ?? null };
-  const entry = { key: PENDING_KEYS.pipelineLog(spec.projectId, spec.slug, at), kind: "pipeline_log", at, jobId: callerJobId(env), payload };
-  const queued = appendPendingWrite({ projectId: spec.projectId, slug: spec.slug, entry, env });
-  if (queued.status !== "queued") throw err;
-  return { ok: true, queued: true, warning: `recorded in ${queued.path}; replayed once the database is back`, pending: queued.path };
-}
-
-// Requires a field neither the call nor the run resolved, saying which tool would have recorded it during the run.
-function requireLogged(field, value) {
-  if (value !== null && value !== undefined && value !== "") return value;
-  throw new UserError(
-    `\`${field}\` is required: send it, or record it during the run with \`run_set\` so this call can leave it out`,
-  );
+// The answer of a `pipeline_log` call: the row written, the queued warning, or that this attempt already recorded the run.
+function pipelineLogAnswer(logged, run) {
+  if (logged.queued === true) return logged;
+  if (logged.skipped === true) return { ok: true, already_recorded: true };
+  return { ok: true, runId: logged.runId, project: logged.projectId ? run.project : null, phases: logged.phases };
 }
 
 // Refuses an operator outcome sent from inside a job, whose run always ends on one of the pipeline's own.
@@ -303,11 +255,33 @@ function runAnswer(result, { project, slug }) {
   return { ok: true, project, slug, path: result.path };
 }
 
+// Tells whether a `run_outcome` call asks the runtime to compose its notice, refusing the combinations that have no single source of truth.
+function wantsComposedNotice(args) {
+  const composed = (typeof args.question === "string" && args.question.trim() !== "") || Boolean(args.from_artifact);
+  if (!composed) return false;
+  if (args.status !== "gate") throw new UserError("`question` and `from_artifact` only compose a `gate` notice: nothing was recorded");
+  if (typeof args.notice === "string" && args.notice.trim() !== "") {
+    throw new UserError("send either `notice` or `question`/`from_artifact`, never both: nothing was recorded");
+  }
+  return true;
+}
+
+// The gate notice the runtime composes from the run's own artifact and/or the question.
+function composedGateNotice(args, run, env) {
+  if (typeof run.projectId !== "string" || run.projectId === "") {
+    throw new UserError(`the run directory of \`${run.project}/${run.slug}\` is unknown, so no artifact can compose the notice: nothing was recorded`);
+  }
+  return composeGateNotice({
+    runDir: runDirOf(run.projectId, run.slug, env),
+    jobId: callerJobId(env),
+    question: args.question,
+    fromArtifact: args.from_artifact ?? null,
+  });
+}
+
 // The fields of state.json `run_set` writes, in the argument names the plugin sends.
 const RUN_SET_FIELDS = {
   type: "type",
-  tier: "tier",
-  tier_raise_reason: "tierRaiseReason",
   branch: "branch",
   worktree: "worktree",
 };
@@ -483,7 +457,6 @@ async function queuedAnswer({ job, registered = null }, env) {
     project: job.project,
     priority: job.priority,
     timeoutS: job.timeoutS,
-    ...(job.tier ? { tier: job.tier } : {}),
     ...(job.startBranch ? { start_branch: job.startBranch } : {}),
     ...(job.startWorktree ? { start_worktree: job.startWorktree } : {}),
     origin: coverages.map(coverageField),
@@ -789,8 +762,8 @@ function connectionCallTool(env) {
       description:
         "Calls the API behind a stored connection by its name; the runtime injects the secret and never shows it, and the host is fixed by the connection's kind. " +
         "`method` is GET (the default), POST, PATCH or PUT; any other is refused. `path` is relative to the connection's API root (empty for a kind that takes none; a webhook connection takes empty or `messages/<id>` to GET or PATCH a posted message): no scheme, no leading `//`, no `.` or `..` segment, no `\\`, `?` or `#`; query parameters only come through `query`. `body` is JSON, at most 50,000 characters serialized, never on a GET. " +
-        "Call any method other than GET only after showing the person exactly what will be sent (connection, method, path, body) and getting an explicit ok, never on your own initiative. Refused inside a queue job, and nothing is sent; a GET is allowed inside a job. " +
-        "Answers `{ok: true, status, body, body_truncated?}` with the body redacted and cut at 50,000 characters, or `{ok: false, error: \"no-connection\" | \"invalid-input\" | \"provider-unavailable\", status, detail}` as a normal answer; a detail saying the call may still have been applied means check before trying again.",
+        "Call any method other than GET only after showing the person exactly what will be sent (connection, method, path, body) and getting an explicit ok, never on your own initiative. Refused inside a queue job, and nothing is sent; a GET is allowed inside a job. In a `nightqueue open` session a non-GET also needs a live `operator_consent` of kind `connection-write` covering it, else it answers `needs-consent` and nothing is sent. " +
+        "Answers `{ok: true, status, body, body_truncated?}` with the body redacted and cut at 50,000 characters, or `{ok: false, error: \"no-connection\" | \"invalid-input\" | \"provider-unavailable\" | \"needs-consent\", status, detail}` as a normal answer; a detail saying the call may still have been applied means check before trying again.",
       inputSchema: {
         connection: z.string().describe("A stored connection's name."),
         method: optionalText.describe("GET (default), POST, PATCH or PUT."),
@@ -803,7 +776,43 @@ function connectionCallTool(env) {
   };
 }
 
-// The thirty-two tools of the plugin contract, with the parameter names the plugin actually sends.
+// Refuses a consent outside a `nightqueue open` session: inside a queue job, or on a server that serves no operator session.
+function consentSession(env) {
+  const own = callerJobId(env);
+  if (own !== null) throw new UserError(`refused: \`operator_consent\` inside job \`${own}\`: a consent is the person's answer in a \`nightqueue open\` session, and a job has no person to ask`);
+  const session = operatorSession(env);
+  if (session === null) throw new UserError("refused: only a `nightqueue open` session records a consent, and this server serves none");
+  return session;
+}
+
+// The tool that records what the person consented to in this operator session, the record the operator guard reads.
+function operatorConsentTool(env) {
+  return {
+    name: "operator_consent",
+    config: {
+      description:
+        "Records what the person consented to in this `nightqueue open` session, so the operator guard lets exactly that through: never call it without the person's explicit answer, quoted in `answer`, to an ask that named what, where and how to undo it; never widen a scope the person did not say; `revoke: true` withdraws it. " +
+        "`kind` is edit or create (`scope` an absolute path: a file or a directory of the project's checkout; a create outside it names one file), run (one bare command, e.g. `npm test`), git-write (a git subcommand that writes, e.g. `commit`) or connection-write (`<connection> <POST|PATCH|PUT> <path>`, `-` for no path). " +
+        "`project` is the registered project (required but for connection-write). Answers `{ok: true, consent, line}` or `{ok: true, revoked, line}`; refused inside a queue job and outside an operator session.",
+      inputSchema: {
+        project: optionalText,
+        kind: z.enum(CONSENT_KINDS),
+        scope: z.string().max(2000).describe("Exactly what the person consented to."),
+        reason: optionalText.describe("Why the consent is asked (required on a grant)."),
+        answer: optionalText.describe("The person's own answer, quoted verbatim (required on a grant)."),
+        revoke: z.boolean().nullable().optional(),
+      },
+    },
+    handler: async (args) => {
+      const session = consentSession(env);
+      const project = args.kind === "connection-write" && !args.project ? null : await memoryProject(args.project, env);
+      const result = recordConsent({ session, project, kind: args.kind, scope: args.scope, reason: args.reason, answer: args.answer, revoke: args.revoke === true, env });
+      return { ok: true, ...result };
+    },
+  };
+}
+
+// The thirty-three tools of the plugin contract, with the parameter names the plugin actually sends.
 function toolDefinitions(env, state) {
   return [
     {
@@ -869,20 +878,22 @@ function toolDefinitions(env, state) {
       name: "phase_prompt",
       config: {
         description:
-          "The complete prompt of one /resolve subagent for THIS run, rendered by the runtime from the plugin's templates: the handoff contract, the Brief of `<RUN_DIR>/00-brief.md`, the routing of the run's tier and the context block. " +
+          "The complete prompt of one /resolve subagent for THIS run, rendered by the runtime from the plugin's templates: the handoff contract, the model of its agent (the default or the project's override) and the context block. " +
+          "`triager` renders from the request: inside a job the job's own prompt (plus the operator's gate answer), outside a job the `request` argument, required there. Every other target reads the Brief of `<RUN_DIR>/00-brief.md`, written by `nightqueue run check 01`, and refuses `request`. " +
           "Pass `prompt` to the `Agent` tool verbatim, with the answered `subagent_type` and `model`, then gate the answered `artifact` with `nightqueue run check <check>`. " +
-          "`reflector` (Phase 9) renders with no artifact and `check` null: launch it and gate nothing. " +
-          "`coder` and `verifier` render the fast-track prompt on trivial/simple; `note` is relaunch context (a fix loop, a re-architect, a re-triage), `raw_evidence` is the bug's raw error block (triager only), `group` the hypotheses of one prover. " +
+          "`reflector` (Phase 10) renders with no artifact and `check` null: launch it and gate nothing. " +
+          "`coder` and `verifier` render the fast-track prompt on trivial/simple; `note` is relaunch context (a fix loop, a re-architect, a re-triage), `raw_evidence` is accepted and ignored, `group` the hypotheses of one prover. " +
           "Inside a job the run is resolved from the job's own row — passing `project` or `slug` there is refused; outside a job both are required.",
         inputSchema: {
           target: z.enum(PROMPT_TARGETS),
           query: optionalText,
+          request: optionalText,
           stage: optionalText,
           delivery_constraints: optionalText,
           raw_evidence: optionalText,
           group: optionalText,
           note: optionalText,
-          artifact: optionalText,
+          artifact: ignoredOldField,
           project: optionalText,
           slug: optionalText,
         },
@@ -1031,49 +1042,41 @@ function toolDefinitions(env, state) {
       name: "pipeline_log",
       config: {
         description:
-          "Records the telemetry of one /resolve run, gate terminations included. One call per run. " +
+          "Records a /resolve run's telemetry; `nightqueue run report` records a job's run itself, so this tool stays for an older plugin and for the operator's outcomes. " +
+          "`phases`, `tier`, `tier_operator` and `tier_raise_reason` are accepted and ignored: the phases come from the run's own state.json. " +
+          "Inside a job, a run already recorded in this attempt is not recorded twice; outside a job, or in a job with no recorded attempt start, a run whose last record carries the same outcome and phases is not recorded twice. The operator's outcomes are recorded on every call. " +
           "Inside a job, `project` and `slug` come from the job's own row and are ignored here; outside one, both name the run. " +
-          "`tier` is the FINAL tier the run executed, `tier_operator` is the tier the operator declared (omit it when there was none) and `tier_raise_reason` carries the evidence of a raise. " +
-          "`tier`, `task_type` and `tier_raise_reason` may be left out when the run already recorded them with `run_set`; the durations and the models the runtime measured in the stream are filled in afterwards and always win over the ones sent here. " +
-          "`investigated` and `queued` are the operator's outcomes (a session that investigated only, or queued a job): outside a job they are recorded, inside a job they are refused. " +
-          "A `reason` recorded with `run_phase_done` is copied onto the rows of the same phase only when `phases` lists exactly as many rows of that phase as the run recorded. Otherwise none of that phase's reasons are copied and `reasons_unpaired` names the phase. Send `reason` on those rows yourself.",
+          "`task_type` may be left out when the run already recorded it with `run_set`; the durations and the models the runtime measured in the stream are filled in afterwards and always win over the ones sent here. " +
+          "`investigated` and `queued` are the operator's outcomes (a session that investigated only, or queued a job): outside a job they are recorded, inside a job they are refused.",
         inputSchema: {
           project: optionalText,
           slug: optionalText,
-          tier: z.enum(PIPELINE_TIERS).nullable().optional(),
-          tier_operator: z.enum(PIPELINE_TIERS).nullable().optional(),
-          tier_raise_reason: z.string().nullable().optional(),
+          tier: ignoredOldField,
+          tier_operator: ignoredOldField,
+          tier_raise_reason: ignoredOldField,
           task_type: z.enum(PIPELINE_TASK_TYPES).nullable().optional(),
           outcome: z.enum(PIPELINE_OUTCOMES),
           gate_stop: z.enum(PIPELINE_GATE_STOPS).nullable().optional(),
           duration_s: z.number().int().min(0).nullable().optional(),
-          phases: z.array(phaseSchema).nullable().optional(),
+          phases: ignoredOldField,
         },
       },
       handler: async (args) => {
         refuseOperatorOutcomeInsideJob(args.outcome, env);
         const run = await pipelineLogRun(args, env);
         const recorded = runFacts(run, env);
-        const reasons = withRecordedReasons(args.phases ?? [], recorded.phases);
-        const unpairedField = reasons.unpaired.length > 0 ? { reasons_unpaired: reasons.unpaired } : {};
         const spec = {
           projectId: run.projectId,
           slug: run.slug,
-          tier: requireLogged("tier", args.tier ?? recorded.tier),
-          tierOperator: args.tier_operator,
-          tierRaiseReason: args.tier_raise_reason ?? recorded.tierRaiseReason,
           taskType: args.task_type ?? recorded.taskType,
           outcome: args.outcome,
           gateStop: args.gate_stop,
           durationS: args.duration_s,
-          phases: reasons.phases,
+          phases: recorded.phases,
         };
-        try {
-          const logged = await openStore(env).runs.logPipelineRun(spec);
-          return { ok: true, runId: logged.runId, project: logged.projectId ? run.project : null, phases: logged.phases, ...unpairedField };
-        } catch (err) {
-          return { ...queuedPipelineLog(err, spec, env), ...unpairedField };
-        }
+        const since = await attemptSince(callerJobId(env), env);
+        const always = OPERATOR_PIPELINE_OUTCOMES.includes(args.outcome);
+        return pipelineLogAnswer(await recordPipelineRun({ spec, since, always }, env), run);
       },
     },
     {
@@ -1081,7 +1084,7 @@ function toolDefinitions(env, state) {
       guardsHome: true,
       config: {
         description:
-          "Enqueues an unattended /nightqueue:resolve run for a registered project. `project` is the registered NAME, never a path. One job is one self-contained deliverable that can be reviewed and merged on its own. Large work is ONE job with numbered stages written in the prompt — never several jobs that depend on each other. A job that needs another job's pull request merged first is cut wrong: fold it into that job. Independent jobs may run in parallel and merge in any order. " +
+          "Enqueues an unattended /nightqueue:resolve run for a registered project. `project` is the registered NAME, never a path. One job is one self-contained deliverable that can be reviewed and merged on its own. Large work is ONE job with numbered stages written in the prompt — never several jobs that depend on each other. A job that needs another job's pull request merged first is cut wrong: fold it into that job. A prompt that conditions the work on another job or pull request (`after J-<n>`, `once PR #<n> is merged`, `depends on J-<n>` / `depends on job`, `when #<n> lands`, outside code blocks and quoted comment threads) is refused and nothing is queued. Independent jobs may run in parallel and merge in any order. " +
           "This tool only records the job; it never runs it. Queue it now and start the whole batch later with `queue_run` (no `job_id`); start a single job now only when the user asks for that one job now. The hint reports how many runners are live right now, and a job queued with none online waits until `nightqueue queue run` starts one. " +
           "With `project` omitted, `cwd` (the absolute working directory of the caller) resolves the project. When no project is registered for it, the answer is `needs_registration`: ask the user to confirm, then call again with the same `cwd` and `register: true`. Registration never happens without `register: true`.",
         inputSchema: {
@@ -1112,11 +1115,6 @@ function toolDefinitions(env, state) {
           priority: z.number().int().min(PRIORITY_RANGE.min).max(PRIORITY_RANGE.max).nullable().optional(),
           max_attempts: z.number().int().min(MAX_ATTEMPTS_RANGE.min).max(MAX_ATTEMPTS_RANGE.max).nullable().optional(),
           timeout_s: z.number().int().min(TIMEOUT_RANGE.min).max(TIMEOUT_RANGE.max).nullable().optional(),
-          tier: z
-            .enum(PIPELINE_TIERS)
-            .nullable()
-            .optional()
-            .describe("Risk tier of the job, set by the operator. The pipeline may only raise it, with evidence, never lower it."),
           origin: z
             .array(z.object({ kind: z.string(), ref: z.string() }))
             .nullable()
@@ -1134,6 +1132,7 @@ function toolDefinitions(env, state) {
       },
       handler: async (args) => {
         requirePrompt(args);
+        refuseDependentPrompt(args.prompt);
         const target = await resolveQueueTarget(args, env);
         if (target.offer && args.register !== true) return needsRegistration(target);
         const registered = target.offer ? await registerOffer(target.offer, args.key, env) : null;
@@ -1144,7 +1143,6 @@ function toolDefinitions(env, state) {
           priority: args.priority,
           maxAttempts: args.max_attempts,
           timeoutS: args.timeout_s,
-          tier: args.tier,
           origin: args.origin,
           title: args.title,
           startBranch: args.start_branch,
@@ -1223,6 +1221,7 @@ function toolDefinitions(env, state) {
     },
     ...trackerWriteTools(env),
     connectionCallTool(env),
+    operatorConsentTool(env),
     {
       name: "queue_status",
       config: {
@@ -1345,7 +1344,7 @@ function toolDefinitions(env, state) {
       name: "queue_retry",
       config: {
         description:
-          "Sends a gated, failed or cancelled job back to the queue. A gated job only moves with `note`, which reaches the run as the answer to its gate - except a job the preflight gated (its `blocked_code` is set: dirty checkout, wrong branch, missing checkout or `claude`, or `store-unavailable`: the session could not reach this server), which moves without one once its cause is fixed. " +
+          "Sends a gated, failed or cancelled job back to the queue. A gated job only moves with `note`, which reaches the run as the answer to its gate - except a job the preflight gated (its `blocked_code` is set: dirty checkout, wrong branch, missing checkout or `claude`, or `store-unavailable`: the session could not reach this server), which moves without one once its cause is fixed. A finished job never resumes: a `closed` job, or a `done` job whose pull request is merged, is refused with \"a finished job does not resume; queue a new one\". " +
           "Without `fresh` the run resumes from the last phase, keeping slug, branch, session and run directory; with `fresh` it starts from phase 0 and the run directory is dropped. " +
           "`run` starts a DETACHED runner, the same one `queue_run` starts - and the same one the `--run` of the CLI starts, unless it is asked for `--foreground`; a job that cannot be claimed right now answers `waiting` and starts nothing. " +
           "Inside an unattended run this tool only accepts the id of the job it is running: retrying another job is refused, because the note is delivered as a human answer in that job's next prompt.",
@@ -1418,26 +1417,34 @@ function toolDefinitions(env, state) {
       config: {
         description:
           "Records how the run ended: `done` when the pull request exists, `gate` with the `notice` the operator has to answer, `no_change` with the run's conclusion as `notice` when the run concluded on purpose that no code change is needed (the job ends `done` with no pull request). " +
+          "A `gate` may instead send `question` and/or `from_artifact: {file, section}` (a run artifact such as `03-plan.md` and a heading such as `## Requires user confirmation`): the runtime composes the whole `## Notice` body - the section verbatim under `## Requires user confirmation`, the question, and the answer line - and returns it as `notice`; then end the turn, with no `## Notice` in the final text. `notice` together with either is refused. " +
           "The pull request URL is NOT a parameter: the runtime writes it from what the session really published. " +
           "Inside a job the run is resolved from the job's own row — passing `project` or `slug` there is refused; outside a job both are required.",
-        inputSchema: { status: z.enum(RUN_OUTCOME_STATUSES), notice: optionalText, project: optionalText, slug: optionalText },
+        inputSchema: {
+          status: z.enum(RUN_OUTCOME_STATUSES),
+          notice: optionalText,
+          question: optionalText,
+          from_artifact: z.object({ file: z.string(), section: z.string() }).nullable().optional(),
+          project: optionalText,
+          slug: optionalText,
+        },
       },
       handler: async (args) => {
         const run = await callerRun(args, env);
-        return runAnswer(recordOutcome({ ...run, status: args.status, notice: args.notice, env }), run);
+        if (!wantsComposedNotice(args)) return runAnswer(recordOutcome({ ...run, status: args.status, notice: args.notice, env }), run);
+        const notice = composedGateNotice(args, run, env);
+        return { ...runAnswer(recordOutcome({ ...run, status: args.status, notice, env }), run), notice };
       },
     },
     {
       name: "run_set",
       config: {
         description:
-          "Records the fields of the run itself in `state.json` as the pipeline discovers them: its `type`, its `tier`, the evidence of a tier raise, and the branch and worktree the code lives in. Only the fields sent are touched. " +
+          "Records the fields of the run itself in `state.json` as the pipeline discovers them: its `type` and the branch and worktree the code lives in. Only the fields sent are touched. " +
           "`qa_stage_a` records the one sub-phase with a marker of its own — sent when the QA stage A gate closes, it is what makes a resume re-enter the QA phase straight at stage B instead of paying the analyst again. " +
           "Inside a job the run is resolved from the job's own row — passing `project` or `slug` there is refused; outside a job both are required.",
         inputSchema: {
           type: z.enum(PIPELINE_TASK_TYPES).nullable().optional(),
-          tier: z.enum(PIPELINE_TIERS).nullable().optional(),
-          tier_raise_reason: optionalText,
           branch: optionalText,
           worktree: optionalText,
           qa_stage_a: z.object({ artifact: z.string(), verdict: optionalText }).optional(),
@@ -1477,7 +1484,7 @@ function refuseRemovedToolCalls(server, state) {
   });
 }
 
-// Builds the MCP server with the thirty-two tools of the plugin contract.
+// Builds the MCP server with the thirty-three tools of the plugin contract.
 export function createServer(env = process.env) {
   const server = new McpServer(
     {
@@ -1488,7 +1495,7 @@ export function createServer(env = process.env) {
       // MCP spec 2025-11-25: clients that support server icons render this next to the server name.
       icons: [{ src: "https://nightqueue.github.io/avatar.png", mimeType: "image/png", sizes: ["1024x1024"] }],
     },
-    { instructions: SERVER_INSTRUCTIONS },
+    { instructions: serverInstructions(env) },
   );
   const state = newContractState();
   const session = { env, state };

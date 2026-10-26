@@ -10,11 +10,12 @@ const AGENTS_DIR = join(ROOT, "plugin/agents");
 const REFUSAL = "too complex to verify that it stays inside the worktree";
 const PROMPTS = join(ROOT, "plugin/skills/resolve/references/prompts");
 
-// The host refuses Bash it cannot prove stays inside the worktree; the skill and the unattended prompt say how to write commands it accepts, and an agent gets the rule from its request, never its own file.
+// The host refuses Bash it cannot prove stays inside the worktree; the skill points at the rule every prompt carries, the unattended prompt says it, and an agent gets the rule from its request, never its own file.
 test("the worktree shell rule reaches the skill and the unattended prompt, and no agent file carries it", () => {
   const skill = readFileSync(join(ROOT, "plugin/skills/resolve/SKILL.md"), "utf8");
-  assert.ok(skill.includes(REFUSAL), "the skill does not name the refusal");
-  assert.match(skill, /no heredocs \(`<<`\)/);
+  assert.ok(skill.includes("Every prompt carries the shell rule (`references/prompts/_shell-rule.md`)"), "the skill does not point at the shell rule of the prompts");
+  assert.match(skill, /every test command a phase runs goes under an explicit `timeout`/);
+  assert.ok(readFileSync(join(PROMPTS, "_shell-rule.md"), "utf8").includes(REFUSAL), "the shell rule the skill points at does not name the refusal");
   const agents = readdirSync(AGENTS_DIR).filter((name) => name.endsWith(".md"));
   assert.ok(agents.length >= 6, "the agent files were not found");
   for (const name of agents) {

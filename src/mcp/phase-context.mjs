@@ -164,7 +164,7 @@ async function phaseOwner(caller, project, env) {
 }
 
 // The context block of one phase, ready to paste into the subagent's prompt: the lessons it has not seen, the project memory and, for the explore, the known map.
-export async function phaseContextBlock({ target, query, project, repoRoot, excludeIds }, env = process.env) {
+export async function phaseContextBlock({ target, query, project, repoRoot, excludeIds, origin = true }, env = process.env) {
   const caller = await callerContext(env);
   const owner = await phaseOwner(caller, project, env);
   const lessons = await recallFreshLessons(
@@ -177,7 +177,7 @@ export async function phaseContextBlock({ target, query, project, repoRoot, excl
     section("Project memory", memories, memoryLine),
     await indexSection({ target, projectId: owner.id, repoRoot, query }, env),
     await jobSection({ target, projectId: owner.id, query, prompt: caller.prompt, excludeJobId: callerJobId(env) }, env),
-    originSection({ target, caller }, env),
+    origin === false ? "" : originSection({ target, caller }, env),
   ].filter(Boolean);
   return { project: owner.name, block: sections.join("\n\n") };
 }

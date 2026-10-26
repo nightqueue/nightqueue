@@ -1,23 +1,39 @@
-Read before acting (via Read): `<RUN_DIR>/05a-qa-analyst.md`, its last `## Round` — stick to YOUR group
-of hypotheses (## Break hypotheses: <IDs/label of the assigned group>) and to the ## Test
-recipe.
+ARTIFACT_PATH: <RUN_DIR>/05-qa.md (appended through the runtime)
+[the round rule]
+Read before acting (via Read): the analyst's round of `<RUN_DIR>/05-qa.md` (the last `## Round`
+carrying `## Break hypotheses`) — stick to YOUR group of hypotheses (## Break hypotheses: <IDs/label
+of the assigned group>) and to the ## Test recipe.
 [the generic handoff lines]
 
-Inputs: the analyst artifact above — your group of ## Break hypotheses and the ## Test recipe; the plugin paths of your methodology.
+Inputs: the analyst's round above — your group of ## Break hypotheses and the ## Test recipe; the plugin paths of your methodology.
 
 Mode: PROVER
 
-Group of hypotheses under your responsibility (read the detail in 05a-qa-analyst.md):
+Group of hypotheses under your responsibility (read the detail in the analyst's round of 05-qa.md):
 [IDs/LABEL OF THE SAME-ROOT GROUP ASSIGNED TO THIS PROVER]
 
 You prove an assigned group of hypotheses: write ONLY the PoC files with the assigned
-names; never touch the git state (other provers run in this same
+names and your round draft; never touch the git state (other provers run in this same
 working tree). type=break → iterate until the PoC FAILS against the current code by the real
 break; type=regression → iterate until it PASSES. NEVER report PROVEN without the output
 of a real failure.
 
 ## Deliver
-Write ONLY the PoC files assigned to your group, with their assigned names, under `<RUN_DIR>/poc/` — never in the repo, and no .md artifact of your own. The return carries one verdict per hypothesis — `PROVEN` (the PoC + the output of its real failure; for type=regression, of its pass) | `REFUTED` (the evidence that the code holds) | `INCONCLUSIVE` (what was missing) — and the PoC files written.
+Write the PoC files assigned to your group, with their assigned names, under `<RUN_DIR>/poc/` — never in the repo. Your round draft carries, in this order and with these headings (the runtime stamps its `source: prover · group:` line, never write one):
+
+## Proven breaks
+(the PROVEN hypotheses: the PoC + the output of its real failure; for type=regression, of its pass; or `None`)
+
+## Validated risks
+One line per hypothesis: `H<n>: BROKE (PROVEN) | HELD (REFUTED) | INCONCLUSIVE — <what was missing>`
+
+## Generated PoCs
+(the PoC files written under `<RUN_DIR>/poc/`, with the vector each one attacks; or `None`)
+
+## Verdict
+NEEDS FIX (any PROVEN) | NEEDS DISCUSSION (any INCONCLUSIVE) | APPROVED
+
+Demo repository: [DEMO REPO — the project's configured path, or `none configured`] — the only repository where a verification may create, merge or close a real pull request; `none configured` → no real pull request: report that scenario as a gate.
 
 Repository: [CWD PATH]
 Project: [PROJECT — the name on the Project: line of the prompt]

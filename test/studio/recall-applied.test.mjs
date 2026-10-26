@@ -113,10 +113,10 @@ test("a path ref is applied when cited as an absolute, ./ or a/ diff path", asyn
   }
 });
 
-test("a lettered artifact such as 05a- counts as its phase's artifact", async (t) => {
+test("a lettered artifact such as 05b- counts as its phase's artifact", async (t) => {
   const env = makeHome(t, "applied-lettered");
-  runWith(env, { "05a-qa-analyst.md": "follow L5 here", "04b-notes.md": "and D-3" });
-  assert.deepEqual(await appliedRefs({ job: JOB, recalls: [recallAt(5, ["L5", "D-3"])], env }), [[["05a-qa-analyst.md"], []]]);
+  runWith(env, { "05b-qa-notes.md": "follow L5 here", "04b-notes.md": "and D-3" });
+  assert.deepEqual(await appliedRefs({ job: JOB, recalls: [recallAt(5, ["L5", "D-3"])], env }), [[["05b-qa-notes.md"], []]]);
 });
 
 test("a missing run directory, an unsafe slug or no recall answers nothing applied, never a throw", async (t) => {

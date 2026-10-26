@@ -10,6 +10,7 @@ import {
   hasGateMarkerInStream,
   isPrUrl,
   lastAttemptStream,
+  nestsAnotherSection,
   parseEventLine,
   prUrlRepo,
   publishedDelivery,
@@ -73,10 +74,10 @@ export function noChangeNotice(reason) {
 // Why the run stopped: state.json is the machine record of the outcome and the `## Notice` is the explanation for the operator — the pipeline had been summarizing the second inside the first, so the notice the run wrote wins, the summary the pipeline recorded is the fallback, and the whole final text is the last resort.
 function gateReason(log, resultText, recorded) {
   const notice = extractNoticeFromStream(log);
-  if (notice) return notice;
-  if (recorded) return recorded;
+  if (notice) return { text: notice, source: "stream" };
+  if (recorded) return { text: recorded, source: "record" };
   const text = String(resultText ?? "").trim();
-  return text ? truncateByCodePoint(text, NOTICE_FALLBACK_LIMIT) : null;
+  return { text: text ? truncateByCodePoint(text, NOTICE_FALLBACK_LIMIT) : null, source: "result" };
 }
 
 // Tells whether the process ended cleanly, the only case where a missing reason is a silent stop instead of a real failure.
@@ -99,9 +100,10 @@ function readPlanConfirmation(planPath) {
   }
 }
 
-// Tells whether a gate's notice fails to carry its question: no confirmation heading, or far shorter than the plan's own section (a margin of reflow, never of dropped points).
-function isBrokenGateNotice(reason, planPath) {
+// Tells whether a gate's notice fails to carry its question: no confirmation heading, or (unless it nests another artifact's section) far shorter than the plan's own section.
+function isBrokenGateNotice(reason, planPath, { nested = false } = {}) {
   if (!hasGateMarker(String(reason ?? ""))) return true;
+  if (nested) return false;
   const planSection = readPlanConfirmation(planPath);
   if (!planSection) return false;
   return Array.from(String(reason)).length < Array.from(planSection).length - GATE_NOTICE_MARGIN_CP;
@@ -171,13 +173,14 @@ function withStrayPr(noticeMd, stray, prUrl) {
 }
 
 // The pull request of the run: its own branch's publication, the runtime's record, then the text - never a publication proven to be another branch's.
-function resolvePrUrl(log, { state, record }) {
+function resolvePrUrl(log, { state, record, provenEdits }) {
   const reported = record?.prUrl ?? extractPrUrlFromStream(log);
   const delivery = publishedDelivery(log, {
     repo: prUrlRepo(reported),
     branch: state?.branch ?? null,
     hints: { type: state?.type, slug: state?.slug },
     recorded: record?.prUrl ?? null,
+    provenEdits,
   });
   const fallback = reported === delivery.stray?.url ? null : reported;
   return { prUrl: delivery.url ?? fallback, stray: delivery.stray };
@@ -187,9 +190,10 @@ function resolvePrUrl(log, { state, record }) {
 function classifyEnding({ record, state, resultText, log, ending, prUrl, planPath, runOutcome }) {
   const gate = record?.status ? record.status === "gate" : hasGateMarker(resultText) || hasGateMarkerInStream(log);
   const noChange = record?.status === NO_CHANGE_OUTCOME && state?.termination?.phase === "triage";
-  const reason = gateReason(log, resultText, record?.notice ?? null);
+  const { text: reason, source } = gateReason(log, resultText, record?.notice ?? null);
   const status = decideStatus({ ...ending, prUrl, gate, noChange, reason, runOutcome });
-  if (status === "gate" && isBrokenGateNotice(reason, planPath)) {
+  const nested = source === "record" && nestsAnotherSection(reason);
+  if (status === "gate" && isBrokenGateNotice(reason, planPath, { nested })) {
     return { status: "failed", noticeMd: brokenGateNotice(planPath) };
   }
   if (status === "cancelled" && !ending.stopped) return { status, noticeMd: nothingToCloseNotice(reason) };
@@ -199,10 +203,10 @@ function classifyEnding({ record, state, resultText, log, ending, prUrl, planPat
 }
 
 // Classifies one attempt of a job from what the pipeline recorded, its stream, how the process ended, the run's plan and the outcome its own telemetry recorded.
-export function classifyJobResult({ log, exitCode, timedOut = false, idleTimedOut = false, stopped = false, state = null, planPath = null, runOutcome = null } = {}) {
+export function classifyJobResult({ log, exitCode, timedOut = false, idleTimedOut = false, stopped = false, state = null, planPath = null, runOutcome = null, provenEdits = [] } = {}) {
   const resultText = extractResultText(log) ?? "";
   const record = pipelineOutcome(state);
-  const { prUrl, stray } = resolvePrUrl(log, { state, record });
+  const { prUrl, stray } = resolvePrUrl(log, { state, record, provenEdits });
   const kill = runtimeKillFromStream(log);
   if (kill && isTerminalKill(kill, record)) {
     return { status: "failed", prUrl, noticeMd: withStrayPr(runtimeKillNotice(kill), stray, prUrl), resultText };

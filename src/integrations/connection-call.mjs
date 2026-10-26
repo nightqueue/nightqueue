@@ -1,5 +1,6 @@
 // The runtime side of `connection_call`: reaches the API behind a stored connection by its name with the secret injected here and never answered; no service is named here, each provider declares its own call rules.
 import { refuseConnectionWriteInsideJob } from "../queue/home-guard.mjs";
+import { connectionScope, consentCovers, operatorSession } from "../queue/operator-consent.mjs";
 import { connectionRecord } from "./connections.mjs";
 import { quietFiles } from "./coverage.mjs";
 import { requestJson } from "./http.mjs";
@@ -197,11 +198,29 @@ function preparedCall(args, method, env) {
   return { ...target, url, body: body.text === null ? undefined : args.body };
 }
 
+// The refusal of a write an operator session sends with no live connection-write consent covering it, or null (always outside an operator session).
+function missingConsent(args, method, env) {
+  const session = operatorSession(env);
+  if (session === null) return null;
+  const scope = connectionScope({ connection: args?.connection, method, path: typeof args?.path === "string" ? args.path : "" });
+  try {
+    if (consentCovers(session, { kind: "connection-write", scope }, env)) return null;
+  } catch (err) {
+    return refused("needs-consent", `the consent record could not be read (${err?.message ?? String(err)}), so the write is refused; nothing was sent`);
+  }
+  return refused(
+    "needs-consent",
+    `needs consent (connection-write ${scope}): show the person the exact request, record their answer with operator_consent, then call again; nothing was sent`,
+  );
+}
+
 // Calls the API behind a stored connection and answers { ok, status, body, body_truncated? } or { ok: false, error, status, detail }.
 export async function connectionCall(args, { env, fetchImpl = globalThis.fetch } = {}) {
   const method = methodOf(args);
   if (!CONNECTION_CALL_METHODS.includes(method)) return invalid("method is GET, POST, PATCH or PUT");
   if (method !== "GET") refuseConnectionWriteInsideJob(env, method);
+  const unconsented = method === "GET" ? null : missingConsent(args, method, env);
+  if (unconsented) return unconsented;
   const call = preparedCall(args, method, env);
   if (call.refusal) return call.refusal;
   const headers = call.provider.authHeaders(call.record);

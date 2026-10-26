@@ -1,0 +1,4 @@
+OK
+VERDICT: APPROVED
+OPEN: unconfirmed decisions — archived jobs visibility
+recorded: phase_done qa APPROVED

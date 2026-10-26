@@ -1,22 +1,20 @@
-import { isAbsolute } from "node:path";
-import { globStaticPrefix, isOrchestratorCall, readTarget } from "../queue/orchestrator-scope.mjs";
+import { existsSync } from "node:fs";
+import { isAbsolute, resolve } from "node:path";
+import { consentBash, neverBashReason, neverWriteReason } from "../queue/operator-bands.mjs";
+import { consentCovers, operatorSession } from "../queue/operator-consent.mjs";
+import { globStaticPrefix, insideRoots, isOrchestratorCall, readTarget } from "../queue/orchestrator-scope.mjs";
 import {
   OPERATOR_GUARD,
-  agentRole,
   checkoutRoots,
   describeAgentDenial,
-  describeMainBashDenial,
-  describeMainWriteDenial,
-  describeQaBashDenial,
-  describeQaWriteDenial,
+  describeMainBashList,
   describeReadDenial,
-  describeReadonlySubagentBashDenial,
-  describeSubagentWriteDenial,
+  describeSubagentBashList,
   mainBashAllowed,
-  qaBashAllowed,
-  qaPathAllowed,
+  pipelineAgent,
   readRefusal,
   readonlySubagentBashAllowed,
+  registryNote,
   sweepsSecrets,
 } from "../queue/operator-scope.mjs";
 
@@ -24,10 +22,14 @@ const WRITE_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
 const READ_TOOLS = new Set(["Read", "Grep", "Glob"]);
 const AGENT_TOOLS = new Set(["Agent", "Task"]);
 const INPUT_REQUIRED_TOOLS = new Set([...WRITE_TOOLS, "Bash", ...AGENT_TOOLS]);
+const CONSENT_TAIL = "ask the person (what, where, how to undo it), record the answer with operator_consent, then retry";
 
-// The path an edit tool call writes, or null when it names none.
-function writeTarget(toolInput) {
-  return toolInput?.file_path ?? toolInput?.notebook_path ?? null;
+// The absolute path an edit tool call writes, a relative one resolved against the session cwd, or null when it names none.
+function writeTarget(toolInput, cwd) {
+  const path = toolInput?.file_path ?? toolInput?.notebook_path ?? null;
+  if (typeof path !== "string" || path.trim() === "") return null;
+  if (isAbsolute(path)) return resolve(path);
+  return typeof cwd === "string" && isAbsolute(cwd) ? resolve(cwd, path) : null;
 }
 
 // The static prefix of an absolute glob a read call carries (Glob `pattern`, Grep `glob`), or null when it carries none.
@@ -57,47 +59,61 @@ function malformedReason(toolName, toolInput) {
   return `${OPERATOR_GUARD}: this ${toolName} call carries no tool_input object, so it cannot be checked and is refused`;
 }
 
-// Deny reason of a main-thread Bash command outside the operator's list, or null.
-function mainBashReason(command, env) {
-  const { roots, error } = checkoutRoots(env);
-  return mainBashAllowed(command, roots) ? null : describeMainBashDenial(error);
+// The refusal of a call no consent covers yet.
+function needsConsent(kind, shown) {
+  return `${OPERATOR_GUARD}: needs consent (${kind} ${shown}): ${CONSENT_TAIL}`;
 }
 
-// Deny reason of a call from the operator's own main thread, or null when the operator guard allows it.
-function mainThreadReason(input, env) {
-  const toolName = input.tool_name;
-  const toolInput = input.tool_input ?? {};
-  if (WRITE_TOOLS.has(toolName)) return describeMainWriteDenial(toolName);
-  if (READ_TOOLS.has(toolName)) return readReason(input, env);
-  if (toolName === "Bash") return mainBashReason(toolInput.command, env);
-  if (AGENT_TOOLS.has(toolName)) return agentRole(toolInput.subagent_type) ? null : describeAgentDenial(toolInput.subagent_type);
-  return null;
-}
-
-// Deny reason of a qa subagent's call: edits and Bash stay in its qa worktree.
-function qaReason(toolName, toolInput, env) {
-  if (WRITE_TOOLS.has(toolName)) {
-    const path = writeTarget(toolInput);
-    return qaPathAllowed(path, env) ? null : describeQaWriteDenial(path, env);
+// Deny reason of an edit tool call: never in the never band, consented edits in a registered checkout, a create anywhere a consent names.
+function writeReason(input, env) {
+  const target = writeTarget(input.tool_input, input.cwd);
+  if (target === null) return `${OPERATOR_GUARD}: this ${input.tool_name} call names no path that can be resolved; pass an absolute \`file_path\``;
+  const never = neverWriteReason(target, env);
+  if (never) return `${OPERATOR_GUARD}: never (${never}): ${target} is in the never band, and no consent covers it`;
+  const kind = input.tool_name === "Write" && !existsSync(target) ? "create" : "edit";
+  if (kind === "edit") {
+    const { roots, error } = checkoutRoots(env);
+    if (!insideRoots(target, roots)) return `${OPERATOR_GUARD}: edits stay in a registered checkout, and ${target} is outside every one${registryNote(error)}`;
   }
-  if (toolName === "Bash") return qaBashAllowed(toolInput.command, env) ? null : describeQaBashDenial(env);
+  return consentCovers(operatorSession(env), { kind, target }, env) ? null : needsConsent(kind, target);
+}
+
+// Tells whether a Bash command is on the free list of the thread that runs it.
+function freeBash(command, { mainThread, env }) {
+  const { roots } = checkoutRoots(env);
+  return mainThread ? mainBashAllowed(command, roots) : readonlySubagentBashAllowed(command, roots);
+}
+
+// Deny reason of a Bash call: never in the never band, free on the thread's list, else only the consented command in a registered checkout.
+function bashReason(input, { mainThread, env }) {
+  const command = input.tool_input.command;
+  if (typeof command !== "string" || command.trim() === "") return `${OPERATOR_GUARD}: this Bash call carries no command`;
+  const never = neverBashReason(command, { cwd: input.cwd, env });
+  if (never) return `${OPERATOR_GUARD}: never (${never}): no consent covers it`;
+  if (freeBash(command, { mainThread, env })) return null;
+  const request = consentBash(command, { cwd: input.cwd, env });
+  if (request.free) return null;
+  if (request.shape) {
+    const free = mainThread ? describeMainBashList() : describeSubagentBashList();
+    return `${OPERATOR_GUARD}: ${request.shape}; run one bare command as \`cd <registered checkout> && <command>\` after the person's consent, or one of the free commands: ${free}`;
+  }
+  return consentCovers(operatorSession(env), request, env) ? null : needsConsent(request.kind, request.shown);
+}
+
+// Deny reason of an Agent/Task launch: only the pipeline agents of the plugin, under a plugin-scoped spelling.
+function agentReason(toolInput) {
+  return pipelineAgent(toolInput.subagent_type) ? null : describeAgentDenial(toolInput.subagent_type);
+}
+
+// Deny reason of a call of the operator or one of its subagents under the three bands, or null when the guard allows it.
+function bandReason(input, env) {
+  const toolName = input.tool_name;
+  const mainThread = isOrchestratorCall(input);
+  if (READ_TOOLS.has(toolName)) return readReason(input, env);
+  if (AGENT_TOOLS.has(toolName)) return mainThread ? agentReason(input.tool_input) : null;
+  if (WRITE_TOOLS.has(toolName)) return writeReason(input, env);
+  if (toolName === "Bash") return bashReason(input, { mainThread, env });
   return null;
-}
-
-// Deny reason of a read-only subagent's call: no edit, and only the read-only Bash list.
-function readonlySubagentReason(toolName, toolInput, { agentType, env }) {
-  if (WRITE_TOOLS.has(toolName)) return describeSubagentWriteDenial(agentType);
-  if (toolName !== "Bash") return null;
-  const { roots, error } = checkoutRoots(env);
-  return readonlySubagentBashAllowed(toolInput.command, roots) ? null : describeReadonlySubagentBashDenial(agentType, error);
-}
-
-// Deny reason of a subagent's call under the operator guard: its reads in the operator's roots, the rest by the role its agent type names.
-function subagentReason(input, env) {
-  const toolInput = input.tool_input ?? {};
-  if (READ_TOOLS.has(input.tool_name)) return readReason(input, env);
-  if (agentRole(input.agent_type) === "qa") return qaReason(input.tool_name, toolInput, env);
-  return readonlySubagentReason(input.tool_name, toolInput, { agentType: input.agent_type, env });
 }
 
 // Reason of a call the guard could not decide: anything but a read is refused rather than let through.
@@ -110,7 +126,7 @@ export function operatorDecision({ input, env = process.env }) {
   try {
     const malformed = malformedReason(input?.tool_name, input?.tool_input);
     if (malformed) return malformed;
-    return isOrchestratorCall(input) ? mainThreadReason(input, env) : subagentReason(input, env);
+    return bandReason(input, env);
   } catch (err) {
     return READ_TOOLS.has(input?.tool_name) ? null : failClosedReason(input?.tool_name, err);
   }

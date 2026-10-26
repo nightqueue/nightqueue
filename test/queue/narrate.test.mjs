@@ -171,7 +171,7 @@ test("the lane label carries the model of the `tool_use` that launched it, the o
   assert.ok(lines.includes("00:01  ◀ coder (phase 4, opus) completed (4s · 3 tools · edits unknown)"), lines.join("\n"));
 });
 
-const RUNTIME_PROMPT = "Phase 6.5 of the job.\n\nMode: RUNTIME\n\nRun the change for real.";
+const RUNTIME_PROMPT = "Phase 7 of the job.\n\nMode: RUNTIME\n\nRun the change for real.";
 
 // The phase of the laneOpen and laneClose events of one Agent lane launched with the given agent and prompt.
 function lanePhases(subagentType, prompt) {
@@ -194,11 +194,10 @@ test("a verifier without the runtime line stays phase 6, and a coder quoting it 
   assert.deepEqual(lanePhases("nightqueue:coder", RUNTIME_PROMPT), [4, 4]);
 });
 
-test("the runtime discriminator matches the shipped runtime template and neither verifier template", () => {
+test("the runtime discriminator matches the shipped runtime template and not the verifier template", () => {
   const template = (name) => readFileSync(new URL(`../../plugin/skills/resolve/references/prompts/${name}`, import.meta.url), "utf8");
   assert.equal(RUNTIME_PROMPT_RE.test(template("runtime.md")), true);
   assert.equal(RUNTIME_PROMPT_RE.test(template("verifier.md")), false);
-  assert.equal(RUNTIME_PROMPT_RE.test(template("verifier-fast.md")), false);
 });
 
 test("the runtime line is still found behind a leading BOM or indentation, and only at a line start of a verifier", () => {
@@ -407,8 +406,8 @@ test("a lane still open at the end of the log is in progress while the job runs,
 const LIVE_NOW_MS = Date.parse(secondsIntoAttempt(30));
 
 // The live state of a log of one attempt, read 30 seconds into it.
-function live(events, tier = "complex") {
-  return liveState(attemptLog(events), { tier, nowMs: LIVE_NOW_MS });
+function live(events) {
+  return liveState(attemptLog(events), { nowMs: LIVE_NOW_MS });
 }
 
 test("liveState inside a lane names the agent, its model and intent, and the last event of that lane", () => {
@@ -437,11 +436,11 @@ test("liveState between lanes and before the first lane belongs to the orchestra
     agentToolUseEvent({ timestamp: secondsIntoAttempt(2) }),
     taskNotificationEvent(),
     assistantEvent("Triage is done.", { timestamp: secondsIntoAttempt(10) }),
-  ], "simple");
+  ]);
   assert.equal(between.agent, "orchestrator");
   assert.equal(between.intent, "Triage is done.");
   assert.deepEqual(between.last, { kind: "text", text: "Triage is done.", at: secondsIntoAttempt(10) });
-  assert.deepEqual([between.phase, between.phases], [2, 5]);
+  assert.deepEqual([between.phase, between.phases], [2, 9]);
 });
 
 test("liveState follows the nightqueue run markers of the orchestrator Bash, with or without a description", () => {
@@ -453,13 +452,13 @@ test("liveState follows the nightqueue run markers of the orchestrator Bash, wit
   assert.equal(report.phase, 9);
 });
 
-test("liveState counts the runtime lane as slot 7 and publish as commit · PR, on complex and trivial tracks", () => {
+test("liveState counts the runtime lane as slot 7 and publish as commit · PR, on the one nine-slot track", () => {
   const runtime = live([agentToolUseEvent({ subagentType: "nightqueue:verifier", prompt: RUNTIME_PROMPT, timestamp: secondsIntoAttempt(2) })]);
   assert.deepEqual([runtime.agent, runtime.phase, runtime.phases], ["verifier", 8, 9]);
-  const verifier = live([agentToolUseEvent({ subagentType: "nightqueue:verifier", timestamp: secondsIntoAttempt(2) })], "trivial");
-  assert.deepEqual([verifier.phase, verifier.phases], [3, 4]);
-  const publish = live([toolUseEvent({ input: { command: "nightqueue run publish --slug x" }, timestamp: secondsIntoAttempt(3) })], "trivial");
-  assert.deepEqual([publish.phase, publish.phases], [4, 4]);
+  const verifier = live([agentToolUseEvent({ subagentType: "nightqueue:verifier", timestamp: secondsIntoAttempt(2) })]);
+  assert.deepEqual([verifier.phase, verifier.phases], [7, 9]);
+  const publish = live([toolUseEvent({ input: { command: "nightqueue run publish --slug x" }, timestamp: secondsIntoAttempt(3) })]);
+  assert.deepEqual([publish.phase, publish.phases], [9, 9]);
 });
 
 test("liveState of a lane opened before the window has no identity but keeps its last event", () => {
@@ -472,7 +471,7 @@ test("liveState of a lane opened before the window has no identity but keeps its
   assert.equal(state.quiet_s, 21);
 });
 
-test("liveState of an unknown tier or an empty tail answers nulls, never a throw", () => {
-  const state = liveState("", { tier: null, nowMs: LIVE_NOW_MS });
-  assert.deepEqual([state.attempt, state.last, state.quiet_s, state.phase, state.phases], [null, null, null, null, null]);
+test("liveState of an empty tail answers nulls at the brief of the nine-slot track, never a throw", () => {
+  const state = liveState("", { nowMs: LIVE_NOW_MS });
+  assert.deepEqual([state.attempt, state.last, state.quiet_s, state.phase, state.phases], [null, null, null, 1, 9]);
 });

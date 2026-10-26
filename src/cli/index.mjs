@@ -79,7 +79,7 @@ commands:
   setup [--from <dir>] [--remove]           install the runtime in the home and register the MCP server, hooks and plugin in the host
   doctor [--json] [--check-updates] [--fix] [--db]  check the host and the home, one line per check; --db reports more of the database, --fix also folds its WAL and moves broken sidecars aside; exits 1 on any failure
   init [path] [--key <KEY>] [--gh (deprecated, no effect)|--no-gh]  install the runtime and register the git repository at [path] (default: .) as a project
-  open [project] [--resume <session>] [--prompt <text>]  open the operator in the nightqueue home; [project] only preselects it; it investigates, plans and queues jobs, and never edits the code; --prompt starts it with a request
+  open [project] [--resume <session>] [--prompt <text>]  open the operator in the nightqueue home; [project] only preselects it; it investigates, plans and queues jobs, and edits or runs only with your consent; --prompt starts it with a request
   update [<version>] [--from [--no-install]] [--force]  reinstall the runtime at the newest version (or at <version>) and re-point the host at it
   org add <name> [--key <KEY>]              create an org; without --key a terminal is asked, else a key is suggested from the name
   org list [--json]                         list orgs, their key, connection slots and project counts
@@ -94,15 +94,17 @@ commands:
   project remove <name> [--purge [--yes]]   unregister a project; --purge also deletes every row it owns (asks first)
   project move <name> [<org>] [--path <p>]  move a project to another org and/or give it a new checkout
   project integrations <name> show|set|unset  show or change the project's per-provider settings (set <kind.key>=<value>, unset <kind.key>)
+  project models <name> [--set|--unset]     show or change the model each agent runs on for the project (--set <agent>=<model>, --unset <agent>)
+  project demo-repo <name> [--set <path>]   show or set the demo repository where verifications may open real pull requests
   connection add <name> --type <type>       store a secret read from stdin and bind it to a free org slot; a home-wide type (linear) binds nothing
   connection bind <name> --org <name>       bind (or rebind) a stored connection to an org slot (org-scoped types only)
   connection test <name>                    check a stored connection against its service
   connection list [--json]                  list connections, their type and the orgs using them
   connection remove <name>                  unbind a connection from every org and delete its secret
-  mcp                                       start the stdio MCP server that exposes the thirty-two memory and queue tools
+  mcp                                       start the stdio MCP server that exposes the thirty-three memory and queue tools
   mcp --http [--port <n>] [--token <t>]     serve the same tools over Streamable HTTP on 127.0.0.1
   studio [--port <n>] [--api-only] [--no-open]  serve nightqueue studio, the local web cockpit, on 127.0.0.1
-  hook <name>                               run a hook (session-start, prompt-context, agent-foreground, merger-guard, subagent-stop), reading the event JSON from stdin
+  hook <name>                               run a hook (session-start, prompt-context, agent-foreground, merger-guard), reading the event JSON from stdin
   embed install                             install the embedding library into the home and download its weights
   embed download                            download the embedding weights into the home (the only network path)
   embed backfill                            compute the embeddings of the lessons that still have none
@@ -136,7 +138,7 @@ inside a job — each acts on the run of the job it is called from, never on the
   run log [--json]                         one line per phase of THIS run: model, status and duration
   run commit --message-file <path>          stage what 04-implementation.md listed and commit it; --extra adds a pathspec
   run pr --body-file <path>                 check the body, push THIS run's branch under its final name and open the PR
-  run start --tier --type --commit-type     record THIS run's tier and type; print its routing row, phases, tasks and PR template as JSON
+  run start --type --commit-type            record THIS run's type; print its agent models, phases and PR template as JSON
   run publish --message-file --body-file    check the body, commit the list once, push THIS run's branch and open the PR
   run report [--json]                       the tables of THIS run's final report: steps, happy or not
 

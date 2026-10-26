@@ -11,8 +11,6 @@ export {
   effectiveProject,
   PRIORITIES,
   removeOrigin,
-  TIERS,
-  type Tier,
 } from "./addJobForm";
 
 interface QueuedAnswer {

@@ -9,6 +9,7 @@ import { ensureProject, registerCheckout } from "../../test-support/memory.mjs";
 import { loadConfig, saveConfig } from "../../src/config/store.mjs";
 import { openDb } from "../../src/memory/db.mjs";
 import { addJob, claimJobById, getJob, parkJob } from "../../src/memory/jobs.mjs";
+import { DEPENDENT_PROMPT_REFUSAL } from "../../src/queue/dependent-prompt.mjs";
 import { clockLabel } from "../../src/queue/hints.mjs";
 import { writeRunnerRecord } from "../../src/queue/registry.mjs";
 import { initGitRepo } from "../../test-support/git.mjs";
@@ -145,6 +146,23 @@ test("queue add without a project takes the one of the current directory and joi
   assert.equal(escaped.status, 0, escaped.stderr);
   assert.equal(getJob(2, env).prompt, "explain --run to me");
   assert.equal(escaped.stdout.includes("running job"), false, "a prompt that mentions --run ran the job");
+});
+
+test("queue add refuses a prompt that depends on another job with the MCP message, and queues nothing", (t) => {
+  const env = makeCliHome(t, "cli-add-dependent");
+  const outside = makeDir(t, "cli-add-dependent-outside");
+  const refused = runCli(env, ["queue", "add", "alpha", "after J-12 add the flag"], { cwd: outside });
+  assert.equal(refused.status, 1, refused.stdout);
+  assert.ok(refused.stderr.includes(`${DEPENDENT_PROMPT_REFUSAL} Matched: \`after J-12\`.`), refused.stderr);
+  assert.equal(getJob(1, env), null, "a dependent prompt was queued");
+
+  const bare = runCli(env, ["queue", "add", "alpha", "add the flag J-12 asked for"], { cwd: outside });
+  assert.equal(bare.status, 0, bare.stderr);
+  assert.equal(getJob(1, env).prompt, "add the flag J-12 asked for");
+
+  const fenced = runCli(env, ["queue", "add", "alpha", "add the flag\n```\nafter J-12\n```"], { cwd: outside });
+  assert.equal(fenced.status, 0, fenced.stderr);
+  assert.equal(getJob(2, env).prompt, "add the flag\n```\nafter J-12\n```");
 });
 
 test("queue add --run --foreground runs the job here and answers with its outcome", (t) => {
@@ -308,7 +326,7 @@ test("a closed job is terminal for cancel, for retry and for close, and retry st
 
   const retried = runCli(env, ["queue", "retry", String(closed)]);
   assert.equal(retried.status, 1);
-  assert.match(retried.stderr, /cannot be retried from status `closed`/);
+  assert.match(retried.stderr, new RegExp(`J-${closed} is closed: a finished job does not resume; queue a new one`));
 
   const reclosed = runCli(env, ["queue", "close", String(closed), "--foreground"]);
   assert.equal(reclosed.status, 1);
@@ -357,32 +375,24 @@ test("queue close takes one id and refuses every job that is not done, and --for
   assert.match(runCli(env, ["queue", "close", String(pending), String(noPr)]).stderr, /unexpected argument/);
 });
 
-test("`queue add --tier` records the tier, `queue status` shows it, and an unknown value queues nothing", (t) => {
+test("`queue add --tier` is refused with the line naming its removal and queues nothing; `queue status` shows no tier", (t) => {
   const env = makeCliHome(t, "cli-add-tier");
   const repo = projectPath(env);
 
-  const added = runCli(env, ["queue", "add", "--tier", "simple", "fix the worker"], { cwd: repo });
-  assert.equal(added.status, 0, added.stderr);
-  assert.equal(getJob(1, env).tier, "simple");
-  assert.equal(JSON.parse(runCli(env, ["queue", "status", "1", "--json"]).stdout).job.tier, "simple");
-  assert.match(runCli(env, ["queue", "status", "1"]).stdout, /tier\s+simple/);
-
-  runCli(env, ["queue", "add", "fix the parser"], { cwd: repo });
-  assert.equal(JSON.parse(runCli(env, ["queue", "status", "2", "--json"]).stdout).job.tier, null);
-  assert.equal(
-    runCli(env, ["queue", "status", "2"]).stdout.includes("tier"),
-    false,
-    "the detail of a job with no tier printed a tier line",
-  );
-
-  const unknown = runCli(env, ["queue", "add", "--tier", "urgent", "fix the uploader"], { cwd: repo });
-  assert.equal(unknown.status, 1);
-  assert.match(unknown.stderr, /invalid `tier`: `urgent`; expected one of trivial\|simple\|complex/);
-  assert.equal(getJob(3, env), null, "the refused tier still queued a job");
+  for (const tier of ["simple", "urgent"]) {
+    const refused = runCli(env, ["queue", "add", "--tier", tier, "fix the worker"], { cwd: repo });
+    assert.equal(refused.status, 1, refused.stdout);
+    assert.match(refused.stderr, /`tier` was removed: every job runs the one \/resolve pipeline \(one model per agent, QA mode chosen by `run check 03`\)/);
+  }
+  assert.equal(getJob(1, env), null, "a refused `--tier` still queued a job");
 
   const dangling = runCli(env, ["queue", "add", "fix the uploader", "--tier"], { cwd: repo });
   assert.equal(dangling.status, 1);
-  assert.equal(getJob(3, env), null, "a `--tier` with no value still queued a job");
+  assert.equal(getJob(1, env), null, "a `--tier` with no value still queued a job");
+
+  runCli(env, ["queue", "add", "fix the parser"], { cwd: repo });
+  assert.equal("tier" in JSON.parse(runCli(env, ["queue", "status", "1", "--json"]).stdout).job, false);
+  assert.equal(runCli(env, ["queue", "status", "1"]).stdout.includes("tier"), false, "the detail of a job printed a tier line");
 });
 
 test("`queue add --title` lists the pending job by that title in the table and in the json, and a blank title is none", (t) => {

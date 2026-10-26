@@ -1,9 +1,5 @@
 import type { JobOrigin } from "./types";
 
-export const TIERS = ["auto", "trivial", "simple", "complex"] as const;
-
-export type Tier = (typeof TIERS)[number];
-
 export const PRIORITIES = [1, 2, 3, 4, 5, 6, 7, 8, 9];
 
 export const DEFAULT_PRIORITY = 5;
@@ -11,13 +7,12 @@ export const DEFAULT_PRIORITY = 5;
 export interface AddJobForm {
   project: string;
   text: string;
-  tier: Tier;
   priority: number;
   origin: JobOrigin[] | null;
   originUrl: string | null;
 }
 
-export const EMPTY_ADD_FORM: AddJobForm = { project: "", text: "", tier: "auto", priority: DEFAULT_PRIORITY, origin: null, originUrl: null };
+export const EMPTY_ADD_FORM: AddJobForm = { project: "", text: "", priority: DEFAULT_PRIORITY, origin: null, originUrl: null };
 
 // The `origin` argument of the form: the chips' origins, `[]` once every chip was cleared, nothing when it never had one.
 function originArg(origin: AddJobForm["origin"]): Record<string, unknown> {
@@ -25,11 +20,10 @@ function originArg(origin: AddJobForm["origin"]): Record<string, unknown> {
   return { origin: origin.map(({ kind, ref }) => ({ kind, ref })) };
 }
 
-// The exact arguments `queue_add` gets from the form: the text as the brief; `auto` sends no tier; the origin only when set or cleared.
+// The exact arguments `queue_add` gets from the form: the text as the brief; the origin only when set or cleared.
 export function buildAddArgs(form: AddJobForm): Record<string, unknown> {
   const text = form.text.trim();
-  const tier = form.tier === "auto" ? {} : { tier: form.tier };
-  return { project: form.project, prompt: text, ...tier, priority: form.priority, ...originArg(form.origin) };
+  return { project: form.project, prompt: text, priority: form.priority, ...originArg(form.origin) };
 }
 
 // What still keeps the form from being queued, or null when it is complete.

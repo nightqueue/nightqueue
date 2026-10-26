@@ -6,7 +6,203 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ## Unreleased
 
+### Added
+
+- **`nightqueue run check` answers the verdict and the gates.** The first line is unchanged
+  (`OK`, `MISSING: <sections>`, `GENERATED`); after it come stable-prefix lines, one fact each,
+  in a fixed order: `VERDICT:`, `GATE: <code> — <evidence>`, `OPEN:`, `TYPE-MISMATCH:`,
+  `CONFIRM:`, `INVALIDATED:`, `DIFF-APPLIES:`, `NEEDS-DEVICE`, `index:`, `recorded:`, and
+  `SCRIPT:` last. The gate codes are `symptom-proof-missing` (01); `coverage-vector-no-reason`,
+  `coverage-enumeration-no-method`, `coverage-not-covered-without-confirmation` and
+  `usage-coverage-cond-1` to `-cond-4` (03, the condition-3 exception included);
+  `symptom-coverage-n-mismatch`, `symptom-coverage-omitted-empty`,
+  `symptom-coverage-method-generic`, `usage-coverage-nm-mismatch`,
+  `usage-coverage-divergences-empty` and `usage-coverage-held-on-pipeline` (05); and
+  `runtime-not-met` and `runtime-no-attempt` (06.5). Each is defined mechanically in
+  `docs/runtime-contract.md`. Round artifacts are read on their last `## Round`, and headings
+  inside fenced code or HTML comments never count. Table cells are split the markdown way, so a
+  pipe inside a code span or written `\|` stays in its cell. The condition-3 exception holds
+  only when the parameter's code token is named whole in the validated brief; a prose-only
+  parameter fires the gate. A `NEEDS-CLARIFICATION` or `NOT-REPRODUCIBLE` triage must carry an
+  `## Open items` with an item. One fixture per code lives under `test/fixtures/check/`.
+- **The check carries out its own effects.** On a complete phase it records `phase_done`
+  itself, with the reason of a re-run (`recorded: phase_done <phase> <verdict>`), and never on a
+  gate, `06` `FAILED` or `06.5` `NOT-MET`/`SYMPTOM-PERSISTS`. `run check 02` saves the index
+  (`index: saved …` / `index: not saved (…)`, which never changes `OK`). `run check 01` records a
+  missing Type and the termination of a terminal verdict, and `run check 05a` records the QA
+  stage A marker. That termination lasts one attempt: a later `PROCEED` triage or a
+  `queue retry` of the gate lifts it, so an answered clarification resumes later pauses
+  normally. A termination written by hand with `run_terminate` is never lifted. A `checks` memo in `state.json` keeps a repeated check from adding a second row.
+  `run publish` and `run pr` record the `commit` phase.
+- **`run_outcome` composes the gate notice.** With `status: "gate"`, `question` and/or
+  `from_artifact: {file, section}` make the runtime write the whole `## Notice` (the section,
+  the question and the `queue retry` answer line). A job whose final text has no `## Notice`
+  still ends at `gate` with that notice, and the `## Notice`-in-text path still works. The
+  section is found at any heading level, as the check reads it. A composed notice that nests
+  another artifact's section (a device script, open items) is not measured against the plan's
+  older confirmation section.
+- **Commit template.** `run start` answers `commitTemplate {source, path, label}`, chosen in
+  this order: git's `commit.template`, then the repository's convention, then the nightqueue
+  fallback in the new `references/commit-template.md`. `run publish --message-file` checks the
+  message before committing and prints one `REJECTED: commit message — <reason>` per violation:
+  a bad subject, a missing blank line 2, a `Co-Authored-By:` or `Refs:` trailer, and, under the
+  fallback, a subject that is not Conventional Commits.
+- **The triager writes the Brief and the request critique.** Its request now takes the raw
+  request (`{{RAW_REQUEST}}`, the job's own prompt inside a job plus the operator's gate answer,
+  the new `phase_prompt` `request` input outside one) and the origin data (`{{ORIGIN}}`), and
+  its triage opens with `## Brief` (Affected area, Context, Objective, Expected outcome, Type,
+  Bug account, Key evidence, Commit type, a `**Slug:**` while the run still holds its
+  provisional slug, Stages) and `## Request critique`. `plugin/agents/triager.md` gains a
+  pipeline-independent `## Framing the request` method section. `phase_prompt` renders the
+  triager without `00-brief.md` and without a type; `raw_evidence` is accepted and ignored.
+- **`run check 01` writes `00-brief.md` and records the commit type and the slug.** On `OK` it
+  copies the triage's `## Brief` into `<RUN_DIR>/00-brief.md` (`recorded: brief 00-brief.md`),
+  records the Brief's Type (`recorded: type <t>`, `(was <old>)` when it replaces one),
+  `commitType` (`recorded: commit type <c>`) and, last, the slug: a job run still on its
+  provisional slug takes the Brief's `**Slug:**`, the row rebound and the run dir renamed
+  (`recorded: slug <new> (renamed from <old>; run dir <path>)`); otherwise the slug is kept with
+  the reason. New gate codes, each with a fixture: `brief-missing` (every verdict),
+  `brief-field-empty — <field>`, `brief-type-invalid` and `brief-commit-type-invalid`
+  (`PROCEED` only). The runner follows the renamed run after the session.
+- **`PROPOSE-ALTERNATIVE` triage verdict.** The triager proposes a cheaper or safer path (the
+  alternative and its trade-off in `## Open items`); the check records the termination and the
+  job pauses at a gate exactly like `NEEDS-CLARIFICATION`, its notice composed from
+  `## Open items`.
+- **`nightqueue queue add` refuses a dependent prompt** with the same message as the MCP
+  `queue_add`, from one shared function; nothing is queued.
+- **The Sentry origin carries the three most recent events in full**, newest first, from one
+  `events/?full=true&per_page=3` request (an event listed without its entries is read once
+  more), with the same per-event frame, breadcrumb, field and tag caps and no private data.
+- **The operator works in three bands: free, with consent, never.** Reads, the free Bash and
+  read-only delegation need no ask. Editing or creating files in a registered checkout, running
+  a command there (`cd <checkout> && <command>`), a git write and an API write pass the operator
+  guard only when the person's answer is on record. Deleting files, a force or delete push,
+  `reset --hard`, `clean`, writing the nightqueue home or Claude/Codex settings, and reading
+  secrets or `.env*` are refused even with a record. The guard judges the operator's subagents
+  the same way, so `nightqueue:coder` edits a checkout after the person's consent.
+- **`operator_consent` records the person's consent.** It takes a kind (`edit`, `create`, `run`,
+  `git-write`, `connection-write`), the exact scope and the person's answer quoted verbatim, and
+  `revoke: true` withdraws it. Records live in `<home>/operator/<session>.jsonl`, never in a
+  checkout, with one line per consent in `<home>/logs/operator-<session>.log`. Each
+  `nightqueue open` mints its own session, so consents end with it. Refused inside a job and
+  outside an operator session.
+- **Direct changes.** The operator can make a small change on the person's current checkout and
+  branch through `nightqueue:coder`, with no worktree and no job: nothing is queued and no
+  telemetry is recorded, and nothing is committed or pushed without a `git-write` consent.
+- **The evidence cap of a read-only request.** The triager, explore, architect, coder,
+  qa-guardian and verifier cap their evidence level at 2, and say so, when the request forbids
+  writing or running.
+
+- **Models per agent, with a per-project override.** `src/queue/routing.mjs` holds one default
+  model per agent: triager `sonnet`, explore `haiku`, architect `opus`, coder `opus`,
+  qa-analyst `sonnet`, qa-prover `haiku`, verifier `haiku`, reflector `haiku`, merger `sonnet`
+  (`nightqueue run start --routing` prints the table). `nightqueue project models <project>
+  [--set <agent>=<model>]... [--unset <agent>]... [--json]` shows or overrides them for one
+  project (`opus`, `sonnet` or `haiku`; the merger is not overridable); the override is stored
+  as `agents.<agent>.model` in the project's settings, which `project integrations` never shows
+  nor drops. `phase_prompt` answers the resolved `model`, and `run start` answers `models`.
+- **The QA mode is decided by the plan.** `nightqueue run check 03` prints `QA: lite|full`
+  after `CONFIRM:`: `full` when `## Identified risks` holds two or more 🔴 risk items (list items
+  or table rows, outside fenced code) or the plan declares `**Always-gate class:** yes`, else
+  `lite`. Phase 5 reads that line and nothing else; the architect writes one `🔴|🟡|🟢` marker on
+  each risk line. `phase_prompt` adds an `open_items` line when a QA target contradicts the mode.
+- **The demo repository is a project setting.** `nightqueue project demo-repo <project> [--set
+  <path>] [--json]` shows (`none configured` without one) or sets the only repository where a
+  verification may create, merge or close a real pull request; `--set` refuses a path that is
+  not an existing directory, not a git repository, or the project's own repository (its
+  checkout, a worktree of it, inside it or around it), and is refused inside a job and to the
+  operator agent. It is stored
+  as `verification.demoRepo` in the project's settings, which `project models` and `project
+  integrations` keep. The verifier, runtime and QA requests render it as `{{DEMO_REPO}}`
+  (`none configured` → no real pull request, the scenario is reported as a gate), and the agents'
+  rule (b) points at it instead of a machine path.
+- **`nightqueue run report` prints `## Open items` and records the run.** The last section lists
+  each `dedicated ticket: yes` suggestion of the last QA round and each `OPEN:` line of the `05`
+  and `07` checks, or `- none`; `--json` adds `openItems` and `recorded`. The command writes the
+  run's telemetry row itself (phases from `state.json`, outcome and gate stop derived from it),
+  at most once per attempt inside a job, and outside a job (or with no recorded attempt start)
+  not again while its last record carries the same outcome and phase count; a no-change run
+  records no gate stop; a failed record is a fixed-phrase open item, never a non-zero exit.
+
 ### Changed
+
+- **The phases are whole numbers, 0 to 10, one artifact each.** The runtime phase is now
+  Phase 7 (`07-runtime.md`, `nightqueue run check 07`), commit/PR Phase 8, the report Phase 9 and
+  the reflector Phase 10; the old `06.5`/`06-runtime.md` are gone. The QA analyst no longer has
+  an artifact of its own (`05a-qa-analyst.md`): it writes its round into `05-qa.md`, and its gate
+  is `nightqueue run check 05 --stage analyst`, which answers `QA-STAGE: provers|skip` and
+  records the `qa_stage_a` marker with no phase; it requires every section check `05` reads,
+  `## Generated PoCs` included. Each prover appends its own round with the new
+  `nightqueue run append 05 --group <GROUP_ID> --from <draft>`, numbered under the run lock, so
+  concurrent provers never lose a round nor share a number; the runtime stamps the round's
+  group from `--group`, never from the lane's text, and refuses a draft with a `## Round` line or
+  an unclosed fence or comment. `nightqueue run check 05` writes the consolidated round itself
+  (`source: runtime consolidation`), merging the analyst's and the latest prover round of each
+  group byte for byte, with an aggregate verdict that counts proof (a proven break anywhere →
+  `NEEDS FIX`; else the provers' verdicts, where every analyst `H<n>` needs a prover `H<n>:`
+  line — a missing id or `INCONCLUSIVE` → `NEEDS DISCUSSION`, a `BROKE` → `NEEDS FIX`, the note
+  naming the ids; with no prover, open hypotheses → `NEEDS DISCUSSION`), and answers over it; a
+  second check writes nothing. A `## Round` heading inside fenced code never counts as a round;
+  one inside an HTML comment counts only as the next number in sequence (closing the comment).
+  The rounds a gate reads are validated when they are written: a round artifact that ends inside
+  an open code fence is closed by the runtime (`run check` and `run append` append the fence's
+  marker and print `REPAIRED: …`), and a column-0 `## Round <next>` inside a fence, a `<!--` a
+  round leaves open or a round heading inside a comment the round closes answers one `MISSING:`
+  line asking the lane to append a new round — never consolidated, so a gate never reads an
+  older round or a phantom tail. Fence lines follow CommonMark (```` ```node --test``` ```` is
+  inline code; ```` ```js ```` never closes a fence). The gates, the round splitter, `run append`,
+  the consolidation's section reader and the `04` file list read comments with one scanner that
+  keeps code spans and fenced lines, and a `<!--` that never closes is literal text. Prover lines
+  accept `REFUTED` as `HELD` (`run append` writes `HELD (REFUTED)`) and `PROVEN` as `BROKE`, or as
+  `HELD` on a `type=regression` hypothesis. A `## Proven breaks` that says `No proven breaks.`,
+  `(none)`, `N/A`, `—` (a none spelling is the whole line, never a prefix of `None of the
+  callers…`), a None with a prose explanation, a header-only table or a regression that passed,
+  in any wording, no longer turns the aggregate into `NEEDS FIX`. `run check 05` validates the
+  consolidated round it builds and writes nothing when the final check would refuse it.
+  On a consolidated round, `usage-coverage-held-on-pipeline` reads only the analyst's risk lines.
+  `run check 06.5` and `run check 05a` exit 1 with the one line `renumbered: use 07` /
+  `renumbered: use 05`. A run whose directory holds `06-runtime.md` or `05a-qa-analyst.md` is
+  never resumed: `queue retry` is refused with ``run started before the renumbering; retry with
+  `fresh` ``, the runner gates a claimed or swept job as `pre-renumbering-run` (notice: retry
+  with `--fresh`) before any spawn, and `run start` refuses the same; there is no alias layer. A resume re-enters the QA at stage B only while the stage
+  A marker names `05-qa.md` and is newer than the last implementation. `run report` prints
+  `7 Runtime`, `8 Commit/PR` and a `9 Report ⏳` row that never counts against Happy. The
+  `/resolve` skill numbers Phase 0 as a plain 1 to 12 list. The canonical phase names in
+  `state.json` are unchanged.
+- **One pipeline, no risk tier.** Every run executes every phase (triager, exploration,
+  architect, coder, QA, verifier, runtime unless the change is purely static), with at most 2
+  fix iterations; the trivial/simple fast tracks and the `coder-fast`/`verifier-fast` prompts
+  are gone. `run report` prints one format: the step table, every step, `⏭️` only for a
+  runtime phase skipped on a purely static change. The Studio shows no tier chip, badge, Add
+  job field or median-by-tier line, and its pipeline card always has the nine slots.
+- **The triager runs in every tier, on `sonnet`.** The routing table has one triager model,
+  `trivial` and `simple` run `0 · 1 · 4 · 6 · 7 · 8`, the phases and tasks of a tier no longer
+  depend on the type, and the `Request critique (step 2.5)` row and the `requestCritique` key
+  are gone.
+- **`run start` takes `--type` and `--commit-type` as optional.** They are validated only when
+  given; `run check 01` records both from the Brief. `run check 00` and the `SLUG:` declaration
+  still work for an older plugin.
+- **`/resolve` no longer writes the Brief.** Phase 0 drops the Brief template (step 1), the
+  request critique (step 2.5), `run check 00` and the `SLUG:` rename; the interactive worktree
+  is entered as `<slug>`, since the commit type is known only after the triage. The spawn
+  prompt's run line reads "Use that RUN_DIR as it comes."
+
+- **`queue_add` refuses a dependent prompt, and `queue_retry` refuses a finished job.** A prompt
+  that conditions the work on another job or pull request (`after J-<n>`,
+  `once PR #<n> is merged`, `depends on J-<n>`/`depends on job`, `when #<n> lands`, outside
+  fenced code and comment threads) is refused with the triager's fixed-alternative wording, and nothing
+  is queued. A `closed` job, or a `done` job whose pull request is merged, answers "a finished
+  job does not resume; queue a new one", for the MCP tool and the CLI alike.
+- **`/resolve` reads the check, not the artifacts.** Phases 1, 2, 3, 5, 6 and 6.5 and steps
+  5.2/5.3 are now tables that map each `run check` answer to an action. The orchestrator no
+  longer reads a run artifact to judge a gate, never calls `run_phase_done`, and no longer runs
+  `run index-save` or `run_terminate` by hand. Every pause (the Phase 1 clarification, the
+  Phase 3 confirmation and usage coverage, and Phase 6.5 `NEEDS-DEVICE`) is a `run_outcome` gate
+  followed by the end of the turn. A Phase 1 `NEEDS-CLARIFICATION` now ends the job at `gate`
+  instead of `cancelled`. The QA stage A gate reads `recorded: qa_stage_a`.
+- **`run check` reads sections fence-aware.** The first line and the gates use the same section
+  reader (prefix match, outside fences and HTML comments), so a heading quoted inside a code
+  block no longer satisfies the check.
 
 - **The triager and the explore are pipeline-independent.** `plugin/agents/triager.md` holds who
   it is, how it thinks, its method, resources and evidence standard — no phase, run artifact,
@@ -73,6 +269,52 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
   project's own origin is `nightqueue run publish`…", byte-identical in its four copies. The search
   and long-command rules every coder and verifier lane got from its agent file now come from
   `prompts/_job-limits.md`.
+- **The operator delegates to the pipeline's own agents.** The operator guard lets `Agent`
+  launch every plugin agent but the operator itself, under `nightqueue:<name>` or
+  `plugin_nightqueue_<name>` (a bare name is refused). `operator.md` delegates to the triager,
+  explore, architect, qa-guardian, verifier, coder and reviewer with an inline
+  Inputs/Deliver/Return request and no handoff file. A subagent's free Bash gains `nightqueue libs`.
+- **The operator session runs in Claude Code's default permission mode.** `nightqueue open`
+  pins `--permission-mode default`, whatever a checkout's local settings say, so the host's
+  prompt stays the barrier; a queued job keeps `bypassPermissions`.
+- **`connection_call` needs a `connection-write` consent in an operator session.** A POST,
+  PATCH or PUT that no live consent covers answers `needs-consent` and sends nothing; a GET, a
+  call inside a job and any other client are unchanged.
+- **Tool contract 10**, for the `operator_consent` tool.
+- **The resolve skill is a skeleton with lazy references.** `SKILL.md` keeps the contract (five
+  channels), Phase 0 and, per phase, the launch, the check, the answer table and its judgment
+  rules; resume, the interactive worktree, Phase 8 and Phase 9 (the report, the six `## Notice`
+  writing rules and the icon tables) move to `references/`, each read when its phase says so.
+  The skill names no host tool or flag outside `references/interactive-worktree.md`, no phase
+  header rule and no tasks step. `test/skill-budget.test.mjs` pins the always-loaded bytes
+  (`SKILL.md` plus the prompt partials) and one ceiling per lazy reference at the measured
+  sizes. The Notice reference no longer claims a validator of the final-text notice: building
+  one (header enum, labels, the 1900 cap) is a follow-up.
+- **`pipeline_log` ignores `phases`.** Like `tier`, `tier_operator` and `tier_raise_reason`,
+  `phases` is accepted from an older plugin and ignored: the phase rows come from the run's
+  `state.json` with their recorded reasons, `reasons_unpaired` is gone, and inside a job a run
+  already recorded in this attempt answers `already_recorded: true` and adds no row.
+
+### Deprecated
+
+- **The tier.** `queue_add` with a `tier` value, `nightqueue queue add --tier` and
+  `nightqueue run start --tier` are refused with a line saying the tier was removed, and nothing
+  is queued or recorded; a `null` or blank `tier` is ignored. `pipeline_log` still accepts
+  `tier`, `tier_operator` and `tier_raise_reason` from an older plugin and ignores them, and
+  `run_set` no longer takes `tier`/`tier_raise_reason`. The `jobs.tier`,
+  `pipeline_runs.tier`, `tier_operator` and `tier_raise_reason` columns stay in the schema,
+  unread (`pipeline_runs.tier` is NOT NULL, so new rows carry the constant `complex`) until a
+  later schema bump drops them. The runner no longer parses `Tier raised:`, the spawn prompt has
+  no `Tier:` line, and `store.jobs.tierBaseline` is gone.
+
+### Removed
+
+- **The `triage` and `qa` operator agents**, with the qa lane of the operator guard and the
+  `subagent-stop` hook that dropped the worktree `nightqueue:qa` announced. `nightqueue sandbox
+  worktree` stays a CLI facility, swept by `nightqueue open` and `nightqueue doctor --fix`.
+- **`tasks` from the answer of `nightqueue run start`**; `phases` stays.
+- **The `00-main-measure.md` artifact override of the runtime phase.** `phase_prompt` accepts
+  `artifact` from an older plugin and ignores it: `runtime` always answers `07-runtime.md`.
 
 ## 0.7.0 - 2026-10-20
 

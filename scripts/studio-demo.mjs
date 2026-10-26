@@ -59,7 +59,7 @@ const AGENTS = [
 ];
 
 const PHASE_NAMES = ["triage", "explore", "architecture", "implementation", "qa", "verification", "runtime", "commit"];
-const PHASE_ARTIFACTS = ["01-triage.md", "02-explore.md", "03-plan.md", "04-implementation.md", "05-qa.md", "06-verification.md", "06-runtime.md", "pr-body.md"];
+const PHASE_ARTIFACTS = ["01-triage.md", "02-explore.md", "03-plan.md", "04-implementation.md", "05-qa.md", "06-verification.md", "07-runtime.md", "pr-body.md"];
 
 // One job of the night. `minutes` per phase index 0..8 (0 = brief, 8 = commit); tokens in thousands per phase.
 const JOBS = [
@@ -248,7 +248,7 @@ function jobStream(job, repo) {
   t += 5 * ms.s;
   const skip = new Set(job.tier === "trivial" ? [1, 2, 3, 5, 7] : job.tier === "simple" ? (job.type === "bug" ? [2, 3, 7] : [2, 3, 5, 7]) : []);
   const last = job.status === "gate" ? 4 : 7;
-  const checks = { 1: "01", 2: "02", 3: "03", 4: "04", 5: "05", 6: "06", 7: "06.5" };
+  const checks = { 1: "01", 2: "02", 3: "03", 4: "04", 5: "05", 6: "06", 7: "07" };
   for (const agent of AGENTS) {
     const [phase] = agent;
     if (phase > last) break;
@@ -291,7 +291,7 @@ function artifactText(name, job) {
     case "04-implementation.md": return `${head("Implementation")}## Files changed\n\n${job.files.map((file) => `- ${file}`).join("\n")}\n`;
     case "05-qa.md": return `${head("Adversarial QA")}## Round 1\n\n## Validated risks\n\n- 2 findings, both fixed.\n`;
     case "06-verification.md": return `${head("Verification")}## Round 1\n\n## Verification\n\n- \`npm test\` — PASSED ✅\n`;
-    case "06-runtime.md": return `${head("Runtime check")}## Round 1\n\n## Runtime verdict\n\nok\n`;
+    case "07-runtime.md": return `${head("Runtime check")}## Round 1\n\n## Runtime verdict\n\nok\n`;
     case "pr-body.md": return `## Report\n\n${job.notice.split("\n")[0]}\n\n## Cause\n\nSee triage.\n\n## Changes\n\n${job.files.map((file) => `- \`${file}\``).join("\n")}\n\n## QA\n\n- \`npm test\` — PASSED ✅\n`;
     default: return "";
   }

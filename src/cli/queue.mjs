@@ -32,6 +32,7 @@ import { formatDuration, formatNarration } from "../queue/narrate.mjs";
 import { blockerLines, claimBlocker } from "../queue/claim.mjs";
 import { worktreeLine } from "../queue/close.mjs";
 import { cancelJobAndWorktree } from "../queue/cancel.mjs";
+import { refuseDependentPrompt } from "../queue/dependent-prompt.mjs";
 import { closeMerged, CLOSE_MERGED_DEADLINE_MS } from "../queue/close-merged.mjs";
 import { runMaintenance } from "../queue/maintenance.mjs";
 import { jobIdOfPrUrl } from "../queue/pr-lookup.mjs";
@@ -59,9 +60,10 @@ import { runtimeLabel } from "./runtime-versions.mjs";
 import { jobRef, parseJobRef } from "../memory/refs.mjs";
 import { coverageLabel, jobOriginCoverage } from "../integrations/coverage.mjs";
 import { originsLabel } from "../integrations/origin.mjs";
+import { TIER_REMOVED_LINE } from "../mcp/tool-contract.mjs";
 
 export const USAGE = {
-  add: "nightqueue queue add [project] <prompt...> [--project <name>] [--run] [--foreground] [--priority <n>] [--max-attempts <n>] [--timeout <s>] [--yes] [--key <KEY>] [--tier <trivial|simple|complex>] [--title <text>] [--origin <kind>:<ref>]... [--branch <name> | --worktree <path>]",
+  add: "nightqueue queue add [project] <prompt...> [--project <name>] [--run] [--foreground] [--priority <n>] [--max-attempts <n>] [--timeout <s>] [--yes] [--key <KEY>] [--title <text>] [--origin <kind>:<ref>]... [--branch <name> | --worktree <path>]",
   status: "nightqueue queue status [J-<id>|<id>|<PR URL>] [--limit <n>] [--json] [--follow [seconds]] [--until-idle] [--blocked]",
   run: "nightqueue queue run [--job <id> | --watch [seconds] [--from HH:MM] --until HH:MM] [--max <jobs>] [--stop] [--foreground] [--dry] [--json]",
   cancel: "nightqueue queue cancel <id> [--reason <text>] [--json]",
@@ -304,13 +306,12 @@ function originOption(values) {
   return (Array.isArray(values) ? values : [values]).map(originValue);
 }
 
-// The knobs of a `queue add` that reach the job: priority, attempts, timeout, the operator's tier and the origin.
+// The knobs of a `queue add` that reach the job: priority, attempts, timeout, the title and the origin.
 function addLimits(values) {
   return {
     priority: requireInt("--priority", values.priority),
     maxAttempts: requireInt("--max-attempts", values["max-attempts"]),
     timeoutS: requireInt("--timeout", values.timeout),
-    tier: values.tier,
     title: values.title,
     origin: originOption(values.origin),
   };
@@ -334,6 +335,7 @@ async function addFromPrompt(positionals, values, ctx) {
   const target = await resolveTarget(loadConfig(ctx.env, { warn: ctx.err }), positionals, values, ctx);
   const prompt = target.words.join(" ").trim();
   if (!prompt) throw new UserError(`missing argument; usage: ${USAGE.add}`);
+  refuseDependentPrompt(prompt);
   if (target.fromCwd) ctx.out(`project \`${target.project.name}\` resolved from the current directory`);
   return await openStore(ctx.env).jobs.addJob({ projectId: target.project.id, prompt, ...addLimits(values), ...startOptions(values, ctx) });
 }
@@ -419,6 +421,7 @@ function parseAdd(argv) {
   const { optionTokens, words } = splitAddArgv(argv);
   const { values } = parseCommand(optionTokens, ADD_OPTIONS);
   if (values["run-dir"] !== undefined) throw new UserError(RUN_DIR_RETIRED);
+  if (values.tier !== undefined) throw new UserError(TIER_REMOVED_LINE);
   checkArgs(words, { min: 1, max: Number.POSITIVE_INFINITY, usage: USAGE.add });
   return { values, positionals: words };
 }

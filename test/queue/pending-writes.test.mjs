@@ -142,7 +142,7 @@ test("(b) fixture (iii) during a run: pipeline_log answers queued, the gate fini
   let logged = null;
   const finishJobImpl = async (jobId, outcome) => {
     sick = makeSickHome(env);
-    logged = answerOf(await client.callTool({ name: "pipeline_log", arguments: { tier: "simple", outcome: "no_commit", gate_stop: "architect" } }));
+    logged = answerOf(await client.callTool({ name: "pipeline_log", arguments: { outcome: "no_commit", gate_stop: "architect" } }));
     return await openStore(env).jobs.finishJob(jobId, outcome);
   };
   t.after(() => sick?.restore());
@@ -479,7 +479,7 @@ test("(a) a random -shm during a run is survived: SQLite rebuilds the index, pip
   closeDb(home.env);
   writeFileSync(`${dbPath(home.env)}-shm`, randomBytes(32768));
 
-  const logged = answerOf(await client.callTool({ name: "pipeline_log", arguments: { tier: "simple", outcome: "no_commit" } }));
+  const logged = answerOf(await client.callTool({ name: "pipeline_log", arguments: { outcome: "no_commit" } }));
   const finished = await openStore(home.env).jobs.finishJob(home.id, gateFinish());
 
   assert.equal(logged.ok, true);

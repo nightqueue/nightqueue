@@ -43,6 +43,7 @@ justify it explicitly in ## Generated PoCs.
 {{>deliverables/qa-report}}
 
 {{>_context}}
+{{>_demo-repo}}
 {{>_shell-rule}}
 
 {{>_footer}}

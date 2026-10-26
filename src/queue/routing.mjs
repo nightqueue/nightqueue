@@ -1,88 +1,70 @@
 /*
- * The track routing of the /resolve pipeline: the single source of every value that changes with the tier.
- * `nightqueue run start` answers the row of the run's tier and `phase_prompt` reads it, so no prompt restates it.
+ * The agent models of the /resolve pipeline and its constants: the single source of every model an agent runs on.
+ * `nightqueue run start` answers the models of the run's project and `phase_prompt` reads them, so no prompt restates them.
  *
- * Routing rationale (moved verbatim from Appendix A of the resolve skill):
+ * Model rationale:
  *
- * The routing table (Phase 0) is the source of truth. When changing it, decide the
- * Claude model by these 3 questions — the **dominant** capability of the phase wins:
- *
- * | Question (YES →) | Model |
- * | ---------------- | ------ |
- * | Does it write/edit code or require deep design judgment? | `opus` (complex) / `sonnet` (simple) |
- * | Does it require reasoning or a broad search without generating code in bulk? | `sonnet` (exploration, QA, complex triage) |
- * | Is it a deterministic and cheap gate (it only runs commands and gives a verdict)? | `haiku` |
- *
- * Exceptions: **QA** does not edit source (it only writes PoCs) and its core is adversarial
- * reasoning + regression analysis → `sonnet`, not `opus`. **Triager** does not edit,
- * but reproduces the bug by running/instrumenting the
- * code → `haiku` (simple) / `sonnet` (complex). Phases 0/7/8 run in the orchestrator
- * (the skill's model, without routing).
- *
- * The `simple` tier has no architect and no qa-guardian: its safety net is the verifier's full
- * test suite, not a second reviewer — a tier is raised to `complex` on evidence found, never on
- * the shape of the change.
+ * The agent models below are the single source. The dominant capability of the agent decides its model:
+ * - writes/edits code or carries the design judgment every later phase builds on → `opus` (architect, coder);
+ * - reasons and critiques without writing code in bulk → `sonnet` (triager: writes the Brief, critiques the
+ *   request and reproduces the bug; qa-analyst: adversarial analysis grouped by root, the lite QA included);
+ * - bounded, mechanical or command-driven work over material another agent already reasoned about → `haiku`
+ *   (explore maps files the triage already scoped; provers write and run one PoC for one pre-analysed
+ *   hypothesis; verifier runs the project's checks and the PoCs; reflector distils lessons from written artifacts).
+ * The merger keeps `sonnet`. A project overrides any of them with `nightqueue project models`.
+ * Phases 0/8/9 run in the orchestrator, on the skill's model. Every run executes every phase.
  */
 
 import { UserError } from "../config/errors.mjs";
-import { PIPELINE_TASK_TYPES, PIPELINE_TIERS } from "../memory/runs.mjs";
+import { PIPELINE_TASK_TYPES } from "../memory/runs.mjs";
 import { RESUME_PHASE_ORDER } from "./resume.mjs";
 
-const NOT_RUN = "—";
-const BUG = "bug/error";
-const QA_METHODS =
-  "automated; + api for an API change; + emulator for a UI change in an Expo repo; + browser for a UI change in a web repo";
-const IMPLEMENTATION_GATE = "written by the coder, gate `nightqueue run check 04`";
+// The model aliases an agent may run on.
+export const MODEL_NAMES = Object.freeze(["opus", "sonnet", "haiku"]);
 
-// The routing table, one row per line of the old skill table, each cell with its text for trivial, simple and complex.
-export const TRACK_ROUTING = [
-  ["Track", ["Fast Lite", "Fast", "Standard"]],
-  ["Phases that run", ["0 · 4 · 6 · 7 · 8", "0 · 1 (bug only) · 4 · 6 · 7 · 8", "every phase, 0 to 8"]],
-  ["🔍 triager", [NOT_RUN, "haiku (bug only)", "sonnet"]],
-  ["🧭 Explore", [NOT_RUN, NOT_RUN, "sonnet"]],
-  ["📐 architect", [NOT_RUN, NOT_RUN, "opus"]],
-  ["⚙️ coder", ["sonnet", "sonnet", "opus"]],
-  ["🛡️ qa-guardian", [NOT_RUN, NOT_RUN, "sonnet"]],
-  ["✅ verifier", ["haiku", "haiku", "sonnet"]],
-  [
-    "Verifier scope",
-    [
-      "tsc + lint + the tests of the files that were touched (no build, no full suite)",
-      "tsc + lint + the project's FULL test suite (no QA PoCs in this tier)",
-      "the project's real checks (typecheck, lint, build, tests) + the QA's PoCs",
-    ],
-  ],
-  ["QA methods of the PR", [QA_METHODS, QA_METHODS, QA_METHODS]],
-  ["Max fix iterations", ["1", "2", "2"]],
-  ["Request critique (step 2.5)", ["skipped", "mandatory", "mandatory"]],
-  ["`<CWD>/CLAUDE.md`", ["not named to the coder", "named to the coder when it exists", "named to the coder (Phase 4)"]],
-  ["`index_recall`", ["no", "yes, to locate the affected files", "yes, in Phase 2 before the Explore"]],
-  ["`context_for_phase` for the coder", ["no", "yes", "yes"]],
-  ["`04-implementation.md`", [IMPLEMENTATION_GATE, IMPLEMENTATION_GATE, IMPLEMENTATION_GATE]],
-  ["Time target", ["under 5 minutes", "under 15 minutes", "none — the depth is the target"]],
-];
+// One line per agent with its default model (decided 2026-10-23).
+export const AGENT_MODELS = Object.freeze({
+  triager: "sonnet",
+  explore: "haiku",
+  architect: "opus",
+  coder: "opus",
+  "qa-analyst": "sonnet",
+  "qa-prover": "haiku",
+  verifier: "haiku",
+  reflector: "haiku",
+  merger: "sonnet",
+});
 
-// The agent each model row routes, by the label of its row.
-const AGENT_ROWS = {
-  triager: "🔍 triager",
-  explore: "🧭 Explore",
-  architect: "📐 architect",
-  coder: "⚙️ coder",
-  qaGuardian: "🛡️ qa-guardian",
-  verifier: "✅ verifier",
-};
+// The agents a project may override: every agent phase_prompt renders (the merger runs in the close, outside phase_prompt).
+export const OVERRIDABLE_AGENTS = Object.freeze(Object.keys(AGENT_MODELS).filter((agent) => agent !== "merger"));
 
-// The pipeline phases each tier runs, in the canonical order; the simple tier adds the triage on a bug only.
-const TIER_PHASES = {
-  trivial: ["implementation", "verification", "commit"],
-  simple: ["implementation", "verification", "commit"],
-  complex: [...RESUME_PHASE_ORDER],
-};
+// The values every run shares, whatever its project.
+export const PIPELINE_CONSTANTS = Object.freeze({
+  verifierScope: "the project's real checks (typecheck, lint, build, tests) + the QA's PoCs",
+  maxFixIterations: 2,
+  qaMethods:
+    "automated; + api for an API change; + emulator for a UI change in an Expo repo; + browser for a UI change in a web repo",
+});
 
-// Refuses a tier outside the pipeline's own, naming the accepted ones.
-function requireTier(tier) {
-  if (PIPELINE_TIERS.includes(tier)) return tier;
-  throw new UserError(`unknown tier \`${String(tier)}\`; accepted: ${PIPELINE_TIERS.join(", ")}`);
+const GLYPHS = Object.freeze({
+  triager: "🔍",
+  explore: "🧭",
+  architect: "📐",
+  coder: "⚙️",
+  "qa-guardian": "🛡️",
+  verifier: "✅",
+});
+
+// Refuses an agent a project cannot override, naming the accepted ones.
+export function requireAgent(agent) {
+  if (OVERRIDABLE_AGENTS.includes(agent)) return agent;
+  throw new UserError(`unknown agent \`${String(agent)}\`; accepted: ${OVERRIDABLE_AGENTS.join(", ")}`);
+}
+
+// Refuses a model outside the accepted aliases, naming them.
+export function requireModel(model) {
+  if (MODEL_NAMES.includes(model)) return model;
+  throw new UserError(`unknown model \`${String(model)}\`; accepted: ${MODEL_NAMES.join(", ")}`);
 }
 
 // Refuses a task type outside the pipeline's own, naming the accepted ones.
@@ -91,68 +73,47 @@ function requireType(type) {
   throw new UserError(`unknown type \`${String(type)}\`; accepted: ${PIPELINE_TASK_TYPES.join(", ")}`);
 }
 
-// The text of one cell of the table for a tier.
-function cellOf(label, tier) {
-  const row = TRACK_ROUTING.find(([name]) => name === label);
-  if (!row) throw new Error(`the routing table has no row \`${label}\``);
-  return row[1][PIPELINE_TIERS.indexOf(tier)];
+// The model an agent runs on: the project's valid override of an overridable agent, else the default; an unknown agent is a programming error.
+export function modelFor(agent, projectAgents = null) {
+  if (!Object.hasOwn(AGENT_MODELS, agent)) throw new Error(`no default model for agent \`${String(agent)}\``);
+  const overridable = OVERRIDABLE_AGENTS.includes(agent) && projectAgents && Object.hasOwn(projectAgents, agent);
+  const entry = overridable ? projectAgents[agent] : null;
+  const override = entry?.model;
+  return MODEL_NAMES.includes(override) ? override : AGENT_MODELS[agent];
 }
 
-// The model a model cell names, or null when the agent does not run in the tier.
-function modelOf(cell) {
-  return cell === NOT_RUN ? null : cell.split(" ")[0];
+// The model of every agent, the project's overrides applied.
+export function agentModels(projectAgents = null) {
+  return Object.fromEntries(Object.keys(AGENT_MODELS).map((agent) => [agent, modelFor(agent, projectAgents)]));
 }
 
-// The whole row of one tier: every cell as it reads, plus the values the runtime acts on.
-export function routingRow(tier) {
-  requireTier(tier);
-  const cells = Object.fromEntries(TRACK_ROUTING.map(([label]) => [label, cellOf(label, tier)]));
-  const models = Object.fromEntries(Object.entries(AGENT_ROWS).map(([agent, label]) => [agent, modelOf(cells[label])]));
-  return {
-    tier,
-    track: cells.Track,
-    models,
-    triagerBugOnly: cells[AGENT_ROWS.triager].includes("(bug only)"),
-    verifierScope: cells["Verifier scope"],
-    qaMethods: cells["QA methods of the PR"],
-    maxFixIterations: Number(cells["Max fix iterations"]),
-    requestCritique: cells["Request critique (step 2.5)"],
-    claudeMd: cells["`<CWD>/CLAUDE.md`"] !== "not named to the coder",
-    indexRecall: cells["`index_recall`"] !== "no",
-    contextForCoder: cells["`context_for_phase` for the coder"] === "yes",
-    timeTarget: cells["Time target"],
-    cells,
-  };
+// The agent model table as markdown, which `nightqueue run start --routing` prints.
+export function modelTable(projectAgents = null) {
+  const rows = Object.entries(agentModels(projectAgents)).map(([agent, model]) => {
+    const glyph = agentGlyph(agent);
+    return `| ${glyph ? `${glyph} ${agent}` : agent} | ${model} |`;
+  });
+  return ["| Agent | Model |", "| --- | --- |", ...rows].join("\n");
 }
 
-// The whole routing table as markdown, one line per row, which `nightqueue run start --routing` prints.
-export function routingTable() {
-  const rows = TRACK_ROUTING.map(([label, cells]) => `| ${label} | ${cells.join(" | ")} |`);
-  return ["| Routing | trivial | simple | complex |", "| --- | --- | --- | --- |", ...rows].join("\n");
+// The canonical phases every run goes through, in order; a type, when given, must be one of the pipeline's.
+export function phasesFor(type) {
+  if (type !== undefined && type !== null && type !== "") requireType(type);
+  return [...RESUME_PHASE_ORDER];
 }
 
-// The canonical phases a run of this tier and type goes through, in order.
-export function phasesFor(tier, type) {
-  requireType(type);
-  const phases = TIER_PHASES[requireTier(tier)];
-  if (tier === "simple" && type === BUG) return ["triage", ...phases];
-  return [...phases];
-}
-
-// The nine slots of the studio track, in order: the number, the label, the routing agent key and the canonical phase of each.
+// The nine slots of the studio track, in order: the number, the label, the agent, the agent whose model it shows and the canonical phase of each.
 export const TRACK_SLOTS = [
-  { number: 0, name: "brief", agent: null, phase: null },
-  { number: 1, name: "triager", agent: "triager", phase: "triage" },
-  { number: 2, name: "explore", agent: "explore", phase: "explore" },
-  { number: 3, name: "architect", agent: "architect", phase: "architecture" },
-  { number: 4, name: "coder", agent: "coder", phase: "implementation" },
-  { number: 5, name: "qa-guardian", agent: "qaGuardian", phase: "qa" },
-  { number: 6, name: "verifier", agent: "verifier", phase: "verification" },
-  { number: 7, name: "runtime", agent: null, phase: "runtime" },
-  { number: 8, name: "commit · PR", agent: null, phase: "commit" },
+  { number: 0, name: "brief", agent: null, modelAgent: null, phase: null },
+  { number: 1, name: "triager", agent: "triager", modelAgent: "triager", phase: "triage" },
+  { number: 2, name: "explore", agent: "explore", modelAgent: "explore", phase: "explore" },
+  { number: 3, name: "architect", agent: "architect", modelAgent: "architect", phase: "architecture" },
+  { number: 4, name: "coder", agent: "coder", modelAgent: "coder", phase: "implementation" },
+  { number: 5, name: "qa-guardian", agent: "qaGuardian", modelAgent: "qa-analyst", phase: "qa" },
+  { number: 6, name: "verifier", agent: "verifier", modelAgent: "verifier", phase: "verification" },
+  { number: 7, name: "runtime", agent: null, modelAgent: null, phase: "runtime" },
+  { number: 8, name: "commit · PR", agent: null, modelAgent: null, phase: "commit" },
 ];
-
-const PHASE_SLOTS = TRACK_SLOTS.filter((slot) => slot.phase !== null);
 
 // The track slot number of a canonical phase; throws on a phase with no slot.
 export function slotNumberOf(phase) {
@@ -161,33 +122,8 @@ export function slotNumberOf(phase) {
   return slot.number;
 }
 
-// The phases of the phase slots (1 to 8) the run does not go through: from its tier and type, from the tier alone while the type is unknown, none for an unknown tier.
-export function offTierPhases(tier, type) {
-  if (!PIPELINE_TIERS.includes(tier)) return [];
-  if (PIPELINE_TASK_TYPES.includes(type)) {
-    const phases = phasesFor(tier, type);
-    return PHASE_SLOTS.filter((slot) => !phases.includes(slot.phase)).map((slot) => slot.phase);
-  }
-  const numbers = trackPhaseNumbers(tier);
-  return PHASE_SLOTS.filter((slot) => !numbers.includes(slot.number)).map((slot) => slot.phase);
-}
-
-// The track slot numbers the tier's track runs, the brief's 0 first, derived from the tier's phases (the triager kept on simple); null for a tier outside the pipeline.
-export function trackPhaseNumbers(tier) {
-  if (!PIPELINE_TIERS.includes(tier)) return null;
-  const phases = tier === "simple" ? ["triage", ...TIER_PHASES.simple] : TIER_PHASES[tier];
-  return [0, ...PHASE_SLOTS.filter((slot) => phases.includes(slot.phase)).map((slot) => slot.number)];
-}
-
-// The emoji of an agent's row in the routing table, or null for a name with no row (the orchestrator).
+// The emoji of an agent, or null for a name with none (the orchestrator).
 export function agentGlyph(agent) {
   const name = String(agent ?? "").toLowerCase();
-  if (!name) return null;
-  const row = TRACK_ROUTING.find(([label]) => label.split(" ").slice(1).join(" ").toLowerCase() === name);
-  return row ? row[0].split(" ")[0] : null;
-}
-
-// The TaskCreate subjects' phase prefixes of a run: one task per phase that runs.
-export function tasksFor(tier, type) {
-  return phasesFor(tier, type);
+  return Object.hasOwn(GLYPHS, name) ? GLYPHS[name] : null;
 }

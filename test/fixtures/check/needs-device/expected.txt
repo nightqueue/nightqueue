@@ -1,0 +1,8 @@
+OK
+VERDICT: NEEDS-DEVICE
+NEEDS-DEVICE
+recorded: phase_done runtime NEEDS-DEVICE
+SCRIPT:
+1. Open the app on a real phone.
+2. Tap Retry and watch the banner.
+Criterion: VERDICT: the banner shows the notice.

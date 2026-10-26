@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
+import { fileURLToPath } from "node:url";
 import { jobLogPath, runDir } from "../../src/config/paths.mjs";
 import { loadConfig, saveConfig } from "../../src/config/store.mjs";
 import { openDb, sqliteToIso } from "../../src/memory/db.mjs";
@@ -16,7 +17,7 @@ import { reconcileFromWitness } from "../../src/queue/reconcile.mjs";
 import { openStore } from "../../src/store/open.mjs";
 import { dropCheckout, ensureProject, makeDir, makeHome, makeProject, projectIdOf } from "../../test-support/memory.mjs";
 import { argValue, fakeCalls, useFakeClaude } from "../../test-support/queue-fake.mjs";
-import { agentToolUseEvent, assistantEvent, codeChangePublishedEvent, doneStream, failureStream, gateStream, noticeText, PR_URL, rateLimitEvent, resultEvent, SESSION_ID, SLUG, slugEvent, slugTypeEvent, systemInitEvent, taskNotificationEvent, toNdjson, transientFailureStream } from "../../test-support/streams.mjs";
+import { agentToolUseEvent, assistantEvent, codeChangePublishedEvent, doneStream, failureStream, GATE_NOTICE, gateStream, noticeText, PR_URL, rateLimitEvent, resultEvent, SESSION_ID, SLUG, slugEvent, slugTypeEvent, systemInitEvent, taskNotificationEvent, toNdjson, transientFailureStream } from "../../test-support/streams.mjs";
 import { fakeJobWorktree } from "../../test-support/job-worktree.mjs";
 
 const PROMPT = "fix the worker";
@@ -91,7 +92,7 @@ async function waitFor(check, label) {
 test("a run that opens a pull request ends as done, with its facts, usage and pipeline run linked", async (t) => {
   const { env } = makeRunnerHome(t, "runner-done", [{ stdout: doneStream({ notice: "the pull request is open" }), exitCode: 0 }]);
   const id = enqueue(env);
-  const logged = logPipelineRun({ projectId: projectIdOf(env, "alpha"), slug: SLUG, tier: "simple", outcome: "pr_opened", phases: [] }, env);
+  const logged = logPipelineRun({ projectId: projectIdOf(env, "alpha"), slug: SLUG, outcome: "pr_opened", phases: [] }, env);
 
   const cycle = await runJobCycle(env, id);
 
@@ -268,7 +269,6 @@ test("the durations and the models of the telemetry come from the stream, and th
     {
       projectId: projectIdOf(env, "alpha"),
       slug: SLUG,
-      tier: "simple",
       outcome: "pr_opened",
       durationS: 999,
       phases: [
@@ -297,7 +297,11 @@ test("the durations and the models of the telemetry come from the stream, and th
   );
 
   const state = JSON.parse(readFileSync(join(runDir(ensureProject(env, "alpha"), SLUG, env), "state.json"), "utf8"));
-  assert.deepEqual({ tier: state.tier, reason: state.tierRaiseReason }, { tier: "complex", reason: "a stack trace in the claim path" });
+  assert.deepEqual(
+    { tier: "tier" in state, reason: "tierRaiseReason" in state },
+    { tier: false, reason: false },
+    "a `Tier raised:` line an older Brief printed was recorded as a tier",
+  );
 });
 
 test("a run that stops at the gate ends as gate and keeps the notice for the operator", async (t) => {
@@ -1045,6 +1049,30 @@ test("a watcher with --max exits once its budget is spent", async (t) => {
   assert.equal(countsByStatus(env).done, 1);
   assert.equal(countsByStatus(env).pending, 1);
   assert.ok(passes.length < 5, `the watcher kept going for ${passes.length} passes`);
+});
+
+test("a run that `run check 01` renamed mid-session finishes from its new slug, with no ghost directory at the old one", async (t) => {
+  const triage =
+    "# Triage\n\n## Brief\n**Affected area:** src/worker.mjs\n**Context:** the worker\n**Objective:** fix the worker\n**Expected outcome:** the worker runs\n" +
+    "**Type:** feature/refactor\n**Commit type:** fix\n**Slug:** triaged-worker\n\n## Verdict: PROCEED\n\nEvidence level: 1\n\n" +
+    "## Validated brief\nFix the worker.\n\n## Out of scope\n- None.\n\n## Request gaps\n- None.\n";
+  const triagePath = join(makeDir(t, "runner-check-rename-triage"), "01-triage.md");
+  writeFileSync(triagePath, triage);
+  const script = fileURLToPath(new URL("../../test-support/fake-triage-check.mjs", import.meta.url));
+  const stream = toNdjson([systemInitEvent(), assistantEvent("Triaged.", { messageId: "msg_triage" }), resultEvent({ text: "Stopped at the gate." })]);
+  const { env } = makeRunnerHome(t, "runner-check-rename", [{ exec: [script, triagePath, GATE_NOTICE], stdout: stream, exitCode: 0 }]);
+  const id = enqueue(env);
+  const projectId = projectIdOf(env, "alpha");
+  const provisional = provisionalSlug(getJob(id, env));
+
+  const cycle = await runJobCycle(env, id);
+
+  assert.equal(cycle.processed[0].status, "gate", readFileSync(jobLogPath(id, env), "utf8"));
+  const row = getJob(id, env);
+  assert.deepEqual([row.slug, row.notice_md], ["triaged-worker", GATE_NOTICE]);
+  assert.equal(existsSync(runDir(projectId, provisional, env)), false, "a ghost directory was recreated at the provisional slug");
+  assert.ok(existsSync(join(runDir(projectId, "triaged-worker", env), "00-brief.md")));
+  assert.match(readFileSync(jobLogPath(id, env), "utf8"), /the run moved to `triaged-worker` \(renamed by run check 01\)/);
 });
 
 test("only a job the preflight gated stays out of the --max budget", () => {

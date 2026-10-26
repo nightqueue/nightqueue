@@ -196,7 +196,7 @@ Eleven tables plus three full text mirrors:
 | `memory` | project facts and durable choices of the code, as key and value, per project or global |
 | `project_index` | the file to responsibility map of a project, with the mtime the file had when it was indexed |
 | `project_libs` | the libraries of a project with the version that was actually resolved |
-| `pipeline_runs` | one row per `/resolve` run: tier, task type, outcome, gate stop, duration, model and session |
+| `pipeline_runs` | one row per `/resolve` run: tier (deprecated, the constant `complex`), task type, outcome, gate stop, duration, model and session |
 | `pipeline_phases` | one row per phase of a run: sequence, phase, model, status, retry, duration and the `reason` the phase ran again (added on open to an older database, null on a first run) |
 | `jobs` | one row per queue job: project, prompt, priority, status, attempts, lease, slug, session, branch, pull request, notice, usage and cost |
 | `lessons_fts`, `memory_fts` | FTS5 mirrors of the two text tables, kept in sync by triggers on insert, update and delete |
@@ -241,7 +241,7 @@ nightqueue `SessionEnd` entry (a third-party one stays).
   cwd; with none it offers `project_register` and calls it only on a yes), drafts the
   candidates, lists them numbered and asks once; it saves ONLY the ones the person confirms
   and reports their refs.
-- the reflector of `/resolve` - Phase 9, the last phase of every run that reaches Phase 8,
+- the reflector of `/resolve` - Phase 10, the last phase of every run that reaches Phase 9,
   delivered or terminated, never at a gate pause. It saves on its own, with no confirmation,
   and returns at most ten lines whose refs the orchestrator prints as one `🪞 Reflection:`
   line above `## Notice`. The orchestrator itself never calls `lesson_save` or `memory_save`.
@@ -270,14 +270,13 @@ also bumps `violated` and answers `violated: true`. An interactive `/nightqueue:
 given.
 
 **What the reflector reads.** The run's handoffs as they are, never the job's raw stream. The
-loop artifacts keep their history: `05a-qa-analyst.md`, `05-qa.md`, `06-verification.md` and
-`06-runtime.md` are append-only, one `## Round n` per launch, and a fix-loop coder appends a
+loop artifacts keep their history: `05-qa.md`, `06-verification.md` and
+`07-runtime.md` are append-only, one `## Round n` per launch, and a fix-loop coder appends a
 `### Fix loop n — what was wrong / what changed` block to `04-implementation.md` instead of
 rewriting it (gates read only the last round). Its prompt carries the run timeline - phase,
 model, status and reason in order - from this attempt's `pipeline_phases`: the orchestrator
-passes `reason` to `run_phase_done` on every relaunch, and `pipeline_log` copies the recorded
-reasons into the rows when its table lists exactly as many launches of that phase as the run
-recorded (otherwise it copies none of them and answers `reasons_unpaired`). When `pipeline_log` recorded no run for the attempt, the timeline
+passes `reason` to `run_phase_done` on every relaunch, and `nightqueue run report` (Phase 9)
+writes one row per phase `state.json` recorded, with its reason. When no run was recorded for the attempt, the timeline
 comes from `state.json` and says so.
 
 An old `~/.nightqueue/state/reflect.json` and `reflect.log` from the former `SessionEnd`
@@ -286,7 +285,7 @@ worker are no longer read or written and can be deleted.
 **Commands.**
 
 ```sh
-nightqueue mcp                     # start the stdio MCP server with the thirty-two tools
+nightqueue mcp                     # start the stdio MCP server with the thirty-three tools
 nightqueue mcp --http --port 4747 --token <t>   # serve the same tools over Streamable HTTP on 127.0.0.1
 nightqueue hook session-start      # run a hook, reading the event JSON from stdin
 nightqueue embed download          # download the embedding weights (the only network path)

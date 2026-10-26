@@ -1,0 +1,4 @@
+OK
+VERDICT: PROCEED
+GATE: brief-type-invalid — chore
+recorded: none (GATE: brief-type-invalid — chore)

@@ -22,6 +22,6 @@ function assertNamedRefusal(fn) {
 test("linkPipelineRun names a missing job instead of a bare FOREIGN KEY error", (t) => {
   const env = makeHome(t, "fk-h3-run");
   const projectId = ensureProject(env, "alpha");
-  logPipelineRun({ projectId, slug: "fix-x", tier: "simple", outcome: "pr_opened" }, env);
+  logPipelineRun({ projectId, slug: "fix-x", outcome: "pr_opened" }, env);
   assertNamedRefusal(() => linkPipelineRun(999, { projectId, slug: "fix-x" }, env));
 });
