@@ -22,6 +22,10 @@ const KEY_TAKEN = "owner key taken";
 
 const AGENTS_KEY = "agents";
 
+const VERIFICATION_KEY = "verification";
+
+const RESERVED_KEYS = [AGENTS_KEY, VERIFICATION_KEY];
+
 // Tells whether a SQLite failure is the violation of a UNIQUE constraint on the given column.
 function isUniqueViolation(err, column) {
   return /UNIQUE constraint failed/i.test(String(err?.message ?? "")) && String(err.message).includes(column);
@@ -124,23 +128,28 @@ export function projectById(db, id) {
   return db.prepare(`${PROJECT_VIEW} WHERE p.id = ?`).get(String(id ?? "")) ?? null;
 }
 
-// The whole settings JSON of a project (its integrations plus the reserved agents key), or null.
+// The whole settings JSON of a project (its integrations plus the reserved keys), or null.
 function projectSettings(db, id) {
   if (!hasColumn(db, "projects", "integrations")) return null;
   const row = db.prepare("SELECT integrations FROM projects WHERE id = ?").get(String(id ?? ""));
   return parseIntegrations(row?.integrations);
 }
 
-// A settings object without the key named, or null when nothing else is left.
-function withoutKey(settings, key) {
+// A settings object without the keys named, or null when nothing else is left.
+function withoutKeys(settings, keys) {
   if (!settings) return null;
-  const { [key]: _dropped, ...rest } = settings;
+  const rest = Object.fromEntries(Object.entries(settings).filter(([key]) => !keys.includes(key)));
   return Object.keys(rest).length > 0 ? rest : null;
+}
+
+// Only the reserved keys of a settings object (agents, verification), as stored.
+function reservedOf(settings) {
+  return Object.fromEntries(Object.entries(settings ?? {}).filter(([key]) => RESERVED_KEYS.includes(key)));
 }
 
 // The integrations of a project as an object, or null when it has none, its value is unreadable or the column is not there yet.
 export function projectIntegrations(db, id) {
-  return withoutKey(projectSettings(db, id), AGENTS_KEY);
+  return withoutKeys(projectSettings(db, id), RESERVED_KEYS);
 }
 
 // The agent model overrides of a project (`{ <agent>: { model } }`), or null when it has none.
@@ -165,16 +174,37 @@ function requireAgentOverrides(value) {
   return value;
 }
 
-// Writes a project's agent model overrides, keeping its integrations; null or an empty object removes them.
-export function setProjectAgents(db, { id, value }) {
+// Refuses a settings write on an unknown project or a database without the settings column.
+function requireSettingsWritable(db, id) {
   if (!projectById(db, id)) throw new UserError(`unknown project id \`${id}\``);
   if (!hasColumn(db, "projects", "integrations")) throw new UserError("this database has no project settings column yet; run `nightqueue update` to migrate it");
+}
+
+// Writes a project's agent model overrides, keeping its integrations and other settings; null or an empty object removes them.
+export function setProjectAgents(db, { id, value }) {
+  requireSettingsWritable(db, id);
   const agents = value === null || value === undefined ? {} : requireAgentOverrides(value);
-  const integrations = projectIntegrations(db, id) ?? {};
+  const others = withoutKeys(projectSettings(db, id), [AGENTS_KEY]) ?? {};
   const normalized = Object.fromEntries(Object.entries(agents).map(([agent, entry]) => [agent, { model: entry.model }]));
-  const settings = Object.keys(normalized).length > 0 ? { ...integrations, [AGENTS_KEY]: normalized } : integrations;
+  const settings = Object.keys(normalized).length > 0 ? { ...others, [AGENTS_KEY]: normalized } : others;
   writeProjectSettings(db, { id, settings });
   return projectAgents(db, id);
+}
+
+// The demo repository of a project, where verifications may open real pull requests, or null when none is configured.
+export function projectDemoRepo(db, id) {
+  const demoRepo = projectSettings(db, id)?.[VERIFICATION_KEY]?.demoRepo;
+  return typeof demoRepo === "string" && demoRepo.trim() ? demoRepo : null;
+}
+
+// Writes a project's demo repository path, keeping every other setting.
+export function setProjectDemoRepo(db, { id, value }) {
+  requireSettingsWritable(db, id);
+  if (typeof value !== "string" || !value.trim()) throw new UserError("the demo repository must be a non-empty path");
+  const settings = projectSettings(db, id) ?? {};
+  const verification = isFilledObject(settings[VERIFICATION_KEY]) ? settings[VERIFICATION_KEY] : {};
+  writeProjectSettings(db, { id, settings: { ...settings, [VERIFICATION_KEY]: { ...verification, demoRepo: value } } });
+  return projectDemoRepo(db, id);
 }
 
 // Tells whether a value is a plain object with at least one key.
@@ -198,9 +228,8 @@ export function setProjectIntegrations(db, { id, value }) {
   if (!projectById(db, id)) throw new UserError(`unknown project id \`${id}\``);
   const isEmpty = value === null || value === undefined || (typeof value === "object" && !Array.isArray(value) && Object.keys(value).length === 0);
   if (!isEmpty && !isFilledObject(value)) throw new UserError("project integrations must be an object of settings per provider");
-  const integrations = isEmpty ? {} : (withoutKey(value, AGENTS_KEY) ?? {});
-  const agents = projectAgents(db, id);
-  writeProjectSettings(db, { id, settings: agents ? { ...integrations, [AGENTS_KEY]: agents } : integrations });
+  const integrations = isEmpty ? {} : (withoutKeys(value, RESERVED_KEYS) ?? {});
+  writeProjectSettings(db, { id, settings: { ...integrations, ...reservedOf(projectSettings(db, id)) } });
   return projectIntegrations(db, id);
 }
 

@@ -275,9 +275,8 @@ loop artifacts keep their history: `05-qa.md`, `06-verification.md` and
 `### Fix loop n — what was wrong / what changed` block to `04-implementation.md` instead of
 rewriting it (gates read only the last round). Its prompt carries the run timeline - phase,
 model, status and reason in order - from this attempt's `pipeline_phases`: the orchestrator
-passes `reason` to `run_phase_done` on every relaunch, and `pipeline_log` copies the recorded
-reasons into the rows when its table lists exactly as many launches of that phase as the run
-recorded (otherwise it copies none of them and answers `reasons_unpaired`). When `pipeline_log` recorded no run for the attempt, the timeline
+passes `reason` to `run_phase_done` on every relaunch, and `nightqueue run report` (Phase 9)
+writes one row per phase `state.json` recorded, with its reason. When no run was recorded for the attempt, the timeline
 comes from `state.json` and says so.
 
 An old `~/.nightqueue/state/reflect.json` and `reflect.log` from the former `SessionEnd`

@@ -31,5 +31,7 @@ Also write `<RUN_DIR>/evidence/automated-verification.md` with this round's `## 
 Search rule: [the search limits of a job]
 Long commands: [the Bash timeout of a job]
 
+Demo repository: [DEMO REPO — the project's configured path, or `none configured`] — the only repository where a verification may create, merge or close a real pull request; `none configured` → no real pull request: report that scenario as a gate.
+
 Repository: [CWD PATH]
 Project: [PROJECT — the name on the Project: line of the prompt]

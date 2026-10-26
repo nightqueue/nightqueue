@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -137,8 +137,15 @@ test("the closed list is frozen data, and its rendering names every rule", () =>
 // The run subcommands the skill names for a lane, never for the orchestrator: a prover appends its own QA round.
 const LANE_ONLY_SUBCOMMANDS = new Set(["append"]);
 
+// The text the orchestrator reads: SKILL.md and every top-level reference of the skill.
+function skillFlow() {
+  const dir = join(packageRoot(), "plugin", "skills", "resolve");
+  const references = readdirSync(join(dir, "references")).filter((name) => name.endsWith(".md")).sort();
+  return [join(dir, "SKILL.md"), ...references.map((name) => join(dir, "references", name))].map((file) => readFileSync(file, "utf8")).join("\n");
+}
+
 test("every `nightqueue run <sub>` the skill names is a real run subcommand, allowed unless only a lane runs it", () => {
-  const skill = readFileSync(join(packageRoot(), "plugin", "skills", "resolve", "SKILL.md"), "utf8");
+  const skill = skillFlow();
   const named = new Set([...skill.matchAll(/nightqueue run ([a-z0-9-]+)/g)].map((match) => match[1]));
   const runSource = readFileSync(join(packageRoot(), "src", "cli", "run.mjs"), "utf8");
   const subcommandsBlock = runSource.match(/const SUBCOMMANDS = new Map\(\[([\s\S]*?)\]\);/);
@@ -156,17 +163,13 @@ test("every `nightqueue run <sub>` the skill names is a real run subcommand, all
 const SKILL_PRESCRIBED = [
   ["git rev-parse --is-inside-work-tree", "git rev-parse --is-inside-work-tree"],
   ["git branch --show-current", "git branch --show-current"],
-  ["git fetch\n     origin", "git fetch origin"],
+  ["git fetch origin", "git fetch origin"],
   ["git worktree add <path> -b worktree-<slug> origin/main", "git worktree add /work/wt -b worktree-slug origin/main"],
   ["git status --short", "git status --short"],
   ["git diff --stat", "git diff --stat"],
-  ["git diff --stat|--shortstat|--name-only|--name-status", "git diff --name-only"],
-  ["gh pr list\n   --head <branch>", "gh pr list --head feat/slug"],
-  ["gh pr view|list|status|checks|create", "gh pr view 3"],
   ["gh pr create", "gh pr create --title t --body-file /runs/p/s/pr-body.md"],
   ["nightqueue run check <NN>", "nightqueue run check 07"],
   ["nightqueue run start", "nightqueue run start"],
-  ["nightqueue run start --routing", "nightqueue run start --routing"],
   [
     "nightqueue run publish --message-file <RUN_DIR>/commit-message.txt --body-file <RUN_DIR>/pr-body.md",
     "nightqueue run publish --message-file /runs/p/s/commit-message.txt --body-file /runs/p/s/pr-body.md --extra test/x.regression.test.mjs",
@@ -175,21 +178,22 @@ const SKILL_PRESCRIBED = [
 ];
 
 test("every command the skill prescribes to the orchestrator passes the closed list", () => {
-  const skill = readFileSync(join(packageRoot(), "plugin", "skills", "resolve", "SKILL.md"), "utf8");
+  const skill = skillFlow();
   for (const [text, concrete] of SKILL_PRESCRIBED) {
     assert.ok(skill.includes(text), `the skill no longer carries ${JSON.stringify(text)} - re-sync this table`);
     assert.equal(orchestratorBashAllowed(concrete), true, `the closed list refuses the prescribed ${JSON.stringify(concrete)}`);
   }
 });
 
-test("the skill's closed list names every rule and every guard of the data", () => {
-  const skill = readFileSync(join(packageRoot(), "plugin", "skills", "resolve", "SKILL.md"), "utf8");
-  const list = skill.slice(skill.indexOf("- (e) the closed Bash list"), skill.indexOf("Nothing else."));
+test("the deny reason names every rule and every guard of the data, and the skill no longer copies the list", () => {
+  const rendered = describeOrchestratorBashRules();
   for (const { argv, noneOf = [], next = [] } of ORCHESTRATOR_BASH_RULES) {
-    assert.ok(list.includes(argv.join(" ")), `the skill's closed list misses ${argv.join(" ")}`);
-    for (const word of [...noneOf, ...next]) assert.ok(list.includes(word), `the skill's closed list misses ${word} of ${argv.join(" ")}`);
+    assert.ok(rendered.includes(argv.join(" ")), `the deny reason misses ${argv.join(" ")}`);
+    for (const word of [...noneOf, ...next]) assert.ok(rendered.includes(word), `the deny reason misses ${word} of ${argv.join(" ")}`);
   }
-  for (const flag of ["-C", "--git-dir", "--work-tree", "-c"]) assert.ok(list.includes(`\`${flag}\``), `the skill's closed list misses the global ${flag}`);
+  const skill = readFileSync(join(packageRoot(), "plugin", "skills", "resolve", "SKILL.md"), "utf8");
+  assert.equal(skill.includes("the closed Bash list"), false, "the skill still copies the closed list the runtime holds");
+  assert.ok(skill.includes("- (e) git/gh/`nightqueue run` in the subcommands the runtime allows; a denial says what to do instead."), "channel (e) no longer defers to the runtime");
 });
 
 test("the job home variable is the one the runtime pins on the child", () => {
@@ -262,6 +266,26 @@ test("the roots are the job's runs and every copy of the plugin, canonical and w
 
   const { [JOB_HOME_ENV]: _pinned, [PLUGIN_DIR_ENV]: _plugin, ...unpinned } = env;
   assert.equal(orchestratorRoots(unpinned)[0], join(base, "other-home", "runs"));
+});
+
+test("the skill's references channel is readable by the orchestrator", (t) => {
+  const { base } = scopeFixture(t);
+  const plugin = join(base, "plugin");
+  const cached = join(base, "claude-config", "plugins", "cache", "x", "plugin");
+  const env = { NIGHTQUEUE_HOME: join(base, "home"), [JOB_HOME_ENV]: join(base, "home"), [PLUGIN_DIR_ENV]: plugin, HOME: base, CLAUDE_CONFIG_DIR: join(base, "claude-config") };
+  const references = [plugin, cached].flatMap((root) => {
+    const dir = join(root, "skills", "resolve", "references");
+    mkdirSync(join(dir, "prompts"), { recursive: true });
+    writeFileSync(join(dir, "phase-9.md"), "# Phase 9\n");
+    writeFileSync(join(dir, "prompts", "_handoff.md"), "handoff\n");
+    return [join(dir, "phase-9.md"), join(dir, "prompts", "_handoff.md")];
+  });
+  const roots = orchestratorRoots(env);
+  const cwd = join(base, "worktree");
+  for (const file_path of references) {
+    assert.equal(insideRoots(readTarget("Read", { file_path }, cwd), roots), true, `${file_path} is outside the orchestrator's roots`);
+  }
+  assert.equal(insideRoots(readTarget("Read", { file_path: join(cwd, "src", "a.mjs") }, cwd), roots), false);
 });
 
 test("only the calling session's own spill of a large tool result is readable, nothing else of the configuration directory", (t) => {

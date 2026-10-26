@@ -21,6 +21,7 @@ of a real failure.
 
 {{>deliverables/qa-report}}
 
+{{>_demo-repo}}
 {{>_shell-rule}}
 
 {{>_footer}}

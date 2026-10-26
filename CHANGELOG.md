@@ -106,6 +106,23 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
   or table rows, outside fenced code) or the plan declares `**Always-gate class:** yes`, else
   `lite`. Phase 5 reads that line and nothing else; the architect writes one `🔴|🟡|🟢` marker on
   each risk line. `phase_prompt` adds an `open_items` line when a QA target contradicts the mode.
+- **The demo repository is a project setting.** `nightqueue project demo-repo <project> [--set
+  <path>] [--json]` shows (`none configured` without one) or sets the only repository where a
+  verification may create, merge or close a real pull request; `--set` refuses a path that is
+  not an existing directory, not a git repository, or the project's own repository (its
+  checkout, a worktree of it, inside it or around it), and is refused inside a job and to the
+  operator agent. It is stored
+  as `verification.demoRepo` in the project's settings, which `project models` and `project
+  integrations` keep. The verifier, runtime and QA requests render it as `{{DEMO_REPO}}`
+  (`none configured` → no real pull request, the scenario is reported as a gate), and the agents'
+  rule (b) points at it instead of a machine path.
+- **`nightqueue run report` prints `## Open items` and records the run.** The last section lists
+  each `dedicated ticket: yes` suggestion of the last QA round and each `OPEN:` line of the `05`
+  and `07` checks, or `- none`; `--json` adds `openItems` and `recorded`. The command writes the
+  run's telemetry row itself (phases from `state.json`, outcome and gate stop derived from it),
+  at most once per attempt inside a job, and outside a job (or with no recorded attempt start)
+  not again while its last record carries the same outcome and phase count; a no-change run
+  records no gate stop; a failed record is a fixed-phrase open item, never a non-zero exit.
 
 ### Changed
 
@@ -264,6 +281,19 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
   PATCH or PUT that no live consent covers answers `needs-consent` and sends nothing; a GET, a
   call inside a job and any other client are unchanged.
 - **Tool contract 10**, for the `operator_consent` tool.
+- **The resolve skill is a skeleton with lazy references.** `SKILL.md` keeps the contract (five
+  channels), Phase 0 and, per phase, the launch, the check, the answer table and its judgment
+  rules; resume, the interactive worktree, Phase 8 and Phase 9 (the report, the six `## Notice`
+  writing rules and the icon tables) move to `references/`, each read when its phase says so.
+  The skill names no host tool or flag outside `references/interactive-worktree.md`, no phase
+  header rule and no tasks step. `test/skill-budget.test.mjs` pins the always-loaded bytes
+  (`SKILL.md` plus the prompt partials) and one ceiling per lazy reference at the measured
+  sizes. The Notice reference no longer claims a validator of the final-text notice: building
+  one (header enum, labels, the 1900 cap) is a follow-up.
+- **`pipeline_log` ignores `phases`.** Like `tier`, `tier_operator` and `tier_raise_reason`,
+  `phases` is accepted from an older plugin and ignored: the phase rows come from the run's
+  `state.json` with their recorded reasons, `reasons_unpaired` is gone, and inside a job a run
+  already recorded in this attempt answers `already_recorded: true` and adds no row.
 
 ### Deprecated
 
@@ -282,6 +312,9 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 - **The `triage` and `qa` operator agents**, with the qa lane of the operator guard and the
   `subagent-stop` hook that dropped the worktree `nightqueue:qa` announced. `nightqueue sandbox
   worktree` stays a CLI facility, swept by `nightqueue open` and `nightqueue doctor --fix`.
+- **`tasks` from the answer of `nightqueue run start`**; `phases` stays.
+- **The `00-main-measure.md` artifact override of the runtime phase.** `phase_prompt` accepts
+  `artifact` from an older plugin and ignores it: `runtime` always answers `07-runtime.md`.
 
 ## 0.7.0 - 2026-10-20
 

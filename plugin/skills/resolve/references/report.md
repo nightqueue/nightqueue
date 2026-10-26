@@ -13,3 +13,7 @@
 
 **Total:** ⏱️ {{TOTAL}}
 {{/HAPPY}}
+
+## Open items
+
+{{OPEN_ITEMS}}

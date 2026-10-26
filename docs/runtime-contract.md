@@ -45,8 +45,7 @@ What a runtime has to provide, and what it can rely on:
   `runs/<project_id>/` once (a `runs/.by-id` marker records it, and a run
   already present under the id is never overwritten). The runtime creates the
   directory before the session starts.
-- Artifact names, in order: `00-main-measure.md` (Phase 0 step 3 only, the post-merge
-  measure), `01-triage.md`, `02-explore.md`, `03-plan.md`, `04-implementation.md`,
+- Artifact names, in order: `01-triage.md`, `02-explore.md`, `03-plan.md`, `04-implementation.md`,
   `05-qa.md`, `06-verification.md`, `07-runtime.md`. The phases are whole numbers, one
   artifact per phase: the QA analyst, every prover and the consolidation all write rounds of
   `05-qa.md`.
@@ -85,7 +84,8 @@ What a runtime has to provide, and what it can rely on:
     included). The key is never in
     `phases` and is never read by resume, routing, the run report or the run context;
     a phase that still runs shows as run. `pipeline_phases.status` is post-run
-    telemetry only: it is written by `pipeline_log` after the run and is never a
+    telemetry only: it is written by `nightqueue run report` (or an older plugin's
+    `pipeline_log`) from `state.json` after the run and is never a
     source of the live track.
   - `outcome{status, at, notice?, prUrl?}`: `run_outcome` (`status`, and `notice` or, for a
     gate, the notice it composes from `question`/`from_artifact`),
@@ -501,7 +501,7 @@ dropped is answered with the older-definitions line):
 |---|---|
 | `lesson_recall` | `query?`, `project?`, `target?`, `exclude_ids?` |
 | `context_for_phase` | `target` (`triager`, `architect`, `coder`, `qa`, `verifier`, `explore`), `query?`, `project?`, `repo_root?`, `exclude_ids?` |
-| `phase_prompt` | `target` (`triager`, `explore`, `architect`, `coder`, `coder-fix`, `verifier`, `runtime`, `qa-lite`, `qa-analyst`, `qa-prover`, `reflector` - no artifact, `check` null), `query?`, `stage?`, `delivery_constraints?`, `request?` (`triager` only, required outside a job), `raw_evidence?` (accepted and ignored), `group?` (required for `qa-prover`), `note?`, `artifact?` (`runtime` only), `project?`, `slug?` |
+| `phase_prompt` | `target` (`triager`, `explore`, `architect`, `coder`, `coder-fix`, `verifier`, `runtime`, `qa-lite`, `qa-analyst`, `qa-prover`, `reflector` - no artifact, `check` null), `query?`, `stage?`, `delivery_constraints?`, `request?` (`triager` only, required outside a job), `raw_evidence?` (accepted and ignored), `group?` (required for `qa-prover`), `note?`, `artifact?` (accepted and ignored: an older plugin still sends it; `runtime` always answers `07-runtime.md`), `project?`, `slug?` |
 | `lesson_save` | `title`, `root_cause`, `solution`, `prevention`, `attempts?`, `project?`, `target?` (a title the owner already has bumps its `attempts`; answers `deduped` and `violated` - `true` only inside a queue job, on a dedup onto a lesson this run was given, which also bumps the lesson's `violated`) |
 | `memory_recall` | `query?`, `project?` |
 | `lesson_delete` | `id` (`L344` or the plain number), `project` (name or key): deletes one lesson and its search entry; an unknown id or another project's is refused; refused inside a queue job; answers `{id, ref, title, project}` |
@@ -509,7 +509,7 @@ dropped is answered with the older-definitions line):
 | `memory_save` | `key`, `value`, `project?` (a key the owner already has is kept, never overwritten: answers `deduped: true` with the stored value; answers `{id, ref: "M<id>", project, deduped, value}`; allowed inside a queue job) |
 | `index_save` | `project`, `repo_root`, `files[{path, responsibility}]`, `libs?[{lib, version}]` |
 | `index_recall` | `project`, `repo_root?`, `query?` |
-| `pipeline_log` | `outcome`, `project?`, `slug?`, `task_type?`, `gate_stop?`, `duration_s?`, `phases?[{phase, model?, status?, retry?, duration_s?, note?, reason?}]` (a phase sent with no `reason` takes the one `run_phase_done` recorded for it, paired by phase name in order, only when `phases` lists exactly as many rows of that phase as the run recorded; otherwise none of that phase's reasons are copied and the answer's `reasons_unpaired` names it) |
+| `pipeline_log` | `outcome`, `project?`, `slug?`, `task_type?`, `gate_stop?`, `duration_s?`, `phases?` (accepted and ignored: the phase rows come from the run's `state.json`, with their recorded `note` and `reason`; inside a job a run already recorded in this attempt answers `already_recorded: true` and adds no row; outside a job, or in a job with no recorded attempt start, so does a run whose last record carries the same outcome and phase count; the operator's outcomes add a row per call) |
 | `queue_add` | `project?`, `prompt`, `cwd?`, `register?`, `key?` (with `register`), `title?` (one line, at most 120 characters; blank is none), `priority?` (1-9), `max_attempts?` (1-10), `timeout_s?` (60-86400), `origin?` (a list of `{kind, ref}`; omitted or null detects every recognised link of the prompt, `[]` is none; the old `{kind, ref}` or `false` is refused as an older client, contract 6) (a prompt that depends on another job or pull request is refused before anything is registered or queued; see "A job is self-contained" below) |
 | `project_register` | `cwd`, `name?`, `key?`, `org?` (registers the repository of `cwd`, a linked worktree as its main checkout, only after the person said yes; answers `{registered, project, key, org, path, hint}`; nothing is queued) |
 | `project_integrations` | `project`, `action` (`show`, `set`, `unset`), `key?` (`<kind>.<setting>`, required by `set`/`unset`), `value?` (text, required by `set`) (answers `{project, integrations, providers: [{kind, keys}]}` with the settings each provider of the build declares; `set` validates against the provider, `unset` of the last key leaves the project without integrations; `set`/`unset` refused from inside a job; never a secret) |
@@ -606,7 +606,27 @@ rendered anyway`` - it never refuses. The three QA targets all answer the artifa
 group's slug plus `-` and 8 hex of the group's sha256, empty for every other target), which it
 appends with `nightqueue run append 05 --group <GROUP_ID>`. A placeholder the run cannot
 fill is an error, never a half prompt. Its `model` is the model of the target's agent (see
-"Agent models and pipeline constants" below).
+"Agent models and pipeline constants" below). The `verifier`, `runtime`, `qa-lite`,
+`qa-analyst` and `qa-prover` prompts carry `Demo repository: {{DEMO_REPO}}` (the
+`_demo-repo.md` partial): the project's `verification.demoRepo` setting (`nightqueue project
+demo-repo`), or `none configured` without one or outside a project, in which case no real
+pull request is created, merged or closed and that scenario is reported as a gate; a store
+that cannot read the setting answers `none configured` with an `open_items` line.
+
+### The skill's references
+
+`plugin/skills/resolve/SKILL.md` is the orchestrator's skeleton: the contract, Phase 0 and,
+per phase, the launch, the `run check`, the answer table and its judgment rules. What only
+one phase or one mode needs lives in `references/` and is read when the phase says so:
+`resume.md` (Phase 0, with a `RESUME CANDIDATE` block), `interactive-worktree.md` (Phase 0
+and Phase 8 outside a job; the only file of the skill that names the host's worktree tool),
+`qa-phase.md` (Phase 5), `phase-8.md` with `commit-template.md` and `pr-template.md`
+(Phase 8), `phase-9.md` (Phase 9: the report, the `## Notice` writing rules and the icon
+tables). `report.md` is rendered by `nightqueue run report` and never read by the
+orchestrator. The budget is pinned by `test/skill-budget.test.mjs`: the always-loaded bytes
+(`SKILL.md` plus every `references/prompts/_*.md` partial) and each lazy reference have a
+ceiling set to the measured size, lowered and never raised; `SKILL.md` stays within 350
+lines and every `### Phase N` section within 40 (Phase 0 within 70).
 
 ### Agent models and pipeline constants
 
@@ -641,7 +661,22 @@ Every run shares the same constants: the verifier scope is the project's real ch
 project's `CLAUDE.md` is named to the coder when it exists, `index_recall` and
 `context_for_phase` always run, and there is no time target.
 
-In `pipeline_log`, `tier`, `tier_operator` and `tier_raise_reason` are accepted and
+`nightqueue run report` records the run's telemetry itself, so the shipped plugin never
+calls `pipeline_log`; the tool stays for an older plugin and for the operator's outcomes
+(`investigated`, `queued`). Both write the same row through one module
+(`src/queue/pipeline-record.mjs`): the phases come from `state.json`, one row per recorded
+phase (`failed` for a ❌ verdict, `retry` for a phase seen before); `run report` also
+derives the outcome (`pr_opened`, `local_commit`, `no_commit`) and the gate stop (`user`
+for a gate outcome, else the terminated or last failed phase) from it, while
+`pipeline_log` keeps the `outcome`/`gate_stop` it was sent. Inside a job the run is
+recorded at most once per attempt (since the job's `attempt_started_at`); outside a job, or
+in a job with no recorded attempt start, a run is not recorded again while the latest
+`pipeline_runs` row of its project and slug carries the same outcome and phase count, and
+the operator's `investigated`/`queued` outcomes of `pipeline_log` insert a row per call. A
+`NO-CHANGE-NEEDED` run records no gate stop. A failed record is the fixed open item `the
+run was not recorded in the telemetry` of the report, never a non-zero exit.
+
+In `pipeline_log`, `phases`, `tier`, `tier_operator` and `tier_raise_reason` are accepted and
 ignored: an older plugin still sends them, and none of them is read or written. The
 `pipeline_runs.tier` column is NOT NULL in the shipped schema, so every new row carries
 the constant `complex` (the one track every run executes); `tier_operator` and

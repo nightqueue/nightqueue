@@ -134,7 +134,6 @@ export async function runStart(argv, ctx) {
     commitType: options.commitType ?? stateText(state, "commitType"),
     models: await runModels(run, ctx),
     phases: phasesFor(type),
-    tasks: phasesFor(type),
     prTemplate,
     commitConvention: commitConvention(cwd, ctx.env),
     commitTemplate: findCommitTemplate(cwd, ctx.env),

@@ -36,7 +36,7 @@ import { isSafeSegment, readRunState, RESUME_PHASE_ORDER } from "../queue/resume
 import { resolveJobRun } from "../queue/job-run.mjs";
 import { composeGateNotice } from "../queue/gate-notice.mjs";
 import { runDir as runDirOf } from "../config/paths.mjs";
-import { appendPendingWrite, PENDING_KEYS } from "../queue/pending-writes.mjs";
+import { attemptSince, recordPipelineRun, statePipelinePhases } from "../queue/pipeline-record.mjs";
 import { applyRetry, callerJobId } from "../queue/retry.mjs";
 import { refuseDependentPrompt } from "../queue/dependent-prompt.mjs";
 import { resolveJobSession } from "../queue/session.mjs";
@@ -58,7 +58,6 @@ import {
   OPERATOR_PIPELINE_OUTCOMES,
   PIPELINE_GATE_STOPS,
   PIPELINE_OUTCOMES,
-  PIPELINE_PHASE_STATUSES,
   PIPELINE_TASK_TYPES,
 } from "../memory/runs.mjs";
 import { ensureStoreExists, openStore, withReadOnlyStore } from "../store/open.mjs";
@@ -135,16 +134,6 @@ const optionalText = z.string().nullable().optional();
 const ignoredOldField = z.unknown().optional().describe("ignored: accepted from an older plugin");
 const jobRefInput = z.union([z.number().int().min(1), z.string()]);
 const jobIdField = jobRefInput.describe("The job's ref (`J-77`) or its plain id.");
-
-const phaseSchema = z.object({
-  phase: z.string(),
-  model: z.string().nullable().optional(),
-  status: z.enum(PIPELINE_PHASE_STATUSES).nullable().optional(),
-  retry: z.boolean().nullable().optional(),
-  duration_s: z.number().int().min(0).nullable().optional(),
-  note: z.string().nullable().optional(),
-  reason: z.string().nullable().optional(),
-});
 
 // The registered project a lesson, memory, index or run call scopes to: a name, or an absolute path inside a checkout; null (global) for
 // a path inside none, and an unknown name refused, so nothing is ever written under a project that does not exist.
@@ -241,61 +230,16 @@ function runFacts({ projectId, slug }, env) {
   const state = readRunState({ projectId, slug, env });
   return {
     taskType: state?.type ?? null,
-    phases: Array.isArray(state?.phases) ? state.phases : [],
+    phases: statePipelinePhases(state),
   };
 }
 
-// The `reason` each recorded phase carries, queued per phase name in the order the run recorded them.
-function recordedReasonsByPhase(recordedPhases) {
-  const queues = new Map();
-  for (const entry of recordedPhases) {
-    const name = typeof entry?.phase === "string" ? entry.phase : "";
-    const reason = typeof entry?.reason === "string" && entry.reason.trim() !== "" ? entry.reason : null;
-    queues.set(name, [...(queues.get(name) ?? []), reason]);
-  }
-  return queues;
+// The answer of a `pipeline_log` call: the row written, the queued warning, or that this attempt already recorded the run.
+function pipelineLogAnswer(logged, run) {
+  if (logged.queued === true) return logged;
+  if (logged.skipped === true) return { ok: true, already_recorded: true };
+  return { ok: true, runId: logged.runId, project: logged.projectId ? run.project : null, phases: logged.phases };
 }
-
-// The trimmed phase name of a sent `pipeline_log` row.
-function sentPhaseName(phase) {
-  return String(phase?.phase ?? "").trim();
-}
-
-// The phase names whose recorded reasons cannot be paired: the call lists a different number of launches than the run recorded.
-function unpairedPhaseNames(phases, queues) {
-  const sentCounts = new Map();
-  for (const phase of phases) sentCounts.set(sentPhaseName(phase), (sentCounts.get(sentPhaseName(phase)) ?? 0) + 1);
-  return [...queues]
-    .filter(([name, reasons]) => (sentCounts.get(name) ?? 0) !== reasons.length)
-    .filter(([, reasons]) => reasons.some((reason) => reason !== null))
-    .map(([name]) => name);
-}
-
-// The sent phases with the reason state.json recorded for each, paired in order only when both sides list the same launches; a sent reason wins.
-function withRecordedReasons(phases, recordedPhases) {
-  const queues = recordedReasonsByPhase(recordedPhases);
-  const unpaired = unpairedPhaseNames(phases, queues);
-  const paired = phases.map((phase) => {
-    const name = sentPhaseName(phase);
-    const recorded = unpaired.includes(name) ? null : (queues.get(name)?.shift() ?? null);
-    const sent = typeof phase?.reason === "string" && phase.reason.trim() !== "" ? phase.reason : null;
-    return sent !== null || recorded === null ? phase : { ...phase, reason: recorded };
-  });
-  return { phases: paired, unpaired };
-}
-
-// Queues a pipeline run the unavailable database refused into the run's pending-writes file, fully resolved, and answers ok with the warning;
-// any other failure, or a run it cannot be queued into, is raised as it came.
-function queuedPipelineLog(err, spec, env) {
-  if (!(err instanceof StoreUnavailableError)) throw err;
-  const at = new Date().toISOString();
-  const payload = { ...spec, model: env?.NIGHTQUEUE_MODEL ?? null, sessionId: env?.NIGHTQUEUE_SESSION_ID ?? null };
-  const entry = { key: PENDING_KEYS.pipelineLog(spec.projectId, spec.slug, at), kind: "pipeline_log", at, jobId: callerJobId(env), payload };
-  const queued = appendPendingWrite({ projectId: spec.projectId, slug: spec.slug, entry, env });
-  if (queued.status !== "queued") throw err;
-  return { ok: true, queued: true, warning: `recorded in ${queued.path}; replayed once the database is back`, pending: queued.path };
-}
-
 
 // Refuses an operator outcome sent from inside a job, whose run always ends on one of the pipeline's own.
 function refuseOperatorOutcomeInsideJob(outcome, env) {
@@ -949,7 +893,7 @@ function toolDefinitions(env, state) {
           raw_evidence: optionalText,
           group: optionalText,
           note: optionalText,
-          artifact: optionalText,
+          artifact: ignoredOldField,
           project: optionalText,
           slug: optionalText,
         },
@@ -1098,11 +1042,12 @@ function toolDefinitions(env, state) {
       name: "pipeline_log",
       config: {
         description:
-          "Records the telemetry of one /resolve run, gate terminations included. One call per run. " +
+          "Records a /resolve run's telemetry; `nightqueue run report` records a job's run itself, so this tool stays for an older plugin and for the operator's outcomes. " +
+          "`phases`, `tier`, `tier_operator` and `tier_raise_reason` are accepted and ignored: the phases come from the run's own state.json. " +
+          "Inside a job, a run already recorded in this attempt is not recorded twice; outside a job, or in a job with no recorded attempt start, a run whose last record carries the same outcome and phases is not recorded twice. The operator's outcomes are recorded on every call. " +
           "Inside a job, `project` and `slug` come from the job's own row and are ignored here; outside one, both name the run. " +
           "`task_type` may be left out when the run already recorded it with `run_set`; the durations and the models the runtime measured in the stream are filled in afterwards and always win over the ones sent here. " +
-          "`investigated` and `queued` are the operator's outcomes (a session that investigated only, or queued a job): outside a job they are recorded, inside a job they are refused. " +
-          "A `reason` recorded with `run_phase_done` is copied onto the rows of the same phase only when `phases` lists exactly as many rows of that phase as the run recorded. Otherwise none of that phase's reasons are copied and `reasons_unpaired` names the phase. Send `reason` on those rows yourself.",
+          "`investigated` and `queued` are the operator's outcomes (a session that investigated only, or queued a job): outside a job they are recorded, inside a job they are refused.",
         inputSchema: {
           project: optionalText,
           slug: optionalText,
@@ -1113,15 +1058,13 @@ function toolDefinitions(env, state) {
           outcome: z.enum(PIPELINE_OUTCOMES),
           gate_stop: z.enum(PIPELINE_GATE_STOPS).nullable().optional(),
           duration_s: z.number().int().min(0).nullable().optional(),
-          phases: z.array(phaseSchema).nullable().optional(),
+          phases: ignoredOldField,
         },
       },
       handler: async (args) => {
         refuseOperatorOutcomeInsideJob(args.outcome, env);
         const run = await pipelineLogRun(args, env);
         const recorded = runFacts(run, env);
-        const reasons = withRecordedReasons(args.phases ?? [], recorded.phases);
-        const unpairedField = reasons.unpaired.length > 0 ? { reasons_unpaired: reasons.unpaired } : {};
         const spec = {
           projectId: run.projectId,
           slug: run.slug,
@@ -1129,14 +1072,11 @@ function toolDefinitions(env, state) {
           outcome: args.outcome,
           gateStop: args.gate_stop,
           durationS: args.duration_s,
-          phases: reasons.phases,
+          phases: recorded.phases,
         };
-        try {
-          const logged = await openStore(env).runs.logPipelineRun(spec);
-          return { ok: true, runId: logged.runId, project: logged.projectId ? run.project : null, phases: logged.phases, ...unpairedField };
-        } catch (err) {
-          return { ...queuedPipelineLog(err, spec, env), ...unpairedField };
-        }
+        const since = await attemptSince(callerJobId(env), env);
+        const always = OPERATOR_PIPELINE_OUTCOMES.includes(args.outcome);
+        return pipelineLogAnswer(await recordPipelineRun({ spec, since, always }, env), run);
       },
     },
     {

@@ -1,7 +1,11 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { CHECK_CONTEXT_FILES, evaluateCheck } from "../queue/check-contract.mjs";
+import { lastRound, PHASE_ARTIFACTS } from "../queue/phase-artifacts.mjs";
+import { attemptSince, derivedGateStop, derivedOutcome, recordPipelineRun, statePipelinePhases, verdictIcon, verdictWord } from "../queue/pipeline-record.mjs";
 import { isStateObject } from "../queue/resume.mjs";
 import { renderSkillTemplate, skillReferencesDir } from "../queue/skill-template.mjs";
+import { sectionOf } from "../queue/stream.mjs";
 import { runDurationS } from "../queue/telemetry.mjs";
 import { checkArgs, parseCommand } from "./args.mjs";
 import { durationCell, phaseRows, readJobLog, requireRunState, resolveRun, RUN_OPTIONS } from "./run-context.mjs";
@@ -23,22 +27,8 @@ const STEPS = [
   { phase: null, step: "9 Report", agent: "🗂️ Report" },
 ];
 
-const OK_VERDICTS = new Set(["PROCEED", "APPROVED", "PASSED", "CONFIRMED", "DONE", "OK"]);
-const FAILED_VERDICT = /^(NEEDS|FAILED|NOT-|NOT |SYMPTOM-PERSISTS)/;
-
-// The verdict word a phase recorded, without a heading prefix such as `## Verification:`.
-function verdictWord(verdict) {
-  const text = typeof verdict === "string" ? verdict.trim() : "";
-  if (!text) return "OK";
-  return text.replace(/^#+\s*/, "").split(":").pop().trim().toUpperCase();
-}
-
-// The status icon a recorded verdict earns: ✅ a clean pass, ❌ a failure, ⚠️ anything the report cannot call clean.
-function verdictIcon(verdict) {
-  const word = verdictWord(verdict);
-  if (OK_VERDICTS.has(word)) return "✅";
-  return FAILED_VERDICT.test(word) ? "❌" : "⚠️";
-}
+const OPEN_CHECKS = ["05", "07"];
+const DEDICATED_TICKET = "dedicated ticket: yes";
 
 // The recorded entries of one phase in state.json, in the order they were recorded.
 function entriesOf(state, phase) {
@@ -79,10 +69,10 @@ function stepRows(state) {
   return STEPS.map((step) => ({ ...step, ...stepStatus(step, { state }) }));
 }
 
-// The plan of the run, or an empty text when the run wrote none.
-function readPlan(runDir) {
+// One file of the run directory, or an empty text when the run wrote none.
+function readRunFile(runDir, file) {
   try {
-    return readFileSync(join(runDir, "03-plan.md"), "utf8");
+    return readFileSync(join(runDir, file), "utf8");
   } catch {
     return "";
   }
@@ -129,10 +119,93 @@ function executionTableRows(rows) {
   return rows.map((row) => `| ${row.phase} | ${agentOf(row.phase)} | ${row.status} | ${cellText(row.note) || "-"} | ${durationCell(row.durationS)} |`).join("\n");
 }
 
+// A text collapsed onto one line.
+function flatLine(text) {
+  return String(text ?? "").replace(/\s+/g, " ").trim();
+}
+
+// The bullets of a markdown section, each flattened onto one line with its indented continuation lines.
+function sectionBullets(section) {
+  const bullets = [];
+  for (const line of String(section ?? "").split("\n")) {
+    if (/^\s*[-*]\s+/.test(line)) bullets.push(line.replace(/^\s*[-*]\s+/, ""));
+    else if (bullets.length > 0 && /^\s+\S/.test(line)) bullets[bullets.length - 1] += ` ${line}`;
+  }
+  return bullets.map(flatLine).filter((bullet) => bullet !== "");
+}
+
+// The suggestions of the QA's last round that ask for a ticket of their own.
+function dedicatedTickets(runDir) {
+  const qa = lastRound(readRunFile(runDir, PHASE_ARTIFACTS.get("05").file));
+  return sectionBullets(sectionOf(qa, "## Suggestions"))
+    .filter((bullet) => bullet.includes(DEDICATED_TICKET))
+    .map((bullet) => `dedicated ticket: ${bullet}`);
+}
+
+// The `OPEN:` lines one check answers for its artifact, named by the check; a check that cannot be evaluated is an open item itself.
+function openLinesOf(check, runDir, state) {
+  const file = PHASE_ARTIFACTS.get(check).file;
+  if (readRunFile(runDir, file) === "") return [];
+  const texts = Object.fromEntries([...CHECK_CONTEXT_FILES, file].map((name) => [name, readRunFile(runDir, name)]));
+  try {
+    return evaluateCheck({ check, texts, state })
+      .lines.filter((line) => line.startsWith("OPEN: "))
+      .map((line) => `${check} open: ${line.slice("OPEN: ".length)}`);
+  } catch {
+    return [`the open items of check ${check} could not be read`];
+  }
+}
+
+// The `OPEN:` lines the QA and runtime checks answer for their artifacts.
+function checkOpenLines(runDir, state) {
+  return OPEN_CHECKS.flatMap((check) => openLinesOf(check, runDir, state));
+}
+
+// The items the run leaves open, which the Notice translates into its Still open.
+function runOpenItems(runDir, state) {
+  return [...dedicatedTickets(runDir), ...checkOpenLines(runDir, state)];
+}
+
+// The telemetry row of the run, derived from its state.json.
+function runSpec(run, state) {
+  const outcome = derivedOutcome(state);
+  return {
+    projectId: run.projectId,
+    slug: run.slug,
+    taskType: state.type ?? null,
+    outcome,
+    gateStop: derivedGateStop(state, outcome),
+    phases: statePipelinePhases(state),
+  };
+}
+
+// The word the report answers for the telemetry write.
+function recordedWord(logged) {
+  if (logged?.queued === true) return "queued";
+  return logged?.skipped === true ? "already recorded" : "recorded";
+}
+
+// Records the run's telemetry once per attempt, else unless its last record has the same facts; a failure answers `not recorded` and leaves an open item, never an error.
+async function recordRun(run, state, { env, openItems }) {
+  try {
+    const since = run.jobId === null ? null : await attemptSince(run.jobId, env);
+    return recordedWord(await recordPipelineRun({ spec: runSpec(run, state), since }, env));
+  } catch (error) {
+    const reason = error?.message ?? String(error);
+    openItems.push("the run was not recorded in the telemetry");
+    return `not recorded: ${reason}`;
+  }
+}
+
+// The open items as the report's list lines, or `- none`.
+function openItemLines(items) {
+  return items.length === 0 ? "- none" : items.map((item) => `- ${cellText(item)}`).join("\n");
+}
+
 // Everything the report says about the run, before it is printed.
 function buildReport(run, state, log) {
   const steps = stepRows(state);
-  const reason = firstFailingGate(state, steps, readPlan(run.runDir));
+  const reason = firstFailingGate(state, steps, readRunFile(run.runDir, "03-plan.md"));
   return {
     slug: run.slug,
     steps,
@@ -152,6 +225,7 @@ function reportValues(report) {
     HAPPY_LINE: report.happy ? "Happy: yes" : `Happy: no — ${cellText(report.reason)}`,
     EXECUTION_ROWS: executionTableRows(report.execution),
     TOTAL: durationCell(report.durationS),
+    OPEN_ITEMS: openItemLines(report.openItems),
   };
 }
 
@@ -166,7 +240,9 @@ export async function runReport(argv, ctx) {
   checkArgs(positionals, { max: 0, usage: REPORT_USAGE });
   const run = await resolveRun(values, ctx);
   const state = requireRunState(run, ctx.env);
-  const report = buildReport(run, state, readJobLog(run.jobId, ctx.env));
+  const openItems = runOpenItems(run.runDir, state);
+  const recorded = await recordRun(run, state, { env: ctx.env, openItems });
+  const report = { ...buildReport(run, state, readJobLog(run.jobId, ctx.env)), openItems, recorded };
   if (values.json === true) ctx.out(JSON.stringify(report));
   else for (const line of reportLines(report)) ctx.out(line);
   return 0;

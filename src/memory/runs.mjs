@@ -129,6 +129,20 @@ function insertRunOnce(db, write, from) {
   });
 }
 
+// Writes the run unless the latest run of its project and slug records the same outcome and phase count, the check and the insert in one transaction.
+function insertRunUnlessSame(db, write) {
+  return inImmediateTransaction(db, () => {
+    const latest = db
+      .prepare(
+        `SELECT r.outcome, (SELECT count(*) FROM pipeline_phases p WHERE p.run_id = r.id) AS phases
+         FROM pipeline_runs r WHERE r.project_id IS ? AND r.slug = ? ORDER BY r.id DESC LIMIT 1`,
+      )
+      .get(write.projectId, write.run.slug);
+    const same = latest && latest.outcome === write.run.outcome && Number(latest.phases) === write.run.phases.length;
+    return same ? { skipped: true, projectId: write.projectId } : insertRunRows(db, write);
+  });
+}
+
 // The column values of one pipeline run, in the order `insertRunRows` writes them; `origin` names the model and the session that ran it.
 function runValues(run, owner, { durationS }, origin) {
   return [
@@ -297,4 +311,13 @@ export function logPipelineRunOnce(spec = {}, { since } = {}, env = process.env)
   const values = runValues(run, owner, spec, { model: spec.model, sessionId: spec.sessionId });
   const db = openDb(env);
   return withFullSync(db, () => withWriteRetry(() => insertRunOnce(db, { run, projectId: owner, values }, from)));
+}
+
+// Persists a pipeline run unless the latest run of the same project and slug records the same outcome and phases; `model` and `sessionId` travel in the spec.
+export function logPipelineRunUnlessSame(spec = {}, env = process.env) {
+  const run = validateRun(spec);
+  const owner = projectIdOrNull(spec.projectId);
+  const values = runValues(run, owner, spec, { model: spec.model, sessionId: spec.sessionId });
+  const db = openDb(env);
+  return withFullSync(db, () => withWriteRetry(() => insertRunUnlessSame(db, { run, projectId: owner, values })));
 }

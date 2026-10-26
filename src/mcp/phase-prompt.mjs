@@ -19,7 +19,7 @@ import { openStore } from "../store/open.mjs";
 import { callerContext, indexLine, phaseContextBlock, runInjectedLessonIds } from "./phase-context.mjs";
 import { runTimelineLines } from "./run-timeline.mjs";
 
-// The subagent every target launches, the agent whose model it runs on, the pipeline phase it belongs to, and its artifact gate.
+// The subagent every target launches, the agent whose model it runs on, the pipeline phase it belongs to, the one artifact it writes and that artifact's gate.
 const TARGETS = {
   triager: { agent: "nightqueue:triager", model: "triager", phase: "triage", artifact: "01-triage.md", check: "01" },
   explore: { agent: "nightqueue:explore", model: "explore", phase: "explore", artifact: "02-explore.md", check: "02" },
@@ -50,10 +50,11 @@ export const LESSON_TARGET_OF = {
 const BUG = "bug/error";
 const INDEX_LIMIT = 40;
 const BRIEF_FILE = "00-brief.md";
-const ARTIFACT_NAME = /^[A-Za-z0-9][A-Za-z0-9._-]*\.md$/;
 const ROUND_TARGETS = ["verifier", "runtime", "qa-lite", "qa-analyst"];
 const INJECTED_LIMIT = 40;
 const NONE_RECORDED = "none recorded";
+
+const NO_DEMO_REPO = "none configured";
 const QA_TARGET_MODE = { "qa-lite": "lite", "qa-analyst": "full", "qa-prover": "full" };
 const QUERY_WORDS = 12;
 const BRIEF_WRITER = "run `nightqueue run check 01` first: it writes the Brief from the triage's `## Brief`";
@@ -145,15 +146,6 @@ function planHasUsageCoverage(dir) {
   } catch {
     return false;
   }
-}
-
-// The artifact the runtime lane writes: its own by default, or the one the call names (the post-merge measure of step 3 of Phase 0).
-function runtimeArtifact(target, artifact) {
-  const name = typeof artifact === "string" ? artifact.trim() : "";
-  if (!name) return TARGETS.runtime.artifact;
-  if (target !== "runtime") throw new UserError("`artifact` is only accepted with `target: \"runtime\"`");
-  if (!ARTIFACT_NAME.test(name)) throw new UserError(`invalid \`artifact\` \`${name}\`: one \`.md\` file name inside the run directory`);
-  return name;
 }
 
 // The text of one handoff of the run directory, or an empty text when it was never written.
@@ -285,8 +277,7 @@ async function promptValues({ args, template, run, state, env, openItems }) {
   const query = text(args.query) || briefField(brief, "Affected area") || leadingWords(triage.RAW_REQUEST);
   const lookup = { template, query, run, repo, env, openItems };
   requireGroupRule(args);
-  const artifact = runtimeArtifact(args.target, args.artifact);
-  const ownArtifact = args.target === "runtime" ? artifact : TARGETS[args.target]?.artifact;
+  const ownArtifact = TARGETS[args.target]?.artifact;
   return {
     RUN_DIR: dir,
     REPOSITORY: repo,
@@ -310,13 +301,20 @@ async function promptValues({ args, template, run, state, env, openItems }) {
     STAGE: text(args.stage),
     GROUP: text(args.group),
     NOTE: text(args.note),
-    ARTIFACT: artifact,
     ROUND: roundOf(args.target, dir, ownArtifact),
     FIX_LOOP: fixLoopOf(args.target, dir),
     DRAFT_PATH: draftPathOf(args.target, dir, text(args.group)),
     GROUP_ID: groupIdValue(args.target, text(args.group)),
+    DEMO_REPO: await demoRepoValue({ run, env, openItems }),
     ...(await reflectorValues({ template, run, state, env, openItems })),
   };
+}
+
+// The demo repository of the run's project as the request shows it: its path, or `none configured`.
+async function demoRepoValue({ run, env, openItems }) {
+  if (!run.projectId) return NO_DEMO_REPO;
+  const path = await tolerant(openItems, "the project's demo repository", null, () => openStore(env).projects.demoRepo(run.projectId));
+  return path || NO_DEMO_REPO;
 }
 
 // The agent model overrides of the run's project, or null without a project or when the store cannot read them (named in an open item).
@@ -345,13 +343,12 @@ export async function phasePrompt(args, { run, env = process.env }) {
   const values = await promptValues({ args, template, run, state, env, openItems });
   noteQaModeMismatch({ target: args.target, dir: values.RUN_DIR, openItems });
   const model = modelFor(spec.model, await runProjectAgents({ run, env, openItems }));
-  const artifact = args.target === "runtime" ? values.ARTIFACT : spec.artifact;
   return {
     prompt: renderTemplate(template, values),
     subagent_type: spec.agent,
     model,
-    artifact: artifact === null ? null : join(values.RUN_DIR, artifact),
-    check: artifact === spec.artifact ? spec.check : null,
+    artifact: spec.artifact === null ? null : join(values.RUN_DIR, spec.artifact),
+    check: spec.check,
     open_items: openItems,
   };
 }

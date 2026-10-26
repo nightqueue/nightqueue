@@ -87,6 +87,7 @@ function runsDomain(env) {
   return {
     logPipelineRun: async (run) => runs.logPipelineRun(run, env),
     logPipelineRunOnce: async (run, options) => runs.logPipelineRunOnce(run, options, env),
+    logPipelineRunUnlessSame: async (run) => runs.logPipelineRunUnlessSame(run, env),
     updateRunTelemetry: async (telemetry) => runs.updateRunTelemetry(telemetry, env),
     latestRunOutcome: async (spec) => runs.latestRunOutcome(spec, env),
     runTimeline: async (spec) => runs.runTimeline(spec, env),
@@ -158,6 +159,8 @@ function projectsDomain(db) {
     setIntegrations: async (id, value) => registry.setProjectIntegrations(db(), { id, value }),
     agents: async (id) => registry.projectAgents(db(), id),
     setAgents: async (id, value) => registry.setProjectAgents(db(), { id, value }),
+    demoRepo: async (id) => registry.projectDemoRepo(db(), id),
+    setDemoRepo: async (id, value) => registry.setProjectDemoRepo(db(), { id, value }),
     at: async (cwd) => registry.projectAt(db(), cwd),
     ofOrg: async (orgId) => registry.projectsOfOrg(db(), orgId),
     add: async (spec) => registry.insertProject(db(), spec),

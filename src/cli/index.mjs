@@ -95,6 +95,7 @@ commands:
   project move <name> [<org>] [--path <p>]  move a project to another org and/or give it a new checkout
   project integrations <name> show|set|unset  show or change the project's per-provider settings (set <kind.key>=<value>, unset <kind.key>)
   project models <name> [--set|--unset]     show or change the model each agent runs on for the project (--set <agent>=<model>, --unset <agent>)
+  project demo-repo <name> [--set <path>]   show or set the demo repository where verifications may open real pull requests
   connection add <name> --type <type>       store a secret read from stdin and bind it to a free org slot; a home-wide type (linear) binds nothing
   connection bind <name> --org <name>       bind (or rebind) a stored connection to an org slot (org-scoped types only)
   connection test <name>                    check a stored connection against its service
@@ -137,7 +138,7 @@ inside a job — each acts on the run of the job it is called from, never on the
   run log [--json]                         one line per phase of THIS run: model, status and duration
   run commit --message-file <path>          stage what 04-implementation.md listed and commit it; --extra adds a pathspec
   run pr --body-file <path>                 check the body, push THIS run's branch under its final name and open the PR
-  run start --type --commit-type            record THIS run's type; print its agent models, phases, tasks and PR template as JSON
+  run start --type --commit-type            record THIS run's type; print its agent models, phases and PR template as JSON
   run publish --message-file --body-file    check the body, commit the list once, push THIS run's branch and open the PR
   run report [--json]                       the tables of THIS run's final report: steps, happy or not
 
