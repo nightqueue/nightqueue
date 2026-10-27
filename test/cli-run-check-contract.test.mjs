@@ -141,6 +141,29 @@ test("gate evidence is one line of at most 160 code points", () => {
   assert.ok(evidence.endsWith("…"));
 });
 
+test("the usage coverage counts read the leading integer of each field and gate a field with none", () => {
+  const { texts } = readFixture("usage-coverage-template-wording");
+  const counts = (fields) => {
+    const qa = texts["05-qa.md"].replace("1 lines of the plan · 1 own scenarios", fields);
+    const { lines } = evaluateCheck({ check: "05", texts: { ...texts, "05-qa.md": qa }, state: { type: "feature/refactor" } });
+    return lines.find((line) => line.startsWith("GATE: usage-coverage-nm-mismatch — "))?.slice("GATE: usage-coverage-nm-mismatch — ".length) ?? null;
+  };
+  for (const fields of ["1 · 1", "N=1 · M=1", "n = 1 · m=1", "**1** lines of the plan · `1` own scenarios", "1 lines of the plan (1 in the diff) · 1 own scenarios", "1 linhas do plano · 1 cenários próprios"]) {
+    assert.equal(counts(fields), null, fields);
+  }
+  assert.equal(counts("1 lines of the plan · 2 own scenarios"), "N=1/1 M=2/1");
+  assert.equal(counts("1.5 · 1"), 'N=(unparsed: "1.5")/1 M=1/1');
+  assert.equal(counts("1,5 · 1"), 'N=(unparsed: "1,5")/1 M=1/1');
+  assert.equal(counts("1lines · 1"), 'N=(unparsed: "1lines")/1 M=1/1');
+  assert.equal(counts("one · 1"), 'N=(unparsed: "one")/1 M=1/1');
+  assert.equal(counts("M=1 · N=1"), 'N=(unparsed: "M=1")/1 M=(unparsed: "N=1")/1');
+  assert.equal(counts("1 · "), "N=1/1 M=(empty)/1");
+  for (const ambiguous of ["1/2", "1 / 2", "1-2", "1 – 2", "1 of 3", "1 or 2", "1 to 2", "1 de 3", "N=1 of 5"]) {
+    assert.equal(counts(`${ambiguous} · 1`), `N=(unparsed: "${ambiguous}")/1 M=1/1`, ambiguous);
+  }
+  assert.equal(counts("1 · 1 of 3"), 'N=1/1 M=(unparsed: "1 of 3")/1');
+});
+
 // ---- Stage 2: the effects a check chains after its contract lines.
 
 // The state.json of a seeded run.
