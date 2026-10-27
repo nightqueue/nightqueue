@@ -1,0 +1,4 @@
+OK
+VERDICT: APPROVED
+OPEN: unconfirmed decisions — export csv lists archived rows
+recorded: phase_done qa APPROVED

@@ -50,9 +50,8 @@ that every `H<n>` of the analyst has a prover `H<n>:` line: a missing id or an `
 gives `NEEDS DISCUSSION` (the note names the ids), a `BROKE` gives `NEEDS FIX`. A prover still
 without `APPENDED:` after its relaunch is an ⚠️ open item.
 
-On a resume whose block says `From stage: qa-stage-b`, the analyst's round is already in
-`05-qa.md`: read it (its last `## Round` carrying `## Break hypotheses`) and start Stage B,
-without rebuilding stage A.
+On a resume with `From stage: qa-stage-b`, follow `resume.md`: Stage B over the analyst's round
+already in `05-qa.md`, never stage A.
 
 **Consolidation — by the runtime:** `nightqueue run check 05` merges every round since the
 analyst's (the later round of a prover group wins), writes `## Round <n+1>` marked
@@ -62,5 +61,5 @@ The aggregate verdict counts proof: any merged round with a non-`None` `## Prove
 `NEEDS FIX` or `BROKE` line → `NEEDS FIX`, else any `NEEDS DISCUSSION`, unreadable verdict,
 `INCONCLUSIVE` line or id with no prover line → `NEEDS DISCUSSION`, else `APPROVED`); with no prover
 round, open hypotheses → `NEEDS DISCUSSION`, and no hypothesis → the analyst's verdict. A `GATE:` line relaunches the QA once,
-from the analyst. The check (the Phase 0 artifact gate) reads the last round — the artifact
+from the analyst; a persisting usage-coverage-only GATE pauses (SKILL.md Phase 5), never terminates. The check reads the last round — the artifact
 Phase 6 and Phase 9 re-read via Read, its last `## Round`.

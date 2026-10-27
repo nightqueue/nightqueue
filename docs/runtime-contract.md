@@ -997,10 +997,18 @@ codes, in output order per phase:
     line, no `## Access map (QA)`, or `N` differs from the plan's `- ` scenario lines or `M`
     from the access map's `- ` lines other than `partial:` and `unimplemented intent:`;
     `usage-coverage-divergences-empty` — `divergences:` or `unconfirmed decisions:` absent or
-    empty; `usage-coverage-held-on-pipeline` — a risk line with the standalone word `HELD`
-    (`UPHELD` never counts) that names `source=pipeline`, `What to avoid`, the scenario name of a
-    plan scenario carrying `source=pipeline`, or an item of the plan's `What to avoid`
-    (case-insensitive); on a consolidated round it reads only the `## Validated risks` of the
+    empty; `usage-coverage-held-on-pipeline` — a risk line with a `HELD` verdict that names
+    `source=pipeline`, `What to avoid`, the scenario name of a plan scenario carrying
+    `source=pipeline`, or an item of the plan's `What to avoid` (the marker match is
+    case-insensitive and reads the whole line). A `HELD` verdict is the standalone, uppercase word
+    `HELD` (`UPHELD` never counts) set off from the prose: no word right before it (an item id
+    such as `R2` or `PM1` is not prose) or no word right after it, with spaces and emoji skipped.
+    Examples: `R2 HELD by reading:`, `item: HELD.`, `item (source=pipeline) HELD.`, `→ HELD (…)`,
+    `— 🟢 HELD`, `…, HELD as low impact.`. A `HELD` with a prose word on both sides (`is HELD by
+    the guard`, `was HELD in round 1`) is mid-prose and does not count. It never counts when
+    negated (`not`, `no`, `never`, `non-`, `un-` or `…n't` right before it), inside backticks or
+    double quotes, or on a line carrying the label `unconfirmed by the operator`. On a
+    consolidated round it reads only the `## Validated risks` of the
     analyst's round (the first number its `source: runtime consolidation · rounds …` line lists),
     never a prover's `H<n>: HELD` line; the other usage and symptom gates read the consolidated
     round.

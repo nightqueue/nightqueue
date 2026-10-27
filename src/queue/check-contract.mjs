@@ -490,12 +490,38 @@ function avoidItems(plan) {
     .filter(Boolean);
 }
 
-// A `HELD` risk line of the QA that names a pipeline-sourced scenario or a forbidden item of the plan.
+const OPERATOR_LABEL_RE = /unconfirmed by the operator/i;
+const HELD_NEGATION_RE = /(?:\b(?:not|no|never|non|un)|n't)[\s-]*$/i;
+const QUOTED_SPAN_RE = /`[^`]*`|"[^"]*"|“[^”]*”/g;
+const BESIDE_HELD = "[\\s\\p{Extended_Pictographic}\\uFE0F]*";
+const WORD_BEFORE_RE = new RegExp(`[\\p{L}\\p{N}_]${BESIDE_HELD}$`, "u");
+const ITEM_ID_BEFORE_RE = new RegExp(`\\b[A-Z]{1,3}\\d+[a-z]?${BESIDE_HELD}$`, "u");
+const WORD_AFTER_RE = new RegExp(`^${BESIDE_HELD}[\\p{L}\\p{N}_]`, "u");
+
+// The text of a risk line without its bullet, its quoted spans and its bold markers.
+function verdictText(line) {
+  return line.trim().replace(/^[-*+]\s+/, "").replace(QUOTED_SPAN_RE, " ").replaceAll("**", "");
+}
+
+// Whether the `HELD` at `at` is set off from the prose: no word right before it (an item id such as `R2` or `PM1` is not prose) or no word right after it; spaces and emoji in between are skipped.
+function setOffFromProse(text, at) {
+  const before = text.slice(0, at);
+  return !WORD_BEFORE_RE.test(before) || ITEM_ID_BEFORE_RE.test(before) || !WORD_AFTER_RE.test(text.slice(at + "HELD".length));
+}
+
+// Whether a risk line states a `HELD` verdict: a standalone `HELD` set off from the prose, not negated, not quoted, on a line not labelled unconfirmed by the operator.
+function heldVerdict(line) {
+  if (OPERATOR_LABEL_RE.test(line)) return false;
+  const text = verdictText(line);
+  return [...text.matchAll(/\bHELD\b/g)].some(({ index }) => !HELD_NEGATION_RE.test(text.slice(0, index)) && setOffFromProse(text, index));
+}
+
+// A risk line of the QA with a `HELD` verdict that names a pipeline-sourced scenario or a forbidden item of the plan.
 function heldOnPipelineGates(ctx, { risks, scenarios }) {
   const names = scenarios.filter((line) => line.includes("source=pipeline")).map((line) => line.slice(2).split(" · ")[0].trim());
   const markers = ["source=pipeline", "what to avoid", ...names, ...avoidItems(ctx.plan)].map((marker) => marker.toLowerCase()).filter(Boolean);
   return risks
-    .filter((line) => /\bHELD\b/.test(line) && markers.some((marker) => line.toLowerCase().includes(marker)))
+    .filter((line) => heldVerdict(line) && markers.some((marker) => line.toLowerCase().includes(marker)))
     .map((line) => gate("usage-coverage-held-on-pipeline", line.trim()));
 }
 
