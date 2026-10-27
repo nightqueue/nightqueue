@@ -58,8 +58,13 @@ export function branchAliases(name, { type, slug } = {}) {
 
 // Tells whether two names are the same branch of a run, before or after `run pr` renamed it; an absent name is never equal to anything.
 export function sameBranch(a, b, hints = {}) {
-  const left = branchAliases(a, hints);
+  return sameRunBranch(a, hints, b, hints);
+}
+
+// Tells whether the branches of two runs are the same, each name expanded by its own run's slug/type; an absent name is never equal to anything.
+export function sameRunBranch(a, hintsA = {}, b, hintsB = {}) {
+  const left = branchAliases(a, hintsA ?? {});
   if (left.length === 0) return false;
-  const right = branchAliases(b, hints);
+  const right = branchAliases(b, hintsB ?? {});
   return right.some((name) => left.includes(name));
 }

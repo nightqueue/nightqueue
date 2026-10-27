@@ -285,6 +285,66 @@ test("a cancelled job retried after another job took its branch is refused namin
   assert.equal(resumed.reused, true);
 });
 
+// The hold of another open job on a runtime `worktree-*` branch of its own run.
+function worktreeHold({ branch, worktree = null }) {
+  return { ...otherHold({ branch, worktree }), type: "feature/refactor" };
+}
+
+// Two linked worktrees on unrelated runtime branches, `worktree-a` at A and `worktree-b` at B.
+function twoWorktrees(t, name) {
+  const checkout = initGitRepo(makeDir(t, `${name}-repo`));
+  const a = linkedWorktree(t, checkout, { name: `${name}-a`, branch: "worktree-a" });
+  const b = linkedWorktree(t, checkout, { name: `${name}-b`, branch: "worktree-b" });
+  return { checkout, a, b };
+}
+
+test("a job retried on its own `worktree-b` is not refused by another open job holding `worktree-a` at another path", async (t) => {
+  const env = homeEnv(t, "start-distinct-retry");
+  const { checkout, a, b } = twoWorktrees(t, "start-distinct-retry");
+  const first = await prepare(env, checkout, { job: jobOf({ worktree: b }) });
+  assert.equal(first.ok, true, first.message);
+  assert.equal(recordedPlace(env).branch, "worktree-b");
+
+  const retried = await prepare(env, checkout, { job: jobOf({ worktree: b }), holds: [worktreeHold({ branch: "worktree-a", worktree: realpathSync(a) })] });
+
+  assert.equal(retried.ok, true, retried.message);
+  assert.equal(retried.reused, true);
+  assert.ok(samePath(retried.path, b));
+});
+
+test("two open jobs on `worktree-a` and `worktree-b` at different paths never refuse each other's first start", async (t) => {
+  const env = homeEnv(t, "start-distinct-first");
+  const { checkout, a, b } = twoWorktrees(t, "start-distinct-first");
+
+  const onB = await prepare(env, checkout, { job: jobOf({ worktree: b }), holds: [worktreeHold({ branch: "worktree-a", worktree: realpathSync(a) })] });
+  assert.equal(onB.ok, true, onB.message);
+  assert.ok(samePath(onB.path, b));
+
+  const onA = await prepare(env, checkout, { job: jobOf({ worktree: a }, "start-the-work-2"), holds: [worktreeHold({ branch: "worktree-b", worktree: realpathSync(b) })] });
+  assert.equal(onA.ok, true, onA.message);
+  assert.ok(samePath(onA.path, a));
+});
+
+test("a start branch naming the published form of another open job's `worktree-<slug>` is still refused naming that job", async (t) => {
+  const env = homeEnv(t, "start-published-alias");
+  const checkout = initGitRepo(makeDir(t, "start-published-alias-repo"));
+
+  const refused = await prepare(env, checkout, { job: jobOf({ branch: "feat/other-run" }), holds: [worktreeHold({ branch: "worktree-other-run" })] });
+
+  assert.equal(refused.code, WORKTREE_FAILED);
+  assert.match(refused.message, /belongs to J-9, which is not closed/);
+});
+
+test("a start worktree another open job holds by path is still refused, whatever branch that job records", async (t) => {
+  const env = homeEnv(t, "start-distinct-same-path");
+  const { checkout, b } = twoWorktrees(t, "start-distinct-same-path");
+
+  const refused = await prepare(env, checkout, { job: jobOf({ worktree: b }), holds: [worktreeHold({ branch: "worktree-a", worktree: realpathSync(b) })] });
+
+  assert.equal(refused.code, WORKTREE_FAILED);
+  assert.match(refused.message, /belongs to J-9, which is not closed/);
+});
+
 test("a job whose run was cleared, as by a --fresh retry, is placed again on its start branch", async (t) => {
   const env = homeEnv(t, "start-fresh");
   const checkout = initGitRepo(makeDir(t, "start-fresh-repo"));
