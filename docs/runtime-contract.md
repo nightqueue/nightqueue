@@ -448,17 +448,33 @@ command lands in one of three bands:
   a write under the home, the Claude config dir, `~/.codex`, any `.claude/settings*.json` or
   `.codex/`, or a `.env*` file; a Bash command any segment of which (split on unquoted `;`,
   `&`, `|`, `(`, `)`, newline, `$(` and backtick, env assignments and wrappers such as `sudo`,
-  `env`, `xargs`, `timeout <n>` skipped) deletes files, force- or delete-pushes, runs
+  `env`, `xargs`, `timeout <n>` skipped) deletes files (but one `home-maintenance` entry),
+  force- or delete-pushes, runs
   `git branch -D|-d`, `reset --hard`, `clean` or `rm`, is a refused nightqueue form (every
   refused top-level command but `verify` and `sandbox <cmd>`, plus `sandbox worktree`,
-  `queue session`, `project add|move`, `queue add --run`, `doctor --fix`, `--follow`,
-  `--foreground`), runs `sh -c`/`eval` text, names the home, or names a `.env*` or
+  `queue session`, `project add|move`, `queue add --run`, `--follow`,
+  `--foreground`), runs `sh -c`/`eval` text, names the home (but a `home-maintenance` entry,
+  a salvage source or a worktree read), or names a `.env*` or
   `secrets.json` path (a `<rev>:<path>` included). A relative path word is resolved only after
-  an explicit `cd` in the command.
+  an explicit `cd` in the command. A home path counts only absolute or as `~/.nightqueue/…`,
+  with no `.`/`..` component, reached through no link; `$HOME`/`$NIGHTQUEUE_HOME` stay never.
+  A delete, `git worktree remove` or salvage whose entry is held is never:
+  `<path> belongs to J-<n> (<status>)` for a `pending`, `running`, `gate` or closing owner (the
+  owner matched by slug, `start_worktree` or run-state `worktree`), a running job of the project
+  with no slug yet, a worktree locked by a live pid or by hand, or `who holds <path> cannot be
+  checked` when the queue cannot be read; salvage also refuses a `done` or `failed` owner. The
+  check runs on every guard call and when the consent is recorded. A home path is judged as the
+  entry stored on disk, so a case variant (`.../FIX-LOGIN` on a case-insensitive volume) names its
+  owner too. `git worktree remove|move` whose worktree is not an absolute literal path (`.`, a
+  bare name, `../…`, a link) is never in every spelling, and so is `doctor --fix` spelled other
+  than `nightqueue doctor --fix` (`/abs/bin/nightqueue`, `bin/nightqueue.mjs`).
 - **free**: the main thread's one bare
   `nightqueue|nq <queue|project|org|connection|doctor|memory|lesson|libs|version> …` (not
   `queue session`, `project add|move`, `queue add --run`, `doctor --fix`, `--follow` or
-  `--foreground`) or read-only `git -C <checkout> …`; a subagent's one bare `nightqueue|nq` read
+  `--foreground`) or read-only `git -C <checkout> …`, also at the root of a job worktree under
+  the home (`stash list` included) while its `.git` points to the admin dir git keeps for it in
+  the checkout's `.git/worktrees` (else never: git would run a configuration the job controls);
+  a subagent's one bare `nightqueue|nq` read
   (`queue status|log`, `project list`, `org list`, `connection list`, `memory stats`, `doctor`
   without `--fix`, `libs`, `version`), the `git -C` reads (also as
   `cd <checkout> && git <read>`), `gh pr view|diff|checks|list|status` or `gh issue view|list`.
@@ -470,7 +486,16 @@ command lands in one of three bands:
   `git -C <registered checkout> <command>`, or bare from a cwd inside a checkout (a git `-c`,
   `--git-dir`, `--work-tree`, `--namespace` or `--exec-path` option is refused). It passes only
   when a live consent of the session covers it, else
-  `operator guard: needs consent (<kind> <scope>): …`.
+  `operator guard: needs consent (<kind> <scope>): …`. `nightqueue doctor --fix` (spelled so)
+  is a `run` from any directory, covered only by a `run` consent whose words name `--fix`.
+  `home-maintenance` is one bare `rm`/`rmdir`/`unlink`/`shred` of one run dir or worktree
+  (`<home>/runs|worktrees/<project id>/<slug>`), `find <entry> -delete`,
+  `git -C <checkout> worktree remove [-f] <absolute worktree path>` or
+  `git -C <checkout> worktree prune` (also `cd <checkout> && …`; the git dir is always the
+  project's checkout, never a worktree), never `git-write`; salvage from a worktree is
+  `git -C <worktree root> stash|format-patch` (`git-write`, its `.git` pointing to git's admin
+  dir) or `cd <checkout> && cp <worktree>/… …` (`run`). A `home-maintenance` or doctor `--fix`
+  request on a subagent thread is never.
 
 Consents live in `<home>/operator/<NIGHTQUEUE_OPERATOR_SESSION>.jsonl`, append-only, one JSON
 event per line: a grant `{at, session, pid, project_id, project, kind, scope, reason, answer}` or
@@ -480,7 +505,10 @@ unparsable line is skipped, any other read error fails closed. Each event append
 `<home>/logs/operator-<session>.log`. Coverage is never widened: a path consent covers its
 canonical path and what lies under it (a symlink resolving into the never band stays never); a
 command consent covers a command run in its project's current checkout whose words, after
-`git`/`-C <dir>` and a leading `timeout <n>`, open with the consent's words; a
+`git`/`-C <dir>` and a leading `timeout <n>`, open with the consent's words (a `git-write` dir
+may also be the project's worktree under the home); a `home-maintenance` consent covers its
+exact words only, its entries in its own project and its git dir in that project's checkout;
+a
 `connection-write` consent covers one exact `<connection> <METHOD> <path>`. Without a session id
 (no `nightqueue open`, or inside a job) there are no consents. The record is the audit and the
 guard; the host's prompt is the barrier.
@@ -519,7 +547,7 @@ dropped is answered with the older-definitions line):
 | `tracker_comment` | `ref`, `body` (at most 50,000) (writes only after the person's explicit ok; refused inside a job; answers `{ok: true, provider, ref, comment: {url}}`) |
 | `tracker_update` | `ref`, `title?`, `description?` (replaces the whole text), `priority?`, `state?`, `assignee?` (`none` unassigns), `labels_add?`, `labels_remove?` (writes only after the person's explicit ok; refused inside a job; answers `{ok: true, provider, issue, changed}`; a write that timed out or was not confirmed answers `provider-unavailable` with a hint to read the issue before trying again; no tracker tool deletes or archives) |
 | `connection_call` | `connection` (a stored connection's name), `method?` (`GET` default, `POST`, `PATCH`, `PUT`; any other, `DELETE` included, is `invalid-input`), `path?` (at most 2,000; relative to the root: a scheme, a leading `//`, a `.` or `..` segment, `\`, `?`, `#`, whitespace or an encoded `.`, `/` or `\` is `invalid-input`), `query?` (an object of text, number, boolean or list of texts), `body?` (JSON, at most 50,000 characters serialized, never on a GET) (the runtime injects the secret and the host is fixed by the kind: Sentry `<url>/api/0/`, Linear `https://api.linear.app/graphql` with an empty path and the GraphQL in `body`, Discord the webhook URL itself with an empty path (GET or POST) or exactly `messages/<id>` (GET or PATCH, to read or edit a posted message), and only `thread_id` and `wait` in `query`; a redirect is never followed; 10 s timeout; answers `{ok: true, status, body, body_truncated?}` with the body redacted then cut at 50,000 characters, or the normal answer `{ok: false, error: "no-connection" \| "invalid-input" \| "provider-unavailable" \| "needs-consent", status, detail}` with a fixed detail, never the provider's message, the URL or a header; a GET reads, any other method only after the person's explicit ok to the exact connection, method, path and body; a non-GET is refused inside a job before anything is sent, a GET is allowed; in an operator session a non-GET with no live `connection-write` consent covering it answers `needs-consent` and sends nothing) |
-| `operator_consent` | `kind` (`edit`, `create`, `run`, `git-write`, `connection-write`), `scope` (at most 2,000: an absolute path for edit/create, one bare command for run, a writing git subcommand for git-write, `<connection> <POST\|PATCH\|PUT> <path>` for connection-write), `project?` (required but for connection-write), `reason?` and `answer?` (the person's answer quoted verbatim; both required on a grant), `revoke?` (records the person's consent in `<home>/operator/<session>.jsonl` and one line in `<home>/logs/operator-<session>.log`; a never-band scope, a revoke that matches nothing, a call inside a job or outside an operator session are refused; answers `{ok: true, consent, line}` or `{ok: true, revoked, line}`) |
+| `operator_consent` | `kind` (`edit`, `create`, `run`, `git-write`, `home-maintenance`, `connection-write`), `scope` (at most 2,000: an absolute path for edit/create, one bare command for run, a writing git subcommand for git-write, the exact command removing one run dir or worktree, or `git worktree remove|prune`, for home-maintenance (refused naming the job that still holds the entry), `<connection> <POST\|PATCH\|PUT> <path>` for connection-write), `project?` (required but for connection-write), `reason?` and `answer?` (the person's answer quoted verbatim; both required on a grant), `revoke?` (records the person's consent in `<home>/operator/<session>.jsonl` and one line in `<home>/logs/operator-<session>.log`; a never-band scope, a revoke that matches nothing, a call inside a job or outside an operator session are refused; answers `{ok: true, consent, line}` or `{ok: true, revoked, line}`) |
 | `queue_status` | `job_id?`, `pr_url?` (never with `job_id`), `limit?` (1-50) |
 | `queue_run` | `job_id?` |
 | `queue_stop` | `pid?` |

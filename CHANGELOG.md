@@ -123,9 +123,30 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
   at most once per attempt inside a job, and outside a job (or with no recorded attempt start)
   not again while its last record carries the same outcome and phase count; a no-change run
   records no gate stop; a failed record is a fixed-phrase open item, never a non-zero exit.
+- **The operator can clean up after a job.** A new `operator_consent` kind,
+  `home-maintenance`, lets the operator remove one run dir or worktree of the nightqueue home
+  (`rm -rf <home>/runs/<project id>/<slug>`, `git -C <checkout> worktree remove <absolute
+  worktree path>`) or run `git -C <checkout> worktree prune`, after the person's consent to that
+  exact command, on its own thread only. git maintenance runs with the project's checkout as
+  its git dir, and a worktree named relatively (`.`, a bare name, `../…`) or through a link is
+  never removed; a case variant of a path names the same entry and owner. Before the grant and on every call the guard looks up the job that holds
+  the entry and refuses as never, naming it (`belongs to J-248 (gate)`), when it is `pending`,
+  `running`, `gate` or being closed, when a live process or a hand lock holds the worktree, or
+  when the queue cannot be read. `runs/`, `worktrees/`, a project's whole directory and the rest
+  of the home (`secrets.json`, `nightqueue.db*`, `logs/`, `.by-id`, `.start-points.lock`) stay
+  never; a relative path, a glob, a brace, a wrapper or `sh -c` is refused. `git worktree
+  remove|prune` is consented as `home-maintenance`, no longer as `git-write`. Files of a closed or
+  cancelled job's worktree can be salvaged with `git -C <worktree> stash|format-patch`
+  (`git-write`) or `cd <checkout> && cp <worktree>/… …` (`run`).
 
 ### Changed
 
+- **`nightqueue doctor --fix` is consentable in an operator session.** It is a `run` from any
+  directory, covered only by a consent naming `--fix`, only spelled `nightqueue doctor --fix`
+  (another spelling of the program stays never), and still never free nor on a subagent
+  thread. Reads at the root of a job worktree under the home (`git -C <worktree>
+  --no-optional-locks status`, `log`, `diff`, `stash list`) are free while its `.git` points to
+  the admin dir git keeps for it in the checkout.
 - **The phases are whole numbers, 0 to 10, one artifact each.** The runtime phase is now
   Phase 7 (`07-runtime.md`, `nightqueue run check 07`), commit/PR Phase 8, the report Phase 9 and
   the reflector Phase 10; the old `06.5`/`06-runtime.md` are gone. The QA analyst no longer has

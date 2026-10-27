@@ -157,6 +157,38 @@ test("`.gitattributes` stays editable under an edit consent, and a consent scope
   assert.throws(() => grant(ctx, { kind: "edit", scope: join(ctx.checkout, ".git") }), /never band/);
 });
 
+test("a home-maintenance consent of one run dir never covers it behind a wrapper, an inline shell, eval or a pipe", (t) => {
+  const ctx = operatorSetup(t, "esc-home-wrap");
+  const run = join(ctx.home, "runs", ctx.project.id, "stale");
+  mkdirSync(run, { recursive: true });
+  grant(ctx, { kind: "home-maintenance", scope: `rm -rf ${run}` });
+  assert.equal(decide(ctx, "Bash", { command: `rm -rf ${run}` }), null);
+  const escapes = [`sudo rm -rf ${run}`, `FOO=1 rm -rf ${run}`, `nice rm -rf ${run}`, `sh -c "rm -rf ${run}"`, `bash -c 'rm -rf ${run}'`, `eval rm -rf ${run}`, `echo ${run} | xargs rm -rf`, `rm -rf $'${run}'`];
+  for (const command of escapes) assert.match(String(decide(ctx, "Bash", { command })), /never/, command);
+  assert.throws(() => grant(ctx, { kind: "home-maintenance", scope: `sudo rm -rf ${run}` }), /one exact command|never band/);
+});
+
+test("a link under runs or worktrees never makes its target deletable, dangling or not, and the canary survives", (t) => {
+  const ctx = operatorSetup(t, "esc-home-link");
+  const canary = realpathSync(mkdtempSync(join(tmpdir(), "esc-home-canary-")));
+  t.after(() => rmSync(canary, { recursive: true, force: true }));
+  writeFileSync(join(canary, "keep"), "x");
+  const linkedProject = newId();
+  const runs = join(ctx.home, "runs", ctx.project.id);
+  mkdirSync(runs, { recursive: true });
+  mkdirSync(join(ctx.home, "worktrees"), { recursive: true });
+  symlinkSync(canary, join(ctx.home, "worktrees", linkedProject));
+  writeFileSync(join(ctx.home, "secrets.json"), "{}");
+  symlinkSync(join(ctx.home, "secrets.json"), join(runs, "to-secrets"));
+  symlinkSync(join(ctx.home, "nightqueue.db-gone"), join(runs, "to-missing"));
+  const targets = [join(ctx.home, "worktrees", linkedProject, "keep"), join(runs, "to-secrets"), join(runs, "to-missing")];
+  for (const target of targets) {
+    assert.match(String(decide(ctx, "Bash", { command: `rm -rf ${target}` })), /never/, target);
+    assert.throws(() => grant(ctx, { kind: "home-maintenance", scope: `rm -rf ${target}` }), /never band/, target);
+  }
+  assert.ok(existsSync(join(canary, "keep")));
+});
+
 test("a consent scope with a newline, a carriage return or a tab is refused and writes no log line", (t) => {
   const ctx = operatorSetup(t, "esc-h5");
   const outside = realpathSync(mkdtempSync(join(tmpdir(), "esc-h5-")));

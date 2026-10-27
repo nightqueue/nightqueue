@@ -1,8 +1,11 @@
 import assert from "node:assert/strict";
-import { join, relative } from "node:path";
+import { existsSync, mkdirSync, symlinkSync } from "node:fs";
+import { dirname, join, relative } from "node:path";
 import { test } from "node:test";
+import { newId } from "../../src/config/ids.mjs";
 import { homeDir, secretsPath } from "../../src/config/paths.mjs";
 import { consentBash, neverBashReason, neverWriteReason, scopeWords } from "../../src/queue/operator-bands.mjs";
+import { isDoctorFix, isDoctorFixForm, mainBashAllowed, readonlySubagentBashAllowed, refusedNightqueueForm } from "../../src/queue/operator-scope.mjs";
 import { makeDir, makeHome, makeProject } from "../../test-support/memory.mjs";
 
 // A home with one registered checkout, a user home and a Claude config dir of its own.
@@ -76,6 +79,48 @@ test("consentBash names the kind, the directory and the words, or the shape it r
   assert.match(consentBash(`cd ${checkout} && npm test 2>&1`, { env }).shape, /chains, pipes or redirects/);
   assert.match(consentBash(`git -C ${checkout} -c core.editor=x commit`, { env }).shape, /`git -c` is refused/);
   assert.match(consentBash("git -C relative commit", { env }).shape, /absolute directory/);
+});
+
+test("doctor --fix leaves the never band for a run consent from any directory, and is free on no thread", (t) => {
+  const { env, checkout } = bandsFixture(t);
+  const home = homeDir(env);
+  assert.equal(refusedNightqueueForm(["nightqueue", "doctor", "--fix"]), false);
+  assert.equal(refusedNightqueueForm(["nightqueue", "doctor", "--fix", "--follow"]), true);
+  assert.equal(neverBashReason("nightqueue doctor --fix", { cwd: home, env }), null);
+  assert.deepEqual(consentBash("nightqueue doctor --fix", { cwd: home, env }), { kind: "run", home: true, dir: home, argv: ["nightqueue", "doctor", "--fix"], shown: "nightqueue doctor --fix" });
+  assert.deepEqual(consentBash("timeout 120 nightqueue doctor --fix=true", { cwd: "/", env }).argv, ["nightqueue", "doctor", "--fix=true"]);
+  for (const command of ["nightqueue doctor --fix", "nq doctor --fix"]) {
+    assert.equal(mainBashAllowed(command, [checkout]), false, command);
+    assert.equal(readonlySubagentBashAllowed(command, [checkout]), false, command);
+  }
+  assert.equal(mainBashAllowed("nightqueue doctor --json", [checkout]), true);
+  assert.equal(isDoctorFix(["nightqueue", "doctor"]), false);
+  assert.equal(isDoctorFix(["npm", "doctor", "--fix"]), false);
+  assert.equal(isDoctorFix("nightqueue doctor --fix"), false);
+  assert.equal(isDoctorFix(["/abs/bin/nightqueue", "doctor", "--fix"]), false);
+  assert.equal(isDoctorFixForm(["/abs/bin/nightqueue", "doctor", "--fix"]), true);
+  const spelling = /`doctor --fix` is consented only as `nightqueue doctor --fix`/;
+  for (const command of ["/abs/bin/nightqueue doctor --fix", "bin/nightqueue.mjs doctor --fix", "timeout 30 /abs/nightqueue doctor --fix"]) {
+    assert.match(neverBashReason(command, { cwd: checkout, env }) ?? "", spelling, command);
+  }
+  assert.equal(neverBashReason("/abs/bin/nightqueue doctor --json", { cwd: checkout, env }), null);
+});
+
+test("a home path in an ANSI-C quote or a variable is never, and a link on the way out of the home leaves today's never band", (t) => {
+  const { env } = bandsFixture(t);
+  const home = homeDir(env);
+  const projectId = newId();
+  const run = join(home, "runs", projectId, "stale");
+  mkdirSync(run, { recursive: true });
+  const canary = join(makeDir(t, "operator-bands-canary"), "keep");
+  mkdirSync(canary);
+  const linked = newId();
+  mkdirSync(join(home, "worktrees"), { recursive: true });
+  symlinkSync(dirname(canary), join(home, "worktrees", linked));
+  const never = [`rm -rf $'${run}'`, `rm -rf "$NIGHTQUEUE_HOME/runs/${projectId}/stale"`, `rm -rf \${HOME}/.nightqueue/runs/${projectId}/stale`, `rm -rf ${join(home, "worktrees", linked, "keep")}`];
+  for (const command of never) assert.ok(neverBashReason(command, { cwd: home, env }), command);
+  assert.equal(neverBashReason(`rm -rf ${run}`, { cwd: home, env }), null);
+  assert.ok(existsSync(canary));
 });
 
 test("scopeWords drops the anchor and the timeout, and refuses a chained scope", () => {

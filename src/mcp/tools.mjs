@@ -95,7 +95,7 @@ import {
 const SERVER_NAME = "nightqueue";
 const OPERATE_THROUGH_TOOLS = "Operate nightqueue through these MCP tools only - never the CLI, the database file, the home directory or the project's files.";
 const OPERATOR_MODE_LINE =
-  "In a `nightqueue open` session the operator reads freely, and edits, creates, runs or writes git in a registered checkout only after the person's explicit answer recorded with `operator_consent` (kind and scope exactly as consented); it never deletes files, force-pushes, writes the nightqueue home or touches Claude/Codex settings.";
+  "In a `nightqueue open` session the operator reads freely, and edits, creates, runs or writes git in a registered checkout only after the person's explicit answer recorded with `operator_consent` (kind and scope exactly as consented); it never deletes files, force-pushes or touches Claude/Codex settings, and never writes the nightqueue home but a consented `home-maintenance` removal of one run dir or worktree of a job that no longer holds it.";
 const OPERATOR_CONNECTION_LINE =
   "In a `nightqueue open` session `connection_call` sends a POST, PATCH or PUT only when a live `operator_consent` of kind `connection-write` (`<connection> <METHOD> <path>`) covers it, else it answers `needs-consent` and sends nothing.";
 const SERVER_INSTRUCTION_LINES = [
@@ -792,7 +792,7 @@ function operatorConsentTool(env) {
     config: {
       description:
         "Records what the person consented to in this `nightqueue open` session, so the operator guard lets exactly that through: never call it without the person's explicit answer, quoted in `answer`, to an ask that named what, where and how to undo it; never widen a scope the person did not say; `revoke: true` withdraws it. " +
-        "`kind` is edit or create (`scope` an absolute path: a file or a directory of the project's checkout; a create outside it names one file), run (one bare command, e.g. `npm test`), git-write (a git subcommand that writes, e.g. `commit`) or connection-write (`<connection> <POST|PATCH|PUT> <path>`, `-` for no path). " +
+        "`kind` is edit or create (`scope` an absolute path: a file or a directory of the project's checkout; a create outside it names one file), run (one bare command, e.g. `npm test`), git-write (a git subcommand that writes, e.g. `commit`), connection-write (`<connection> <POST|PATCH|PUT> <path>`, `-` for no path) or home-maintenance (the exact command removing one run dir or worktree of a job that no longer holds it, e.g. `rm -rf <abs path>` or `git -C <checkout> worktree remove <worktree>`, or `git -C <checkout> worktree prune`). " +
         "`project` is the registered project (required but for connection-write). Answers `{ok: true, consent, line}` or `{ok: true, revoked, line}`; refused inside a queue job and outside an operator session.",
       inputSchema: {
         project: optionalText,

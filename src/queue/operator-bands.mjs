@@ -3,12 +3,27 @@ import { homeDir, secretsPath, userHomeDir } from "../config/paths.mjs";
 import { claudeConfigDir } from "../host/paths.mjs";
 import { canonicalPath, insideRoots, isDeniedFlag, tokenize } from "./orchestrator-scope.mjs";
 import {
+  WORKTREE_MAINTENANCE,
+  deletes,
+  homeSegment,
+  isWorktreeEntry,
+  isWorktreeRead,
+  isWorktreeSalvage,
+  programName,
+  wordPath,
+  worktreeArgJudged,
+  worktreeCall,
+  worktreeTrustRefusal,
+} from "./operator-home.mjs";
+import {
   DOTENV_NAME,
   NIGHTQUEUE_PROGRAMS,
   OPERATOR_CLI_COMMANDS,
   bareTokens,
   checkoutRoots,
   gitReadAllowed,
+  isDoctorFix,
+  isDoctorFixForm,
   refusedNightqueueForm,
   registryNote,
 } from "./operator-scope.mjs";
@@ -16,13 +31,13 @@ import {
 const SEGMENT_SEPARATORS = new Set([";", "&", "|", "(", ")", "\n", "\r"]);
 const WRAPPERS = new Set(["sudo", "env", "command", "exec", "nohup", "time", "nice", "builtin", "xargs", "timeout"]);
 const SHELLS = new Set(["sh", "bash", "zsh", "dash", "ksh", "fish"]);
-const DELETERS = new Set(["rm", "rmdir", "unlink", "shred"]);
-const EXEC_FLAGS = new Set(["-exec", "-execdir", "-ok", "-okdir"]);
 const ENV_ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/;
 const WRAPPER_ARGUMENT = /^(-.*|\d+(\.\d+)?[smhd]?)$/;
-const SCRIPT_EXTENSION = /\.m?js$/;
 const SETTINGS_FILE = /^settings.*\.json$/;
-const HOME_LITERALS = ["$HOME", "${HOME}", "$NIGHTQUEUE_HOME", "${NIGHTQUEUE_HOME}", "$CLAUDE_CONFIG_DIR", "${CLAUDE_CONFIG_DIR}", "~/.nightqueue"];
+const SHELL_HOME_LITERALS = ["$HOME", "${HOME}", "$NIGHTQUEUE_HOME", "${NIGHTQUEUE_HOME}", "$CLAUDE_CONFIG_DIR", "${CLAUDE_CONFIG_DIR}"];
+const HOME_LITERALS = [...SHELL_HOME_LITERALS, "~/.nightqueue"];
+const NO_WORDS = new Set();
+const HOME_MAINTENANCE = "home-maintenance";
 const GIT_VALUE_OPTIONS = new Set(["-C", "-c", "--git-dir", "--work-tree", "--namespace", "--exec-path"]);
 const GIT_UNSCOPED_OPTIONS = ["-c", "--git-dir", "--work-tree", "--namespace", "--exec-path"];
 const FORCE_PUSH_FLAGS = ["-f", "-d", "--force", "--delete", "--mirror", "--prune"];
@@ -35,11 +50,12 @@ const GLOB_CHARS = /[*?[\]{}]/;
 const DOTENV_STEM = ".env";
 const MAX_BRACE_WORDS = 64;
 const NIGHTQUEUE_NEVER = "a nightqueue command that writes the home or settings, nests a session or starts the runner";
-
-// The program a word names, its directory and a script extension dropped (`bin/nightqueue.mjs` names nightqueue).
-function programName(word) {
-  return typeof word === "string" ? basename(word).replace(SCRIPT_EXTENSION, "") : "";
-}
+const DOCTOR_FIX_SPELLING = "`doctor --fix` is consented only as `nightqueue doctor --fix`";
+const WORKTREE_TARGETED = new Set(["remove", "move"]);
+const WORKTREE_BY_ABSOLUTE_PATH = "`git worktree remove|move` names its worktree by its absolute path, never relative to where git runs nor through a link";
+const HOME_PATH_NEVER = "naming a never-band path (writing under the nightqueue home)";
+const WORKTREE_READ_ONLY =
+  "a worktree under the nightqueue home is only read (`git -C <worktree> --no-optional-locks status`, `log`, `diff`, `stash list`), salvaged with a git-write consent (`git -C <worktree> stash`, `git -C <worktree> format-patch`) or removed with a home-maintenance consent";
 
 // The directories whose content is Claude or Codex settings: the Claude configuration directory and the user's `.codex`.
 function settingsRoots(env) {
@@ -57,6 +73,11 @@ export function neverWriteReason(path, env = process.env) {
   if (typeof path !== "string" || path === "") return null;
   const target = canonicalPath(path);
   if (insideRoots(target, [canonicalPath(homeDir(env))])) return "writing under the nightqueue home";
+  return protectedPathReason(target, env);
+}
+
+// Why a canonical path is in the never band wherever it lies (Claude/Codex settings, a `.git` directory, a `.env*` file), or null.
+function protectedPathReason(target, env) {
   if (insideRoots(target, settingsRoots(env)) || isSettingsPath(target)) return "Claude/Codex settings";
   if (target.split(sep).includes(GIT_DIR_NAME)) return "a repository's `.git` directory (its config and hooks run commands)";
   if (DOTENV_NAME.test(basename(target))) return "a `.env` file";
@@ -152,13 +173,6 @@ function programIndex(words) {
   return index;
 }
 
-// A word as an absolute path, `~` expanded and a relative path with a slash resolved against the segment's directory, or null.
-function wordPath(word, { dir, env }) {
-  if (word === "~" || word.startsWith("~/")) return join(userHomeDir(env), word.slice(1));
-  if (isAbsolute(word)) return word;
-  return word.includes("/") && dir ? resolve(dir, word) : null;
-}
-
 // The path forms a word may carry: itself and, for a `--flag=value`, its value.
 function pathForms(word) {
   const value = word.startsWith("-") && word.includes("=") ? word.slice(word.indexOf("=") + 1) : null;
@@ -188,16 +202,20 @@ function expandedWords(words) {
   return expanded;
 }
 
-// Why the words of a segment name a never-band path (secrets, the home, Claude/Codex settings, a `.git` directory), or null.
-function pathWordsReason(rawWords, scope) {
-  const words = expandedWords(rawWords);
-  if (words === null) return "a brace expansion too large to check";
+// Why a path a word carries is in the never band; a home entry the segment's home use accepted is judged on everything but the home itself.
+function pathFormReason(path, { accepted, env }) {
+  return accepted ? protectedPathReason(canonicalPath(path), env) : neverWriteReason(path, env);
+}
+
+// Why the expanded words of a segment name a never-band path (secrets, the home, Claude/Codex settings, a `.git` directory), or null.
+function pathWordsReason(words, scope, accepted = NO_WORDS) {
   for (const word of words) {
     if (namesSecret(word, scope)) return "reading or printing secrets";
-    if (HOME_LITERALS.some((literal) => word.includes(literal))) return "naming the nightqueue home or the Claude/Codex settings";
+    const literals = accepted.has(word) ? SHELL_HOME_LITERALS : HOME_LITERALS;
+    if (literals.some((literal) => word.includes(literal))) return "naming the nightqueue home or the Claude/Codex settings";
     for (const form of pathForms(word)) {
       const path = wordPath(form, scope);
-      const reason = path ? neverWriteReason(path, scope.env) : null;
+      const reason = path ? pathFormReason(path, { accepted: accepted.has(form), env: scope.env }) : null;
       if (reason) return `naming a never-band path (${reason})`;
     }
   }
@@ -219,9 +237,10 @@ function forcePushArg(token) {
   return !token.startsWith("-") && (token.startsWith("+") || token.startsWith(":"));
 }
 
-// Why a git command is in the never band (force push, branch delete, hard reset, clean, rm), or null.
+// Why a git command is in the never band (force push, branch delete, hard reset, clean, rm, a worktree removal by an unjudged path), or null.
 function gitNeverReason(args) {
   const { subcommand, rest } = gitSubcommand(args);
+  if (subcommand === "worktree" && WORKTREE_TARGETED.has(rest[0]) && !rest.slice(1).every(worktreeArgJudged)) return WORKTREE_BY_ABSOLUTE_PATH;
   if (subcommand === "push" && rest.some(forcePushArg)) return "a force push or a remote delete";
   if (subcommand === "branch" && rest.some((token) => BRANCH_DELETE_FLAGS.some((flag) => isDeniedFlag(token, flag)))) return "deleting a branch";
   if (subcommand === "reset" && rest.some((token) => isDeniedFlag(token, "--hard"))) return "a hard reset";
@@ -233,29 +252,35 @@ function gitNeverReason(args) {
 // Why a nightqueue command is in the never band, or null; `verify` and `sandbox <command>` are left to the consent band.
 function nightqueueNeverReason(words) {
   const [, command, subcommand] = words;
+  if (isDoctorFixForm(words) && !isDoctorFix(words)) return DOCTOR_FIX_SPELLING;
   if (command === "verify") return null;
   if (command === "sandbox") return subcommand === "worktree" ? NIGHTQUEUE_NEVER : null;
   return OPERATOR_CLI_COMMANDS.refused.includes(command) || refusedNightqueueForm(words) ? NIGHTQUEUE_NEVER : null;
 }
 
-// Tells whether the words delete files: a deleting program, `find … -delete`, or a deleting program after `-exec`.
-function deletes(words) {
-  const program = programName(words[0]);
-  if (DELETERS.has(program)) return true;
-  if (program === "find" && words.includes("-delete")) return true;
-  return words.some((word, index) => EXEC_FLAGS.has(word) && DELETERS.has(programName(words[index + 1])));
-}
-
-// Why the program words of a segment are in the never band, or null; a shell's `-c` text and `eval` are scanned in turn.
-function programReason(words, scope) {
+// Why the program words of a segment are in the never band, or null; a home maintenance delete is left to the consent band, a shell's `-c` text and `eval` are scanned in turn.
+function programReason(words, { scope, maintenance }) {
   if (words.length === 0) return null;
   const program = programName(words[0]);
-  if (deletes(words)) return "deleting files";
+  if (deletes(words) && !maintenance) return "deleting files";
   if (program === "git") return gitNeverReason(words.slice(1));
   if (NIGHTQUEUE_PROGRAMS.has(program)) return nightqueueNeverReason(words);
-  if (program === "eval") return neverBashReason(words.slice(1).join(" "), { cwd: scope.dir, env: scope.env });
+  const nested = { cwd: scope.dir, env: scope.env, nested: true };
+  if (program === "eval") return neverBashReason(words.slice(1).join(" "), nested);
   const inline = SHELLS.has(program) ? words.indexOf("-c") : -1;
-  return inline === -1 ? null : neverBashReason(words[inline + 1] ?? "", { cwd: scope.dir, env: scope.env });
+  return inline === -1 ? null : neverBashReason(words[inline + 1] ?? "", nested);
+}
+
+// Why one segment is in the never band: its home use first, then the paths its words name, then its program.
+function segmentReason(words, { scope, nested }) {
+  const expanded = expandedWords(words);
+  if (expanded === null) return "a brace expansion too large to check";
+  const home = homeSegment(expanded, { start: programIndex(expanded), env: scope.env, nested });
+  if (home?.never) return home.never;
+  const pathReason = pathWordsReason(expanded, scope, home?.accepted);
+  if (pathReason) return pathReason;
+  if (home?.unclassified) return HOME_PATH_NEVER;
+  return programReason(words.slice(programIndex(words)), { scope, maintenance: home?.kind === "maintenance" });
 }
 
 // The directory the next segment runs in: the one a `cd <dir>` segment moves to (a relative one from the last known directory), else the same.
@@ -272,14 +297,14 @@ function firstSegmentDir(base, env) {
 }
 
 // Why a Bash command is in the never band, scanning every segment of it, or null when no segment is; relative words resolve against the cwd, then each `cd`.
-export function neverBashReason(command, { cwd = null, env = process.env } = {}) {
+export function neverBashReason(command, { cwd = null, env = process.env, nested = false } = {}) {
   if (typeof command !== "string") return null;
   const base = typeof cwd === "string" && isAbsolute(cwd) ? cwd : null;
   let dir = firstSegmentDir(base, env);
   for (const segment of shellSegments(command)) {
     const words = segmentWords(segment);
     const scope = { dir, env };
-    const reason = pathWordsReason(words, scope) ?? programReason(words.slice(programIndex(words)), scope);
+    const reason = segmentReason(words, { scope, nested });
     if (reason) return reason;
     dir = nextDir(words, { scope, base });
   }
@@ -321,6 +346,15 @@ function checkoutShape(dir, env) {
   return { shape: `${dir ?? "the session's directory"} is outside every registered checkout${registryNote(error)}` };
 }
 
+// The consent of a git command in a worktree under the home: free for a read, git-write for `git -C <worktree> stash|format-patch`, else a shape refusal.
+function worktreeGitConsent(words, { asRead, gitDir, argv, shown }, env) {
+  const untrusted = worktreeTrustRefusal(gitDir, env);
+  if (untrusted) return { shape: untrusted };
+  if (isWorktreeRead(asRead, env)) return { free: true };
+  if (isWorktreeSalvage(words, env)) return { kind: "git-write", dir: gitDir, argv, shown };
+  return { shape: WORKTREE_READ_ONLY };
+}
+
 // The git consent of a command (`git [-C <dir>] <subcommand> …`), or free for a read of a checkout, or a shape refusal.
 function gitConsent(words, { dir, rest }, env) {
   let index = 1;
@@ -338,14 +372,43 @@ function gitConsent(words, { dir, rest }, env) {
     noLocks = noLocks || option === "--no-optional-locks";
     index += 1;
   }
+  const argv = words.slice(index);
+  const asRead = ["git", "-C", gitDir, ...(noLocks ? ["--no-optional-locks"] : []), ...argv];
+  if (isWorktreeEntry(gitDir, env)) return worktreeGitConsent(words, { asRead, gitDir, argv, shown: rest }, env);
   const outside = checkoutShape(gitDir, env);
   if (outside) return outside;
-  const argv = words.slice(index);
-  if (gitReadAllowed(["git", "-C", gitDir, ...(noLocks ? ["--no-optional-locks"] : []), ...argv], checkoutRoots(env).roots)) return { free: true };
+  if (gitReadAllowed(asRead, checkoutRoots(env).roots)) return { free: true };
   return { kind: "git-write", dir: gitDir, argv, shown: rest };
 }
 
-// What consent a Bash command needs (`{ kind, dir, argv, shown }`), `{ free: true }` for a git read of a checkout, or `{ shape }` when it has no consentable form.
+// Tells whether the words are a home maintenance command: a delete, or `git worktree remove|prune` in any spelling.
+export function isHomeMaintenance(words) {
+  if (deletes(words)) return true;
+  if (programName(words[0]) !== "git") return false;
+  const { subcommand, rest } = gitSubcommand(words.slice(1));
+  return subcommand === "worktree" && WORKTREE_MAINTENANCE.has(rest[0]);
+}
+
+// Tells whether a directory may anchor home maintenance: a registered checkout, or for a delete also a worktree under the home or the home itself.
+function maintenanceDirAllowed(dir, { env, home }) {
+  if (typeof dir !== "string" || !isAbsolute(dir)) return false;
+  if (insideRoots(dir, checkoutRoots(env).roots)) return true;
+  return home && (isWorktreeEntry(dir, env) || canonicalPath(dir) === canonicalPath(homeDir(env)));
+}
+
+// The home-maintenance consent of a delete or a `git worktree remove|prune`, or the shape it refuses.
+function homeMaintenanceConsent(argv, anchor, env) {
+  if (programName(argv[0]) === "git") {
+    const call = worktreeCall(argv);
+    const gitDir = call?.gitDir ?? anchor.dir;
+    if (!call || !maintenanceDirAllowed(gitDir, { env, home: false })) return { shape: "`git worktree remove|prune` runs in the project's checkout: `git -C <checkout> worktree prune`" };
+    return { kind: HOME_MAINTENANCE, dir: anchor.dir, gitDir, argv, shown: anchor.rest };
+  }
+  if (!maintenanceDirAllowed(anchor.dir, { env, home: true })) return { shape: `${anchor.dir ?? "the session's directory"} is no registered checkout, worktree or the nightqueue home` };
+  return { kind: HOME_MAINTENANCE, dir: anchor.dir, argv, shown: anchor.rest };
+}
+
+// What consent a Bash command needs (`{ kind, dir, argv, shown }`, `home: true` for `doctor --fix` from any directory), `{ free: true }` for a git read of a checkout, or `{ shape }` when it has no consentable form.
 export function consentBash(command, { cwd = null, env = process.env } = {}) {
   if (typeof command !== "string" || command.trim() === "") return { shape: "the command is empty" };
   const anchor = commandAnchor(command.trim(), cwd);
@@ -353,6 +416,8 @@ export function consentBash(command, { cwd = null, env = process.env } = {}) {
   const words = bareTokens(anchor.rest);
   if (words === null || words.length === 0) return { shape: "the command chains, pipes or redirects, or carries a backslash" };
   if (hasGlob(anchor.rest)) return { shape: "the command carries a glob or brace character (`* ? [ ] { }`), so no consent can name what it touches" };
+  if (isHomeMaintenance(withoutTimeout(words))) return homeMaintenanceConsent(withoutTimeout(words), anchor, env);
+  if (isDoctorFix(withoutTimeout(words))) return { kind: "run", home: true, dir: anchor.dir, argv: withoutTimeout(words), shown: anchor.rest };
   if (words[0] === "git") return gitConsent(words, anchor, env);
   const outside = checkoutShape(anchor.dir, env);
   if (outside) return outside;

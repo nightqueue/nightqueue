@@ -756,7 +756,13 @@ touched; ignored files inside a removed worktree (a local `.env`, build output) 
 `.claude/worktrees/` of each checkout with the command that cleans it, marks a legacy worktree
 an open job still runs in as `legacy-in-use`, and `nightqueue doctor --fix` runs
 `git worktree repair` for a home worktree whose checkout or home moved
-(see [Doctor](cli.md#doctor)).
+(see [Doctor](cli.md#doctor)). In a `nightqueue open` session the operator runs
+`nightqueue doctor --fix` only after a `run` consent, and removes one run dir or worktree
+(`rm -rf <home>/runs/<project id>/<slug>`, `git -C <checkout> worktree remove <worktree>`) or
+runs `git -C <checkout> worktree prune` only after a `home-maintenance` consent of that exact
+command; the guard refuses, naming the job (`belongs to J-248 (gate)`), an entry whose job is
+`pending`, `running`, `gate` or being closed, and never removes `runs/`, `worktrees/` or a
+project's whole directory (see [Operator](cli.md#open)).
 
 **Ownership and orphans.** A claim is one atomic `UPDATE` inside SQLite, so two
 runners never share a job and `queue.maxConcurrent` (no default: no ceiling) is, when set,

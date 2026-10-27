@@ -22,6 +22,7 @@ const WRITE_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
 const READ_TOOLS = new Set(["Read", "Grep", "Glob"]);
 const AGENT_TOOLS = new Set(["Agent", "Task"]);
 const INPUT_REQUIRED_TOOLS = new Set([...WRITE_TOOLS, "Bash", ...AGENT_TOOLS]);
+const HOME_MAINTENANCE = "home-maintenance";
 const CONSENT_TAIL = "ask the person (what, where, how to undo it), record the answer with operator_consent, then retry";
 
 // The absolute path an edit tool call writes, a relative one resolved against the session cwd, or null when it names none.
@@ -97,6 +98,7 @@ function bashReason(input, { mainThread, env }) {
     const free = mainThread ? describeMainBashList() : describeSubagentBashList();
     return `${OPERATOR_GUARD}: ${request.shape}; run one bare command as \`cd <registered checkout> && <command>\` after the person's consent, or one of the free commands: ${free}`;
   }
+  if (!mainThread && (request.kind === HOME_MAINTENANCE || request.home === true)) return `${OPERATOR_GUARD}: never (home maintenance runs on the operator's own thread): no consent covers it`;
   return consentCovers(operatorSession(env), request, env) ? null : needsConsent(request.kind, request.shown);
 }
 
