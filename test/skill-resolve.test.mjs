@@ -132,6 +132,30 @@ test("Phase 5 takes the QA mode from the `QA: lite|full` line of run check 03, a
   assert.match(SKILL, /`CONFIRM:`,\s+`QA:`,\s+`QA-STAGE:`,\s+`INVALIDATED:`/, "the check line list does not carry the QA line after CONFIRM");
 });
 
+// A text with its line breaks and indentation folded to single spaces.
+function folded(text) {
+  return text.replace(/\s+/g, " ");
+}
+
+test("Phase 5 pauses a usage-coverage-only gate and never terminates it, and its resume answers the gate once", () => {
+  const phase5 = folded(SKILL.slice(SKILL.indexOf("### Phase 5 —"), SKILL.indexOf("### Phase 6 —")));
+  const usageRow = phase5.slice(phase5.indexOf("| only `GATE: usage-coverage-*`"), phase5.indexOf("| `OPEN: …`"));
+  assert.ok(phase5.includes("| only `GATE: usage-coverage-*`, after that relaunch |"), "Phase 5 has no row for a usage-coverage-only gate");
+  assert.ok(usageRow.includes('`status: "gate"`') && usageRow.includes('{ file: "05-qa.md", section: "## Validated risks" }'), "the usage-coverage pause no longer composes its notice from 05-qa.md");
+  assert.ok(usageRow.includes("never terminate"), "the usage-coverage pause no longer forbids the termination");
+  assert.equal(usageRow.includes("→ terminate"), false, "a usage-coverage-only gate still leads to a termination");
+  assert.ok(phase5.includes("| `GATE: …` | relaunch the QA once") && phase5.includes("still, with a non-usage GATE → terminate per step 6"), "the non-usage GATE row lost its relaunch-then-terminate path");
+  assert.ok(phase5.includes("That pause's answer resumes Phase 5: `run check 05` first, a pure read."), "the resume no longer reads `run check 05` before any relaunch");
+  assert.ok(phase5.includes("Approved → the same `usage-coverage-*` `GATE:` lines it prints are answered: act on the `VERDICT:` row"), "an approved resume no longer goes on with the verdict's own row");
+  assert.ok(phase5.includes("never a second relaunch, pause or terminate"), "an approved resume may relaunch, pause or terminate again");
+  assert.ok(phase5.includes("Adjustments → relaunch the QA once (🔁, `note` = the answer); only there a usage-only gate pauses again."), "the adjustments path no longer relaunches the QA with the answer");
+  assert.ok(folded(RESUME).includes("**Exception, an OPERATOR ANSWER resuming at `qa`:** `run check 05` first, whatever `From stage:` says"), "resume.md lost the Phase 5 pause exception to `From stage: qa-stage-b`");
+  assert.ok(folded(RESUME).includes("never a second relaunch, pause or terminate"), "resume.md lets an answered usage-coverage gate relaunch, pause or terminate");
+  assert.ok(folded(QA_PHASE).includes("a persisting usage-coverage-only GATE pauses (SKILL.md Phase 5), never terminates"), "qa-phase.md no longer says a usage-coverage-only gate pauses");
+  assert.ok(passageAt("7. **Records.**").includes("a gate pause of Phase 1, 3, 5 or 7"), "the records no longer list the Phase 5 pause");
+  assert.ok(folded(SKILL).includes("the usage-coverage gate of Phase 3 or 5"), "Phase 10 no longer skips the reflection at the Phase 5 pause");
+});
+
 test("the coder prompts never carry pasted file content, and no fast variant ships", () => {
   for (const text of [SKILL, promptTemplate("coder"), promptTemplate("coder-fix")]) {
     assert.equal(text.includes("[CONTENT READ INLINE]"), false, "a coder prompt still pastes file content");

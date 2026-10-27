@@ -164,6 +164,61 @@ test("the usage coverage counts read the leading integer of each field and gate 
   assert.equal(counts("1 · 1 of 3"), 'N=1/1 M=(unparsed: "1 of 3")/1');
 });
 
+test("the held-on-pipeline gate counts HELD only set off from the prose", () => {
+  const { texts } = readFixture("usage-coverage-held-on-pipeline");
+  const gates = (line) => {
+    const qa = texts["05-qa.md"].replace("- R2 HELD: export csv still lists archived rows", line);
+    const { lines } = evaluateCheck({ check: "05", texts: { ...texts, "05-qa.md": qa }, state: { type: "feature/refactor" } });
+    return lines.some((entry) => entry.startsWith("GATE: usage-coverage-held-on-pipeline — "));
+  };
+  const verdicts = [
+    "- R2 HELD: export csv still lists archived rows",
+    "- export csv (source=pipeline): HELD. The button stays enabled",
+    "- Cancel delivery in progress (source=pipeline): HELD. The register button stays enabled",
+    "- R2 (mitigation: x) HELD: export csv",
+    "- R2 HELD (by reading): export csv",
+    "- export csv: checked. HELD.",
+    "- export csv R2 HELD",
+    "- R2 **HELD**: export csv",
+    "- R2 no-op HELD: export csv",
+    "- export csv — HELD by reading",
+    "- Cancel delivery in progress (source=pipeline) HELD. The register button stays enabled",
+    "- export csv (source=pipeline) → HELD (verified by reading the guard)",
+    "- export csv (source=pipeline) - HELD, archived rows still listed",
+    "- R2: export csv (source=pipeline) HELD by reading",
+    "- R2 HELD by reading: export csv (source=pipeline)",
+    "- export csv (source=pipeline) => HELD; the button stays enabled",
+    "- export csv (source=pipeline): 🟢 HELD for github-only configs",
+    "- R3 export csv — 🟡 HELD na unidade",
+    "- [R10] export csv — analytically HELD (the mechanism is",
+    "- [R7] export csv — confirmed real, HELD as low impact.",
+    "- R1–R9 HELD analytically: export csv",
+    "- export csv: PARTIALLY HELD.",
+    "- export csv (source=pipeline) HELD",
+    "- export csv: not HELD in round 1; now HELD",
+    "- R2 run HELD: export csv",
+    "- export csv: BROKE for archived rows; HELD for active rows",
+  ];
+  for (const line of verdicts) assert.equal(gates(line), true, line);
+  const notVerdicts = [
+    "- export csv (`source=pipeline`): archived rows stay listed; the decision remains unconfirmed by the operator. Not HELD, not a break.",
+    "- export csv (source=pipeline): HELD. The decision remains unconfirmed by the operator",
+    "- export csv: not HELD",
+    "- export csv: isn't HELD",
+    "- export csv: non-HELD",
+    "- export csv: the `HELD` word",
+    '- export csv: "HELD"',
+    "- export csv is HELD by the guard and more",
+    "- R2 UPHELD: export csv",
+    "- export csv: is not HELD",
+    "- export csv: never HELD",
+    "- R1 (mid-prose HELD no longer gates): BROKE on export csv",
+    "- export csv was HELD in round 1, now BROKE",
+    "- Plan line 8 (export csv, source=pipeline): Not marked HELD per the rule on pipeline items",
+  ];
+  for (const line of notVerdicts) assert.equal(gates(line), false, line);
+});
+
 // ---- Stage 2: the effects a check chains after its contract lines.
 
 // The state.json of a seeded run.

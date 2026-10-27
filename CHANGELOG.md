@@ -316,6 +316,23 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 - **The `00-main-measure.md` artifact override of the runtime phase.** `phase_prompt` accepts
   `artifact` from an older plugin and ignores it: `runtime` always answers `07-runtime.md`.
 
+### Fixed
+
+- **A usage-coverage gate at the QA no longer cancels an approved run.**
+  `usage-coverage-held-on-pipeline` counts `HELD` only when it is set off from the prose
+  (`R2 HELD by reading`, `item (…) HELD.`, `→ HELD`), never mid-prose (`is HELD by the
+  guard`), never negated (`not HELD`, `non-HELD`), quoted or in backticks, and never on a line
+  labelled `unconfirmed by the operator`; a `- Cancel delivery in progress (source=pipeline)
+  HELD.` still gates. At Phase 5,
+  a gate whose `GATE:` lines are all `usage-coverage-*` and that survives the one QA relaunch
+  now pauses the job at `gate` with `run_outcome` (notice from `05-qa.md` `## Validated
+  risks`) instead of `run_terminate`, so `queue retry` resumes it at the QA. An approving answer
+  re-runs `run check 05` as a read and goes on with the verdict's own row, the `GATE:` lines an
+  open item: no second relaunch, pause or termination. Open items: after an operator-approved
+  Phase 5 pause the `qa` phase stays unrecorded in `state.json` (the report shows it as not
+  recorded), and a mixed `symptom-coverage-*` plus `usage-coverage-*` gate still terminates at
+  Phase 5.
+
 ## 0.7.0 - 2026-10-20
 
 0.6.0 was tagged in this file but never published to npm; a 0.5.x install reaches 0.7.0 directly
