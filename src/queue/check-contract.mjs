@@ -434,14 +434,30 @@ function accessMapCount(text) {
   return lines.filter((line) => line.startsWith("- ") && !/^(?:partial:|unimplemented intent:)/.test(line.slice(2).trim())).length;
 }
 
+const SECOND_NUMBER_RE = String.raw`\s*[-/+~–—]\s*\d|\s+(?:of|or|to|out of|de|ou|em|a)\s*\d`;
+
+// The leading integer of a count field (optionally prefixed by its own `<letter>=`), or null when it has none or it is followed by a second number.
+function leadingCount(field, letter) {
+  const match = new RegExp(`^(?:${letter}\\s*=\\s*)?(\\d+)(?!\\w|[.,]\\d|${SECOND_NUMBER_RE})`, "i").exec(plainValue(field));
+  return match ? Number(match[1]) : null;
+}
+
+// The evidence text of one count field: its parsed number, `(empty)` or the unparsed field.
+function countEvidence(field, count) {
+  if (count !== null) return String(count);
+  return field === "" ? "(empty)" : `(unparsed: "${field}")`;
+}
+
 // The N/M gate of the QA's `Usage coverage:` line against the plan's scenarios and its own access map.
 function usageCountGates(ctx, { value, scenarios }) {
   if (value === null) return [gate("usage-coverage-nm-mismatch", "line absent")];
   const mapped = accessMapCount(ctx.text);
   if (mapped === null) return [gate("usage-coverage-nm-mismatch", "## Access map (QA) absent")];
   const [n = "", m = ""] = value.split(" · ").map((field) => field.trim());
-  const holds = /^\d+$/.test(n) && /^\d+$/.test(m) && Number(n) === scenarios.length && Number(m) === mapped;
-  return holds ? [] : [gate("usage-coverage-nm-mismatch", `N=${n || "(empty)"}/${scenarios.length} M=${m || "(empty)"}/${mapped}`)];
+  const nCount = leadingCount(n, "N");
+  const mCount = leadingCount(m, "M");
+  const holds = nCount === scenarios.length && mCount === mapped;
+  return holds ? [] : [gate("usage-coverage-nm-mismatch", `N=${countEvidence(n, nCount)}/${scenarios.length} M=${countEvidence(m, mCount)}/${mapped}`)];
 }
 
 // The value of one `<label> <value>` field of the `Usage coverage:` line, or null when the field is absent.
