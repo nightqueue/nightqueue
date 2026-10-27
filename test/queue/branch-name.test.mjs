@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { branchAliases, COMMIT_TYPES, commitTypeOf, publishedBranchName, sameBranch, WORKTREE_BRANCH_PREFIX } from "../../src/queue/branch-name.mjs";
+import { branchAliases, COMMIT_TYPES, commitTypeOf, publishedBranchName, sameBranch, sameRunBranch, WORKTREE_BRANCH_PREFIX } from "../../src/queue/branch-name.mjs";
 
 // The rename `run pr` applied before the rule moved here, kept verbatim as the reference the module must match.
 function legacyFinalBranch(current, { type, slug }) {
@@ -82,4 +82,25 @@ test("a runtime `worktree-<slug>` branch is the same branch as its publication u
   assert.equal(sameBranch("worktree-foo", "perf/foo", { slug: "foo" }), false);
   assert.equal(sameBranch("worktree-foo", "refactor/bar", { slug: "foo" }), false);
   assert.equal(sameBranch("worktree-feat+x", "refactor/x", { slug: "x" }), false, "the `+` form keeps its own type");
+});
+
+test("the branches of two runs never match through one run's slug: unrelated `worktree-*` names are different branches", () => {
+  const holdHints = { slug: "botao-registrar-entrega-loading-drawer", type: "feature/refactor" };
+  const hold = "worktree-bot-o-registrar-entrega-do-drawer";
+  const candidate = "worktree-bot-o-entregar-tudo-no-modal";
+  assert.equal(sameRunBranch(hold, holdHints, candidate, { slug: null, type: "feature/refactor" }), false);
+  assert.equal(sameRunBranch(hold, holdHints, candidate, { slug: "botao-entregar-tudo-modal", type: "feature/refactor" }), false);
+  assert.equal(sameRunBranch(candidate, { slug: "botao-entregar-tudo-modal" }, hold, holdHints), false, "swapped sides");
+  assert.equal(sameRunBranch("worktree-a", { slug: "a" }, "worktree-b", { slug: "b" }), false);
+  assert.ok(sameRunBranch("worktree-a", { slug: "a" }, "worktree-a", { slug: null }), "a name is itself");
+});
+
+test("the branch of one run still matches its published form across runs, each side by its own slug", () => {
+  assert.ok(sameRunBranch("feat/x", { slug: "x" }, "worktree-x", { slug: "x" }));
+  assert.ok(sameRunBranch("worktree-x", { slug: "x" }, "feat/x", { slug: null }), "the hold's own aliases carry the match");
+  assert.ok(sameRunBranch("worktree-feat+x", {}, "feat/x", {}));
+  assert.equal(sameRunBranch("feat/x", { slug: "x" }, "worktree-x", { slug: "y" }), false);
+  assert.equal(sameRunBranch("feat/y", { slug: "x" }, "worktree-y", { slug: null }), false, "a slugless candidate gets no type aliases");
+  assert.equal(sameRunBranch(null, { slug: "x" }, "feat/x", {}), false);
+  assert.equal(sameRunBranch("feat/x", {}, undefined, { slug: "x" }), false);
 });

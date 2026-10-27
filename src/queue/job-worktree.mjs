@@ -3,7 +3,7 @@ import { isAbsolute, relative, resolve } from "node:path";
 import { withPathLock } from "../config/lock.mjs";
 import { jobWorktreePath, startPointsLockPath, worktreesDir } from "../config/paths.mjs";
 import { runGitAsync } from "../host/git.mjs";
-import { branchAliases, sameBranch } from "./branch-name.mjs";
+import { branchAliases, sameBranch, sameRunBranch } from "./branch-name.mjs";
 import { isRunPath, ownRunState } from "./resume.mjs";
 import { recordAdoptedWorktree, recordHeldWorktree, recordRunFields } from "./run-state.mjs";
 import { canonicalPath, droppedNames, lockPid, lockState, parseWorktreeList, sameDir } from "./worktree.mjs";
@@ -282,15 +282,15 @@ function mainBranchRefusal(place, branch) {
   return null;
 }
 
-// Tells whether an open job's hold covers the given worktree path or branch.
-function holdCovers(hold, { path, branch }) {
+// Tells whether an open job's hold covers the given worktree path or branch, each branch expanded by its own run's slug/type.
+function holdCovers(hold, { path, branch }, hints = {}) {
   if (path !== null && hold.worktree !== null && sameDir(hold.worktree, path)) return true;
-  return branch !== null && hold.branch !== null && sameBranch(hold.branch, branch, { slug: hold.slug, type: hold.type });
+  return branch !== null && hold.branch !== null && sameRunBranch(hold.branch, { slug: hold.slug, type: hold.type }, branch, hints);
 }
 
 // Why another open job keeps this one off a start point, naming that job; null when no other open job holds it.
 function ownerRefusal(place, { path, branch }) {
-  const owner = place.others.find((hold) => holdCovers(hold, { path, branch }));
+  const owner = place.others.find((hold) => holdCovers(hold, { path, branch }, place.hints ?? {}));
   return owner ? `\`${path ?? branch}\` belongs to ${jobRef(owner.jobId)}, which is not closed; two open jobs never share a branch` : null;
 }
 
@@ -308,7 +308,7 @@ function otherHolds(holds, job) {
 async function claimUnderLock(place, { path, branch }, write) {
   const holds = await place.openHolds();
   if (!Array.isArray(holds)) return failed(`the queue could not be read to check who owns \`${path ?? branch}\`; retry`);
-  const refusal = ownerRefusal({ others: otherHolds(holds, place.job) }, { path, branch });
+  const refusal = ownerRefusal({ others: otherHolds(holds, place.job), hints: place.hints }, { path, branch });
   if (refusal) return failed(refusal);
   return recordRefusal(write(), `\`${path ?? branch}\` was not taken`);
 }
@@ -378,7 +378,7 @@ async function recordedRefusal(ctx, prior) {
   if (prior.branch === null && prior.worktree === null) return null;
   const holds = await ctx.openHolds();
   if (!Array.isArray(holds)) return failed(`the queue could not be read to check who owns \`${prior.worktree ?? prior.branch}\`; retry`);
-  const refusal = ownerRefusal({ others: otherHolds(holds, ctx.job) }, { path: prior.worktree, branch: prior.branch });
+  const refusal = ownerRefusal({ others: otherHolds(holds, ctx.job), hints: ctx.hints }, { path: prior.worktree, branch: prior.branch });
   return refusal ? failed(refusal) : null;
 }
 
