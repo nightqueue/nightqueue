@@ -64,9 +64,11 @@ test("operator.md states the three bands, never the old never-edits contract, an
   assert.equal(/never (edits?|executes?)\b/i.test(OPERATOR), false, "operator.md still says it never edits or executes");
   const bands = sectionOf("What you may do");
   for (const band of ["| **Free** |", "| **With consent** |", "| **Never** |"]) assert.ok(bands.includes(band), `the table has no ${band} row`);
-  for (const kind of ["`edit`", "`create`", "`run`", "`git-write`", "`connection-write`", "`operator_consent`", "`revoke: true`"]) {
+  for (const kind of ["`edit`", "`create`", "`run`", "`git-write`", "`connection-write`", "`home-maintenance`", "`operator_consent`", "`revoke: true`"]) {
     assert.ok(bands.includes(kind), `What you may do does not name ${kind}`);
   }
+  assert.ok(bands.includes("| **Home cleanup (with consent)** |"), "the table has no Home cleanup row");
+  assert.ok(bands.includes("Never `runs/`, `worktrees/` or a project's whole directory"), "the table does not state the whole-directory rule");
   const flat = OPERATOR.replace(/\s+/g, " ");
   assert.ok(flat.includes("say what needs the person's consent"));
   assert.ok(flat.includes("The runtime record is the audit and the guard; the host's permission prompt is the barrier for Edit, Write and Bash only"));

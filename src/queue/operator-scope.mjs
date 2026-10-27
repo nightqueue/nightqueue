@@ -25,9 +25,13 @@ export const OPERATOR_SUBCOMMANDS = Object.freeze({
   }),
 });
 
-// The flags refused on an otherwise allowed command: `queue add --run` starts the runner, `doctor --fix` writes.
+// The flags refused on an otherwise allowed command: `queue add --run` starts the runner.
 export const OPERATOR_REFUSED_FLAGS = Object.freeze([
   Object.freeze({ argv: Object.freeze(["queue", "add"]), flags: Object.freeze(["--run"]) }),
+]);
+
+// The flags that take an otherwise free command off the free list into the consent band: `doctor --fix` writes, as a `run` consent.
+export const OPERATOR_CONSENT_FLAGS = Object.freeze([
   Object.freeze({ argv: Object.freeze(["doctor"]), flags: Object.freeze(["--fix"]) }),
 ]);
 
@@ -53,6 +57,7 @@ export const PIPELINE_AGENTS = Object.freeze([
 const PLUGIN_NAME = "nightqueue";
 export const NIGHTQUEUE_PROGRAMS = new Set([SHIM_NAME, ...SHORTCUT_SHIM_NAMES]);
 const BLOCKING_FLAGS = ["--follow", "--foreground"];
+const SCRIPT_EXTENSION = /\.m?js$/;
 export const GIT_READ_SUBCOMMANDS = new Set(["log", "show", "diff", "blame", "ls-tree", "ls-files", "rev-parse", "branch", "status"]);
 const GIT_DENIED_FLAGS = ["--output", "--ext-diff", "--no-index", "--exec"];
 const BRANCH_DENIED_FLAGS = [
@@ -104,9 +109,9 @@ function isBlockingFlag(token) {
   return BLOCKING_FLAGS.some((flag) => token === flag || token.startsWith(`${flag}=`));
 }
 
-// Tells whether the tokens carry a flag refused on the command they spell (`queue add --run`, `doctor --fix`).
-function refusedFlagUsed(tokens) {
-  const rule = OPERATOR_REFUSED_FLAGS.find(({ argv }) => argv.every((word, index) => tokens[index + 1] === word));
+// Tells whether the tokens carry a flag one of the rules lists on the command they spell (`queue add --run`, `doctor --fix`).
+function flagUsed(tokens, rules) {
+  const rule = rules.find(({ argv }) => argv.every((word, index) => tokens[index + 1] === word));
   if (!rule) return false;
   return tokens.some((token) => rule.flags.some((flag) => token === flag || token.startsWith(`${flag}=`)));
 }
@@ -116,7 +121,22 @@ export function refusedNightqueueForm(tokens) {
   const [, command, subcommand] = tokens;
   const family = Object.hasOwn(OPERATOR_SUBCOMMANDS, command) ? OPERATOR_SUBCOMMANDS[command] : null;
   if (family?.refused.includes(subcommand)) return true;
-  return tokens.some(isBlockingFlag) || refusedFlagUsed(tokens);
+  return tokens.some(isBlockingFlag) || flagUsed(tokens, OPERATOR_REFUSED_FLAGS);
+}
+
+// The program a word names, its directory and a script extension dropped (`bin/nightqueue.mjs` names nightqueue).
+export function programName(word) {
+  return typeof word === "string" ? basename(word).replace(SCRIPT_EXTENSION, "") : "";
+}
+
+// Tells whether the words spell `doctor --fix` of nightqueue by any spelling of its program (`/abs/bin/nightqueue`, `bin/nightqueue.mjs`).
+export function isDoctorFixForm(words) {
+  return Array.isArray(words) && NIGHTQUEUE_PROGRAMS.has(programName(words[0])) && flagUsed(words, OPERATOR_CONSENT_FLAGS);
+}
+
+// Tells whether the words are the consentable `nightqueue doctor --fix`: the home's own cleanup, its program spelled bare.
+export function isDoctorFix(words) {
+  return isDoctorFixForm(words) && NIGHTQUEUE_PROGRAMS.has(words[0]);
 }
 
 // The subcommands the main thread may run under an allowed command: the classified ones of a family, else any; undefined when the command is refused.
@@ -137,7 +157,7 @@ function nightqueueAllowed(tokens, subcommandsOf) {
   const subcommands = subcommandsOf(command);
   if (subcommands === undefined) return false;
   if (subcommands !== ANY_SUBCOMMAND && !subcommands.includes(subcommand)) return false;
-  return !tokens.some(isBlockingFlag) && !refusedFlagUsed(tokens);
+  return !tokens.some(isBlockingFlag) && !flagUsed(tokens, OPERATOR_REFUSED_FLAGS) && !flagUsed(tokens, OPERATOR_CONSENT_FLAGS);
 }
 
 // Tells whether a git argument is one that writes a file or runs a program (`--output*`, `--ext-diff`, `--no-index`, `--exec`).
@@ -206,7 +226,7 @@ export function describeReadDenial({ target, refusal, env = process.env }) {
   return `${OPERATOR_GUARD}: the operator and its subagents read anything on disk but the secrets file and \`.env*\` files, and ${because}`;
 }
 
-// The refused subcommands and flags of the main thread, as a reason shows them (`queue session`, `doctor --fix`, …).
+// The refused subcommands and flags of the main thread, as a reason shows them (`queue session`, `queue add --run`, …).
 function describeMainRefusals() {
   const subcommands = Object.entries(OPERATOR_SUBCOMMANDS).flatMap(([command, { refused }]) => refused.map((subcommand) => `${command} ${subcommand}`));
   const flags = OPERATOR_REFUSED_FLAGS.flatMap(({ argv, flags: refused }) => refused.map((flag) => `${argv.join(" ")} ${flag}`));
@@ -223,7 +243,8 @@ function describeReadonlyCommands() {
 // The free Bash list of the operator's main thread, as a reason shows it.
 export function describeMainBashList() {
   return (
-    `\`nightqueue|nq ${OPERATOR_CLI_COMMANDS.allowed.join("|")} …\` (never ${describeMainRefusals()}, \`--follow\` or \`--foreground\`) and ` +
+    `\`nightqueue|nq ${OPERATOR_CLI_COMMANDS.allowed.join("|")} …\` (never ${describeMainRefusals()}, \`--follow\` or \`--foreground\`; ` +
+    "`doctor --fix` only after a `run` consent) and " +
     "`git -C <registered checkout> [--no-optional-locks] log|show|diff|blame|ls-tree|ls-files|rev-parse|branch --list|status` " +
     "(status only after --no-optional-locks; never --output, --ext-diff, --no-index or --exec)"
   );

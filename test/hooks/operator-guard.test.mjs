@@ -94,10 +94,31 @@ test("the main thread refuses the subcommands and flags that write files, widen 
     "nightqueue doctor",
   ];
   for (const command of allowed) assertAllowed(main("Bash", { command }), env);
-  for (const command of [`nightqueue project add ${checkout}`, "nightqueue project move alpha --path /tmp/elsewhere", "nightqueue queue add --project alpha fix-it --run", "nightqueue queue add --run=true x", "nightqueue doctor --fix"]) {
+  for (const command of [`nightqueue project add ${checkout}`, "nightqueue project move alpha --path /tmp/elsewhere", "nightqueue queue add --project alpha fix-it --run", "nightqueue queue add --run=true x", "nightqueue doctor --fix --follow"]) {
     assertNever(main("Bash", { command }), env);
   }
   for (const command of ["nightqueue queue", "nightqueue decision list", "nightqueue decision show D-1"]) assertDenied(main("Bash", { command }), env);
+});
+
+test("doctor --fix is consented as a run from any directory, only by a consent naming it, and only on the main thread", (t) => {
+  const { env } = operatorFixture(t);
+  const fromHome = (command) => main("Bash", { command }, homeDir(env));
+  const needs = /^operator guard: needs consent \(run nightqueue doctor --fix\)/;
+  assert.match(decide(fromHome("nightqueue doctor --fix"), env), needs);
+  assert.ok(decide(main("Bash", { command: "npm test" }), env).includes("`doctor --fix` only after a `run` consent"), "the free list does not say doctor --fix needs a run consent");
+  assertAllowed(fromHome("nightqueue doctor --json"), env);
+  consent(env, { kind: "run", scope: "nightqueue doctor" });
+  assert.match(decide(fromHome("nightqueue doctor --fix"), env), needs, "a doctor consent widened to --fix");
+  consent(env, { kind: "run", scope: "nightqueue doctor --fix" });
+  assertAllowed(fromHome("nightqueue doctor --fix"), env);
+  assertAllowed(main("Bash", { command: "nightqueue doctor --fix --json" }), env);
+  assertAllowed(main("Bash", { command: "timeout 120 nightqueue doctor --fix" }), env);
+  assert.match(decide(fromHome("nq doctor --fix"), env), /^operator guard: needs consent \(run nq doctor --fix\)/);
+  assertNever(fromHome("nightqueue doctor --fix --follow"), env);
+  assertNever(sub("nightqueue:reviewer", "Bash", { command: "nightqueue doctor --fix" }, homeDir(env)), env);
+  for (const command of ["/abs/bin/nightqueue doctor --fix", "bin/nightqueue.mjs doctor --fix", "timeout 30 /abs/nightqueue doctor --fix"]) {
+    assert.match(decide(fromHome(command), env), /never \(`doctor --fix` is consented only as `nightqueue doctor --fix`\)/, command);
+  }
 });
 
 test("a backslash never smuggles a refused word past the main thread or a subagent", (t) => {

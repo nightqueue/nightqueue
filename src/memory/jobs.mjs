@@ -1308,6 +1308,16 @@ export function listOpenJobs(env = process.env, db = openDb(env)) {
   return registry.attachNames(db, rows);
 }
 
+// The jobs of one project that may still hold a run dir or worktree, the owners the operator's home maintenance checks an entry against.
+export function listHomeHolders(projectId, env = process.env, db = openDb(env)) {
+  return db
+    .prepare(
+      `SELECT id, slug, status, close_status, start_worktree FROM jobs
+        WHERE project_id = ? AND (status IN ('pending', 'running', 'gate', 'done', 'failed') OR close_status = 'closing')`,
+    )
+    .all(requireProjectId(projectId));
+}
+
 // Every job, closed or not, that already named its run, the owners `nightqueue doctor --fix` checks a leftover worktree against.
 export function listNamedJobs(env = process.env, db = openDb(env)) {
   const rows = db.prepare("SELECT id, project_id, slug, status FROM jobs WHERE slug IS NOT NULL").all();

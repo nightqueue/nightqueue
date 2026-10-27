@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
-import { appendFileSync, existsSync, readFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { newId } from "../../src/config/ids.mjs";
-import { operatorConsentPath, operatorLogPath } from "../../src/config/paths.mjs";
+import { operatorConsentPath, operatorLogPath, runsDir } from "../../src/config/paths.mjs";
 import { registeredCheckouts } from "../../src/memory/registry-access.mjs";
 import { connectionScope, consentCovers, liveConsents, operatorSession, recordConsent } from "../../src/queue/operator-consent.mjs";
 import { makeHome, makeProject } from "../../test-support/memory.mjs";
@@ -74,6 +74,21 @@ test("an unparsable line of the record is skipped, and a consent of another sess
   assert.equal(liveConsents(session, env).length, 1);
   assert.equal(consentCovers(newId(), { kind: "edit", target: join(checkout, "a.mjs") }, env), false);
   assert.equal(consentCovers(null, { kind: "edit", target: join(checkout, "a.mjs") }, env), false);
+});
+
+test("a home-maintenance grant stores the exact command of one entry, and doctor --fix is granted as a run", (t) => {
+  const { env, checkout, project, session } = consentFixture(t);
+  const run = join(runsDir(env), project.id, "stale");
+  mkdirSync(run, { recursive: true });
+  const base = { session, project, reason: "clean up after a job", answer: "yes, remove it", env };
+  const { consent, line } = recordConsent({ ...base, kind: "home-maintenance", scope: `cd ${checkout} && timeout 30 rm -rf ${run}` });
+  assert.deepEqual(consent.argv, ["rm", "-rf", run]);
+  assert.equal(consent.scope, `rm -rf ${run}`);
+  assert.match(line, / consent home-maintenance rm -rf .*stale · alpha · "yes, remove it"$/);
+  assert.equal(consentCovers(session, { kind: "home-maintenance", dir: checkout, argv: ["rm", "-rf", run] }, env), true);
+  assert.equal(consentCovers(session, { kind: "home-maintenance", dir: checkout, argv: ["rm", "-rf", run, "x"] }, env), false);
+  assert.equal(recordConsent({ ...base, kind: "run", scope: "nightqueue doctor --fix" }).consent.kind, "run");
+  assert.throws(() => recordConsent({ ...base, kind: "home-maintenance", scope: "nightqueue doctor --fix" }), /home-maintenance consent is one/);
 });
 
 test("connectionScope writes the method upper-case and the path without its slash, `-` for none", () => {

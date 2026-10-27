@@ -1,15 +1,19 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
-import { dirname, isAbsolute } from "node:path";
+import { dirname, isAbsolute, join } from "node:path";
 import { UserError } from "../config/errors.mjs";
 import { isId } from "../config/ids.mjs";
-import { operatorConsentPath, operatorLogPath } from "../config/paths.mjs";
+import { operatorConsentPath, operatorLogPath, worktreesDir } from "../config/paths.mjs";
 import { registeredCheckouts } from "../memory/registry-access.mjs";
-import { hasGlob, neverBashReason, neverWriteReason, scopeWords } from "./operator-bands.mjs";
-import { GIT_READ_SUBCOMMANDS } from "./operator-scope.mjs";
+import { hasGlob, isHomeMaintenance, neverBashReason, neverWriteReason, scopeWords } from "./operator-bands.mjs";
+import { homeMaintenanceForm, homeTargets, worktreeCall } from "./operator-home.mjs";
+import { GIT_READ_SUBCOMMANDS, isDoctorFix } from "./operator-scope.mjs";
 import { canonicalPath, insideRoots } from "./orchestrator-scope.mjs";
 
 export const OPERATOR_SESSION_ENV = "NIGHTQUEUE_OPERATOR_SESSION";
-export const CONSENT_KINDS = Object.freeze(["edit", "create", "run", "git-write", "connection-write"]);
+const HOME_MAINTENANCE = "home-maintenance";
+export const CONSENT_KINDS = Object.freeze(["edit", "create", "run", "git-write", "connection-write", HOME_MAINTENANCE]);
+const HOME_MAINTENANCE_FORMS =
+  "a home-maintenance consent is one exact command: `rm`/`rmdir`/`find … -delete` of one run dir or worktree, `git -C <checkout> worktree remove <absolute worktree path>` or `git -C <checkout> worktree prune`";
 
 const CONNECTION_WRITE_METHODS = ["POST", "PATCH", "PUT"];
 const BOUNDS = Object.freeze({ answer: 2000, reason: 500, scope: 2000 });
@@ -91,20 +95,63 @@ function pathScope({ kind, scope, project, env }) {
   return { scope: canonical, exact: true };
 }
 
-// The scope of a run or git-write consent: one bare command, its leading `cd <dir> &&` and `timeout <n>` dropped (and `git` for git-write).
-function commandScope({ kind, scope }) {
+// The words of a command consent's scope: one bare command naming its files literally, its leading `cd <dir> &&` and `timeout <n>` dropped.
+function commandWords(kind, scope) {
   const words = scopeWords(scope);
   if (words === null) throw new UserError(`the scope of a ${kind} consent is one bare command, with no shell operator or backslash`);
   if (hasGlob(scope)) throw new UserError(`the scope of a ${kind} consent names its files literally, with no glob or brace character (\`* ? [ ] { }\`)`);
+  return words;
+}
+
+// Refuses a consent scope the never band holds, with its reason (a job that still holds a run dir or worktree included).
+function refuseNever(shown, env) {
+  const never = neverBashReason(shown, { env });
+  if (never) throw new UserError(`\`${shown}\` is in the never band (${never}); no consent covers it`);
+}
+
+// The scope of a run or git-write consent: one bare command, its leading `cd <dir> &&` and `timeout <n>` dropped (and `git` for git-write).
+function commandScope({ kind, scope, env }) {
+  const words = commandWords(kind, scope);
   if (kind === "run" && words[0] === "git") throw new UserError("a git command is consented as kind git-write, never as run");
   const argv = kind === "git-write" && words[0] === "git" ? words.slice(1) : words;
   const shown = kind === "git-write" ? `git ${argv.join(" ")}` : argv.join(" ");
-  const never = neverBashReason(shown);
-  if (never) throw new UserError(`\`${shown}\` is in the never band (${never}); no consent covers it`);
+  refuseNever(shown, env);
+  if (isHomeMaintenance(kind === "git-write" ? ["git", ...argv] : argv)) throw new UserError(`\`${shown}\` deletes or removes a worktree: it is consented as kind ${HOME_MAINTENANCE}`);
   if (kind === "git-write" && (!argv[0] || argv[0].startsWith("-") || (GIT_READ_SUBCOMMANDS.has(argv[0]) && argv[0] !== "branch"))) {
     throw new UserError(`the scope of a git-write consent starts with a git subcommand that writes, and \`${shown}\` does not`);
   }
   return { scope: argv.join(" "), argv };
+}
+
+// A project's registered checkout as a one-root list, canonical; empty when it has none.
+function checkoutRootOf(projectId, env) {
+  const checkout = registeredCheckouts(env).find((project) => project.id === projectId)?.path;
+  return typeof checkout === "string" && checkout !== "" ? [canonicalPath(checkout)] : [];
+}
+
+// The directories a project's home maintenance or salvage may run git in: its checkout and its worktrees under the home, canonical.
+function maintenanceRoots(projectId, env) {
+  return [...checkoutRootOf(projectId, env), canonicalPath(join(worktreesDir(env), projectId))];
+}
+
+// Refuses a home-maintenance scope that touches another project: an entry of another project, or a `git -C` dir outside its checkout.
+function refuseForeignTargets(words, { project, env }) {
+  const foreign = homeTargets(words, env).find((entry) => entry.projectId !== project.id);
+  if (foreign) throw new UserError(`${foreign.canonical} is not a run dir or worktree of ${project.name}; a home-maintenance consent stays in its own project`);
+  const gitDir = worktreeCall(words)?.gitDir;
+  if (gitDir && !insideRoots(gitDir, checkoutRootOf(project.id, env))) {
+    throw new UserError(`\`git -C ${gitDir}\` is outside the checkout of ${project.name}; git maintenance runs with the checkout as its git dir`);
+  }
+}
+
+// The scope of a home-maintenance consent: the exact command, one delete of a run dir or worktree, `git worktree remove <worktree>` or `git worktree prune`.
+function homeScope({ scope, project, env }) {
+  const words = commandWords(HOME_MAINTENANCE, scope);
+  if (!homeMaintenanceForm(words)) throw new UserError(HOME_MAINTENANCE_FORMS);
+  const shown = words.join(" ");
+  refuseNever(shown, env);
+  refuseForeignTargets(words, { project, env });
+  return { scope: shown, argv: words };
 }
 
 // The scope of a connection-write consent: `<connection> <POST|PATCH|PUT> <path>`.
@@ -125,7 +172,8 @@ function normalizedScope({ kind, scope, project, env }) {
   if (kind === "connection-write") return connectionWriteScope(text);
   if (!project?.id) throw new UserError(`a ${kind} consent requires \`project\`: the registered project it applies to`);
   if (kind === "edit" || kind === "create") return pathScope({ kind, scope: text, project, env });
-  return commandScope({ kind, scope: text });
+  if (kind === HOME_MAINTENANCE) return homeScope({ scope: text, project, env });
+  return commandScope({ kind, scope: text, env });
 }
 
 // Appends one line to a file, its directory made first.
@@ -190,12 +238,28 @@ function coversPath(consent, target) {
   return insideRoots(target, [consent.scope]);
 }
 
-// Tells whether a command consent covers a command: run in its project's checkout, and opening with the consented words.
-function coversCommand(consent, { dir, argv }, env) {
-  const checkout = registeredCheckouts(env).find((project) => project.id === consent.project_id)?.path;
-  if (!checkout || !insideRoots(dir, [canonicalPath(checkout)])) return false;
+// Tells whether a command opens with a consent's words.
+function opensWith(consent, argv) {
   const words = Array.isArray(consent.argv) ? consent.argv : [];
-  return words.length > 0 && words.every((word, index) => argv[index] === word);
+  return Array.isArray(argv) && words.length > 0 && words.every((word, index) => argv[index] === word);
+}
+
+// Tells whether a command consent covers a command: run in its project's checkout (a git-write also in its worktrees), and opening with the consented words.
+function coversCommand(consent, { dir, argv }, env) {
+  const roots = consent.kind === "git-write" ? maintenanceRoots(consent.project_id, env) : checkoutRootOf(consent.project_id, env);
+  return insideRoots(dir, roots) && opensWith(consent, argv);
+}
+
+// Tells whether a run consent covers `doctor --fix` from any directory: only a consent that itself names `doctor --fix`.
+function coversDoctorFix(consent, { argv }) {
+  return isDoctorFix(consent.argv) && opensWith(consent, argv);
+}
+
+// Tells whether a home-maintenance consent covers a request: the exact same command, its git run in the consent's project checkout.
+function coversHomeMaintenance(consent, { argv, gitDir }, env) {
+  const words = Array.isArray(consent.argv) ? consent.argv : [];
+  if (!Array.isArray(argv) || words.length === 0 || words.length !== argv.length || !words.every((word, index) => argv[index] === word)) return false;
+  return !gitDir || insideRoots(gitDir, checkoutRootOf(consent.project_id, env));
 }
 
 // Tells whether one live consent covers a request of the same kind; nothing wider is ever inferred.
@@ -203,6 +267,8 @@ function covers(consent, request, env) {
   if (consent.kind !== request.kind) return false;
   if (request.kind === "edit" || request.kind === "create") return coversPath(consent, canonicalPath(request.target));
   if (request.kind === "connection-write") return consent.scope === request.scope;
+  if (request.kind === HOME_MAINTENANCE) return coversHomeMaintenance(consent, request, env);
+  if (request.home === true) return coversDoctorFix(consent, request);
   return coversCommand(consent, request, env);
 }
 
