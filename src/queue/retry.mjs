@@ -6,6 +6,7 @@ import { flattenPrState } from "./pr-state.mjs";
 import { clearRunTerminal, discardRunDir, PRE_RENUMBERING_REFUSAL, preRenumberingArtifact } from "./resume.mjs";
 import { clearTermination } from "./run-state.mjs";
 import { jobRef } from "../memory/refs.mjs";
+import { OPERATOR_NOTE_LIMIT } from "../memory/jobs.mjs";
 
 export { callerJobId };
 
@@ -46,9 +47,20 @@ function refusePreRenumberingRun(job, env) {
   if (preRenumberingArtifact({ projectId: job?.project_id, slug: job?.slug, env }) !== null) throw new UserError(PRE_RENUMBERING_REFUSAL);
 }
 
+// Refuses an operator answer longer than the resumed prompt carries, before anything is written, so it is never cut silently.
+function refuseOverlongNote(note) {
+  if (typeof note !== "string") return;
+  const length = Array.from(note.trim()).length;
+  if (length <= OPERATOR_NOTE_LIMIT) return;
+  throw new UserError(
+    `the answer is ${length} characters long and the resumed run reads at most ${OPERATOR_NOTE_LIMIT}: shorten it and retry; nothing was written`,
+  );
+}
+
 // Retries one job (a gate's answer also lifts the runtime's termination of that attempt) and, only with `fresh`, drops the run directory of the previous attempt; the order is fixed, so a refused retry never deletes anything.
 export async function applyRetry({ id, note, fresh = false, env = process.env, prStateImpl = ghPrViewAsync } = {}) {
   requireOwnJob(id, env);
+  refuseOverlongNote(note);
   const store = openStore(env);
   const before = await store.jobs.getJob(id);
   await refuseFinishedJob(id, before, { env, prStateImpl });

@@ -104,8 +104,7 @@ Prompt: `phase_prompt` with `target: "triager"`; outside a job pass `request` = 
 request verbatim (`references/interactive-worktree.md`). Inside a job the runtime reads the job's
 own prompt.
 
-Launch **1 triager** with the answered `subagent_type`, `model` and `prompt` verbatim. It writes
-`01-triage.md`; run `nightqueue run check 01` (the artifact gate, step 6) and act on its answer.
+Launch **1 triager**. It writes `01-triage.md`; run `nightqueue run check 01` (the artifact gate, step 6) and act on its answer.
 
 **Gate:**
 
@@ -133,9 +132,8 @@ still one branch and ONE pull request.
 
 ### Phase 2 — Exploration
 
-Launch **1 explore agent**: `phase_prompt` with `target: "explore"`, then the launch with the
-answered `subagent_type`, `model` and `prompt` verbatim. The prompt already carries the structural
-index earlier runs saved (`stale`/`missing` files marked REVALIDATE).
+Launch **1 explore agent**: `phase_prompt` with `target: "explore"`. The prompt already carries
+the structural index earlier runs saved (`stale`/`missing` files marked REVALIDATE).
 
 Run `nightqueue run check 02`
 before proceeding. Phase 3 reads the findings from `02-explore.md`. The check saves the
@@ -144,8 +142,7 @@ structural index itself: `index: not saved (…)` → ⚠️ open item of Phase 
 ### Phase 3 — Architecture
 
 Launch **1 architect agent**: `phase_prompt` with `target: "architect"` (plus
-`delivery_constraints` when there is one, and `note` on a relaunch), then the launch with the
-answered `subagent_type`, `model` and `prompt` verbatim.
+`delivery_constraints` when there is one, and `note` on a relaunch).
 
 **Never inject the DESIGN into the architect's prompt** (fix level, where the solution goes, an
 approach ruled out by diff size): the ONLY constraint is the delivery LIMIT, on the
@@ -155,7 +152,8 @@ approach ruled out by diff size): the ONLY constraint is the delivery LIMIT, on 
 
 | `run check 03` answers | Action |
 | --- | --- |
-| `MISSING` / `GATE: coverage-*` | relaunch the architect once (🔁, `note` = the lines); still → inform the user and terminate (⚠️ open item) |
+| `MISSING` | relaunch the architect once (🔁, `note` = the lines); still → inform the user and terminate (⚠️ open item) |
+| `GATE: coverage-*` | the same relaunch; still → ONE `run_outcome` for every line: `status: "gate"`, `from_artifact: { file: "03-plan.md", section: "## Requires user confirmation" }` (no `CONFIRM:` → `"## Symptom coverage"`), `question` = the `GATE:` lines verbatim + "answer the open decision or say what to adjust", then end the turn; never terminate |
 | `GATE: usage-coverage-*` (the usage-coverage gate) | relaunch the architect once (🔁) demanding `## Requires user confirmation`; still → `run_outcome` with `status: "gate"`, `from_artifact: { file: "03-plan.md", section: "## Usage coverage" }` and `question` = the `GATE:` lines verbatim, then end the turn |
 | `TYPE-MISMATCH: … — triage: bug/error …` together with `CONFIRM:` | ONE `run_outcome` with `status: "gate"`, `from_artifact: { file: "03-plan.md", section: "## Requires user confirmation" }` and `question` = "Is this a bug or a feature/refactor? <the TYPE-MISMATCH evidence>", then end the turn |
 | `TYPE-MISMATCH: … — triage: feature/refactor …` (the Type divergence valve) | `run_set` with `type: "feature/refactor"`, then Phase 4 |
@@ -168,12 +166,14 @@ The user's answer to a pause arrives as a retry and applies on the resumed run b
 approved → Phase 4 with the architect's plan; adjustments → relaunch the architect (🔁) with the
 decision as `note`; the literal reading → relaunch it (🔁) instructing the literal plan; a Type
 answer → `run_set` with that `type`, then Phase 4 (`feature/refactor`) or relaunch the architect
-(🔁, `bug/error`). Never write code before that confirmation.
+(🔁, `bug/error`). Never write code before that confirmation. A coverage pause's answer resumes
+here: `run check 03` first, then relaunch the architect once (🔁, `note` = answer + lines) and
+`run check 03`; the same `GATE:` lines → terminate (⚠️ open item), never pause twice on them
+(same gate code); else → its row, relaunch spent.
 
 ### Phase 4 — Implementation
 
-Launch 1 coder agent: `phase_prompt` with `target: "coder"` (plus `stage` in a staged plan),
-then the launch with the answered `subagent_type`, `model` and `prompt` verbatim.
+Launch 1 coder agent: `phase_prompt` with `target: "coder"` (plus `stage` in a staged plan).
 
 Run `nightqueue run check 04` (the artifact gate, step 6); `GENERATED` → accept and move on.
 `MISSING: ## Modified files (no changed files)` means the worktree changed nothing: inform the
@@ -224,8 +224,7 @@ answer follows `references/resume.md`; never pause twice on the same lines.
 ### Phase 6 — Verification (final gate + correction loop)
 
 Launch 1 verifier agent: `phase_prompt` with `target: "verifier"` (plus `stage` between the
-stages of a staged plan), then the launch with the answered `subagent_type`, `model` and `prompt`
-verbatim.
+stages of a staged plan).
 
 The verifier runs **after** the QA, independently: it **reproduces** the QA's proven breaks. Neither the QA nor the coder validates its own work.
 
@@ -242,8 +241,7 @@ The verifier runs **after** the QA, independently: it **reproduces** the QA's pr
   go to Phase 9 and report the remaining failures/breaks to the user.
 
 Prompt of the coder in the fix: `phase_prompt` with `target: "coder-fix"` and `note` = what the
-relaunch is about (the iteration and its failures, in one line). Relaunch the coder with the
-answered `subagent_type`, `model` and `prompt` verbatim. After it returns, run
+relaunch is about (the iteration and its failures, in one line). After the coder returns, run
 `nightqueue run check 04` before relaunching the verifier.
 
 ### Phase 7 — Runtime validation (real execution)
@@ -255,8 +253,7 @@ Runs when the change (fix OR feature) is **observable at runtime**
 (UI/screen/flow/integration): passing tsc/lint proves neither the fix nor the feature — only
 executing does.
 
-Launch **1 verifier agent**: `phase_prompt` with `target: "runtime"`, then the launch with the
-answered `subagent_type`, `model` and `prompt` verbatim.
+Launch **1 verifier agent**: `phase_prompt` with `target: "runtime"`.
 
 Run `nightqueue run check 07` (the artifact gate, step 6). Only move on to Phase 8 with the
 change confirmed at runtime; a field position/value or a control-flow merely ASSUMED does not pass.
@@ -296,11 +293,11 @@ Read `references/phase-9.md` now and follow it; it opens with `nightqueue run re
 It runs ONCE per attempt, after `nightqueue run report` (which records the run, so the run
 timeline has this attempt's rows), and BEFORE the final text. It runs on a delivered run, a
 `no_commit` run and a terminated run (`run_terminate`, a `gate_stop`, an artifact `MISSING`, the
-loop limits). It does NOT run at a gate pause (Phase 1, the Confirmation pause, the
-usage-coverage gate of Phase 3 or 5, NEEDS-DEVICE): the resumed run reflects at its end.
+loop limits). It does NOT run at a gate pause (Phase 1, the Confirmation pause, the coverage gate
+of Phase 3, the usage-coverage gate of Phase 3 or 5, NEEDS-DEVICE): the resumed run reflects at
+its end.
 
-Launch: `phase_prompt` with `target: "reflector"`, then the launch with the answered
-`subagent_type` and `model`, and the `prompt` verbatim.
+Launch: `phase_prompt` with `target: "reflector"`.
 
 There is no artifact, no `nightqueue run check` and no `run_phase_done` for this phase; the
 reflector saves the run's lessons and memories itself.

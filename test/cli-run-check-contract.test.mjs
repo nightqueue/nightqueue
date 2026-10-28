@@ -509,6 +509,25 @@ test("a second-round INVALIDATED withholds qa, pauses at a gate from `## Validat
   assert.deepEqual([decision.resume, decision.fromPhase], [true, "qa"]);
 });
 
+test("a J-258 coverage gate with an open decision records no phase and no termination, composes its notice, and the answered run resumes at architecture", async (t) => {
+  const seeded = seedRun(t, "coverage-gate-pause", readFixture("coverage-split-status-confirm"));
+  for (const phase of ["triage", "explore"]) recordPhaseDone({ projectId: seeded.projectId, slug: SLUG, phase, env: seeded.env });
+  const { out } = await runCheck(seeded.env, "03");
+  for (const prefix of ["GATE: coverage-vector-no-reason — V14", "GATE: coverage-enumeration-no-method — ", "CONFIRM: requires-user-confirmation"]) {
+    assert.ok(out.some((line) => line.startsWith(prefix)), `check 03 no longer prints ${prefix}: ${out.join("\n")}`);
+  }
+  assert.ok(!out.some((line) => line.startsWith("recorded: phase_done architecture")), out.join("\n"));
+  assert.equal(stateOf(seeded).termination, undefined);
+  const confirmation = composeGateNotice({ runDir: seeded.dir, fromArtifact: { file: "03-plan.md", section: "## Requires user confirmation" } });
+  assert.match(confirmation, /should the escape apply to every git read \(A\)/);
+  const coverage = composeGateNotice({ runDir: seeded.dir, fromArtifact: { file: "03-plan.md", section: "## Symptom coverage" } });
+  assert.match(coverage, /covered under \(A\) · not-covered under \(B\)/);
+  openDb(seeded.env).prepare("UPDATE jobs SET status = 'gate' WHERE id = ?").run(jobIdOf(seeded));
+  await applyRetry({ id: jobIdOf(seeded), note: "(A) every git read", env: seeded.env });
+  const decision = decideResume({ state: stateOf(seeded) });
+  assert.deepEqual([decision.resume, decision.fromPhase], [true, "architecture"]);
+});
+
 test("a terminal triage with a partial Brief fires no field gate and still terminates", async (t) => {
   const partial = "## Brief\n**Affected area:** src/a.mjs\n**Commit type:**\n\n";
   const seeded = seedRun(t, "terminal-partial-brief", { fixture: { type: "bug/error" }, texts: { "01-triage.md": triageWith("NEEDS-CLARIFICATION", undefined, partial) } });

@@ -376,6 +376,15 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A Phase 3 coverage gap that persists pauses for the operator instead of cancelling the
+  job.** When `run check 03` still prints `GATE: coverage-*` lines after the one architect
+  relaunch, the orchestrator now pauses the job at `gate` with ONE `run_outcome`. The notice
+  comes from `03-plan.md` `## Requires user confirmation` (or `## Symptom coverage` when there
+  is none), and the question is the `GATE:` lines plus "answer the open decision or say what
+  to adjust". The answer resumes at the architecture: one relaunch with the answer, and the
+  same lines again terminate with an open item, never a second pause. A persisting `MISSING`
+  still terminates. The architect prompt now gives each coverage row a single status and puts
+  an either/or decision in `## Requires user confirmation`.
 - **A second `INVALIDATED:` at the QA pauses for the operator, and a terminated run keeps its
   work.** After the one allowed architect relaunch, a second `INVALIDATED:` no longer
   terminates. The orchestrator pauses the job at `gate` with `run_outcome` (notice from

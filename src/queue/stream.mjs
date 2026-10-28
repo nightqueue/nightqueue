@@ -494,13 +494,13 @@ export function wholeHeadingSectionOf(text, heading) {
   return sectionWhere(text, (line) => line.trimEnd() === heading);
 }
 
-// The section whose heading, at any level from `#` to `######`, starts with the heading's title, read outside a fence; null when absent.
+// The section whose heading, at any level from `#` to `######` and in any letter case (the gate marker's own rule), starts with the heading's title, read outside a fence; null when absent.
 export function sectionOfAnyLevel(text, heading) {
-  const title = String(heading ?? "").replace(/^#+\s*/, "");
+  const title = String(heading ?? "").replace(/^#+\s*/, "").toLowerCase();
   if (title === "") return null;
   return sectionWhere(text, (line) => {
     const match = /^#{1,6}\s+(.*)$/.exec(line.trimEnd());
-    return match !== null && match[1].startsWith(title);
+    return match !== null && match[1].toLowerCase().startsWith(title);
   });
 }
 
