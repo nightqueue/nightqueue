@@ -1,7 +1,15 @@
 import { execFile, spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 
 const CALL_TIMEOUT_MS = 20000;
 const PR_VIEW_TIMEOUT_MS = 5000;
+export const GUARD_PR_VIEW_TIMEOUT_MS = 3000;
+const GUARD_PR_CONCURRENCY = 6;
+const PR_BATCH_MARGIN_MS = 500;
+const PR_BATCH_SCRIPT = fileURLToPath(new URL("./gh-pr-batch.mjs", import.meta.url));
+const GUARD_PR_UNANSWERED = `gh did not answer within ${GUARD_PR_VIEW_TIMEOUT_MS / 1000} s`;
+const GUARD_PR_BUDGET_SPENT = `the guard's ${GUARD_PR_VIEW_TIMEOUT_MS / 1000} s for gh were spent on other pull requests`;
+const PR_VIEW_FIELDS = "state,mergedAt,mergeCommit,mergeable,isDraft";
 const PR_LIST_TIMEOUT_MS = 5000;
 const PR_LIST_LIMIT = "5";
 const PR_STATES = ["MERGED", "CLOSED", "OPEN"];
@@ -135,11 +143,84 @@ function parsePrView(text) {
   };
 }
 
+// The arguments of `gh pr view` asking for the fields `parsePrView` keeps.
+function prViewArgs(url) {
+  return ["pr", "view", String(url ?? ""), "--json", PR_VIEW_FIELDS];
+}
+
 // State of one pull request, read without blocking the event loop and never rejecting: `ok: false` means nobody could tell.
 export async function ghPrViewAsync(url, { env = process.env, execFileImpl = execFile, timeoutMs = PR_VIEW_TIMEOUT_MS, signal } = {}) {
-  const args = ["pr", "view", String(url ?? ""), "--json", "state,mergedAt,mergeCommit,mergeable,isDraft"];
-  const result = await runGhAsync(args, { env, execFileImpl, timeoutMs, signal });
+  const result = await runGhAsync(prViewArgs(url), { env, execFileImpl, timeoutMs, signal });
   return result.ok ? parsePrView(result.stdout) : { ok: false };
+}
+
+// Why a gh call that did not succeed gave no answer, in words a refusal can carry.
+function ghFailure(result, timeoutMs) {
+  if (result.missing) return "gh is not installed";
+  if (result.unfinished) return `gh did not answer within ${timeoutMs / 1000} s`;
+  return `gh failed: ${firstLine(result.stderr)}`;
+}
+
+// The raw gh answer to one `gh pr view` in the time left before a deadline, an unfinished one once it has passed.
+function prViewBefore(url, { env, deadline }) {
+  const left = deadline - Date.now();
+  if (left <= 0) return Promise.resolve({ ok: false, stdout: "", stderr: "", missing: false, unfinished: true });
+  return runGhAsync(prViewArgs(url), { env, timeoutMs: left });
+}
+
+// The raw gh answers to `gh pr view` of several pull requests, a few at a time and all within one deadline, never rejecting.
+export async function ghPrViewResults(urls, { env = process.env, timeoutMs = GUARD_PR_VIEW_TIMEOUT_MS, concurrency = GUARD_PR_CONCURRENCY } = {}) {
+  const list = Array.isArray(urls) ? urls : [];
+  const deadline = Date.now() + timeoutMs;
+  const results = new Array(list.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < list.length) {
+      const index = next;
+      next += 1;
+      results[index] = await prViewBefore(list[index], { env, deadline });
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(concurrency, list.length) }, worker));
+  return results;
+}
+
+// Each URL with the same unread state and why nobody could tell it.
+function unreadStates(urls, why) {
+  return new Map(urls.map((url) => [url, { ok: false, why }]));
+}
+
+// The raw gh answers of the batch child (gh-pr-batch.mjs), or why it gave none.
+function runPrBatch(urls, { env, spawnSyncImpl, timeoutMs }) {
+  let result;
+  try {
+    const input = JSON.stringify({ urls, timeoutMs });
+    result = spawnSyncImpl(process.execPath, [PR_BATCH_SCRIPT], { input, encoding: "utf8", env, timeout: timeoutMs + PR_BATCH_MARGIN_MS });
+  } catch (err) {
+    return { ok: false, why: `the gh batch could not start: ${err?.message ?? String(err)}` };
+  }
+  if (result?.error?.code === "ETIMEDOUT" || result?.signal) return { ok: false, why: GUARD_PR_UNANSWERED };
+  const results = parseJson(result?.stdout);
+  if (result?.status === 0 && Array.isArray(results) && results.length === urls.length) return { ok: true, results };
+  return { ok: false, why: `the gh batch failed: ${firstLine(result?.stderr ?? result?.error?.message)}` };
+}
+
+// The state one raw gh answer of the batch gives, or why it gives none.
+function readPrResult(result) {
+  if (result?.ok !== true) return { ok: false, why: ghFailure(result ?? {}, GUARD_PR_VIEW_TIMEOUT_MS) };
+  const view = parsePrView(result.stdout);
+  return view.ok ? view : { ok: false, why: "gh answered no readable pull request state" };
+}
+
+// States of several pull requests read at once for a guard that must answer now, the gh calls run in parallel by one child within the time given; never throws, and each `ok: false` carries why nobody could tell.
+export function ghPrStatesSync(urls, { env = process.env, spawnSyncImpl = spawnSync, timeoutMs = GUARD_PR_VIEW_TIMEOUT_MS } = {}) {
+  const list = Array.isArray(urls) ? urls.map(String) : [];
+  if (env?.NIGHTQUEUE_NO_PR_CHECK === "1") return unreadStates(list, "pull request checks are off (NIGHTQUEUE_NO_PR_CHECK=1)");
+  if (!(Number.isFinite(timeoutMs) && timeoutMs > 0)) return unreadStates(list, GUARD_PR_BUDGET_SPENT);
+  if (list.length === 0) return new Map();
+  const batch = runPrBatch(list, { env, spawnSyncImpl, timeoutMs });
+  if (!batch.ok) return unreadStates(list, batch.why);
+  return new Map(list.map((url, index) => [url, readPrResult(batch.results[index])]));
 }
 
 // Parses a json text, answering null instead of throwing.

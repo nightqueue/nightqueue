@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { test } from "node:test";
 import { newId } from "../../src/config/ids.mjs";
@@ -11,9 +11,13 @@ import { consentBash, neverBashReason } from "../../src/queue/operator-bands.mjs
 import { recordConsent } from "../../src/queue/operator-consent.mjs";
 import { homeEntry, homeOwner, homeSegment } from "../../src/queue/operator-home.mjs";
 import { saveRunState } from "../../src/queue/resume.mjs";
+import { isolatedHostVars } from "../../test-support/host.mjs";
 import { ensureProject, makeDir, makeHome, makeProject, projectIdOf, seedClosedJob, seedDoneJob } from "../../test-support/memory.mjs";
 
 const WORKER = "test:operator-home";
+const HARDENED = "-c core.fsmonitor=false -c core.hooksPath=/dev/null";
+const HARDENED_WORDS = HARDENED.split(" ");
+const READ_HARDENED = /never \(a worktree under the nightqueue home is read only hardened.*core\.fsmonitor=false -c core\.hooksPath=\/dev\/null/;
 
 // A home at `~/.nightqueue` of its own user home, one registered checkout, one run dir and one worktree of a project.
 function homeFixture(t) {
@@ -145,7 +149,7 @@ test("consentBash asks a home-maintenance consent for a removal, never a run or 
   assert.equal(consentBash(`git -C ${checkout} worktree prune`, { cwd: home, env }).kind, "home-maintenance");
   assert.equal(consentBash("git worktree prune", { cwd: checkout, env }).kind, "home-maintenance");
   assert.match(consentBash("git worktree prune", { cwd: home, env }).shape, /runs in the project's checkout/);
-  assert.match(consentBash(`git -C${checkout} worktree prune`, { cwd: home, env }).shape, /runs in the project's checkout/);
+  assert.match(consentBash(`git -C${checkout} worktree prune`, { cwd: home, env }).shape, /is refused: a git global option other than/);
   assert.match(consentBash(`cd ${worktree} && git worktree prune`, { env }).shape, /runs in the project's checkout/);
   assert.match(consentBash("git worktree prune", { cwd: worktree, env }).shape, /runs in the project's checkout/);
   assert.match(consentBash(`git -C ${checkout} worktree prune --expire`, { cwd: home, env }).shape, /runs in the project's checkout/);
@@ -209,13 +213,18 @@ test("an open job's run dir or worktree is never removed, and the refusal names 
     cancelled: jobAt(env, { projectId, slug: "dropped", status: "cancelled" }),
     failed: jobAt(env, { projectId, slug: "broken", status: "failed" }),
     done: seedDoneJob(env, { slug: "shipped" }),
+    noChange: seedDoneJob(env, { slug: "unchanged", prUrl: null }),
     closed: seedClosedJob(env, { slug: "merged" }),
   };
-  for (const slug of ["dropped", "broken", "shipped", "merged", "orphan"]) {
+  for (const slug of ["dropped", "broken", "unchanged", "merged", "orphan"]) {
     const { run, worktree } = entriesOf(home, projectId, slug);
     assert.equal(neverBashReason(`rm -rf ${run}`, { cwd: home, env }), null, slug);
     assert.equal(neverBashReason(`git -C ${checkout} worktree remove ${worktree}`, { cwd: home, env }), null, slug);
   }
+  const unconfirmed = new RegExp(`belongs to J-${free.done} \\(done, pull request https://github\\.com/acme/api/pull/7 could not be confirmed merged or closed: pull request checks are off`);
+  const shipped = entriesOf(home, projectId, "shipped");
+  assert.match(neverBashReason(`rm -rf ${shipped.run}`, { cwd: home, env }), unconfirmed);
+  assert.match(neverBashReason(`git -C ${checkout} worktree remove ${shipped.worktree}`, { cwd: home, env }), unconfirmed);
   assert.equal(neverBashReason(`git -C ${checkout} worktree prune`, { cwd: home, env }), null);
   retryJob(free.cancelled, {}, env);
   assert.match(neverBashReason(`rm -rf ${join(home, "runs", projectId, "dropped")}`, { cwd: home, env }), new RegExp(`belongs to J-${free.cancelled} \\(pending\\)`));
@@ -350,17 +359,89 @@ test("a consent recorded while a job was cancelled is refused at run time once t
   assert.match(bash(env, { command: `rm -rf ${run}`, cwd: home }), new RegExp(`never \\(.*belongs to J-${id} \\(pending\\)\\)`));
 });
 
-test("git reads of a worktree under the home are free, and nothing else runs there", (t) => {
+// Points the fixture's gh at the fake CLI answering one pull request state (none makes it fail), with the pull request check on.
+function fakeGh(t, env, { state = null, sleepMs = null } = {}) {
+  const vars = isolatedHostVars(makeDir(t, "operator-home-gh"));
+  delete env.NIGHTQUEUE_NO_PR_CHECK;
+  delete env.NIGHTQUEUE_FAKE_GH_PR_STATE;
+  delete env.NIGHTQUEUE_FAKE_GH_SLEEP_MS;
+  Object.assign(env, { NIGHTQUEUE_GH_BIN: vars.NIGHTQUEUE_GH_BIN, NIGHTQUEUE_FAKE_GH_LOG: vars.NIGHTQUEUE_FAKE_GH_LOG });
+  if (state) env.NIGHTQUEUE_FAKE_GH_PR_STATE = state;
+  if (sleepMs) env.NIGHTQUEUE_FAKE_GH_SLEEP_MS = String(sleepMs);
+  return vars.NIGHTQUEUE_FAKE_GH_LOG;
+}
+
+test("a done job's run dir and worktree stay never while its pull request is not merged or closed, and the refusal names the job and the pull request", (t) => {
+  const { env, checkout, home, project, alphaId } = sessionFixture(t);
+  const url = "https://github.com/acme/api/pull/7";
+  const done = seedDoneJob(env, { slug: "shipped", prUrl: url });
+  const { run, worktree } = entriesOf(home, alphaId, "shipped");
+  const remove = `git -C ${checkout} worktree remove ${worktree}`;
+  const held = (words) => new RegExp(`never \\(.*belongs to J-${done} \\(done, pull request ${url.replaceAll(".", "\\.")} ${words}`);
+  const assertHeld = (words) => {
+    assert.match(bash(env, { command: `rm -rf ${run}`, cwd: home }), held(words));
+    assert.match(bash(env, { command: remove, cwd: home }), held(words));
+    assert.throws(() => grant(env, { project, scope: `rm -rf ${run}` }), new RegExp(`belongs to J-${done} \\(done, pull request `));
+  };
+  fakeGh(t, env, { state: "OPEN" });
+  assertHeld("is open\\)");
+  env.NIGHTQUEUE_FAKE_GH_PR_DRAFT = "1";
+  assertHeld("is a draft\\)");
+  delete env.NIGHTQUEUE_FAKE_GH_PR_DRAFT;
+  fakeGh(t, env);
+  assertHeld("could not be confirmed merged or closed: gh failed: ");
+  env.NIGHTQUEUE_GH_BIN = join(home, "no-gh-here");
+  assertHeld("could not be confirmed merged or closed: gh is not installed\\)");
+  env.NIGHTQUEUE_NO_PR_CHECK = "1";
+  assertHeld("could not be confirmed merged or closed: pull request checks are off");
+  for (const state of ["MERGED", "CLOSED"]) {
+    fakeGh(t, env, { state });
+    assert.match(bash(env, { command: `rm -rf ${run}`, cwd: home }), /needs consent \(home-maintenance rm -rf /, state);
+    assert.match(bash(env, { command: remove, cwd: home }), /needs consent \(home-maintenance git -C /, state);
+  }
+  grant(env, { project, scope: `rm -rf ${run}` });
+  assert.equal(bash(env, { command: `rm -rf ${run}`, cwd: home }), null);
+  fakeGh(t, env, { state: "OPEN" });
+  assert.match(bash(env, { command: `rm -rf ${run}`, cwd: home }), held("is open\\)"));
+});
+
+test("a done job's pull request that is not on GitHub or does not answer in time holds its entries, and one with no pull request does not", (t) => {
+  const { env, home, alphaId } = sessionFixture(t);
+  const foreign = seedDoneJob(env, { slug: "foreign", prUrl: "https://gitlab.com/acme/api/-/merge_requests/7" });
+  const slow = seedDoneJob(env, { slug: "slow", prUrl: "https://github.com/acme/api/pull/8" });
+  seedDoneJob(env, { slug: "unchanged", prUrl: null });
+  const log = fakeGh(t, env, { state: "MERGED", sleepMs: 8000 });
+  const runOf = (slug) => entriesOf(home, alphaId, slug).run;
+  assert.match(bash(env, { command: `rm -rf ${runOf("foreign")}`, cwd: home }), new RegExp(`belongs to J-${foreign} \\(done, pull request .* could not be confirmed merged or closed: it is not a GitHub pull request URL\\)`));
+  assert.equal(existsSync(log), false, "gh was asked about a pull request URL that is not GitHub's");
+  const started = Date.now();
+  assert.match(bash(env, { command: `rm -rf ${runOf("slow")}`, cwd: home }), new RegExp(`belongs to J-${slow} \\(done, pull request .* could not be confirmed merged or closed: gh did not answer within 3 s\\)`));
+  assert.ok(Date.now() - started < 5000, "the guard waited on gh past the hook's own 5 s timeout");
+  assert.match(bash(env, { command: `rm -rf ${runOf("unchanged")}`, cwd: home }), /needs consent \(home-maintenance rm -rf /);
+});
+
+test("hardened git reads of a worktree under the home are free, and nothing else runs there", (t) => {
   const { env, checkout, home, alphaId } = sessionFixture(t);
   const worktree = linkedTree({ checkout, home, projectId: alphaId, slug: "fix-login" });
   const reads = [
-    `git -C ${worktree} --no-optional-locks status`,
-    `git -C ${worktree} log --oneline -5`,
-    `git -C ${worktree} diff`,
-    `git -C ${worktree} stash list`,
-    `cd ${worktree} && git diff`,
+    `git -C ${worktree} ${HARDENED} --no-optional-locks status --ignore-submodules=all`,
+    `git -C ${worktree} ${HARDENED} log --oneline -5`,
+    `git -C ${worktree} ${HARDENED} diff --ignore-submodules=all`,
+    `git -C ${worktree} ${HARDENED} stash list`,
   ];
   for (const command of reads) assert.equal(bash(env, { command, cwd: home }), null, command);
+  assert.notEqual(bash(env, { command: `cd ${worktree} && git ${HARDENED} diff --ignore-submodules=all`, cwd: home }), null);
+  const unhardened = [
+    `git -C ${worktree} --no-optional-locks status`,
+    `git -C ${worktree} log --oneline -5`,
+    `git -C ${worktree} -c core.hooksPath=/dev/null -c core.fsmonitor=false diff --ignore-submodules=all`,
+    `git -C ${worktree} ${HARDENED} diff`,
+    `git -C ${worktree} ${HARDENED} diff --ignore-submodules=all --submodule=diff`,
+    `git -C ${worktree} ${HARDENED} log -p --submodule=diff`,
+    `git -C ${worktree} ${HARDENED} ls-files --recurse-submodules`,
+  ];
+  for (const command of unhardened) assert.match(bash(env, { command, cwd: home }), READ_HARDENED, command);
+  assert.match(bash(env, { command: `cd ${worktree} && git diff`, cwd: home }), /is only read as `git -C <worktree> -c core\.fsmonitor=false/);
   assert.match(bash(env, { command: `git -C ${worktree} commit -am x`, cwd: home }), /never \(naming a never-band path/);
   assert.match(bash(env, { command: `git -C ${worktree} log ${join(home, "logs")}`, cwd: home }), /never/);
   assert.match(bash(env, { command: `cd ${worktree} && git commit -am x`, cwd: home }), /is only read/);
@@ -388,14 +469,19 @@ test("a worktree whose .git leaves git's admin dir in the checkout is never read
   assert.match(bash(env, { command: `git -C ${unlinked} log`, cwd: home }), untrusted);
 });
 
-test("homeSegment classifies a stash, a format-patch or a copy out of an entry as salvage, and nothing into one", (t) => {
+test("homeSegment classifies a format-patch or a copy out of an entry as salvage, a stash as never, and nothing into one", (t) => {
   const { env, checkout, home, run } = homeFixture(t);
   const worktree = linkedTree({ checkout, home, projectId: projectIdOf(env, "alpha"), slug: "fix-login" });
-  const salvage = [
+  const stashes = [
+    ["git", "-C", worktree, ...HARDENED_WORDS, "stash"],
+    ["git", "-C", worktree, ...HARDENED_WORDS, "stash", "push", "-m", "keep"],
+    ["git", "-C", worktree, ...HARDENED_WORDS, "stash", "-u"],
     ["git", "-C", worktree, "stash"],
-    ["git", "-C", worktree, "stash", "push", "-m", "keep"],
-    ["git", "-C", worktree, "stash", "-u"],
+  ];
+  for (const words of stashes) assert.match(homeSegment(words, { env })?.never ?? "", /is never stashed/, words.join(" "));
+  const salvage = [
     ["git", "-C", worktree, "format-patch", "-1", "-o", checkout],
+    ["git", "-C", worktree, ...HARDENED_WORDS, "format-patch", "-1", "-o", checkout],
     ["cp", join(worktree, "src", "a.js"), join(checkout, "src", "a.js")],
     ["cp", "-rp", join(run, "sub"), join(checkout, "sub")],
   ];
@@ -411,12 +497,13 @@ test("homeSegment classifies a stash, a format-patch or a copy out of an entry a
     ["cp", join(worktree, "a.js")],
   ];
   for (const words of refused) assert.deepEqual(homeSegment(words, { env }), { unclassified: true }, words.join(" "));
-  assert.equal(homeSegment(["git", "-C", worktree, "stash", "list"], { env }).kind, "read");
+  assert.equal(homeSegment(["git", "-C", worktree, ...HARDENED_WORDS, "stash", "list"], { env }).kind, "read");
+  assert.match(homeSegment(["git", "-C", worktree, "stash", "list"], { env }).never, /read only hardened/);
   assert.match(homeSegment(["sudo", "cp", join(worktree, "a.js"), checkout], { start: 1, env }).never, /one bare command/);
-  assert.match(homeSegment(["git", "-C", worktree, "stash"], { env, nested: true }).never, /one bare command/);
+  assert.match(homeSegment(["git", "-C", worktree, "format-patch", "-1", "-o", checkout], { env, nested: true }).never, /one bare command/);
 });
 
-test("salvage from a closed, cancelled or ownerless job's worktree is consentable; from an open, done or failed one never", (t) => {
+test("salvage from a closed, cancelled or ownerless job's worktree is consentable; from an open, done or failed one never; a stash never", (t) => {
   const { env, checkout, home, project, alphaId } = sessionFixture(t);
   jobAt(env, { projectId: alphaId, slug: "dropped", status: "cancelled" });
   seedClosedJob(env, { slug: "merged" });
@@ -424,25 +511,30 @@ test("salvage from a closed, cancelled or ownerless job's worktree is consentabl
   const done = seedDoneJob(env, { slug: "shipped" });
   const failed = jobAt(env, { projectId: alphaId, slug: "broken", status: "failed" });
   const tree = (slug) => linkedTree({ checkout, home, projectId: alphaId, slug });
+  const patch = (slug) => `git -C ${tree(slug)} ${HARDENED} format-patch -1 -o ${checkout}`;
+  const neverStashed = /never \(a worktree under the nightqueue home is never stashed/;
   for (const slug of ["dropped", "merged", "orphan"]) {
-    assert.match(bash(env, { command: `git -C ${tree(slug)} stash`, cwd: home }), /needs consent \(git-write git -C /, slug);
+    assert.match(bash(env, { command: patch(slug), cwd: home }), /needs consent \(git-write git -C /, slug);
+    assert.match(bash(env, { command: `git -C ${tree(slug)} ${HARDENED} stash`, cwd: home }), neverStashed, slug);
   }
   grant(env, { project, kind: "git-write", scope: "git stash" });
-  assert.equal(bash(env, { command: `git -C ${tree("dropped")} stash`, cwd: home }), null);
-  assert.equal(bash(env, { command: `git -C ${tree("merged")} stash push -m keep`, cwd: home }), null);
-  assert.match(bash(env, { command: `git -C ${join(tree("merged"), "src")} stash push -m keep`, cwd: home }), /never \(naming a never-band path/);
+  assert.match(bash(env, { command: `git -C ${tree("dropped")} ${HARDENED} stash`, cwd: home }), neverStashed);
+  assert.match(bash(env, { command: `git -C ${tree("merged")} ${HARDENED} stash push -m keep`, cwd: home }), neverStashed);
+  assert.match(bash(env, { command: `git -C ${tree("dropped")} stash`, cwd: home }), neverStashed);
+  assert.match(bash(env, { command: `git -C ${join(tree("merged"), "src")} ${HARDENED} stash push -m keep`, cwd: home }), /never \(naming a never-band path/);
   assert.match(bash(env, { command: `git -C ${tree("orphan")} format-patch -1 -o ${checkout}`, cwd: home }), /needs consent \(git-write/);
-  assert.match(bash(env, { command: `git -C ${tree("waiting")} stash`, cwd: home }), new RegExp(`never \\(.*belongs to J-${gate} \\(gate\\)`));
+  assert.match(bash(env, { command: patch("waiting"), cwd: home }), new RegExp(`never \\(.*belongs to J-${gate} \\(gate\\)`));
   for (const [slug, id, status] of [["shipped", done, "done"], ["broken", failed, "failed"]]) {
     const reason = new RegExp(`salvage copies from a closed or cancelled job; .* belongs to J-${id} \\(${status}\\)`);
-    assert.match(bash(env, { command: `git -C ${tree(slug)} stash`, cwd: home }), reason);
+    assert.match(bash(env, { command: patch(slug), cwd: home }), reason);
     assert.match(bash(env, { command: `cd ${checkout} && cp ${tree(slug)}/a.js a.js`, cwd: home }), reason);
   }
-  assert.match(bash(env, { command: `cd ${tree("dropped")} && git stash`, cwd: home }), /`git -C <worktree> stash`/);
-  assert.match(bash(env, { command: `git -C ${tree("dropped")} stash pop`, cwd: home }), /never \(naming a never-band path/);
+  assert.match(bash(env, { command: `cd ${tree("dropped")} && git stash`, cwd: home }), /salvaged with a git-write consent \(`git -C <worktree> format-patch`, never `stash`\)/);
+  assert.match(bash(env, { command: `git -C ${tree("dropped")} ${HARDENED} stash pop`, cwd: home }), /never \(naming a never-band path/);
   const beta = makeProject(t, env, "beta");
   const betaTree = linkedTree({ checkout: beta, home, projectId: projectIdOf(env, "beta"), slug: "other" });
-  assert.match(bash(env, { command: `git -C ${betaTree} stash`, cwd: home }), /needs consent \(git-write/);
+  assert.match(bash(env, { command: `git -C ${betaTree} ${HARDENED} format-patch -1 -o ${checkout}`, cwd: home }), /needs consent \(git-write/);
+  assert.match(bash(env, { command: `git -C ${betaTree} ${HARDENED} stash`, cwd: home }), neverStashed);
 });
 
 test("a copy out of a worktree runs under a run consent, and nothing writes into a worktree", (t) => {

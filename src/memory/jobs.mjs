@@ -1312,7 +1312,7 @@ export function listOpenJobs(env = process.env, db = openDb(env)) {
 export function listHomeHolders(projectId, env = process.env, db = openDb(env)) {
   return db
     .prepare(
-      `SELECT id, slug, status, close_status, start_worktree FROM jobs
+      `SELECT id, slug, status, close_status, start_worktree, pr_url FROM jobs
         WHERE project_id = ? AND (status IN ('pending', 'running', 'gate', 'done', 'failed') OR close_status = 'closing')`,
     )
     .all(requireProjectId(projectId));

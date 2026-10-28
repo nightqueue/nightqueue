@@ -782,7 +782,9 @@ an open job still runs in as `legacy-in-use`, and `nightqueue doctor --fix` runs
 (`rm -rf <home>/runs/<project id>/<slug>`, `git -C <checkout> worktree remove <worktree>`) or
 runs `git -C <checkout> worktree prune` only after a `home-maintenance` consent of that exact
 command; the guard refuses, naming the job (`belongs to J-248 (gate)`), an entry whose job is
-`pending`, `running`, `gate` or being closed, and never removes `runs/`, `worktrees/` or a
+`pending`, `running`, `gate` or being closed, or `done` with a pull request gh does not confirm
+merged or closed (`belongs to J-248 (done, pull request <url> is open)`; a gh failure or
+`NIGHTQUEUE_NO_PR_CHECK=1` holds too), and never removes `runs/`, `worktrees/` or a
 project's whole directory (see [Operator](cli.md#open)).
 
 **Ownership and orphans.** A claim is one atomic `UPDATE` inside SQLite, so two
