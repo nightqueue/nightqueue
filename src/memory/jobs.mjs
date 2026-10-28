@@ -78,6 +78,8 @@ const TRUNCATION_FLAGS = { notice_md: "notice_truncated", result: "result_trunca
 // Host-command counters the view omits at zero, the same way a null one is left out: a regression shows only once there is one to show.
 const JOB_VIEW_ZERO_OMITTED = ["bash_timeouts", "tasks_backgrounded", "tasks_killed"];
 export const VIEW_TEXT_LIMIT = 500;
+// The longest operator answer, in code points, the resumed prompt carries; a retry refuses a longer one.
+export const OPERATOR_NOTE_LIMIT = 4000;
 const LIST_LIMIT_RANGE = { min: 1, max: 50, fallback: 10 };
 
 // Requires a non-empty text field, because the column is NOT NULL and a raw SQLite error helps nobody.

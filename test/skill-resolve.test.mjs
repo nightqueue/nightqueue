@@ -3,6 +3,7 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { test } from "node:test";
 import { PHASE_TARGETS } from "../src/mcp/phase-context.mjs";
 import { LESSON_TARGET_OF, PROMPT_TARGETS } from "../src/mcp/phase-prompt.mjs";
+import { evaluateCheck } from "../src/queue/check-contract.mjs";
 import { RESUME_PHASE_ORDER } from "../src/queue/resume.mjs";
 import { AGENT_MODELS, PIPELINE_CONSTANTS } from "../src/queue/routing.mjs";
 import { RUN_OUTCOME_STATUSES } from "../src/queue/run-state.mjs";
@@ -154,6 +155,39 @@ test("Phase 5 pauses a usage-coverage-only gate and never terminates it, and its
   assert.ok(folded(QA_PHASE).includes("a persisting usage-coverage-only GATE pauses (SKILL.md Phase 5), never terminates"), "qa-phase.md no longer says a usage-coverage-only gate pauses");
   assert.ok(passageAt("7. **Records.**").includes("a gate pause of Phase 1, 3, 5 or 7"), "the records no longer list the Phase 5 pause");
   assert.ok(folded(SKILL).includes("the usage-coverage gate of Phase 3 or 5"), "Phase 10 no longer skips the reflection at the Phase 5 pause");
+});
+
+test("Phase 3 pauses a persisting coverage gate, never terminates it, and its answer never pauses twice", () => {
+  const phase3 = folded(SKILL.slice(SKILL.indexOf("### Phase 3 —"), SKILL.indexOf("### Phase 4 —")));
+  const missingRow = phase3.slice(phase3.indexOf("| `MISSING` |"), phase3.indexOf("| `GATE: coverage-*` |"));
+  const coverageRow = phase3.slice(phase3.indexOf("| `GATE: coverage-*` |"), phase3.indexOf("| `GATE: usage-coverage-*`"));
+  assert.ok(missingRow.includes("→ inform the user and terminate (⚠️ open item)"), "a persisting MISSING no longer terminates");
+  assert.equal(missingRow.includes("coverage"), false, "the MISSING row still routes a coverage gate to the termination");
+  for (const part of ["ONE `run_outcome` for every line", '`status: "gate"`', '{ file: "03-plan.md", section: "## Requires user confirmation" }', '`"## Symptom coverage"`', '"answer the open decision or say what to adjust"', "never terminate"]) {
+    assert.ok(coverageRow.includes(part), `the coverage row lost ${part}`);
+  }
+  assert.equal(coverageRow.includes("→ terminate"), false, "a persisting coverage gate still leads to a termination");
+  assert.ok(phase3.indexOf("| `GATE: coverage-*` |") < phase3.indexOf("| `CONFIRM: requires-user-confirmation`"), "the CONFIRM row matches before the coverage row, so one answer pauses twice");
+  assert.ok(phase3.includes("A coverage pause's answer resumes here: `run check 03` first, then relaunch the architect once (🔁, `note` = answer + lines)"), "the coverage pause's answer no longer relaunches the architect with the answer");
+  assert.ok(phase3.includes("the same `GATE:` lines → terminate (⚠️ open item), never pause twice on them"), "the coverage pause may pause twice on the same lines");
+  assert.ok(phase3.includes("never pause twice on them (same gate code); else → its row, relaunch spent."), "the coverage pause's answer compares the lines by their evidence text, not by gate code");
+  assert.ok(folded(SKILL).includes("the coverage gate of Phase 3,"), "Phase 10 no longer skips the reflection at the Phase 3 coverage pause");
+  const architect = folded(promptTemplate("architect"));
+  assert.ok(architect.includes("Each row carries ONE status, `covered` or `not-covered`: the one the plan ships by default."), "the architect prompt lost the single-status rule");
+  assert.ok(architect.includes("An either/or decision goes to `## Requires user confirmation`, never into a row's Status or Reason."), "the architect prompt lets an either/or land in a coverage row");
+  assert.ok(architect.includes("drops the answered `## Requires user confirmation`; keep that section only for a NEW question."), "an answered relaunch keeps the settled confirmation");
+});
+
+test("the architect prompt's symptom coverage table carries only statuses the check accepts", () => {
+  const template = promptTemplate("architect");
+  const section = template.slice(template.indexOf("## Symptom coverage"), template.indexOf("Rules: list ALL the paths"));
+  const table = section.split("\n").filter((line) => line.startsWith("|")).join("\n");
+  const plan = ["## Implementation plan", "- a fix.", "", "## Symptom coverage", '**How I enumerated:** `grep -rn "x" src`', "", table, "", "## Requires user confirmation", "- a trade-off.", "", "## Assumptions", "- [P1] a.", "", "## Pre-mortem", "- [PM1] a.", "", "## Identified risks", "- [R1] a."].join("\n");
+  const triage = readFileSync(new URL("fixtures/check/coverage-vector-no-reason/01-triage.md", import.meta.url), "utf8");
+  const { lines } = evaluateCheck({ check: "03", texts: { "01-triage.md": triage, "03-plan.md": plan } });
+  assert.equal(lines[0], "OK", lines.join("\n"));
+  assert.ok(table.includes("| covered |") && table.includes("| not-covered |"), "the template table lost a status example");
+  assert.equal(lines.some((line) => line.startsWith("GATE: coverage-vector-no-reason")), false, lines.join("\n"));
 });
 
 test("a second INVALIDATED pauses at a gate, its answer has three paths, and no skill text terminates without a commit", () => {

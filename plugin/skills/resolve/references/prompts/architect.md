@@ -73,6 +73,8 @@ Declare `**Diff axis:**` and `**Always-gate class:**` here too when `## Usage co
 | V2 | [file:line · event · input] | not-covered | [why + trade-off taken to ## Requires user confirmation] |
 
 Rules: list ALL the paths that produce the symptom of the ticket, not only the reproduced one. `not applicable`/`n/a` is FORBIDDEN — a single path is listed with how you confirmed it is the only one. A path that literally produces the symptom of the ticket is never "outside the reported symptom". Every `not-covered` vector requires `## Requires user confirmation` in the SAME plan.
+Each row carries ONE status, `covered` or `not-covered`: the one the plan ships by default. An either/or decision goes to `## Requires user confirmation`, never into a row's Status or Reason.
+A relaunch whose note carries the operator's answer applies it to the rows and drops the answered `## Requires user confirmation`; keep that section only for a NEW question.
 The one exit without a table: when the Type says bug/error but the brief/triage describes no observable symptom, write only `**Type mismatch:** the request declared bug/error, but <literal quote from the brief/triage that shows the absence of a symptom>`. The quote is mandatory: a claim without a quoted excerpt is an escape.
 
 ## Usage coverage  (mandatory when the Type is bug/error and the diff touches 2+ scenarios of the access map, or when the always-gate class is yes)

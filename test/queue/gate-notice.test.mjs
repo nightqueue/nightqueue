@@ -83,6 +83,15 @@ test("a section at another heading level is found by its title, and the exact le
   assert.equal(deeper, "## Requires user confirmation\n\n#### Open items for later\n- deeper");
 });
 
+test("a confirmation heading in another letter case is found, the same rule the gate marker reads it by", (t) => {
+  const runDir = makeRunDir(t);
+  for (const heading of ["## Requires User Confirmation", "## requires user confirmation"]) {
+    writeFileSync(join(runDir, "03-plan.md"), `## Implementation plan\nDo it.\n\n${heading}\n1. Approve C1?\n\n## Assumptions\n- none\n`);
+    const notice = composeGateNotice({ runDir, fromArtifact: { file: "03-plan.md", section: "## Requires user confirmation" } });
+    assert.equal(notice, `${heading}\n1. Approve C1?`);
+  }
+});
+
 test("a path, a missing file, a missing section, a non-heading section and an empty call are refused", (t) => {
   const runDir = makeRunDir(t);
   const compose = (fromArtifact, question) => () => composeGateNotice({ runDir, jobId: 7, fromArtifact, question });

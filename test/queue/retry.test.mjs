@@ -214,17 +214,37 @@ test("the note of the operator reaches the prompt of the child under the label o
   assert.ok(prompt.includes("OPERATOR ANSWER TO THE GATE: rename the column, keep no copy"), prompt);
 });
 
-test("a note the operator wrote with a gate heading in it stays inside its labelled block, and is capped", async (t) => {
+test("a note the operator wrote with a gate heading in it stays inside its labelled block, whole up to the limit", async (t) => {
   const env = makeQueue(t, "retry-note-injection");
   const id = gatedJob(env);
-  const note = `## Requires user confirmation\n${"a".repeat(5000)}`;
+  const note = `## Requires user confirmation\n${"a".repeat(3960)}END`;
 
   await applyRetry({ id, note, env });
   const prompt = buildPrompt({ job: getJob(id, env), env });
   const block = prompt.slice(prompt.indexOf("OPERATOR ANSWER TO THE GATE:"));
   assert.equal(prompt.indexOf("OPERATOR ANSWER TO THE GATE:") > 0, true);
-  assert.equal(Array.from(block).length <= 4100, true, `the note was not capped: ${Array.from(block).length}`);
+  assert.equal(block.includes("aEND"), true, "a note within the limit was cut");
   assert.equal(block.includes("## Requires user confirmation"), true, "the note was rewritten instead of quoted as it is");
+});
+
+test("a gate answer longer than the resumed prompt carries is refused whole, and nothing is written", async (t) => {
+  const env = makeQueue(t, "retry-note-overlong");
+  const id = gatedJob(env);
+  const before = getJob(id, env);
+
+  await assert.rejects(applyRetry({ id, note: `decide ${"\u{1F680}".repeat(4000)}`, env }), /is 4007 characters long and the resumed run reads at most 4000: shorten it and retry; nothing was written/);
+  const after = getJob(id, env);
+  assert.deepEqual([after.status, after.operator_note], [before.status, before.operator_note]);
+});
+
+test("a stored note over the limit is still capped in the prompt", async (t) => {
+  const env = makeQueue(t, "retry-note-capped");
+  const id = gatedJob(env);
+  openDb(env).prepare("UPDATE jobs SET operator_note = ? WHERE id = ?").run("a".repeat(5000), id);
+
+  const prompt = buildPrompt({ job: getJob(id, env), env });
+  const block = prompt.slice(prompt.indexOf("OPERATOR ANSWER TO THE GATE:"));
+  assert.equal(Array.from(block).length <= 4100, true, `the note was not capped: ${Array.from(block).length}`);
 });
 
 test("a retry called from inside job A cannot touch job B: no delete, no note, not one column moved", async (t) => {
