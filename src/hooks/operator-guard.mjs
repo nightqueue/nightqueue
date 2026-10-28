@@ -11,6 +11,11 @@ import {
   describeMainBashList,
   describeReadDenial,
   describeSubagentBashList,
+  hasControlChar,
+  hasUnquotedCaret,
+  hasUnquotedForeignBlank,
+  hasUnquotedHash,
+  hasUnquotedParen,
   mainBashAllowed,
   pipelineAgent,
   readRefusal,
@@ -20,6 +25,7 @@ import {
 } from "../queue/operator-scope.mjs";
 
 const WRITE_TOOLS = new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
+// Claude Code 2.1.3xx ships neither Grep nor Glob; the operator searches with the hardened `git -C <checkout> … grep`.
 const READ_TOOLS = new Set(["Read", "Grep", "Glob"]);
 const AGENT_TOOLS = new Set(["Agent", "Task"]);
 const INPUT_REQUIRED_TOOLS = new Set([...WRITE_TOOLS, "Bash", ...AGENT_TOOLS]);
@@ -97,8 +103,13 @@ function freeBash(command, { mainThread, env }) {
 function bashReason(input, { mainThread, env }) {
   const command = input.tool_input.command;
   if (typeof command !== "string" || command.trim() === "") return `${OPERATOR_GUARD}: this Bash call carries no command`;
+  if (hasUnquotedForeignBlank(command)) return `${OPERATOR_GUARD}: never (a blank other than a space or a tab outside quotes, such as a form feed or a no-break space, joins words in zsh that the guard reads apart: separate words with plain spaces): no consent covers it`;
+  if (hasControlChar(command)) return `${OPERATOR_GUARD}: never (a control character other than a tab or a newline, such as a NUL byte at which zsh cuts a word short of the one the guard judged: drop it): no consent covers it`;
   const never = neverBashReason(command, { cwd: input.cwd, env });
   if (never) return `${OPERATOR_GUARD}: never (${never}): no consent covers it`;
+  if (hasUnquotedParen(command)) return `${OPERATOR_GUARD}: never (an unquoted \`(\` or \`)\` lets zsh run a command: quote it): no consent covers it`;
+  if (hasUnquotedHash(command)) return `${OPERATOR_GUARD}: never (an unquoted \`#\` is a zsh comment that drops the rest of the command, or a pattern operator under EXTENDED_GLOB: quote it, as \`'#'\` or \`"fix #12"\`): no consent covers it`;
+  if (hasUnquotedCaret(command)) return `${OPERATOR_GUARD}: never (an unquoted \`^\` is a pattern operator under EXTENDED_GLOB anywhere in a word, so zsh can pass file names the guard never judged: quote it, as \`'HEAD^'\` or \`'^main'\`): no consent covers it`;
   if (freeBash(command, { mainThread, env })) return null;
   const request = consentBash(command, { cwd: input.cwd, env });
   if (request.free) return null;

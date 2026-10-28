@@ -87,7 +87,8 @@ function orchestratorBashReason() {
   return (
     `the orchestrator does not read the repository - hand the path to the coder / ask the verifier: ` +
     `the orchestrator of a queued job runs only its closed command list (${describeOrchestratorBashRules()}), ` +
-    "each as the bare program name followed by its subcommand (no binary path, no `git -C`/`-c`/`--git-dir`/`--work-tree`); " +
+    "each as the bare program name followed by its subcommand (no binary path, no `git -C`/`-c`/`--git-dir`/`--work-tree`; " +
+    "no unquoted `( ) * ? [ ] { } # ^`: quote it; no backslash outside single quotes, no control character but a tab, and only plain spaces or tabs between words); " +
     "hand this to the subagent of the phase and read its handoff file, or use `git diff --stat`"
   );
 }

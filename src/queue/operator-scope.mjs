@@ -1,7 +1,21 @@
 import { basename, isAbsolute } from "node:path";
 import { SHIM_NAME, SHORTCUT_SHIM_NAMES, secretsPath } from "../config/paths.mjs";
 import { registeredCheckouts } from "../memory/registry-access.mjs";
-import { FORBIDDEN_SHELL_CHARS, canonicalPath, insideRoots, isDeniedFlag, tokenize } from "./orchestrator-scope.mjs";
+import {
+  FORBIDDEN_SHELL_CHARS,
+  canonicalPath,
+  hasControlChar,
+  hasUnquotedCaret,
+  hasUnquotedForeignBlank,
+  hasUnquotedHash,
+  hasUnquotedParen,
+  insideRoots,
+  isDeniedFlag,
+  maskQuoted,
+  tokenize,
+} from "./orchestrator-scope.mjs";
+
+export { hasControlChar, hasUnquotedCaret, hasUnquotedForeignBlank, hasUnquotedHash, hasUnquotedParen };
 
 export const OPERATOR_GUARD = "operator guard";
 
@@ -58,7 +72,27 @@ const PLUGIN_NAME = "nightqueue";
 export const NIGHTQUEUE_PROGRAMS = new Set([SHIM_NAME, ...SHORTCUT_SHIM_NAMES]);
 const BLOCKING_FLAGS = ["--follow", "--foreground"];
 const SCRIPT_EXTENSION = /\.m?js$/;
-export const GIT_READ_SUBCOMMANDS = new Set(["log", "show", "diff", "blame", "ls-tree", "ls-files", "rev-parse", "branch", "status"]);
+export const GIT_READ_SUBCOMMANDS = new Set(["log", "show", "diff", "blame", "ls-tree", "ls-files", "rev-parse", "branch", "status", "grep"]);
+const GREP_LONG_FLAGS = new Set([
+  "--cached", "--exclude-standard", "--text", "--no-textconv", "--ignore-case", "--recursive", "--no-recursive", "--word-regexp",
+  "--invert-match", "--full-name", "--extended-regexp", "--basic-regexp", "--perl-regexp", "--fixed-strings", "--line-number",
+  "--column", "--files-with-matches", "--name-only", "--files-without-match", "--null", "--only-matching", "--count", "--no-color",
+  "--break", "--heading", "--show-function", "--function-context", "--and", "--or", "--not", "--all-match", "--quiet",
+]);
+const GREP_LONG_VALUES = new Set(["--max-depth", "--context", "--after-context", "--before-context", "--max-count", "--threads"]);
+const GREP_COLOR = /^--color=(never|always|auto)$/;
+const GREP_SHORT_FLAGS = new Set("aiIwvhHEGFPnlLoczpWq0123456789");
+const GREP_SHORT_VALUES = new Set("eABCm");
+const ANY_VALUE_LETTER = "e";
+const INTEGER = /^-?\d+$/;
+const OPTIONS_END = "--";
+const EXPANSION_CHARS = /[*?[\]{}]/;
+const EXTENDED_GLOB_NEGATION = "^";
+const GREP_FREE_RULES =
+  "`git -C <registered checkout> -c core.fsmonitor=false -c core.hooksPath=/dev/null --no-lazy-fetch grep [--cached] <options> <pattern> -- [<paths>] ':(top,exclude,glob)**/.env*'` " +
+  "(only this spelling, `--no-lazy-fetch` and the `.env*` exclusion pathspec required; the working tree or `--cached` only, never a revision (history: `git log -S<text>`, `git show <rev>`); full option names; " +
+  "globs, braces and parentheses quoted, as `-- 'src/*.mjs'` and `'('`; no `|`, OR is `-e a -e b`; never -O, -f, --textconv, --no-index or --untracked); " +
+  "quote every `* ? [ ] { }`, as `git show 'HEAD@{1}'` (left bare, one takes a command off the free list) and every `( )` or `#` (left bare, one is refused outright)";
 const GIT_DENIED_FLAGS = ["--output", "--ext-diff", "--no-index", "--exec"];
 const BRANCH_DENIED_FLAGS = [
   "-d", "-D", "-m", "-M", "-c", "-C", "--delete", "--move", "--copy", "-u", "--set-upstream-to", "--unset-upstream",
@@ -84,8 +118,28 @@ const WRAPPER_VALUE_OPTIONS = new Map([
 const ENV_SPLIT_OPTIONS = new Set(["-S", "--split-string"]);
 const NO_VALUE_OPTIONS = new Set();
 export const GIT_READ_HARDENING = Object.freeze(["-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null"]);
-const GIT_HARDENING_VALUES = new Set(["core.fsmonitor=false", "core.hooksPath=/dev/null"]);
+const GIT_HARDENING_ORDER = Object.freeze(["core.fsmonitor=false", "core.hooksPath=/dev/null"]);
+const GIT_HARDENING_VALUES = new Set(GIT_HARDENING_ORDER);
 const GIT_SAFE_GLOBALS = new Set(["--no-optional-locks", "--no-pager"]);
+export const NO_LAZY_FETCH = "--no-lazy-fetch";
+export const GREP_READ_GLOBALS = Object.freeze([...GIT_READ_HARDENING, NO_LAZY_FETCH]);
+export const DOTENV_EXCLUDE_PATHSPEC = ":(top,exclude,glob)**/.env*";
+export const GREP_HARDENED_SPELLING =
+  `${grepDirSpelling("<checkout>")} (or \`cd <checkout> && git -c core.fsmonitor=false -c core.hooksPath=/dev/null --no-lazy-fetch grep … -- ':(top,exclude,glob)**/.env*'\`)`;
+const GREP_UNHARDENED =
+  `\`git grep\` runs only hardened and with no lazy fetch from a promisor remote, so no program planted in the shared \`.git/config\` runs: ${GREP_HARDENED_SPELLING}`;
+const GREP_UNEXCLUDED =
+  `\`git grep\` always ends with \`-- … ':(top,exclude,glob)**/.env*'\`, so no tracked \`.env*\` file the Read rule refuses is printed: ${GREP_HARDENED_SPELLING}`;
+const GREP_OUTSIDE_TRACKED = ["--no-index", "--untracked", "--no-exclude-standard"];
+const GREP_REFUSALS = Object.freeze([
+  { refuses: (word) => shortClusterHas(word, "O") || word.startsWith("--open-files-in-pager"), reason: "`git grep` opening files in a pager (`-O`, `--open-files-in-pager`) runs a program" },
+  { refuses: (word) => word.startsWith("--te"), reason: "`git grep --textconv` runs the textconv filters a repository configures" },
+  { refuses: (word) => shortClusterHas(word, "f"), reason: "`git grep -f` reads its patterns from a file" },
+  { refuses: (word) => GREP_OUTSIDE_TRACKED.some((flag) => isDeniedFlag(word, flag)), reason: "`git grep --no-index|--untracked|--no-exclude-standard` searches outside the tracked files" },
+  { refuses: (word) => isDeniedFlag(word, "--ext-grep"), reason: "`git grep --ext-grep` hands the search to an external program" },
+  { refuses: isSubmoduleArg, reason: "`git grep` into submodules reads repositories no guard judged" },
+]);
+const PAREN_OPERATORS = new Set(["(", ")"]);
 export const IGNORE_SUBMODULES = "--ignore-submodules=all";
 const SUBMODULE_OPTIONS = ["submodule", "recurse-submodules", "ignore-submodules"];
 const NEGATION = /^no-/;
@@ -209,13 +263,19 @@ function gitGlobalStep(option, value) {
   if (option === "-C") return typeof value === "string" ? { width: 2, dir: value } : null;
   if (option === "-c") return GIT_HARDENING_VALUES.has(value) ? { width: 2, hardening: value } : null;
   if (GIT_SAFE_GLOBALS.has(option)) return { width: 1, noLocks: option === "--no-optional-locks" };
+  if (option === NO_LAZY_FETCH) return { width: 1, noLazyFetch: true };
   return null;
 }
 
-// git's global options read against the allowlist: the last `-C` dir, whether both hardening pairs and `--no-optional-locks` are there, the subcommand's index, and the first refused option (null when none).
+// Tells whether the hardening values of git's global options are both pairs, once each, in the hardened spelling's order.
+function hardeningInOrder(values) {
+  return values.length === GIT_HARDENING_ORDER.length && GIT_HARDENING_ORDER.every((value, index) => values[index] === value);
+}
+
+// git's global options read against the allowlist: the last `-C` dir, whether the hardening pairs (in order, once each) and `--no-optional-locks` are there, the subcommand's index, and the first refused option (null when none; `--no-lazy-fetch` is refused on every subcommand but grep).
 export function gitGlobals(args) {
   const list = Array.isArray(args) ? args : [];
-  const found = { dir: null, noLocks: false, hardening: new Set() };
+  const found = { dir: null, noLocks: false, noLazyFetch: false, hardening: [] };
   let index = 0;
   let refused = null;
   while (index < list.length && list[index].startsWith("-")) {
@@ -225,11 +285,13 @@ export function gitGlobals(args) {
       break;
     }
     if (step.dir !== undefined) found.dir = step.dir;
-    if (step.hardening) found.hardening.add(step.hardening);
+    if (step.hardening) found.hardening.push(step.hardening);
     found.noLocks = found.noLocks || step.noLocks === true;
+    found.noLazyFetch = found.noLazyFetch || step.noLazyFetch === true;
     index += step.width;
   }
-  return { dir: found.dir, noLocks: found.noLocks, hardened: found.hardening.size === GIT_HARDENING_VALUES.size, index, refused };
+  if (refused === null && found.noLazyFetch && list[index] !== "grep") refused = NO_LAZY_FETCH;
+  return { dir: found.dir, noLocks: found.noLocks, hardened: hardeningInOrder(found.hardening), index, refused };
 }
 
 // Tells whether the words spell `doctor --fix` of nightqueue by any spelling of its program (`/abs/bin/nightqueue`, `bin/nightqueue.mjs`).
@@ -286,23 +348,192 @@ export function isSubmoduleArg(token) {
   return name !== "" && SUBMODULE_OPTIONS.some((option) => option.startsWith(name));
 }
 
-// Tells whether the tokens are a read-only git command on a registered checkout: `git -C <checkout> [<read hardening>] [--no-optional-locks] <read> …`.
+// Tells whether the tokens are a read-only git command on a registered checkout: `git -C <checkout> [<read hardening>] [--no-optional-locks] <read> …`, or the one hardened grep spelling.
 export function gitReadAllowed(tokens, checkouts) {
   const [program, option, dir, ...after] = tokens;
   if (program !== "git" || option !== "-C" || typeof dir !== "string" || !isAbsolute(dir)) return false;
   if (!insideRoots(dir, checkouts)) return false;
+  const globals = gitGlobals(after);
+  if (globals.refused === null && after[globals.index] === "grep") return grepReadAllowed(after);
   const rest = opensWithHardening(after) ? after.slice(GIT_READ_HARDENING.length) : after;
   const noLocks = rest[0] === "--no-optional-locks";
   const [subcommand, ...args] = noLocks ? rest.slice(1) : rest;
   if (!GIT_READ_SUBCOMMANDS.has(subcommand) || args.some(isDeniedGitArg)) return false;
   if (subcommand === "status") return noLocks;
   if (subcommand === "branch") return branchListOnly(args);
+  if (subcommand === "grep") return grepReadAllowed(after);
   return true;
 }
 
-// The tokens of a single bare command, or null when it carries a shell operator or a backslash, or is not a string.
+// Tells whether a git grep past `-C <dir>` is the one free spelling `grepSpellingNever` accepts.
+function grepReadAllowed(after) {
+  return grepSpellingNever(after) === null;
+}
+
+// Tells whether a word is a short option cluster (`-nO`) carrying a letter.
+function shortClusterHas(word, letter) {
+  return word.startsWith("-") && !word.startsWith("--") && word.includes(letter);
+}
+
+// The never reason of a git grep option off the allow list: the named hazard it opens, else the allow list itself.
+function grepOptionNever(word) {
+  const named = GREP_REFUSALS.find(({ refuses }) => refuses(word));
+  return `${named?.reason ?? "an option off the git grep allow list; spell every option by its full name"} (\`${word}\`)`;
+}
+
+// The never reason of a git grep global option but `-C <dir>`, the hardening pair and `--no-lazy-fetch`.
+function grepGlobalNever(word) {
+  return `\`git grep\` takes no global option but \`-C <dir>\`, the hardening pair and \`${NO_LAZY_FETCH}\` (\`${word}\`); run it as ${GREP_HARDENED_SPELLING}`;
+}
+
+// The one free spelling of a hardened git grep in a directory given by `-C`, shown with the label of that directory.
+export function grepDirSpelling(label) {
+  return `\`git -C ${label} -c core.fsmonitor=false -c core.hooksPath=/dev/null --no-lazy-fetch grep [--cached] <options> <pattern> -- [<paths>] ':(top,exclude,glob)**/.env*'\``;
+}
+
+// The never reason of a git grep given a revision or a path before `--`.
+function grepRevisionNever(word) {
+  return `\`git grep\` searches only the working tree or the index (\`--cached\`), never a revision: a ref, \`HEAD\`, \`HEAD~n\`, \`'HEAD@{n}'\`, an object id or \`<rev>:<path>\` can name a blob no pathspec filters, and paths go after \`--\`; search history with \`git -C <dir> log -S<text>\` or read a commit with \`git -C <dir> show <rev>\` (\`${word}\`)`;
+}
+
+// The global words of a git grep that are neither a hardening `-c` pair nor `--no-lazy-fetch` (`--no-pager`, a second `-C`).
+function grepExtraGlobals(globals) {
+  return globals.filter((word, index) => word !== "-c" && globals[index - 1] !== "-c" && word !== NO_LAZY_FETCH);
+}
+
+// Tells whether two word lists are the same words in the same order.
+function sameWords(words, expected) {
+  return words.length === expected.length && expected.every((word, index) => words[index] === word);
+}
+
+// Tells whether a short git grep option cluster gives the pattern (`-e foo`, `-ne foo`).
+function givesPattern(word) {
+  if (!shortClusterHas(word, "e")) return false;
+  return [...word.slice(1)].find((letter) => GREP_SHORT_VALUES.has(letter)) === ANY_VALUE_LETTER;
+}
+
+// Tells whether git grep still parses a word as an option: a dash word or a paren operator.
+function isGrepOptionWord(word) {
+  return typeof word === "string" && (word.startsWith("-") || PAREN_OPERATORS.has(word));
+}
+
+// The positional words of git grep arguments before the real `--` (revisions or misplaced paths), the pattern dropped when no `-e` gave it; any one makes the grep never.
+export function grepRevisions(args) {
+  const list = Array.isArray(args) ? args : [];
+  const { terminator } = grepArgs(list);
+  const end = terminator === -1 ? list.length : terminator;
+  let index = 0;
+  let patternGiven = false;
+  while (index < end && isGrepOptionWord(list[index])) {
+    patternGiven = patternGiven || givesPattern(list[index]);
+    index += Math.max(1, grepWordWidth(list[index], list[index + 1]));
+  }
+  const positional = list.slice(index, end);
+  return patternGiven ? positional : positional.slice(1);
+}
+
+// Why the words of a git grep past `-C <dir>` (or past `git` in the cd form) are not the one free spelling, or null when they are.
+export function grepSpellingNever(afterDir) {
+  const words = Array.isArray(afterDir) ? afterDir : [];
+  const { index, refused } = gitGlobals(words);
+  if (refused !== null || words[index] !== "grep") return grepGlobalNever(refused ?? words[index] ?? "no grep subcommand");
+  const globals = words.slice(0, index);
+  const [extra] = grepExtraGlobals(globals);
+  if (extra !== undefined) return grepGlobalNever(extra);
+  if (!sameWords(globals, GREP_READ_GLOBALS)) return GREP_UNHARDENED;
+  const args = words.slice(index + 1);
+  const { refused: option, terminator } = grepArgs(args);
+  if (option !== null) return grepOptionNever(option);
+  const [revision] = grepRevisions(args);
+  if (revision !== undefined) return grepRevisionNever(revision);
+  const excluded = terminator !== -1 && args.slice(terminator + 1).includes(DOTENV_EXCLUDE_PATHSPEC);
+  return excluded ? null : GREP_UNEXCLUDED;
+}
+
+// How many words a short value letter of git grep takes (its glued value, else the next word), 0 when `-A|-B|-C|-m` get no integer.
+function shortValueWidth(letter, glued, next) {
+  const value = glued !== "" ? glued : next;
+  if (typeof value !== "string") return 0;
+  if (letter !== ANY_VALUE_LETTER && !INTEGER.test(value)) return 0;
+  return glued !== "" ? 1 : 2;
+}
+
+// How many words one short git grep option cluster takes (`-nC3`, `-e foo`), 0 when a letter or its value is off the allow list.
+function grepShortWidth(word, next) {
+  for (let index = 1; index < word.length; index += 1) {
+    const letter = word[index];
+    if (GREP_SHORT_VALUES.has(letter)) return shortValueWidth(letter, word.slice(index + 1), next);
+    if (!GREP_SHORT_FLAGS.has(letter)) return 0;
+  }
+  return word.length > 1 ? 1 : 0;
+}
+
+// How many words one long git grep option takes (`--context 3`, `--context=3`), 0 when its exact name or its value is off the allow list.
+function grepLongWidth(word, next) {
+  if (GREP_LONG_FLAGS.has(word) || GREP_COLOR.test(word)) return 1;
+  const equals = word.indexOf("=");
+  const name = equals === -1 ? word : word.slice(0, equals);
+  if (!GREP_LONG_VALUES.has(name)) return 0;
+  if (equals !== -1) return INTEGER.test(word.slice(equals + 1)) ? 1 : 0;
+  return INTEGER.test(next ?? "") ? 2 : 0;
+}
+
+// How many words one git grep argument takes: 1 for a pattern, revision or paren operator, an option's own width, 0 when refused.
+function grepWordWidth(word, next) {
+  if (typeof word !== "string") return 0;
+  if (!word.startsWith("-")) return 1;
+  return word.startsWith(OPTIONS_END) ? grepLongWidth(word, next) : grepShortWidth(word, next);
+}
+
+// git grep arguments read against the exact-name allow list: the first refused word (null when none) and the index of the real `--` (-1 when none).
+export function grepArgs(args) {
+  const list = Array.isArray(args) ? args : [];
+  let index = 0;
+  while (index < list.length) {
+    if (list[index] === OPTIONS_END) return { refused: null, terminator: index };
+    const width = grepWordWidth(list[index], list[index + 1]);
+    if (width === 0) return { refused: list[index], terminator: -1 };
+    index += width;
+  }
+  return { refused: null, terminator: -1 };
+}
+
+// The index of `grep` in git words (`git [<global options>] grep …`), or -1 when the words are no git grep.
+export function gitGrepIndex(words) {
+  if (!Array.isArray(words) || programName(words[0]) !== "git") return -1;
+  const { index, refused } = gitGlobals(words.slice(1));
+  return refused === null && words[1 + index] === "grep" ? 1 + index : -1;
+}
+
+// The end of the words zsh expansion is judged on: the words before the real `--` of a git grep, else every word.
+export function expansionJudgedEnd(words) {
+  const list = Array.isArray(words) ? words : [];
+  const grep = gitGrepIndex(list);
+  if (grep === -1) return list.length;
+  const { terminator } = grepArgs(list.slice(grep + 1));
+  return terminator === -1 ? list.length : grep + 1 + terminator;
+}
+
+// For each word of a command, whether zsh expands it: an unquoted `* ? [ ] { }` or a leading `^`; null when the masked words do not align.
+export function expansionFlags(command) {
+  if (typeof command !== "string") return null;
+  const words = tokenize(command);
+  const masked = tokenize(maskQuoted(command));
+  if (masked.length !== words.length) return null;
+  return masked.map((word) => EXPANSION_CHARS.test(word) || word.startsWith(EXTENDED_GLOB_NEGATION));
+}
+
+// Tells whether zsh would expand a judged word of a command whose tokens are given, or whether its words cannot be aligned to tell.
+export function expandsUnquoted(command, tokens) {
+  const flags = expansionFlags(command);
+  if (flags === null || !Array.isArray(tokens) || flags.length !== tokens.length) return true;
+  return flags.slice(0, expansionJudgedEnd(tokens)).some(Boolean);
+}
+
+// The tokens of a single bare command, or null when it carries a shell operator, a backslash, an unquoted paren, `#` or foreign blank, or is not a string.
 export function bareTokens(command) {
   if (typeof command !== "string" || FORBIDDEN_SHELL_CHARS.test(command) || command.includes("\\")) return null;
+  if (hasUnquotedParen(command) || hasUnquotedHash(command) || hasUnquotedForeignBlank(command)) return null;
   return tokenize(command.trim());
 }
 
@@ -314,13 +545,14 @@ function ghReadAllowed(args) {
 // Tells whether a Bash command is one the operator's main thread may run with no consent.
 export function mainBashAllowed(command, checkouts = []) {
   const tokens = bareTokens(command);
-  return tokens !== null && (nightqueueAllowed(tokens, mainSubcommands) || gitReadAllowed(tokens, checkouts));
+  if (tokens === null || expandsUnquoted(command, tokens)) return false;
+  return nightqueueAllowed(tokens, mainSubcommands) || gitReadAllowed(tokens, checkouts);
 }
 
 // Tells whether a Bash command is one a subagent of the operator may run with no consent: nightqueue reads, git reads of a checkout, gh reads.
 export function readonlySubagentBashAllowed(command, checkouts = []) {
   const tokens = bareTokens(command);
-  if (tokens === null) return false;
+  if (tokens === null || expandsUnquoted(command, tokens)) return false;
   if (tokens[0] === "gh") return ghReadAllowed(tokens.slice(1));
   return nightqueueAllowed(tokens, readonlySubcommands) || gitReadAllowed(tokens, checkouts);
 }
@@ -362,7 +594,7 @@ export function describeMainBashList() {
     `\`nightqueue|nq ${OPERATOR_CLI_COMMANDS.allowed.join("|")} …\` (never ${describeMainRefusals()}, \`--follow\` or \`--foreground\`; ` +
     "`doctor --fix` only after a `run` consent) and " +
     "`git -C <registered checkout> [--no-optional-locks] log|show|diff|blame|ls-tree|ls-files|rev-parse|branch --list|status` " +
-    "(status only after --no-optional-locks; never --output, --ext-diff, --no-index or --exec)"
+    `(status only after --no-optional-locks; never --output, --ext-diff, --no-index or --exec) and ${GREP_FREE_RULES}`
   );
 }
 
@@ -370,7 +602,7 @@ export function describeMainBashList() {
 export function describeSubagentBashList() {
   return (
     `\`nightqueue|nq ${describeReadonlyCommands()}\` (never \`doctor --fix\`, \`--follow\` or \`--foreground\`), the operator's \`git -C <registered checkout>\` reads, ` +
-    "`gh pr view|diff|checks|list|status` and `gh issue view|list`"
+    `\`gh pr view|diff|checks|list|status\`, \`gh issue view|list\` and ${GREP_FREE_RULES}`
   );
 }
 

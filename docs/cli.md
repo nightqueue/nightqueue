@@ -1217,7 +1217,8 @@ person's checkout once the person consented to it. The PreToolUse hook of an ope
 of the main thread and of every subagent it launched under three bands, and answers every
 refusal with one line starting `operator guard:`:
 
-- **free**: `Read`, `Grep` and `Glob` read anything on disk except `secrets.json` and any
+- **free**: `Read` is the operator's only file tool (Claude Code 2.1.3xx ships neither `Grep`
+  nor `Glob`; the guard still judges them when a host ships them). They read anything on disk except `secrets.json` and any
   `.env*` file (`.env`, `.env.local`, …); a `Grep` whose `path` is the home or a parent of it is
   refused because the sweep would read `secrets.json`, a path that cannot be resolved is
   refused, and an absolute Glob `pattern` or Grep `glob` is judged by its static prefix. The
@@ -1229,6 +1230,26 @@ refusal with one line starting `operator guard:`:
   of `log`, `show`, `diff`, `blame`, `ls-tree`, `ls-files`, `rev-parse`, `branch --list` and
   `--no-optional-locks status` (never `--output*`, `--ext-diff`, `--no-index`, `--exec`, nor a
   global option other than `-C`, `--no-optional-locks` and the two hardening `-c` pairs below).
+  Search is `grep`, free only as `git -C <checkout> -c core.fsmonitor=false
+  -c core.hooksPath=/dev/null --no-lazy-fetch grep [--cached] <options> <pattern> -- [<paths>]
+  ':(top,exclude,glob)**/.env*'` (or `cd <checkout> && git -c core.fsmonitor=false
+  -c core.hooksPath=/dev/null --no-lazy-fetch grep … -- ':(top,exclude,glob)**/.env*'`), the
+  same `-C` spelling in a job worktree, with no other global option, full option names from an
+  exact allow list, OR written `-e a -e b`, and every glob, brace or parenthesis quoted
+  (`-- 'src/*.mjs'`, `'('`). `--no-lazy-fetch` keeps a promisor remote in the shared
+  `.git/config` from running its fetch program (a missing object errors instead). The exclusion
+  pathspec after `--` is required, so no tracked `.env*` file the Read rule refuses is printed
+  (`.envrc` and other `.env*`-prefixed names are left out too). It searches only the working
+  tree or the index (`--cached`): any revision (a ref, `HEAD`, `HEAD~n`, `'HEAD@{n}'`, an
+  object id, `<rev>:<path>`) or a path before `--` is never, since a ref can name a blob no
+  pathspec filters; search history with `git -C <dir> log -S<text>` or read a commit with
+  `git -C <dir> show <rev>`. The plain `git -C <checkout> grep …` and the spelling without
+  `--no-lazy-fetch` or the exclusion are never, and the reason shows the full spelling, so no
+  program planted in the shared `.git/config` runs. `-O`/
+  `--open-files-in-pager`, `-f`, `--textconv`, `--no-index`, `--untracked`, `--ext-grep`,
+  submodule options, an abbreviation or any option off the list are never. A free command holding
+  an unquoted `* ? [ ] { }`, which zsh expands, is not free and its refusal says
+  to quote it (`git -C <checkout> show 'HEAD@{1}'`, not `HEAD@{1}`).
   The root of a job worktree under the home whose `.git` points to the admin dir git keeps for
   it in the checkout's `.git/worktrees` is read only hardened, `git -C <worktree>
   -c core.fsmonitor=false -c core.hooksPath=/dev/null [--no-optional-locks] <read>` (`stash
@@ -1292,7 +1313,16 @@ refusal with one line starting `operator guard:`:
   `sandbox worktree`, …), `sh -c`/`eval` text, and a git global option other than `-C <dir>`,
   `--no-optional-locks`, `--no-pager` and the exact `-c core.fsmonitor=false` /
   `-c core.hooksPath=/dev/null` pairs (`--config-env`, `--attr-source`, `--git-dir`,
-  `-c <other>`, `--`, an unknown flag), behind every wrapper. A path is judged where it really points: a
+  `-c <other>`, `--`, an unknown flag), behind every wrapper. Any command with an unquoted `(`
+  or `)` is never (``operator guard: never (an unquoted `(` or `)` lets zsh run a command:
+  quote it)``), since zsh runs a program through `=(…)` or a glob qualifier `*(e:…:)`; a quoted
+  `'('` stays allowed. Any command with an unquoted `#` is never too, since zsh reads it as a
+  comment that drops the rest of the command, or as a pattern operator under EXTENDED_GLOB;
+  `'#'` and `"fix #12"` stay allowed. Any command with an unquoted `^` anywhere in a word is
+  never as well, since zsh reads it as a pattern operator under EXTENDED_GLOB (`--^x`, `HEAD^`);
+  `'^main'` and `"HEAD^"` stay allowed. Any command with a control character other than a tab
+  or a newline is never, quoted or not, since zsh cuts a word at a NUL byte. A git command run after a `cd` into a job worktree is
+  never, and its reason names `git -C <worktree>`, the only way a worktree is read. A path is judged where it really points: a
   symlink, a dangling one included, is followed. Every segment of a chain is scanned, relative
   words against the cwd and then each `cd`, so `cd <checkout> && rm -rf x` is never, not a
   shape refusal.
@@ -1344,7 +1374,8 @@ servers (user, project and local scope, and their user-scope plugins): nightqueu
 none of them, the guard passes them to the host prompt, and the person's own allow rules apply.
 A guard `deny` still wins over a user allow rule. The operator agent has no `tools:` allowlist,
 since `mcp__*` there matches nothing: it inherits every tool and its `disallowedTools` drops the
-built-ins it never had (listed against Claude Code 2.1.312).
+built-ins it never had (listed against Claude Code 2.1.312), `RemoteTrigger` included, which
+only a claude.ai login exposes.
 
 `--prompt <text>` starts the session with that request instead of the opening prompt (after
 `--resume <session>` when resuming): it is passed verbatim as claude's first positional

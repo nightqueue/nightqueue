@@ -896,7 +896,13 @@ carries one - inside a job (`NIGHTQUEUE_JOB_ID` set):
   Each is the bare program name followed by its subcommand: a path to the binary or a
   global flag before the subcommand (`git -C <dir>`, `-c`, `--git-dir`, `--work-tree`) is
   refused. A command carrying a newline or any of ``; & | ` < > $`` is refused: the skill
-  never chains, substitutes or redirects.
+  never chains, substitutes or redirects. So is a command with an unquoted `( ) * ? [ ] { } # ^`
+  (outside `'…'`, `"…"` and `$'…'`), which zsh expands before the program runs (`=(cmd)`,
+  `git push {--receive-pack=<prog>,origin}`, `--^x` matching a file named `--force` under
+  EXTENDED_GLOB) or reads as a comment (`git diff # --stat`): quote it. So is a command with a
+  backslash outside single quotes, a blank other than a space or a tab between words (form feed,
+  no-break space, …), or a control character other than a tab, quoted or not: zsh cuts a word
+  at a NUL byte, so `--force<NUL>x` would run as `--force`.
 - Anything else is denied (`permissionDecision: "deny"`) with a reason that starts
   `the orchestrator does not read the repository - hand the path to the coder / ask the
   verifier` and says where the call would have to go instead.

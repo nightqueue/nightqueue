@@ -442,12 +442,16 @@ pre-approves `mcp__nightqueue__*`, `WebFetch` and `WebSearch` only: the operator
 two tools, since they neither edit nor execute. Edit, Write and Bash are never pre-approved.
 The person's own MCP servers (loaded through the `user` setting source) are reachable and never
 pre-approved: the guard passes every `mcp__<server>__` tool but nightqueue's to the host prompt.
+The operator agent's `disallowedTools` also drops `RemoteTrigger`, which only a claude.ai login
+exposes.
 
 The `agent-foreground` hook in operator mode is the operator guard. Each refusal is a PreToolUse
 `deny` whose reason is one line starting `operator guard:`, naming what is allowed instead; it never moves
 a call to the foreground; an allowed call answers nothing (never `allow`), so the host's
 permission prompt still applies. Every call of the main thread and of every subagent (a payload
-with `agent_id`/`agent_type`) is judged in one order: a malformed call; the reads (anything on
+with `agent_id`/`agent_type`) is judged in one order: a malformed call; the reads (`Read` is the
+operator's only file tool, since Claude Code 2.1.3xx ships neither `Grep` nor `Glob`, which the
+guard still judges when a host ships them; anything on
 disk but `<home>/secrets.json` and any `.env*` file, never a Grep whose `path` is the home or a
 parent of it, nor a path that cannot be resolved; an absolute Glob `pattern` or Grep `glob` is
 judged by its static prefix); `Agent`/`Task` (main thread), allowed for every plugin agent but
@@ -490,7 +494,31 @@ command lands in one of three bands:
   `-c core.fsmonitor=false`, `-c core.hooksPath=/dev/null` is never (`--config-env`,
   `--attr-source`, `--git-dir`, `-c <other>`, `--`, `--version`, an unknown flag), behind every
   wrapper. A read of a job worktree under the home in any spelling but the hardened one below is
-  never.
+  never. Any command with an unquoted `(` or `)` (outside `'…'`, `"…"` and `$'…'`; `"$(x)"`
+  counts as unquoted) is never, checked on the raw command for every thread, consented commands
+  and the `cd <dir>` anchor included, and refused as a consent scope: zsh runs a program through
+  `=(…)` and glob qualifiers `*(e:…:)`. Any command with an unquoted `#` is never at the same
+  points, since zsh reads it as a comment that drops the rest of the command, or as a pattern
+  operator under EXTENDED_GLOB (`'#'` and `"fix #12"` stay allowed). Any command with a blank
+  other than space or tab outside quotes (form feed, vertical tab, no-break space, U+2028, …) is
+  never at the same point: zsh keeps such a blank inside a word, and the guard would split there.
+  Any command with a control character other than a tab or a newline, quoted or not, is never at
+  the same point: zsh cuts a word at a NUL byte, so it would run a shorter word than the one
+  judged (`-C <outside>\0/../<checkout>`). Any command with an unquoted `^` anywhere in a word is
+  never like `#`: under EXTENDED_GLOB zsh reads it as a pattern operator (`--^x` expands to the
+  cwd's file names opening with `--`, `HEAD^` to `HEAD…`); `'^main'` and `"HEAD^"` stay allowed.
+  The orchestrator's closed list refuses such a blank, control character and `^` too, and a
+  backslash outside single quotes, which zsh removes or reads as an escape. A git command run after a
+  `cd` into a job worktree is never, and its reason names `git -C <worktree>`. A `git grep` that is not the hardened free spelling is
+  never: without the hardening pair and `--no-lazy-fetch` in that order, once each (the reason
+  shows the spelling), with any other global option (`--no-optional-locks`, `--no-pager`), with
+  an option off its exact allow list (`-O`, `-f`, `--textconv`, `--no-index`, `--untracked`,
+  `--ext-grep`, submodules, any abbreviation), with any revision word before its real `--` (a
+  ref, `HEAD`, `HEAD~n`, `'HEAD@{n}'`, an object id, `<rev>:<path>`, or a path written there),
+  without the exclusion pathspec
+  `':(top,exclude,glob)**/.env*'` after its real `--`, or with a backslash, a `$`, or an
+  unquoted glob, brace or leading `^` before its real `--`. `--no-lazy-fetch` on any other git
+  subcommand stays never.
 - **free**: the main thread's one bare
   `nightqueue|nq <queue|project|org|connection|doctor|memory|lesson|libs|version> …` (not
   `queue session`, `project add|move`, `queue add --run`, `doctor --fix`, `--follow` or
@@ -501,6 +529,14 @@ command lands in one of three bands:
   [--no-optional-locks] <read>`, `status` and `diff` with `--ignore-submodules=all`, never another
   `--submodule*`, `--ignore-submodules*` or `--recurse-submodules*` argument nor an abbreviation
   or negation git accepts for one (`--ignore-submod=none`, `--recurse-submod`);
+  `grep` is a read only as `git -C <checkout|worktree> -c core.fsmonitor=false
+  -c core.hooksPath=/dev/null --no-lazy-fetch grep [--cached] <options> <pattern> -- [<paths>]
+  ':(top,exclude,glob)**/.env*'` (or `cd <checkout> && git -c core.fsmonitor=false
+  -c core.hooksPath=/dev/null --no-lazy-fetch grep … -- ':(top,exclude,glob)**/.env*'`), the
+  working tree or `--cached` only, never a revision (history: `git log -S<text>`,
+  `git show <rev>`), full option names, OR as `-e a -e b`, globs and
+  parentheses quoted; no free command holds an unquoted `* ? [ ] { }` or `^`, which zsh
+  expands, so a revision is written `git show 'HEAD@{1}'` and the refusal says to quote it;
   a subagent's one bare `nightqueue|nq` read
   (`queue status|log`, `project list`, `org list`, `connection list`, `memory stats`, `doctor`
   without `--fix`, `libs`, `version`), the `git -C` reads (also as

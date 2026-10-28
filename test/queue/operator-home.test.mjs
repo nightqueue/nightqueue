@@ -9,7 +9,7 @@ import { acquireClose, addJob, cancelJob, claimJobById, finishJob, retryJob } fr
 import { registeredCheckouts } from "../../src/memory/registry-access.mjs";
 import { consentBash, neverBashReason } from "../../src/queue/operator-bands.mjs";
 import { recordConsent } from "../../src/queue/operator-consent.mjs";
-import { homeEntry, homeOwner, homeSegment } from "../../src/queue/operator-home.mjs";
+import { WORKTREE_READ_SPELLING, homeEntry, homeOwner, homeSegment } from "../../src/queue/operator-home.mjs";
 import { saveRunState } from "../../src/queue/resume.mjs";
 import { isolatedHostVars } from "../../test-support/host.mjs";
 import { ensureProject, makeDir, makeHome, makeProject, projectIdOf, seedClosedJob, seedDoneJob } from "../../test-support/memory.mjs";
@@ -18,6 +18,8 @@ const WORKER = "test:operator-home";
 const HARDENED = "-c core.fsmonitor=false -c core.hooksPath=/dev/null";
 const HARDENED_WORDS = HARDENED.split(" ");
 const READ_HARDENED = /never \(a worktree under the nightqueue home is read only hardened.*core\.fsmonitor=false -c core\.hooksPath=\/dev\/null/;
+const GREP_UNHARDENED = /never \(`git grep` runs only hardened and with no lazy fetch.*--no-lazy-fetch grep \[--cached\] <options>/;
+const WORKTREE_CD_NEVER = /never \(a worktree under the nightqueue home is read only through `git -C <worktree>`, never after a `cd` into it: `git -C <worktree> -c core\.fsmonitor=false/;
 
 // A home at `~/.nightqueue` of its own user home, one registered checkout, one run dir and one worktree of a project.
 function homeFixture(t) {
@@ -441,12 +443,47 @@ test("hardened git reads of a worktree under the home are free, and nothing else
     `git -C ${worktree} ${HARDENED} ls-files --recurse-submodules`,
   ];
   for (const command of unhardened) assert.match(bash(env, { command, cwd: home }), READ_HARDENED, command);
-  assert.match(bash(env, { command: `cd ${worktree} && git diff`, cwd: home }), /is only read as `git -C <worktree> -c core\.fsmonitor=false/);
+  assert.match(bash(env, { command: `cd ${worktree} && git diff`, cwd: home }), WORKTREE_CD_NEVER);
   assert.match(bash(env, { command: `git -C ${worktree} commit -am x`, cwd: home }), /never \(naming a never-band path/);
   assert.match(bash(env, { command: `git -C ${worktree} log ${join(home, "logs")}`, cwd: home }), /never/);
-  assert.match(bash(env, { command: `cd ${worktree} && git commit -am x`, cwd: home }), /is only read/);
+  assert.match(bash(env, { command: `cd ${worktree} && git commit -am x`, cwd: home }), WORKTREE_CD_NEVER);
   assert.match(bash(env, { command: `git -C ${worktree} status`, cwd: home }), /never \(naming a never-band path/);
   assert.match(bash(env, { command: `git -C ${join(worktree, "src")} log`, cwd: home }), /never \(naming a never-band path/);
+});
+
+test("a hardened git grep of a worktree under the home is free on both threads; unhardened or with another global option it is never", (t) => {
+  const { env, checkout, home, alphaId } = sessionFixture(t);
+  const worktree = linkedTree({ checkout, home, projectId: alphaId, slug: "fix-login" });
+  const grep = `${HARDENED} --no-lazy-fetch grep`;
+  const excl = "':(top,exclude,glob)**/.env*'";
+  for (const agent of [false, true]) {
+    assert.equal(bash(env, { command: `git -C ${worktree} ${grep} -n foo -- ${excl}`, cwd: home, agent }), null);
+    assert.equal(bash(env, { command: `git -C ${worktree} ${grep} -e foo -- 'src/*.mjs' ${excl}`, cwd: home, agent }), null);
+    assert.equal(bash(env, { command: `git -C ${worktree} ${grep} --cached -n foo -- ${excl}`, cwd: home, agent }), null);
+    assert.match(bash(env, { command: `cd ${worktree} && git ${grep} -n foo -- ${excl}`, cwd: home, agent }), WORKTREE_CD_NEVER);
+    assert.match(bash(env, { command: `cd ${worktree} && git ${HARDENED} log`, cwd: home, agent }), WORKTREE_CD_NEVER);
+    assert.match(bash(env, { command: `git -C ${worktree} ${grep} foo HEAD -- ${excl}`, cwd: home, agent }), /never \(`git grep` searches only the working tree .*never a revision/);
+    assert.equal(bash(env, { command: `cd ${checkout} && git ${grep} -n foo -- ${excl}`, cwd: home, agent }), null);
+    assert.match(bash(env, { command: `git -C ${worktree} grep -n foo`, cwd: home, agent }), GREP_UNHARDENED);
+    assert.match(bash(env, { command: `git -C ${worktree} ${HARDENED} grep -n foo`, cwd: home, agent }), GREP_UNHARDENED);
+    assert.match(bash(env, { command: `git -C ${worktree} --no-pager ${grep} foo -- ${excl}`, cwd: home, agent }), /never \(`git grep` takes no global option/);
+    assert.match(bash(env, { command: `git -C ${worktree} ${grep} -n foo`, cwd: home, agent }), /never \(`git grep` always ends with/);
+    assert.match(bash(env, { command: `git -C ${worktree} ${grep} foo c3886f3fec -- ${excl}`, cwd: home, agent }), /never a revision/);
+    assert.match(bash(env, { command: `git -C ${worktree} ${HARDENED} --no-optional-locks grep foo`, cwd: home, agent }), /^operator guard: never \(/);
+  }
+  assert.equal(WORKTREE_READ_SPELLING.includes("cd "), false);
+  assert.match(WORKTREE_READ_SPELLING, /`git -C <worktree> -c core\.fsmonitor=false -c core\.hooksPath=\/dev\/null --no-lazy-fetch grep \[--cached\]/);
+});
+
+test("a worktree read with a reversed or duplicated hardening pair is never free, in the -C form and the cd form", (t) => {
+  const { env, checkout, home, alphaId } = sessionFixture(t);
+  const worktree = linkedTree({ checkout, home, projectId: alphaId, slug: "fix-login" });
+  const reversed = "-c core.hooksPath=/dev/null -c core.fsmonitor=false";
+  const duplicated = `${HARDENED} -c core.hooksPath=/dev/null`;
+  for (const pair of [reversed, duplicated]) {
+    assert.match(bash(env, { command: `git -C ${worktree} ${pair} log --oneline -5`, cwd: home }), READ_HARDENED, pair);
+    assert.notEqual(bash(env, { command: `cd ${worktree} && git ${pair} log --oneline -5`, cwd: home }), null, pair);
+  }
 });
 
 test("a worktree whose .git leaves git's admin dir in the checkout is never read nor salvaged", (t) => {
@@ -457,7 +494,7 @@ test("a worktree whose .git leaves git's admin dir in the checkout is never read
   assert.match(bash(env, { command: `git -C ${pointer} --no-optional-locks status`, cwd: home }), untrusted);
   assert.match(bash(env, { command: `git -C ${pointer} diff`, cwd: home }), untrusted);
   assert.match(bash(env, { command: `git -C ${pointer} stash`, cwd: home }), untrusted);
-  assert.match(bash(env, { command: `cd ${pointer} && git diff`, cwd: home }), /does not point to the admin dir git keeps for it/);
+  assert.match(bash(env, { command: `cd ${pointer} && git diff`, cwd: home }), WORKTREE_CD_NEVER);
   const directory = linkedTree({ checkout, home, projectId: alphaId, slug: "directory" });
   rmSync(join(directory, ".git"));
   mkdirSync(join(directory, ".git"));
@@ -529,7 +566,7 @@ test("salvage from a closed, cancelled or ownerless job's worktree is consentabl
     assert.match(bash(env, { command: patch(slug), cwd: home }), reason);
     assert.match(bash(env, { command: `cd ${checkout} && cp ${tree(slug)}/a.js a.js`, cwd: home }), reason);
   }
-  assert.match(bash(env, { command: `cd ${tree("dropped")} && git stash`, cwd: home }), /salvaged with a git-write consent \(`git -C <worktree> format-patch`, never `stash`\)/);
+  assert.match(bash(env, { command: `cd ${tree("dropped")} && git stash`, cwd: home }), WORKTREE_CD_NEVER);
   assert.match(bash(env, { command: `git -C ${tree("dropped")} ${HARDENED} stash pop`, cwd: home }), /never \(naming a never-band path/);
   const beta = makeProject(t, env, "beta");
   const betaTree = linkedTree({ checkout: beta, home, projectId: projectIdOf(env, "beta"), slug: "other" });
