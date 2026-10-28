@@ -174,6 +174,9 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **The operator agent disallows `RemoteTrigger`.** Only a claude.ai login exposes it, and it
+  reached the operator with no band decision. It is now in `disallowedTools` and in the probed
+  built-in list of the plugin test.
 - **`nightqueue doctor --fix` is consentable in an operator session.** It is a `run` from any
   directory, covered only by a consent naming `--fix`, only spelled `nightqueue doctor --fix`
   (another spelling of the program stays never), and still never free nor on a subagent
@@ -423,6 +426,70 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
   Phase 5 pause the `qa` phase stays unrecorded in `state.json` (the report shows it as not
   recorded), and a mixed `symptom-coverage-*` plus `usage-coverage-*` gate still terminates at
   Phase 5.
+- **No operator command runs a program through zsh expansion.** A free command such as
+  `git -C <checkout> log -1 =(nightqueue version)` passed the guard, and zsh ran the inner
+  command. Any operator command with an unquoted `(` or `)` (`=(…)`, a glob qualifier
+  `*(e:…:)`, `"$(x)"`) is now never, on the main thread and on subagents, consented commands,
+  the `cd <dir>` anchor and consent scopes included; a quoted `'('` stays allowed. A free
+  command with an unquoted `* ? [ ] { }` or a leading `^` is no longer free, because zsh
+  expands it (`{--run,x}` injected a refused flag). The refusal says to quote it:
+  `git -C <checkout> show 'HEAD@{1}'` stays free, while `HEAD@{1}` left bare is not. An
+  unquoted `#` (a zsh comment that drops the rest of the command, or a pattern under
+  EXTENDED_GLOB) is never in every operator command, so `… grep -n . # -- <exclusion>` no
+  longer passes as if its exclusion were there; `'#'` and `"fix #12"` stay allowed. A blank
+  other than space or tab outside quotes is never in every operator command: zsh does not split
+  on a form feed or a no-break space, so the guard judged words zsh never ran (a free grep could
+  drop its `--` and exclusion, or fold `--no-lazy-fetch` into the hooks-path value). An
+  unquoted `^` anywhere in a word is never in every operator command, like `#`: under
+  EXTENDED_GLOB zsh expanded `--^zzz` to a planted `--output=<file>`; `'^main'` and `"HEAD^"`
+  stay allowed. A control character other than a tab or a newline is never, quoted or not:
+  zsh cut `-C <outside><NUL>/../<checkout>` at the NUL and searched the outside repository.
+- **The operator and its subagents can search a checkout again.** Claude Code 2.1.3xx ships
+  neither `Grep` nor `Glob`, and `git -C <checkout> grep` asked for a `git-write` consent.
+  `git -C <checkout> -c core.fsmonitor=false -c core.hooksPath=/dev/null --no-lazy-fetch grep
+  [--cached] <options> <pattern> -- [<paths>] ':(top,exclude,glob)**/.env*'` (also
+  `cd <checkout> && git -c … --no-lazy-fetch grep … -- ':(top,exclude,glob)**/.env*'`, and the
+  same spelling at a job worktree's root) is now a free read. Its options are an exact allow
+  list of full names. OR is written `-e a -e b`, and globs, braces and parentheses are quoted.
+  `--no-lazy-fetch` is required, so a promisor remote planted in the shared `.git/config` never
+  runs its fetch program on a missing object. The `.env*` exclusion pathspec after `--` is
+  required, so no tracked `.env*` file the Read rule refuses is printed (`.envrc` and other
+  `.env*`-prefixed names are left out too). It searches only the working tree or the index
+  (`--cached`): any revision (a ref, `HEAD`, `HEAD~n`, `'HEAD@{n}'`, an object id,
+  `<rev>:<path>`) is never, since a ref can name a blob no pathspec filters (a fetched tag, a
+  remote-tracking ref, a symref'd `HEAD`); history is searched with `git log -S` or read with
+  `git show`. A git command after `cd` into a job worktree is never, and its reason names
+  `git -C <worktree>`. The plain `git -C <checkout> grep …`, and the hardened spelling without
+  `--no-lazy-fetch` or the exclusion, are never, and the reason shows the full spelling. A
+  reversed or duplicated hardening pair is never free, also in the `cd` form of a worktree read.
+  `-O`, `-f`, `--textconv`, `--no-index`, `--untracked`, `--ext-grep`, submodule options and
+  abbreviations are never. operator.md names `Read` as the only file tool, lists files with
+  `git -C <checkout> ls-files`, and teaches the hardened grep. A real-git test plants
+  fsmonitor, textconv, filter, pager and promisor traps (with a missing blob and
+  `protocol.file.allow=always`) and tracked `.env*` files at every depth. On git 2.50.1 (Apple
+  Git-155), no free spelling fires any trap or prints a `.env*` file, while the earlier
+  hardened spelling without `--no-lazy-fetch` runs the planted `uploadpack`. Open items:
+  - plain checkout `log`/`diff`/`status`/`show` reads still run a program planted in
+    `.git/config` (`core.fsmonitor`, measured on `status`); a separate job handles them;
+  - non-grep reads (`log`/`diff`/`show` of a checkout or worktree) still lazily fetch from a
+    promisor remote in the shared `.git/config`;
+  - free `show`/`log -p`/`diff` still print a tracked `.env*` file's content by object id or
+    diff; the Read-rule parity is enforced for grep only;
+  - the other agents' prompts (architect, explore, triager, …) still mention Grep/Glob;
+  - worktree `diff`/`show`/`log` still run a job-planted textconv by default (no
+    `--no-textconv`/`--no-ext-diff` required);
+  - other built-ins that only a claude.ai login exposes are not probed.
+- **The orchestrator's closed Bash list refuses unquoted zsh expansion.** A command with an
+  unquoted `( ) * ? [ ] { } # ^` passed the list, so
+  `git push {--receive-pack=<prog>,origin}` reached git as `--receive-pack=<prog>`, a word
+  the list never saw, and `git diff # --stat` passed as if `--stat` were there. Such a command
+  is now refused, and the deny reason says to quote it. It also refuses a backslash outside
+  single quotes and a blank other than a space or a tab between words: zsh removed the backslash (`--up\load-pack=`, `\+main`) or
+  split an escaped `\"` the list read as one word, so git received a denied flag. An unquoted
+  `^` is refused anywhere in a word, not only at its start: under EXTENDED_GLOB zsh expanded
+  `git push origin HEAD --^zzz` to a planted `--force`. A control character other than a tab is
+  refused, quoted or not: zsh cut `git push origin main --force<NUL>x` at the NUL and ran
+  `--force`.
 
 ## 0.7.0 - 2026-10-20
 

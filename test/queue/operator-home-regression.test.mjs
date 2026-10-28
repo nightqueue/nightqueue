@@ -252,7 +252,7 @@ test("S4 (H3): a real linked worktree with an intact pointer is read freely and 
   ];
   for (const command of reads) assert.equal(bash(env, { command, cwd: home }), null, command);
   assert.match(bash(env, { command: `git -C ${worktree} --no-optional-locks status`, cwd: home }), READ_HARDENED);
-  assert.match(bash(env, { command: `cd ${worktree} && git diff`, cwd: home }), /is only read as `git -C <worktree> -c core\.fsmonitor=false/);
+  assert.match(bash(env, { command: `cd ${worktree} && git diff`, cwd: home }), /is read only through `git -C <worktree>`, never after a `cd` into it: `git -C <worktree> -c core\.fsmonitor=false/);
   assert.notEqual(bash(env, { command: `cd ${worktree} && git ${HARDENED} diff --ignore-submodules=all`, cwd: home }), null);
   assert.match(bash(env, { command: `git -C ${worktree} ${HARDENED} format-patch -1 -o ${fixture.checkout}`, cwd: home }), /needs consent \(git-write git -C /);
   assert.match(bash(env, { command: `git -C ${worktree} ${HARDENED} stash`, cwd: home }), /never \(a worktree under the nightqueue home is never stashed/);
@@ -525,14 +525,15 @@ test("H1 (fix loop 4): an argument that only shares git's name keeps a read out 
   for (const command of hidden) assert.notEqual(neverBashReason(command, { cwd: checkout, env }), null, command);
 });
 
-// Writes a gh stand-in that answers `gh pr view <url>` after a delay, OPEN for pull request 5 and MERGED for any other, logging each URL.
-function perUrlGh(t, env) {
+// Writes a gh stand-in that answers `gh pr view <url>` only once `parallel` reads have started (else after more than the guard's 3 s), OPEN for pull request 5 and MERGED for any other, logging each URL.
+function perUrlGh(t, env, parallel) {
   const dir = makeDir(t, "operator-home-regression-gh-per-url");
   const log = join(dir, "calls.log");
   const script = join(dir, "gh");
   const open = '{"state":"OPEN","mergedAt":null,"mergeCommit":null,"mergeable":"MERGEABLE","isDraft":false}';
   const merged = '{"state":"MERGED","mergedAt":"2026-09-11T15:54:01Z","mergeCommit":{"oid":"abc123"},"mergeable":"UNKNOWN","isDraft":false}';
-  writeFileSync(script, `#!/bin/sh\nprintf '%s\\n' "$3" >> "${log}"\nsleep 1.5\ncase "$3" in\n  */pull/5) printf '%s\\n' '${open}' ;;\n  *) printf '%s\\n' '${merged}' ;;\nesac\n`);
+  const barrier = `i=0\nwhile [ "$(grep -c '' "${log}")" -lt ${parallel} ] && [ "$i" -lt 70 ]; do sleep 0.05; i=$((i + 1)); done\n`;
+  writeFileSync(script, `#!/bin/sh\nprintf '%s\\n' "$3" >> "${log}"\n${barrier}case "$3" in\n  */pull/5) printf '%s\\n' '${open}' ;;\n  *) printf '%s\\n' '${merged}' ;;\nesac\n`);
   chmodSync(script, 0o755);
   delete env.NIGHTQUEUE_NO_PR_CHECK;
   env.NIGHTQUEUE_GH_BIN = script;
@@ -552,8 +553,9 @@ function doneRuns({ env, home, projectId }, slugs) {
 test("H3 (fix loop 4): a chain of done jobs' run dirs reads every pull request once, in parallel, inside the hook's 5 s", (t) => {
   const fixture = setup(t);
   const { env, home } = fixture;
-  const calls = perUrlGh(t, env);
-  const runs = doneRuns(fixture, ["m1", "m2", "m3", "m4", "open5"]);
+  const slugs = ["m1", "m2", "m3", "m4", "open5"];
+  const calls = perUrlGh(t, env, slugs.length);
+  const runs = doneRuns(fixture, slugs);
   const open = runs.at(-1);
   const started = Date.now();
   const reason = bash(env, { command: runs.map(({ run }) => `rm -rf ${run}`).join("; "), cwd: home });
@@ -628,7 +630,7 @@ test("H7: a nested repo planted with an fsmonitor and a clean filter runs nothin
   for (const command of [`git -C ${wt} stash`, `git -C ${wt} ${HARDENED} stash`, `git -C ${wt} ${HARDENED} stash push -m keep`]) {
     assert.match(bash(env, { command, cwd: home }) ?? "", /never \(a worktree under the nightqueue home is never stashed/, command);
   }
-  assert.match(bash(env, { command: `cd ${wt} && git diff`, cwd: home }), /is only read as `git -C <worktree> -c core\.fsmonitor=false/);
+  assert.match(bash(env, { command: `cd ${wt} && git diff`, cwd: home }), /is read only through `git -C <worktree>`, never after a `cd` into it: `git -C <worktree> -c core\.fsmonitor=false/);
   assert.notEqual(bash(env, { command: `cd ${wt} && git ${HARDENED} diff --ignore-submodules=all`, cwd: home }), null);
   const allowed = [
     `git -C ${wt} ${HARDENED} --no-optional-locks status --ignore-submodules=all`,

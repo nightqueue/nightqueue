@@ -27,7 +27,7 @@ function toolListOf(text, key) {
 
 const DISALLOWED = [
   "CronCreate", "CronDelete", "CronList", "DesignSync", "EnterWorktree", "ExitWorktree", "ListAgents", "Monitor",
-  "PushNotification", "ReportFindings", "ScheduleWakeup", "TaskStop", "Workflow",
+  "PushNotification", "RemoteTrigger", "ReportFindings", "ScheduleWakeup", "TaskStop", "Workflow",
 ];
 const OPERATOR_BUILTINS = ["Task", "Bash", "Edit", "NotebookEdit", "Read", "SendMessage", "Skill", "ToolSearch", "WebFetch", "WebSearch", "Write"];
 
@@ -53,9 +53,10 @@ test("the operator carries no `tools:` allowlist and denies only built-ins, neve
 
 // The built-ins `init.tools` lists on Claude Code 2.1.312 with no restriction (tmp probe, `claude -p --output-format stream-json --verbose`);
 // after an upgrade, re-probe it here, and each new built-in must land in OPERATOR_BUILTINS (guarded) or in disallowedTools.
+// RemoteTrigger is exposed only on a claude.ai login, so an API-key probe lacks it; the live probe below never requires a name to be present.
 const CLAUDE_CODE_2_1_312_BUILTINS = [
   "Task", "Bash", "CronCreate", "CronDelete", "CronList", "DesignSync", "Edit", "EnterWorktree", "ExitWorktree", "ListAgents", "Monitor",
-  "NotebookEdit", "PushNotification", "Read", "ReportFindings", "ScheduleWakeup", "SendMessage", "Skill", "TaskStop", "ToolSearch",
+  "NotebookEdit", "PushNotification", "Read", "RemoteTrigger", "ReportFindings", "ScheduleWakeup", "SendMessage", "Skill", "TaskStop", "ToolSearch",
   "WebFetch", "WebSearch", "Workflow", "Write",
 ];
 
@@ -64,6 +65,23 @@ test("every probed Claude Code built-in is triaged: the operator's effective bui
   const effective = CLAUDE_CODE_2_1_312_BUILTINS.filter((tool) => !disallowed.includes(tool));
   assert.deepEqual(effective, OPERATOR_BUILTINS, "a built-in reaches the operator without being triaged");
   for (const tool of disallowed) assert.ok(CLAUDE_CODE_2_1_312_BUILTINS.includes(tool), `${tool} is not a probed built-in`);
+});
+
+test("operator.md names Read as the only file tool and teaches the hardened git grep, ls-files and quoting `'HEAD@{1}'`", () => {
+  assert.equal(OPERATOR.includes("Read, Grep and Glob"), false, "operator.md still promises Grep and Glob");
+  const parts = [
+    "-c core.fsmonitor=false -c core.hooksPath=/dev/null --no-lazy-fetch grep",
+    "':(top,exclude,glob)**/.env*'",
+    "never a revision",
+    "<pattern> --",
+    "`( ) * ? [ ] { } # ^`",
+    "`git -C <checkout> ls-files`",
+    "`'HEAD@{1}'`",
+  ];
+  for (const part of parts) {
+    assert.ok(OPERATOR.includes(part), `operator.md does not name ${part}`);
+  }
+  assert.equal(OPERATOR.includes("[<ref>"), false, "operator.md still offers a revision to grep");
 });
 
 const LIVE_PROBE_TIMEOUT_MS = 120000;

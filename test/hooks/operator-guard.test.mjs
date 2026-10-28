@@ -139,6 +139,255 @@ test("a backslash never smuggles a refused word past the main thread or a subage
   assertNever(main("Bash", { command: "r\\m -rf x" }), env);
 });
 
+test("an unquoted paren is never on the main thread or a subagent, since zsh runs a command through it", (t) => {
+  const { env, checkout } = operatorFixture(t);
+  const vectors = [
+    `git -C ${checkout} log -1 =(nightqueue version)`,
+    `git -C ${checkout} log *(e:'true':)`,
+    `git -C ${checkout} log /etc/hosts(e:id:)`,
+    "nightqueue queue status =(id)",
+    "nightqueue version =(id)",
+    `cd ${checkout} && npm test =(id)`,
+    `cd ${checkout}/x(e:id:) && git status`,
+    `git -C ${checkout} log "it's"(e:id:)`,
+    `git -C ${checkout} log $'a\\''(e:id:)`,
+  ];
+  for (const command of vectors) {
+    for (const input of [main("Bash", { command }), sub("nightqueue:explore", "Bash", { command })]) {
+      assert.match(decide(input, env) ?? "", /^operator guard: never \(an unquoted `\(` or `\)` lets zsh run a command: quote it\)/, command);
+    }
+  }
+  consent(env, { kind: "run", scope: "npm test" });
+  assertNever(main("Bash", { command: `cd ${checkout} && npm test =(id)` }), env);
+  assert.match(decide(main("Bash", { command: "rm -rf x (y)" }), env) ?? "", /^operator guard: never \((?!an unquoted)/, "a more specific never reason comes first");
+});
+
+test("a quoted paren keeps its band: free stays free and a consented command still asks for consent", (t) => {
+  const { env, checkout } = operatorFixture(t);
+  for (const command of [`git -C ${checkout} log -1 --format='%h (x)'`, `git -C ${checkout} log -1 --format="%h (x)"`]) {
+    assertAllowed(main("Bash", { command }), env);
+    assertAllowed(sub("nightqueue:explore", "Bash", { command }), env);
+  }
+  assertAllowed(main("Bash", { command: "nightqueue queue add --project alpha 'fix (thing)'" }), env);
+  assert.match(decide(main("Bash", { command: `cd ${checkout} && npm test -- '(x)'` }), env) ?? "", /^operator guard: needs consent \(run /);
+});
+
+test("a consent scope with an unquoted paren is never recorded", (t) => {
+  const { env } = operatorFixture(t);
+  assert.throws(() => consent(env, { kind: "run", scope: "npm test =(id)" }), /one bare command/);
+});
+
+const OLD_GREP_HARDENING = "-c core.fsmonitor=false -c core.hooksPath=/dev/null";
+const GREP_HARDENING = `${OLD_GREP_HARDENING} --no-lazy-fetch`;
+const EXCL = "':(top,exclude,glob)**/.env*'";
+const GREP_SPELLING_SHOWN =
+  /-c core\.fsmonitor=false -c core\.hooksPath=\/dev\/null --no-lazy-fetch grep \[--cached\] <options> <pattern> -- \[<paths>\] ':\(top,exclude,glob\)\*\*\/\.env\*'/;
+const REVISION_NEVER = /never a revision/;
+const HASH_NEVER = /an unquoted `#`|never a revision.*\(`#`\)\): no consent/;
+
+// The same Bash call on the operator's main thread and on one subagent.
+function bothThreads(command) {
+  return [main("Bash", { command }), sub("nightqueue:explore", "Bash", { command })];
+}
+
+test("a hardened git grep of a registered checkout is free on the main thread and a subagent, in every allowed spelling", (t) => {
+  const { env, checkout } = operatorFixture(t);
+  const hardened = `git -C ${checkout} ${GREP_HARDENING} grep`;
+  const free = [
+    `${hardened} -e a --and '(' -e b ')' -- ${EXCL}`,
+    `${hardened} -n foo -- ${EXCL}`,
+    `${hardened} -e foo -e bar -- 'src/*.mjs' ${EXCL}`,
+    `${hardened} -C3 foo -- ${EXCL}`,
+    `${hardened} --context 3 foo -- ${EXCL}`,
+    `${hardened} 'foo.*bar' -- ${EXCL}`,
+    `${hardened} --text --or --not -e x -- ${EXCL}`,
+    `${hardened} -e -O -- ${EXCL}`,
+    `${hardened} -eO -- ${EXCL}`,
+    `${hardened} foo -- src/*.mjs ${EXCL}`,
+    `${hardened} --cached foo -- ${EXCL}`,
+    `${hardened} -e '#' -- ${EXCL}`,
+    `${hardened} -e 'TODO:' -- ${EXCL}`,
+    `cd ${checkout} && git ${GREP_HARDENING} grep 'foo.*bar' -- ${EXCL}`,
+    `cd ${checkout} && git ${GREP_HARDENING} grep -n foo -- ${EXCL}`,
+  ];
+  for (const command of free) for (const input of bothThreads(command)) assertAllowed(input, env);
+});
+
+test("a plain or (A)-spelled git grep of a checkout is never, and its reason shows the full hardened spelling", (t) => {
+  const { env, checkout } = operatorFixture(t);
+  const never = [
+    `git -C ${checkout} grep -n foo`,
+    `cd ${checkout} && git grep foo`,
+    `git -C ${checkout} --no-pager ${GREP_HARDENING} grep foo -- ${EXCL}`,
+    `git -C ${checkout} ${OLD_GREP_HARDENING} grep -n foo`,
+    `git -C ${checkout} ${OLD_GREP_HARDENING} grep -n foo -- ${EXCL}`,
+    `cd ${checkout} && git ${OLD_GREP_HARDENING} grep -n foo -- ${EXCL}`,
+    `git -C ${checkout} -c core.hooksPath=/dev/null -c core.fsmonitor=false --no-lazy-fetch grep foo -- ${EXCL}`,
+    `git -C ${checkout} ${GREP_HARDENING} grep -n foo`,
+    `git -C ${checkout} ${GREP_HARDENING} grep -n -e . -- '*.local'`,
+  ];
+  for (const command of never) {
+    for (const input of bothThreads(command)) {
+      assertNever(input, env);
+      assert.match(decide(input, env), GREP_SPELLING_SHOWN, command);
+    }
+  }
+  assert.throws(() => consent(env, { kind: "git-write", scope: "git grep x" }), /in the never band \(`git grep` runs only hardened/);
+});
+
+test("a git grep that runs a program, reads outside the tracked files or carries an unquoted expansion is never, with its named reason", (t) => {
+  const { env, checkout } = operatorFixture(t);
+  const hardened = `git -C ${checkout} ${GREP_HARDENING} grep`;
+  const refused = [
+    [`${hardened} -O foo`, /opening files in a pager/],
+    [`${hardened} -Osh foo`, /opening files in a pager/],
+    [`${hardened} -nO foo`, /opening files in a pager/],
+    [`${hardened} --open-files-in-pager=sh foo`, /opening files in a pager/],
+    [`${hardened} --open foo`, /off the git grep allow list/],
+    [`${hardened} --o foo`, /off the git grep allow list/],
+    [`${hardened} --textconv foo`, /textconv/],
+    [`${hardened} --te foo`, /textconv/],
+    [`${hardened} -f patterns.txt`, /patterns from a file/],
+    [`${hardened} --no-index foo`, /outside the tracked files/],
+    [`${hardened} --untracked foo`, /outside the tracked files/],
+    [`${hardened} --ext-grep foo`, /external program/],
+    [`${hardened} --recurse-submodules foo`, /submodules/],
+    [`${hardened} -C/tmp foo`, /off the git grep allow list/],
+    [`${hardened} foo.*bar`, /quote the pattern/],
+    [`${hardened} {-O,x} foo`, /quote the pattern/],
+    [`${hardened} 'foo$'`, /a `\$` in a `git grep`/],
+    [`cd ${checkout} && git ${GREP_HARDENING} grep foo.*bar`, /quote the pattern/],
+    [`${hardened} foo c3886f3fec -- ${EXCL}`, REVISION_NEVER],
+    [`${hardened} foo HEAD:sub/config.env.ts -- ${EXCL}`, REVISION_NEVER],
+    [`${hardened} foo :0:sub/a.txt -- ${EXCL}`, REVISION_NEVER],
+    [`${hardened} foo ${EXCL} -- src`, REVISION_NEVER],
+    [`${hardened} foo HEAD -- ${EXCL}`, REVISION_NEVER],
+    [`${hardened} foo 'HEAD@{1}' -- ${EXCL}`, REVISION_NEVER],
+    [`${hardened} foo HEAD~0 -- ${EXCL}`, REVISION_NEVER],
+    [`${hardened} foo main -- ${EXCL}`, REVISION_NEVER],
+    [`${hardened} -e foo HEAD -- ${EXCL}`, REVISION_NEVER],
+    [`${hardened} -C3 foo HEAD -- ${EXCL}`, REVISION_NEVER],
+    [`${hardened} --context 3 foo HEAD -- ${EXCL}`, REVISION_NEVER],
+    [`${hardened} -e foo -e bar HEAD -- ${EXCL}`, REVISION_NEVER],
+    [`${hardened} foo src -- ${EXCL}`, REVISION_NEVER],
+    [`${hardened} foo HEAD:.env.local -- ${EXCL}`, /reading or printing secrets/],
+    [`${hardened} foo -- ${EXCL} '.env.local'`, /reading or printing secrets/],
+    [`${hardened} foo -- ':(top,exclude,glob)**/.env*x'`, /reading or printing secrets/],
+  ];
+  for (const [command, reason] of refused) {
+    for (const input of bothThreads(command)) {
+      assertNever(input, env);
+      assert.match(decide(input, env), reason, command);
+    }
+  }
+});
+
+test("an unquoted `#` is never on both threads, so no comment drops a required word, and a quoted `#` keeps its band", (t) => {
+  const { env, checkout } = operatorFixture(t);
+  const hardened = `git -C ${checkout} ${GREP_HARDENING} grep`;
+  const never = [
+    `${hardened} -n -e . # -- ${EXCL}`,
+    `${hardened} -n . # -- ${EXCL}`,
+    `${hardened} --cached -n -e . # -- ${EXCL}`,
+    `cd ${checkout} && git ${GREP_HARDENING} grep -n -e . # -- ${EXCL}`,
+    `cd ${checkout} && git ${GREP_HARDENING} grep x#-Osh -- ${EXCL}`,
+    `git -C ${checkout} log --format=%h#%s`,
+  ];
+  for (const command of never) {
+    for (const input of bothThreads(command)) {
+      assertNever(input, env);
+      assert.match(decide(input, env), HASH_NEVER, command);
+    }
+  }
+  for (const command of [`cd ${checkout} && git ${GREP_HARDENING} grep x#-Osh -- ${EXCL}`, `git -C ${checkout} log --format=%h#%s`, `${hardened} -n -e . -- ${EXCL} #x`]) {
+    for (const input of bothThreads(command)) assert.match(decide(input, env), /never \(an unquoted `#` is a zsh comment .*quote it, as `'#'` or `"fix #12"`\): no consent covers it$/, command);
+  }
+  const free = [`${hardened} -e '#' -- ${EXCL}`, `git -C ${checkout} log '--format=%h#%s'`, `git -C ${checkout} log "--format=%h#%s"`];
+  for (const command of free) for (const input of bothThreads(command)) assertAllowed(input, env);
+  assert.throws(() => consent(env, { kind: "run", scope: "npm test # x" }), /one bare command/);
+});
+
+const FOREIGN_BLANKS = ["\f", "\v", " ", " ", " ", " ", " ", " ", " ", " ", "　", "﻿"];
+const FOREIGN_BLANK_NEVER = /^operator guard: never \(a blank other than a space or a tab/;
+
+// Every spelling of a command with exactly one single-space gap replaced by one foreign blank.
+function blankFolds(command) {
+  const words = command.split(" ");
+  return words.slice(1).flatMap((_, gap) => FOREIGN_BLANKS.map((blank) => `${words.slice(0, gap + 1).join(" ")}${blank}${words.slice(gap + 1).join(" ")}`));
+}
+
+test("an unquoted blank other than space or tab is never on both threads, whatever word of a free grep it fuses", (t) => {
+  const { env, checkout } = operatorFixture(t);
+  const worktree = join(homeDir(env), "worktrees", "J1", "wt");
+  const spellings = [`git -C ${checkout} ${GREP_HARDENING} grep -n -e foo -- ${EXCL}`, `git -C ${worktree} ${GREP_HARDENING} grep -n -e foo -- ${EXCL}`];
+  for (const spelling of spellings) {
+    for (const command of blankFolds(spelling)) {
+      for (const input of bothThreads(command)) assert.match(decide(input, env) ?? "", FOREIGN_BLANK_NEVER, JSON.stringify(command));
+    }
+  }
+  const literal = [
+    `git -C ${checkout} ${GREP_HARDENING} grep -n -F -e '' -e x\f--\f${EXCL}`,
+    `git -C ${checkout} ${OLD_GREP_HARDENING}\f--no-lazy-fetch grep -n --cached foo -- ${EXCL}`,
+    `cd ${checkout} && git ${GREP_HARDENING} grep -n foo -- ${EXCL}`,
+    `sh -c 'git -C ${checkout} log'\f-1`,
+  ];
+  for (const command of literal) for (const input of bothThreads(command)) assert.match(decide(input, env) ?? "", FOREIGN_BLANK_NEVER, JSON.stringify(command));
+});
+
+test("a quoted foreign blank and the plain spaced spelling keep a free grep free on both threads", (t) => {
+  const { env, checkout } = operatorFixture(t);
+  const free = [`git -C ${checkout} ${GREP_HARDENING} grep -n -e 'a b' -- ${EXCL}`, `git -C ${checkout} ${GREP_HARDENING} grep -n -e foo -- ${EXCL}`];
+  for (const command of free) for (const input of bothThreads(command)) assertAllowed(input, env);
+});
+
+test("an unquoted glob or brace takes a free command off the free list with a hint to quote it, and the quoted form stays free", (t) => {
+  const { env, checkout } = operatorFixture(t);
+  const unquoted = [
+    main("Bash", { command: 'nightqueue queue add "t" {--run,x}' }),
+    main("Bash", { command: "nightqueue doctor {--fix,x}" }),
+    ...bothThreads(`git -C ${checkout} log {--output=/tmp/nq-marker,-1}`),
+    ...bothThreads(`git -C ${checkout} show HEAD@{1}`),
+    sub("nightqueue:explore", "Bash", { command: "gh pr view {--web,1}" }),
+  ];
+  for (const input of unquoted) {
+    const reason = decide(input, env) ?? "";
+    assert.match(reason, /^operator guard: /, input.tool_input.command);
+    assert.match(reason, /quote it \(`'HEAD@\{1\}'`/, input.tool_input.command);
+  }
+  for (const input of bothThreads(`git -C ${checkout} show 'HEAD@{1}'`)) assertAllowed(input, env);
+});
+
+test("an unquoted `^` anywhere in a word is never on both threads, and the quoted spelling stays free", (t) => {
+  const { env, checkout } = operatorFixture(t);
+  const refused = [
+    `git -C ${checkout} log ^main`,
+    `git -C ${checkout} log --^zzz`,
+    `git -C ${checkout} show HEAD^`,
+    `git -C ${checkout} ${GREP_HARDENING} grep -n -e foo -- ${EXCL} --^zzz`,
+    `cd ${checkout} && npm test -- --^zzz`,
+  ];
+  for (const command of refused) {
+    for (const input of bothThreads(command)) assert.match(decide(input, env) ?? "", /^operator guard: never \(.*`\^`/, command);
+  }
+  for (const command of [`git -C ${checkout} log '^main'`, `git -C ${checkout} log "--^zzz"`, `git -C ${checkout} show 'HEAD^'`]) {
+    for (const input of bothThreads(command)) assertAllowed(input, env);
+  }
+});
+
+test("a control character other than a tab or a newline is never on both threads, quoted or not", (t) => {
+  const { env, checkout, elsewhere } = operatorFixture(t);
+  const refused = [
+    `git -C ${elsewhere}\u0000/..${checkout} ${GREP_HARDENING} grep -n -e foo -- ${EXCL}`,
+    `git -C ${checkout} ${GREP_HARDENING} grep -n -e 'x\u0000' -- ${EXCL}`,
+    `git -C ${checkout} log --oneline\u0001`,
+    `git -C ${checkout} log --oneline\u001b`,
+  ];
+  for (const command of refused) {
+    for (const input of bothThreads(command)) assert.match(decide(input, env) ?? "", /^operator guard: never \(a control character other than a tab or a newline/, JSON.stringify(command));
+  }
+  for (const input of bothThreads(`git -C ${checkout} log --oneline -5`)) assertAllowed(input, env);
+});
+
 test("the main thread runs its free Bash list with no consent, and anything else is refused", (t) => {
   const { env, checkout } = operatorFixture(t);
   const allowed = [

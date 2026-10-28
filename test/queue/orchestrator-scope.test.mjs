@@ -9,8 +9,16 @@ import {
   ORCHESTRATOR_BASH_RULES,
   PLUGIN_DIR_ENV,
   describeOrchestratorBashRules,
+  hasControlChar,
+  hasEscapingBackslash,
+  hasUnquotedCaret,
+  hasUnquotedExpansion,
+  hasUnquotedForeignBlank,
+  hasUnquotedHash,
+  hasUnquotedParen,
   insideRoots,
   isOrchestratorCall,
+  maskQuoted,
   orchestratorBashAllowed,
   orchestratorRoots,
   readTarget,
@@ -113,6 +121,19 @@ const BASH_TABLE = [
   ["git diff --stat `ls`", false],
   ["git diff --stat > out.txt", false],
   ["git status --short\nls", false],
+  ["git rev-parse =(x)", false],
+  ["git rev-parse *(e:'x':)", false],
+  ["git status --short =(x)", false],
+  ["nightqueue run check =(x)", false],
+  ["git push {--receive-pack=x,origin}", false],
+  ["git fetch {--upload-pack=x,origin}", false],
+  ["git add *", false],
+  ["git add src/?.mjs", false],
+  ["git rev-parse ^HEAD", false],
+  ["git rev-parse '(x)'", true],
+  ['git commit -m "fix(scope): x {y}"', true],
+  ["git rev-parse HEAD^", false],
+  ["git rev-parse 'HEAD^'", true],
 ];
 
 for (const [command, allowed] of BASH_TABLE) {
@@ -121,9 +142,165 @@ for (const [command, allowed] of BASH_TABLE) {
   });
 }
 
+test("hasUnquotedExpansion sees only what zsh reads unquoted, and hasUnquotedParen only a paren", () => {
+  const cases = [
+    ["git add *", true, false],
+    ["git log ^main", true, false],
+    ["git log =(x)", true, true],
+    ["git log '(x)' \"{y}\" $'[z]'", false, false],
+    ["git log HEAD^ a~1", false, false],
+    ["", false, false],
+  ];
+  for (const [command, expands, paren] of cases) {
+    assert.equal(hasUnquotedExpansion(command), expands, command);
+    assert.equal(hasUnquotedParen(command), paren, command);
+  }
+  assert.equal(hasUnquotedExpansion(42), true);
+  assert.equal(hasUnquotedParen(42), false);
+});
+
+test("hasUnquotedHash sees a `#` zsh reads unquoted, word-initial or mid-word, and never a quoted one", () => {
+  for (const command of ["a # b", "a#b", "#x", "''#b"]) assert.equal(hasUnquotedHash(command), true, command);
+  for (const command of ["'#'", '"#"', "$'#'", "x'#'", '"fix #12"', "git log"]) assert.equal(hasUnquotedHash(command), false, command);
+  assert.equal(hasUnquotedHash(42), false);
+});
+
+test("the orchestrator's closed list refuses an unquoted `#` that would drop a required word, and keeps a quoted one", () => {
+  const refused = ["git diff # --stat", "git diff # --name-only", "git branch # --show-current", "git status # --short", "git status --short x#y"];
+  for (const command of refused) assert.equal(orchestratorBashAllowed(command), false, command);
+  for (const command of ["git diff '#' --stat", 'git commit -m "fix: #12"']) assert.equal(orchestratorBashAllowed(command), true, command);
+});
+
+test("hasUnquotedCaret sees a `^` zsh reads unquoted anywhere in a word, and never a quoted one", () => {
+  for (const command of ["git log ^main", "git fetch origin --^zzz", "git rev-parse HEAD^", "a ''^b"]) assert.equal(hasUnquotedCaret(command), true, command);
+  for (const command of ["'^main'", '"--^zzz"', "$'^x'", "x'^'", "git log"]) assert.equal(hasUnquotedCaret(command), false, command);
+  assert.equal(hasUnquotedCaret(42), false);
+});
+
+test("the orchestrator's closed list refuses an unquoted `^` mid-word, which EXTENDED_GLOB expands to file names, and keeps a quoted one", () => {
+  const refused = ["git fetch origin --^zzz", "git push origin HEAD --^zzz", "git commit -m fix --^zzz", "git diff --stat HEAD^"];
+  for (const command of refused) assert.equal(orchestratorBashAllowed(command), false, command);
+  for (const command of ["git commit -m 'a ^ b'", 'git diff --stat "HEAD^"']) assert.equal(orchestratorBashAllowed(command), true, command);
+});
+
+test("hasControlChar sees a C0 control character but a tab or a newline, quoted or not", () => {
+  for (const command of ["a\u0000b", "'a\u0000b'", "a\u0001", "a\u001bb", "a\rb", "a\fb", 42]) assert.equal(hasControlChar(command), true, JSON.stringify(command));
+  for (const command of ["a b", "a\tb", "a\nb", "a\u007fb", "a b"]) assert.equal(hasControlChar(command), false, JSON.stringify(command));
+});
+
+test("the orchestrator's closed list refuses a command carrying a NUL byte, at which zsh cuts the word it passes", () => {
+  const refused = ["git push origin main --force\u0000x", "git push origin main '--force\u0000x'", "git status --short\u0000", "git diff --stat\u0001"];
+  for (const command of refused) assert.equal(orchestratorBashAllowed(command), false, JSON.stringify(command));
+  assert.equal(orchestratorBashAllowed("git push origin main"), true);
+});
+
+const FOREIGN_BLANKS = ["\f", "\v", " ", " ", " ", " ", " ", " ", " ", " ", "　", "﻿"];
+
+const BLANK_FUZZ_EXAMPLES = [
+  "git rev-parse --show-toplevel",
+  "git status --short",
+  "git diff --stat",
+  "git branch --show-current",
+  "git push origin HEAD",
+  "git fetch origin main",
+  "git commit -m fix",
+  "gh pr view 12",
+  "nightqueue run check job",
+];
+
+const BACKSLASH_VECTORS = [
+  "git fetch --up\\load-pack=x origin",
+  "git push origin \\+main",
+  "git push origin \\:main",
+  "git push --for\\ce origin main",
+  "git push --dele\\te origin main",
+  "git commit -m x --am\\end",
+  "git diff --stat -\\p",
+  'git commit -m \\"a --amend b\\"',
+  'git push origin \\"x --force y\\"',
+];
+
+// The command with only the space after word `gap` replaced by `blank`.
+function fuseAt(command, blank, gap) {
+  const words = command.split(" ");
+  return `${words.slice(0, gap + 1).join(" ")}${blank}${words.slice(gap + 1).join(" ")}`;
+}
+
+test("hasUnquotedForeignBlank sees an unquoted blank zsh does not split on, and never a quoted one or a plain space, tab or line break", () => {
+  for (const blank of FOREIGN_BLANKS) {
+    assert.equal(hasUnquotedForeignBlank(`a${blank}b`), true, JSON.stringify(blank));
+    assert.equal(hasUnquotedForeignBlank(`'a${blank}b'`), false, JSON.stringify(blank));
+    assert.equal(hasUnquotedForeignBlank(`"a${blank}b"`), false, JSON.stringify(blank));
+  }
+  for (const command of ["a b", "a\tb", "a\nb", "a\rb"]) assert.equal(hasUnquotedForeignBlank(command), false, JSON.stringify(command));
+  assert.equal(hasUnquotedForeignBlank(42), false);
+});
+
+test("hasEscapingBackslash sees a backslash outside quotes or inside double quotes, and never a single-quoted one", () => {
+  for (const command of ["a\\b", '\\"x\\"', '"a\\"b"', '"a\\\\b"', '"a\\b"', "x'y'\\z"]) assert.equal(hasEscapingBackslash(command), true, command);
+  for (const command of ["'a\\b'", "'\\'", "plain", '"no escape"']) assert.equal(hasEscapingBackslash(command), false, command);
+  assert.equal(hasEscapingBackslash(42), true);
+});
+
+test("the orchestrator's closed list refuses a backslash zsh reads as an escape, and keeps a single-quoted one", () => {
+  for (const command of BACKSLASH_VECTORS) assert.equal(orchestratorBashAllowed(command), false, command);
+  for (const command of ["git commit -m 'a\\b'", "git commit -m 'a b'", "git fetch origin", "git diff --stat"]) assert.equal(orchestratorBashAllowed(command), true, command);
+});
+
+test("the orchestrator's closed list refuses every row example with a foreign blank at any gap, and keeps a quoted one", () => {
+  for (const command of BLANK_FUZZ_EXAMPLES) {
+    assert.equal(orchestratorBashAllowed(command), true, command);
+    for (const blank of FOREIGN_BLANKS) {
+      for (let gap = 0; gap < command.split(" ").length - 1; gap += 1) {
+        const fused = fuseAt(command, blank, gap);
+        assert.equal(orchestratorBashAllowed(fused), false, JSON.stringify(fused));
+      }
+    }
+  }
+  assert.equal(orchestratorBashAllowed("git commit -m 'a b'"), true);
+});
+
 test("a command that is not a string is refused and never throws", () => {
   for (const value of [undefined, null, 42, ["git", "status"], { command: "git status --short" }]) {
     assert.equal(orchestratorBashAllowed(value), false);
+  }
+});
+
+const MASK_TABLE = [
+  ["git log -1 =(nightqueue version)", "git log -1 =(nightqueue version)"],
+  ["grep -e a '(' -e b ')'", "grep -e a '_' -e b '_'"],
+  ['log --format="%h (x)"', 'log --format="______"'],
+  ["a '' \"\" b", "a '' \"\" b"],
+  ["'a'\"b\"(x)", "'_'\"_\"(x)"],
+  ["\"it's\"(x)", "\"____\"(x)"],
+  ['"a\\"" (x)', '"___" (x)'],
+  ["$'a\\'(x)' y", "$'______' y"],
+  ["$'a\\'' (x)", "$'___' (x)"],
+  ['echo "$(id)"', 'echo "$(___"'],
+  ["echo \\( x", "echo \\_ x"],
+  ["echo 'unterminated (x", "echo '_______________"],
+  ['echo "open (x', 'echo "_______'],
+];
+
+for (const [command, masked] of MASK_TABLE) {
+  test(`maskQuoted hides only what zsh reads as quoted: ${JSON.stringify(command)}`, () => {
+    assert.equal(maskQuoted(command), masked);
+    assert.equal(maskQuoted(command).length, command.length);
+  });
+}
+
+test("maskQuoted refuses a value that is not a string with a clear error", () => {
+  assert.throws(() => maskQuoted(undefined), /maskQuoted expects a string command, got undefined/);
+});
+
+test("maskQuoted scans a large unterminated quote in linear time", () => {
+  for (const opening of ["'", '"', "$'"]) {
+    const command = `git log ${opening}${"a\\(".repeat(100_000)}`;
+    const started = performance.now();
+    const masked = maskQuoted(command);
+    assert.equal(masked.length, command.length);
+    assert.equal(/[()]/.test(masked), false);
+    assert.ok(performance.now() - started < 1000, `maskQuoted took too long on an unterminated ${opening} run`);
   }
 });
 

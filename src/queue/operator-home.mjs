@@ -5,7 +5,18 @@ import { homeDir, userHomeDir } from "../config/paths.mjs";
 import { listHomeHolders } from "../memory/jobs.mjs";
 import { jobRef } from "../memory/refs.mjs";
 import { registeredCheckouts, withRegistry } from "../memory/registry-access.mjs";
-import { GIT_READ_HARDENING, IGNORE_SUBMODULES, gitGlobals, gitReadAllowed, isBarePrefix, isSubmoduleArg, opensWithHardening, programName } from "./operator-scope.mjs";
+import {
+  GIT_READ_HARDENING,
+  IGNORE_SUBMODULES,
+  gitGlobals,
+  gitReadAllowed,
+  grepDirSpelling,
+  grepSpellingNever,
+  isBarePrefix,
+  isSubmoduleArg,
+  opensWithHardening,
+  programName,
+} from "./operator-scope.mjs";
 import { prStates } from "./operator-pr-budget.mjs";
 import { canonicalPath } from "./orchestrator-scope.mjs";
 import { flattenPrState, prStateKey } from "./pr-state.mjs";
@@ -39,7 +50,7 @@ const NON_LITERAL_HOME =
 const ADMIN_DIRS = "worktrees";
 const NO_LOCKS = "--no-optional-locks";
 const HARDENED_GIT = "git -C <worktree> -c core.fsmonitor=false -c core.hooksPath=/dev/null";
-export const WORKTREE_READ_SPELLING = `\`${HARDENED_GIT} [${NO_LOCKS}] <read>\` (\`status\` and \`diff\` with \`${IGNORE_SUBMODULES}\`)`;
+export const WORKTREE_READ_SPELLING = `\`${HARDENED_GIT} [${NO_LOCKS}] <read>\` (\`status\` and \`diff\` with \`${IGNORE_SUBMODULES}\`; \`grep\` only as ${grepDirSpelling("<worktree>")})`;
 const WORKTREE_READ_HARDENED = `a worktree under the nightqueue home is read only hardened, so no program the job planted runs: ${WORKTREE_READ_SPELLING}, never another \`--submodule*\` or \`--recurse-submodules\``;
 const WORKTREE_NEVER_STASHED =
   "a worktree under the nightqueue home is never stashed: `git stash` runs the clean filter of a nested repo the job planted, whatever the hardening; salvage it with `git -C <worktree> format-patch` or `cp`";
@@ -233,7 +244,7 @@ function trustedWorktree(entry, env, result) {
 // Tells whether git words past the global options are a read of a directory: `stash list`, or an allowed read of it.
 function isGitRead(argv, { dir, noLocks }) {
   if (argv[0] === "stash") return argv.length === 2 && argv[1] === "list";
-  return gitReadAllowed(["git", "-C", dir, ...(noLocks ? [NO_LOCKS] : []), ...argv], [canonicalPath(dir)]);
+  return gitReadAllowed(["git", "-C", dir, ...GIT_READ_HARDENING, ...(noLocks ? [NO_LOCKS] : []), ...argv], [canonicalPath(dir)]);
 }
 
 // Tells whether a read keeps out of submodules: `status` and `diff` carry exactly `--ignore-submodules=all`, any other read no submodule option.
@@ -249,6 +260,12 @@ function hardenedGlobals(globalWords, { dir, noLocks }) {
   return globalWords.length === expected.length && expected.every((word, index) => globalWords[index] === word);
 }
 
+// The classification of a git grep of a worktree under the home: read for the one free hardened spelling, else never with its reason.
+function worktreeGrepRead(program) {
+  const never = grepSpellingNever(program.slice(3));
+  return never === null ? { kind: "read" } : { never };
+}
+
 // The classification of a git read of a worktree under the home (`stash list` included): read when hardened, never when not or for an untrusted pointer, else null.
 function worktreeReadSegment(program, hits, env) {
   const entry = worktreeRootHit(program, hits);
@@ -256,6 +273,7 @@ function worktreeReadSegment(program, hits, env) {
   const globals = gitGlobals(program.slice(1));
   if (globals.refused !== null) return null;
   const argv = program.slice(1 + globals.index);
+  if (argv[0] === "grep") return trustedWorktree(entry, env, worktreeGrepRead(program));
   const spelling = { dir: program[2], noLocks: globals.noLocks };
   if (!isGitRead(argv, spelling)) return null;
   const hardened = hardenedGlobals(program.slice(1, 1 + globals.index), spelling) && submodulesIgnored(argv);
