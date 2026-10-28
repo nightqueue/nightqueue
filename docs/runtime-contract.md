@@ -440,6 +440,8 @@ Claude session never spawns a hook): the PreToolUse matcher becomes
 pre-approves `mcp__nightqueue__*`, `WebFetch` and `WebSearch` only: the operator reads the web
 (a linked page, an issue, a library's docs) without a prompt; the guard does not judge those
 two tools, since they neither edit nor execute. Edit, Write and Bash are never pre-approved.
+The person's own MCP servers (loaded through the `user` setting source) are reachable and never
+pre-approved: the guard passes every `mcp__<server>__` tool but nightqueue's to the host prompt.
 
 The `agent-foreground` hook in operator mode is the operator guard. Each refusal is a PreToolUse
 `deny` whose reason is one line starting `operator guard:`, naming what is allowed instead; it never moves

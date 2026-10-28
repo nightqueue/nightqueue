@@ -16,7 +16,7 @@ const RETIRED_HOOK_EVENTS = ["SessionEnd"];
 
 const OPERATOR_TOOL_MATCHER = "Agent|Task|Bash|Read|Grep|Glob|Edit|Write|MultiEdit|NotebookEdit";
 
-// The tools the operator session may call without asking: the nightqueue MCP server is its own product, every prompt would be noise.
+// The tools the operator session may call without asking: the nightqueue MCP server is its own product, every prompt would be noise; never another MCP server: the person's own go through the host prompt.
 export const OPERATOR_ALLOWED_TOOLS = ["mcp__nightqueue__*", "WebFetch", "WebSearch"];
 
 // Command line registered in the host for one hook of this package.

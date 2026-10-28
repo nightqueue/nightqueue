@@ -1171,9 +1171,10 @@ nightqueue open my-app --prompt "Analyse the login failure"   # start the sessio
 `nightqueue open [project] [--resume <session>] [--prompt <text>]` starts an interactive `claude` with the
 `nightqueue:nightqueue-operator` agent as the main thread (`--append-system-prompt` with the
 agent's body when `claude --help` does not list `--agent`; `nightqueue doctor` reports which),
-the operator settings, `--setting-sources project,local` (the operator's interactive session keeps
-the `local` source; a queued job's child gets `--setting-sources project` only), the plugin and
-the nightqueue MCP server, and `NIGHTQUEUE_MODE=operator`, which puts the guard hook in operator
+the operator settings, `--setting-sources user,project,local` (the operator loads the person's own
+MCP servers, plugins and settings; a queued job's child keeps `--strict-mcp-config
+--setting-sources project`), the plugin and the nightqueue MCP server (its `--mcp-config` entry
+wins over a same-name user-scope one), and `NIGHTQUEUE_MODE=operator`, which puts the guard hook in operator
 mode (below). It never holds the config lock.
 
 **Home mode.** The operator is generalist: the session always runs in the nightqueue
@@ -1299,7 +1300,7 @@ refused. Consents end with the
 operator session, the tool is refused.
 
 The runtime record is the audit and the guard; the host's permission prompt is the barrier
-for `Edit`, `Write` and `Bash` only. `operator_consent` and `connection_call` are pre-approved
+for `Edit`, `Write`, `Bash` and the person's own MCP servers. `operator_consent` and `connection_call` are pre-approved
 MCP tools, so no prompt stands before them: for them the guard's record is the only control,
 and the operator agent never calls either without the person's answer in the conversation.
 An allowed call answers nothing, never `allow`, so Claude Code still prompts for it, and the
@@ -1321,7 +1322,12 @@ preselected project or the list of registered ones (from the session block, no t
 where to start. A resumed session is not greeted again. The `nightqueue` MCP tools are
 pre-approved for the session (`permissions.allow: ["mcp__nightqueue__*"]` in the settings it
 is started with), so the operator never asks before reading the queue or the
-memory; every other tool keeps Claude Code's own prompts.
+memory; every other tool keeps Claude Code's own prompts. That covers the person's own MCP
+servers (user, project and local scope, and their user-scope plugins): nightqueue pre-approves
+none of them, the guard passes them to the host prompt, and the person's own allow rules apply.
+A guard `deny` still wins over a user allow rule. The operator agent has no `tools:` allowlist,
+since `mcp__*` there matches nothing: it inherits every tool and its `disallowedTools` drops the
+built-ins it never had (listed against Claude Code 2.1.312).
 
 `--prompt <text>` starts the session with that request instead of the opening prompt (after
 `--resume <session>` when resuming): it is passed verbatim as claude's first positional

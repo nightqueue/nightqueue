@@ -5,7 +5,8 @@ import { test } from "node:test";
 import { COMMAND_NAMES } from "../../src/cli/index.mjs";
 import { idTime, newId } from "../../src/config/ids.mjs";
 import { configPath, dbPath, homeDir, runsDir, secretsPath } from "../../src/config/paths.mjs";
-import { operatorDecision } from "../../src/hooks/operator-guard.mjs";
+import { runAgentForeground } from "../../src/hooks/agent-foreground.mjs";
+import { operatorDecision, personMcpTool } from "../../src/hooks/operator-guard.mjs";
 import { operatorSettings, desiredHooks } from "../../src/host/settings.mjs";
 import { SUBCOMMAND_NAMES as PROJECT_SUBCOMMANDS } from "../../src/cli/project.mjs";
 import { SUBCOMMAND_NAMES as QUEUE_SUBCOMMANDS } from "../../src/cli/queue.mjs";
@@ -447,6 +448,40 @@ test("a failure inside the guard refuses an edit or a Bash call and lets a read 
   assert.match(decide(main("Bash", hostile), env), /^operator guard: .*boom/);
   assert.match(decide(sub("nightqueue:coder", "Write", hostile), env), /^operator guard: .*boom/);
   assert.equal(decide(main("Read", hostile), env), null);
+});
+
+test("the person's own MCP tools pass to the host prompt by a named branch, and the nightqueue tools keep today's path", (t) => {
+  const { env } = operatorFixture(t);
+  const tools = [
+    "mcp__nightqueue__queue_add", "mcp__nightqueue__operator_consent", "mcp__nightqueue__connection_call",
+    "mcp__linear__create_issue", "mcp__sentry__x", "mcp__plugin_foo_bar__x",
+  ];
+  for (const tool of tools) {
+    assertAllowed(main(tool, { title: "x" }), env);
+    assertAllowed(sub("nightqueue:coder", tool, { title: "x" }), env);
+    assertAllowed(main(tool, "not an object"), env);
+  }
+});
+
+test("personMcpTool names every MCP tool but the nightqueue server's", () => {
+  const table = [
+    ["mcp__linear__x", true], ["mcp__plugin_foo_bar__x", true], ["mcp__nightqueue_evil__x", true],
+    ["mcp__nightqueue__queue_add", false], ["Bash", false], [undefined, false],
+  ];
+  for (const [tool, expected] of table) assert.equal(personMcpTool(tool), expected, String(tool));
+});
+
+// Claude Code's hook precedence is `deny` > `defer` > `ask` > `allow` (https://code.claude.com/docs/en/hooks), so this deny beats a user allow rule.
+test("a user-level permissions.allow for Bash never bypasses the consent band: the hook still answers deny", (t) => {
+  const { env, checkout } = operatorFixture(t);
+  const claudeDir = makeDir(t, "operator-guard-user-settings");
+  writeFileSync(join(claudeDir, "settings.json"), JSON.stringify({ permissions: { allow: ["Bash", "Edit", "Write", "mcp__linear__*"] } }));
+  const withUserAllow = { ...env, CLAUDE_CONFIG_DIR: claudeDir };
+  const answer = JSON.parse(runAgentForeground({ input: main("Bash", { command: `cd ${checkout} && npm test` }), env: withUserAllow }));
+  assert.equal(answer.hookSpecificOutput.permissionDecision, "deny");
+  assert.match(answer.hookSpecificOutput.permissionDecisionReason, /^operator guard: needs consent \(run /);
+  consent(withUserAllow, { kind: "run", scope: "npm test" });
+  assert.equal(runAgentForeground({ input: main("Bash", { command: `cd ${checkout} && npm test` }), env: withUserAllow }), "");
 });
 
 test("idTime reads back the time a fresh id was made at, and null for a non-id", () => {

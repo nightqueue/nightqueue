@@ -964,6 +964,9 @@ behaviour, for an operator who wants a job to see everything a foreground sessio
 sees; there is no per-server allowlist - it is all or nothing. `nightqueue doctor`
 reports which mode is in effect: `job environment` is `ok` when isolated, and warns,
 naming the config key, when a job inherits the operator's own environment.
+The operator session (`nightqueue open`, `queue session`) is the opposite: it loads the
+person's own MCP servers, plugins and user settings (`--setting-sources user,project,local`,
+no `--strict-mcp-config`), and a job never does.
 
 **`baseline_ctx` measures what a run started with.** The first assistant turn of the
 orchestrator (never a subagent's) carries the input, cache-read and cache-creation

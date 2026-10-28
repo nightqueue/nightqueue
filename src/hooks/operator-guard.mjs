@@ -24,6 +24,13 @@ const AGENT_TOOLS = new Set(["Agent", "Task"]);
 const INPUT_REQUIRED_TOOLS = new Set([...WRITE_TOOLS, "Bash", ...AGENT_TOOLS]);
 const HOME_MAINTENANCE = "home-maintenance";
 const CONSENT_TAIL = "ask the person (what, where, how to undo it), record the answer with operator_consent, then retry";
+const MCP_PREFIX = "mcp__";
+const NIGHTQUEUE_MCP_PREFIX = "mcp__nightqueue__";
+
+// A tool of an MCP server the person configured: never judged by the guard, the host prompt decides.
+export function personMcpTool(toolName) {
+  return typeof toolName === "string" && toolName.startsWith(MCP_PREFIX) && !toolName.startsWith(NIGHTQUEUE_MCP_PREFIX);
+}
 
 // The absolute path an edit tool call writes, a relative one resolved against the session cwd, or null when it names none.
 function writeTarget(toolInput, cwd) {
@@ -110,6 +117,7 @@ function agentReason(toolInput) {
 // Deny reason of a call of the operator or one of its subagents under the three bands, or null when the guard allows it.
 function bandReason(input, env) {
   const toolName = input.tool_name;
+  if (personMcpTool(toolName)) return null;
   const mainThread = isOrchestratorCall(input);
   if (READ_TOOLS.has(toolName)) return readReason(input, env);
   if (AGENT_TOOLS.has(toolName)) return mainThread ? agentReason(input.tool_input) : null;

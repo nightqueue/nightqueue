@@ -76,10 +76,11 @@ test("every Phase section of SKILL.md fits its line cap", () => {
   }
 });
 
+// A `disallowedTools:` frontmatter line names host tools only to deny them, so it is no use of a host term.
 test("SKILL.md and the agents name no host or machine term", () => {
   const agents = readdirSync(AGENTS_DIR).filter((name) => name.endsWith(".md")).map((name) => join(AGENTS_DIR, name));
   for (const path of [SKILL_PATH, ...agents]) {
-    const hit = textOf(path).split("\n").find((line) => HOST_TERMS.test(line));
+    const hit = textOf(path).split("\n").find((line) => !line.startsWith("disallowedTools:") && HOST_TERMS.test(line));
     assert.equal(hit, undefined, `${path} names a host or machine term: ${hit}`);
   }
 });
