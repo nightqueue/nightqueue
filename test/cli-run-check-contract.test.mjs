@@ -164,6 +164,34 @@ test("the usage coverage counts read the leading integer of each field and gate 
   assert.equal(counts("1 · 1 of 3"), 'N=1/1 M=(unparsed: "1 of 3")/1');
 });
 
+test("the symptom coverage N reads the leading integer of its field and gates a wrong or unparsed count", () => {
+  const { texts } = readFixture("symptom-coverage-n-mismatch");
+  const nGate = (n) => {
+    const qa = texts["05-qa.md"].replace("Symptom coverage: 3 ·", `Symptom coverage: ${n} ·`);
+    const { lines } = evaluateCheck({ check: "05", texts: { ...texts, "05-qa.md": qa }, state: { type: "bug/error" } });
+    return lines.find((line) => line.startsWith("GATE: symptom-coverage-n-mismatch — "))?.slice("GATE: symptom-coverage-n-mismatch — ".length) ?? null;
+  };
+  for (const n of ["2", "2 vectors of the plan's table", "**2**", "`2`", "N=2", "2 (1 in the diff)"]) {
+    assert.equal(nGate(n), null, n);
+  }
+  for (const n of ["3 vectors of the plan's table", "two vectors", "2/2", "2 of 2", "2.0", "2vectors", "N: 2"]) {
+    assert.equal(nGate(n), `N=${n} plan=2`, n);
+  }
+});
+
+test("the filled symptom coverage example of the QA report template passes the check", () => {
+  const { texts } = readFixture("symptom-coverage-n-mismatch");
+  const template = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "plugin", "skills", "resolve", "references", "deliverables", "qa-report.md"), "utf8");
+  const example = /`(Symptom coverage: [^`]*)`/.exec(template)?.[1];
+  assert.ok(example, "qa-report.md has no `Symptom coverage:` example");
+  assert.equal(example.split(" · ")[0], "Symptom coverage: <N>");
+  const filled = example.replace("<N>", "2").replace("<command/criterion of your re-enumeration>", '`grep -rn "x" src`').replace("<file:line | none>", "none");
+  assert.ok(!filled.includes("<"), `unfilled placeholder in ${filled}`);
+  const qa = texts["05-qa.md"].replace(/^Symptom coverage: .*$/m, () => filled);
+  const { lines } = evaluateCheck({ check: "05", texts: { ...texts, "05-qa.md": qa }, state: { type: "bug/error" } });
+  assert.deepEqual(lines.filter((line) => line.startsWith("GATE: symptom-coverage-")), []);
+});
+
 test("the held-on-pipeline gate counts HELD only set off from the prose", () => {
   const { texts } = readFixture("usage-coverage-held-on-pipeline");
   const gates = (line) => {

@@ -411,7 +411,7 @@ export function qaModeOf(plan) {
   return declaresAlwaysGate(text) || highRisks(text).length >= 2 ? "full" : "lite";
 }
 
-// The three gates of the QA's `Symptom coverage:` line against the plan's table.
+// The three gates of the QA's `Symptom coverage:` line against the plan's table, its N read as the field's leading integer.
 function symptomCoverageGates(ctx, risks) {
   if (!needsCoverage(ctx)) return [];
   const value = labelledValue(risks, "Symptom coverage:");
@@ -421,7 +421,7 @@ function symptomCoverageGates(ctx, risks) {
   const omitted = fields.find((field) => /^omitted:/i.test(field));
   const method = fields.slice(1).find((field) => !/^omitted:/i.test(field)) ?? "";
   return [
-    ...(/^\d+$/.test(fields[0]) && Number(fields[0]) === planRows ? [] : [gate("symptom-coverage-n-mismatch", `N=${fields[0] || "(empty)"} plan=${planRows}`)]),
+    ...(leadingCount(fields[0], "N") === planRows ? [] : [gate("symptom-coverage-n-mismatch", `N=${fields[0] || "(empty)"} plan=${planRows}`)]),
     ...(omitted && omitted.slice("omitted:".length).trim() !== "" ? [] : [gate("symptom-coverage-omitted-empty", omitted ? "omitted: (empty)" : "omitted: field absent")]),
     ...(METHOD_RE.test(method) && !GENERIC_METHOD_RE.test(method) ? [] : [gate("symptom-coverage-method-generic", method || "(empty)")]),
   ];
@@ -436,7 +436,7 @@ function accessMapCount(text) {
 
 const SECOND_NUMBER_RE = String.raw`\s*[-/+~–—]\s*\d|\s+(?:of|or|to|out of|de|ou|em|a)\s*\d`;
 
-// The leading integer of a count field (optionally prefixed by its own `<letter>=`), or null when it has none or it is followed by a second number.
+// The leading integer of a coverage count field (optionally prefixed by its own `<letter>=`), or null when it has none or it is followed by a second number.
 function leadingCount(field, letter) {
   const match = new RegExp(`^(?:${letter}\\s*=\\s*)?(\\d+)(?!\\w|[.,]\\d|${SECOND_NUMBER_RE})`, "i").exec(plainValue(field));
   return match ? Number(match[1]) : null;
