@@ -209,10 +209,46 @@ export function recordCheck({ projectId, slug, check, memo, done = null, env = p
 }
 
 // Records that the run stopped on purpose at a phase, which is what keeps a retry from resuming it.
-export function recordTermination({ projectId, slug, phase, reason, by, env = process.env } = {}) {
+export function recordTermination({ projectId, slug, phase, reason, by, wip = null, env = process.env } = {}) {
+  const refused = terminationRefusal(phase, reason);
+  if (refused) return refused;
+  return record({
+    projectId,
+    slug,
+    env,
+    change: (_state, at) => ({
+      termination: withText({ phase, reason: trimmedText(reason), at }, { by }),
+      ...(isStateObject(wip) ? { wip: { ...wip, at } } : {}),
+    }),
+  });
+}
+
+// Why a termination cannot be recorded (an unknown phase or no reason), or null when it can.
+export function terminationRefusal(phase, reason) {
   if (!RESUME_PHASE_ORDER.includes(phase)) return refuseEnum("phase", phase, RESUME_PHASE_ORDER);
   if (trimmedText(reason) === null) return kept("a termination needs a reason: it is what the operator reads in the queue");
-  return record({ projectId, slug, env, change: (_state, at) => ({ termination: withText({ phase, reason: trimmedText(reason), at }, { by }) }) });
+  return null;
+}
+
+// Records what the runtime did with a terminated run's work (its wip commit, or why there is none).
+export function recordWip({ projectId, slug, wip, env = process.env } = {}) {
+  if (!isStateObject(wip)) return kept("a wip record needs the wip commit's result");
+  return record({ projectId, slug, env, change: (_state, at) => ({ wip: { ...wip, at } }) });
+}
+
+// Drops the wip record of a run, once its work was given back to the worktree.
+export function clearWip({ projectId, slug, env = process.env } = {}) {
+  return underRunLock({
+    projectId,
+    slug,
+    env,
+    write: () => {
+      const state = readRunState({ projectId, slug, env });
+      if (!isStateObject(state?.wip)) return { status: "absent", path: null, reason: null };
+      const { wip: _dropped, ...rest } = state;
+      return saveRunState({ projectId, slug, env, state: { ...rest, updatedAt: new Date().toISOString() } });
+    },
+  });
 }
 
 // Whether the state holds a termination of that author (and of that phase, when one is named).

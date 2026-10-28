@@ -151,6 +151,14 @@ function operatorBlock(operatorNote, prompt) {
   return `\n\nOPERATOR ANSWER TO THE GATE: ${escapePromptMarkers(truncateByCodePoint(note, OPERATOR_NOTE_LIMIT))}`;
 }
 
+// Extra block appended to the prompt when the claim gave the previous attempt's wip commit back to the worktree as uncommitted changes.
+function restoredWipBlock(restoredWip) {
+  if (!restoredWip?.short) return "";
+  const subject = escapePromptMarkers(String(restoredWip.subject ?? "").replace(/\s+/g, " ").trim());
+  const subjectPart = subject ? ` (${subject})` : "";
+  return `\n\nRESTORED WIP: the previous attempt's changes from commit ${escapePromptMarkers(String(restoredWip.short))}${subjectPart} are back as uncommitted changes in the worktree; keep them.`;
+}
+
 // Extra block appended to the prompt when the previous run of this job can be resumed: the runtime hands over where the run lives and which phase comes next.
 function resumeBlock(handoff) {
   if (!handoff || !isSafeSegment(handoff.slug)) return "";
@@ -225,7 +233,7 @@ function originBlock(job, env) {
 }
 
 // Builds the prompt of the unattended run; every marker is quoted inline, so the echo never looks like one.
-export function buildPrompt({ job, handoff, openPrs, env = process.env } = {}) {
+export function buildPrompt({ job, handoff, openPrs, restoredWip = null, env = process.env } = {}) {
   if (job?.prompt === RECOVERED_PROMPT) throw new UserError(recoveredPromptRefusal(job.id));
   const base = [
     `/nightqueue:resolve ${String(job?.prompt ?? "").trim()}`,
@@ -236,7 +244,7 @@ export function buildPrompt({ job, handoff, openPrs, env = process.env } = {}) {
     "If you need a human decision, stop at the gate and print `## Requires user confirmation`.",
     "Shell rule: the worktree isolation refuses commands it cannot verify - one simple command per Bash call, no heredocs, no `\\` continuations, no `cd … && …`; longer snippets are files written with Write and run by path.",
   ].join("\n");
-  return `${base}${originBlock(job, env)}${operatorBlock(job?.operator_note, job?.prompt)}${resumeBlock(handoff)}${openPrsBlock(openPrs)}`;
+  return `${base}${originBlock(job, env)}${operatorBlock(job?.operator_note, job?.prompt)}${restoredWipBlock(restoredWip)}${resumeBlock(handoff)}${openPrsBlock(openPrs)}`;
 }
 
 // Builds the argv of the child: an array, never a shell, fenced off from the operator's own environment unless inheritUserEnvironment is true, with --resume only behind the session id gate.

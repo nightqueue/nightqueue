@@ -61,5 +61,5 @@ The aggregate verdict counts proof: any merged round with a non-`None` `## Prove
 `NEEDS FIX` or `BROKE` line → `NEEDS FIX`, else any `NEEDS DISCUSSION`, unreadable verdict,
 `INCONCLUSIVE` line or id with no prover line → `NEEDS DISCUSSION`, else `APPROVED`); with no prover
 round, open hypotheses → `NEEDS DISCUSSION`, and no hypothesis → the analyst's verdict. A `GATE:` line relaunches the QA once,
-from the analyst; a persisting usage-coverage-only GATE pauses (SKILL.md Phase 5), never terminates. The check reads the last round — the artifact
-Phase 6 and Phase 9 re-read via Read, its last `## Round`.
+from the analyst; a persisting usage-coverage-only GATE pauses (SKILL.md Phase 5), never terminates; a second `INVALIDATED:` too. The check reads the
+last `## Round`, the one Phase 6 and Phase 9 re-read.

@@ -1,0 +1,6 @@
+OK
+VERDICT: APPROVED
+INVALIDATED: [H6] the list reads one table — a view joins it (src/views.mjs:12)
+INVALIDATED: [H7] archived rows carry a flag — they live in `jobs_archive` (src/memory/archive.mjs:8)
+INVALIDATED: [H8] no caller pages the list — `queue list --offset` passes one (src/cli/queue.mjs:40)
+recorded: none (INVALIDATED: [H6] the list reads one table — a view joins it (src/views.mjs:12))

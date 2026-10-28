@@ -5,6 +5,7 @@ import { STORE_UNAVAILABLE_HINT, StoreUnavailableError, UserError, isStoreOutage
 import { jobLogPath, jobWorktreePath, logsDir, runDir } from "../config/paths.mjs";
 import { ensureHome } from "../config/store.mjs";
 import { ghPrList } from "../host/gh.mjs";
+import { runGitAsync } from "../host/git.mjs";
 import { packageRoot, spawnRoot } from "../host/paths.mjs";
 import { NO_CHANGE_RESOLUTION } from "../memory/jobs.mjs";
 import { sqliteToIso } from "../memory/schema.mjs";
@@ -33,10 +34,11 @@ import { holdRunnerAwake } from "./keep-awake.mjs";
 import { killProcess, ownRunnerRecord } from "./registry.mjs";
 import { runMaintenance } from "./maintenance.mjs";
 import { appendPendingWrite, PENDING_KEYS, replayPendingWrites } from "./pending-writes.mjs";
-import { clearRunOutcome, decideResume, isRunPath, isSafeSegment, ownRunState, PRE_RENUMBERING_REFUSAL, preRenumberingArtifact, readRunState, resumeHandoff, writeRunTerminal } from "./resume.mjs";
+import { clearRunOutcome, decideResume, isRunPath, isSafeSegment, isStateObject, ownRunState, PRE_RENUMBERING_REFUSAL, preRenumberingArtifact, readRunState, resumeHandoff, writeRunTerminal } from "./resume.mjs";
 import { adoptRunSlug, followRunSlug, slugRefusal } from "./run-slug.mjs";
-import { JOB_BLOCK_ALREADY_RECORDED, recordJobBlock, recordPrUrl, recordResume, recordRunFields } from "./run-state.mjs";
+import { clearWip, JOB_BLOCK_ALREADY_RECORDED, recordJobBlock, recordPrUrl, recordResume, recordRunFields, recordWip } from "./run-state.mjs";
 import { DISABLED_BACKGROUND_ESCAPE_LINE } from "./run-notice.mjs";
+import { commitWipAsync, reanchorWip, restoreWip, WIP_SKIP_REASONS, wipKeptLine, wipNoticeLine, withWipLine, worktreeCarriesWip } from "./wip-commit.mjs";
 
 export { DISABLED_BACKGROUND_ESCAPE_LINE } from "./run-notice.mjs";
 import { buildPrompt, IDLE_TIMEOUT_S, provisionalSlug, slugCandidates, spawnClaude } from "./spawn.mjs";
@@ -61,7 +63,7 @@ import {
 } from "./stream.mjs";
 import { phaseTelemetry, runDurationS } from "./telemetry.mjs";
 import { resolveWindow, windowPhase } from "./window.mjs";
-import { ADOPTED_WORKTREE_REASON, finishNotice, inspectRunWorktree, isAdoptedWorktree, keptWorktreeLine, openJobHolds, openJobWorktrees, removeRunWorktree } from "./worktree.mjs";
+import { ADOPTED_WORKTREE_REASON, finishNotice, inspectRunWorktree, isAdoptedWorktree, keptWorktreeLine, openJobHolds, openJobWorktrees, removeRunWorktree, withoutKeptLine } from "./worktree.mjs";
 import { jobRef } from "../memory/refs.mjs";
 import { enrichJobOrigins } from "../integrations/enrich.mjs";
 import { parseOriginsColumn } from "../integrations/origin.mjs";
@@ -672,10 +674,77 @@ function withDisabledBackgroundEscape(noticeMd, log) {
 }
 
 // The outcome the finish writes: the run's own, with the kept-worktree line and the disabled-background escape appended to whatever notice exists; both lines also go to their own log.
-function outcomeWithWorktree(job, run, worktree, env) {
+function outcomeWithWorktree({ job, run, worktree, state, wipOnBranch, env }) {
   if (worktree && !worktree.removable) appendJobLog(job.id, keptWorktreeLine(worktree), env);
-  const noticeMd = finishNotice({ runNotice: run.outcome.noticeMd, rowNotice: job.notice_md, worktree });
+  const runNotice = runNoticeWithWip({ job, run, state, wipOnBranch, env });
+  const noticeMd = finishNotice({ runNotice, rowNotice: job.notice_md, worktree });
   return { ...run.outcome, noticeMd: withDisabledBackgroundEscape(noticeMd, run.result.log) };
+}
+
+// The run's notice with the runtime's wip paragraph: the terminated form for a self-ended run, the kept form for any other ending whose branch sits on a wip.
+function runNoticeWithWip({ job, run, state, wipOnBranch, env }) {
+  if (endedByItself(run)) return noticeWithParagraph({ job, run, line: terminatedLine(job, state), env });
+  if (wipOnBranch) return noticeWithParagraph({ job, run, line: keptWipLine(state), env });
+  return run.outcome.noticeMd;
+}
+
+// The run's notice (or the row's when the run wrote none) with one wip paragraph appended, the paragraph also written to the job log.
+function noticeWithParagraph({ job, run, line, env }) {
+  const hasRunNotice = typeof run.outcome.noticeMd === "string" && run.outcome.noticeMd.trim() !== "";
+  const base = withoutKeptLine(hasRunNotice ? run.outcome.noticeMd : job.notice_md);
+  appendJobLog(job.id, line, env);
+  return withWipLine(base, line);
+}
+
+// The worktree the run recorded, trimmed, or null.
+function stateWorktree(state) {
+  return typeof state?.worktree === "string" ? state.worktree.trim() || null : null;
+}
+
+// The paragraph of a cancelled run about its work (wip commit, retry line, start branch), rebuilt from the state.
+function terminatedLine(job, state) {
+  const wip = isStateObject(state?.wip) ? state.wip : { status: "skipped", reason: WIP_SKIP_REASONS.noWorktree };
+  return wipNoticeLine({ wip, jobId: job.id, branch: wip.branch ?? state?.branch ?? null, worktree: stateWorktree(state) });
+}
+
+// The paragraph of a run that ended otherwise while its branch still sits on a terminated attempt's wip commit.
+function keptWipLine(state) {
+  return wipKeptLine({ wip: state.wip, branch: state.wip.branch ?? state?.branch ?? null, worktree: stateWorktree(state) });
+}
+
+// Tells whether HEAD of the run's worktree is the wip commit its state records; an unreadable HEAD answers false.
+async function isWipOnBranch(state, env) {
+  const commit = state?.wip?.commit;
+  const worktree = stateWorktree(state);
+  if (typeof commit !== "string" || !commit || !worktree) return false;
+  const head = await runGitAsync({ args: ["rev-parse", "--verify", "-q", "HEAD"], cwd: worktree, env });
+  return head.ok && head.stdout.trim() === commit;
+}
+
+// Tells whether the run ended `cancelled` by itself (a termination), never by an operator stop.
+function endedByItself(run) {
+  return run.outcome.status === "cancelled" && !run.result?.stopped;
+}
+
+// The phase and reason a self-ended run stopped at: its recorded termination, else its last recorded phase.
+function terminationOf(state) {
+  if (isStateObject(state?.termination)) return { phase: state.termination.phase, reason: state.termination.reason };
+  const phases = Array.isArray(state?.phases) ? state.phases : [];
+  const last = phases.at(-1);
+  return { phase: isStateObject(last) && last.phase ? last.phase : "unknown", reason: "the run ended without a pull request" };
+}
+
+// The state after committing the work of a run that ended `cancelled` by itself as its wip commit; an operator stop, a failure or a delivery commits nothing.
+async function keepTerminatedWork(job, run, state, env) {
+  if (!endedByItself(run)) return state;
+  const worktree = stateWorktree(state);
+  if (!worktree || !isRunPath(job.project_id, run.facts.slug)) return state;
+  const { phase, reason } = terminationOf(state);
+  const committed = await commitWipAsync({ cwd: worktree, slug: run.facts.slug, phase, reason, prior: state.wip ?? null, state, env });
+  const wip = { ...committed, phase };
+  const written = recordWip({ projectId: job.project_id, slug: run.facts.slug, wip, env });
+  if (written.status !== "written") appendJobLog(job.id, `the wip commit could not be recorded: ${written.reason}`, env);
+  return { ...state, wip };
 }
 
 // Removes the worktree of a job that ended `done`; a refusal is written to the job log and stderr, and never costs the job.
@@ -713,12 +782,14 @@ function implementedFiles(job, run, state, env) {
 async function finalize(job, run, ctx) {
   const { env, store } = ctx;
   const finishJobImpl = ctx.deps.finishJobImpl ?? ((id, outcome) => store.jobs.finishJob(id, outcome));
-  const state = readRunState({ projectId: job.project_id, slug: run.facts.slug, env });
-  persistPrUrl(job, run, state, env);
+  const read = readRunState({ projectId: job.project_id, slug: run.facts.slug, env });
+  persistPrUrl(job, run, read, env);
   await persistTelemetry(job, run, ctx);
-  if (state?.branch) await recordBranch(job, run.facts.slug, state.branch, ctx);
+  if (read?.branch) await recordBranch(job, run.facts.slug, read.branch, ctx);
+  const state = await keepTerminatedWork(job, run, read, env);
+  const wipOnBranch = !endedByItself(run) && (await isWipOnBranch(state, env));
   const worktree = await inspectJobWorktree(run, state, ctx);
-  const outcome = outcomeWithWorktree(job, run, worktree, env);
+  const outcome = outcomeWithWorktree({ job, run, worktree, state, wipOnBranch, env });
   const spec = finishSpec(job, run, { state, noticeMd: outcome.noticeMd, env });
   await replayOwnPendingWrites(job, run.facts.slug, ctx);
   const finish = await tryFinish(job, { write: () => finishJobImpl(job.id, spec, env), slug: run.facts.slug, spec }, env);
@@ -1068,6 +1139,84 @@ function handoffAt(handoff, { projectId, slug, env }) {
   return { ...handoff, slug, runDir: runDir(projectId, slug, env) };
 }
 
+// Drops the wip record of a run once its commit is no longer on HEAD; a refused write is one job-log line.
+function dropWipRecord(job, slug, env) {
+  const cleared = clearWip({ projectId: job.project_id, slug, env });
+  if (cleared.status !== "written" && cleared.status !== "absent") appendJobLog(job.id, `the wip record could not be cleared: ${cleared.reason}`, env);
+}
+
+// Writes a wip record into the run's state; a refused write is one job-log line.
+function keepWipRecord(job, slug, wip, env) {
+  const written = recordWip({ projectId: job.project_id, slug, wip, env });
+  if (written.status !== "written") appendJobLog(job.id, `the wip record could not be written: ${written.reason}`, env);
+}
+
+// Records a wip commit the claim just gave back as restored in the claiming job's own state; answers it for the prompt.
+function keepRestoredWip(job, restored, cwd, env) {
+  const { status: _restored, ...ids } = restored;
+  const wip = { ...ids, status: "committed", restored: true };
+  keepWipRecord(job, job.slug, wip, env);
+  appendJobLog(job.id, `wip commit ${restored.short} given back to ${cwd} as uncommitted changes (still kept under ${restored.ref})`, env);
+  return wip;
+}
+
+// The recorded wip of an earlier claim that already gave it back (HEAD is its parent), marked restored again for the re-anchor; answers it for the prompt.
+function alreadyRestoredWip(job, wip, cwd, env) {
+  if (wip.restored !== true) keepWipRecord(job, job.slug, { ...wip, restored: true }, env);
+  appendJobLog(job.id, `wip commit ${wip.short ?? wip.commit} was already given back to ${cwd}: nothing was reset`, env);
+  return { ...wip, restored: true };
+}
+
+// The recorded wip whose parent is HEAD: already given back when the record or the worktree says so, else discarded by hand and dropped, so nothing re-anchors onto it.
+async function givenBackOrDiscarded(job, wip, cwd, env) {
+  if (wip.restored === true) return alreadyRestoredWip(job, wip, cwd, env);
+  const carried = await worktreeCarriesWip({ cwd, wip, env });
+  if (carried.status === "carried") return alreadyRestoredWip(job, wip, cwd, env);
+  const short = wip.short ?? wip.commit;
+  if (carried.status === "failed") {
+    appendJobLog(job.id, `could not tell whether ${cwd} still carries the wip commit ${short}: ${carried.reason}; nothing was reset`, env);
+    return null;
+  }
+  dropWipRecord(job, job.slug, env);
+  appendJobLog(job.id, `the wip commit ${short} was discarded from ${cwd} by hand (HEAD is its parent and its changes are gone): nothing was reset; it stays kept under ${wip.ref ?? "its wip ref"}`, env);
+  return null;
+}
+
+// Gives back, at every claim, the runtime wip commit a wip ref names on HEAD as uncommitted changes; answers what the prompt reports, or null.
+async function restoreTerminatedWork(job, state, cwd, env) {
+  if (!cwd) return null;
+  const restored = await restoreWip({ cwd, env });
+  if (restored.status === "restored") return keepRestoredWip(job, restored, cwd, env);
+  if (restored.status === "failed") {
+    appendJobLog(job.id, `the wip commit at HEAD of ${cwd} could not be given back: ${restored.reason}`, env);
+    return null;
+  }
+  const wip = isStateObject(state?.wip) && typeof state.wip.commit === "string" && state.wip.commit ? state.wip : null;
+  if (!wip) return null;
+  if (restored.status === "none" && typeof wip.parent === "string" && restored.head === wip.parent) return await givenBackOrDiscarded(job, wip, cwd, env);
+  dropWipRecord(job, job.slug, env);
+  appendJobLog(job.id, `the wip commit ${wip.commit} is no longer HEAD of ${cwd}: nothing was reset; it stays kept under ${wip.ref ?? "its wip ref"}`, env);
+  return null;
+}
+
+// Puts the branch back on the wip commit this claim gave back, so every ending of the attempt leaves the work on a branch commit; an attempt that moved HEAD keeps its own history.
+async function reanchorRestoredWork(job, run, cwd, env) {
+  const slug = isSafeSegment(run.facts?.slug) ? run.facts.slug : job.slug;
+  if (!cwd || !isRunPath(job.project_id, slug)) return;
+  const wip = readRunState({ projectId: job.project_id, slug, env })?.wip;
+  if (!isStateObject(wip) || wip.restored !== true) return;
+  const answer = await reanchorWip({ cwd, wip, env });
+  if (answer.status === "reanchored") {
+    keepWipRecord(job, slug, { ...wip, restored: false }, env);
+    appendJobLog(job.id, `the branch ${wip.branch} is back on the wip commit ${wip.short}; changes made after it stay uncommitted`, env);
+  } else if (answer.status === "moved") {
+    dropWipRecord(job, slug, env);
+    appendJobLog(job.id, `the attempt moved HEAD of ${cwd} past the parent of the wip commit ${wip.short}: nothing was reset; it stays kept under ${wip.ref ?? "its wip ref"}`, env);
+  } else if (answer.status === "failed") {
+    appendJobLog(job.id, `the branch could not be put back on the wip commit ${wip.short}: ${answer.reason}`, env);
+  }
+}
+
 // Runs one held job: what comes before the spawn, its attempts and the single write of the outcome.
 async function runHeldJob(claimed, ctx) {
   const { env } = ctx;
@@ -1075,17 +1224,19 @@ async function runHeldJob(claimed, ctx) {
   if (ready.report) return ready.report;
   const { job, check, prepared, openPrs } = ready;
   const state = ownRunState({ projectId: job.project_id, slug: job.slug, jobId: job.id, env });
+  const restoredWip = await restoreTerminatedWork(job, state, prepared.path, env);
   const resume = decideResume({ state });
   const handoff = resumeHandoff({ job, resume, state, env });
   if (handoff) persistResume(job, resume.resumeCount, env);
   logOperatorReruns(job, handoff, env);
-  const promptFor = (slug) => buildPrompt({ job: { ...job, slug }, handoff: handoffAt(handoff, { projectId: job.project_id, slug, env }), openPrs, env });
+  const promptFor = (slug) => buildPrompt({ job: { ...job, slug }, handoff: handoffAt(handoff, { projectId: job.project_id, slug, env }), openPrs, restoredWip, env });
   const run = await runAttempts(job, { ...ctx, cwd: prepared.path, sessionResumable: prepared.reused && !prepared.legacy, promptFor });
   if (run.lost) {
     noteOwnershipLost(job, env);
     await recordLateMeasures(job, run, ctx);
     return { id: job.id, status: "lost", attempts: run.attempt };
   }
+  await reanchorRestoredWork(job, run, prepared.path, env);
   if (run.outageStopped) {
     queueMeasures(job, run, env);
     return stoppedInOutage(job, env);

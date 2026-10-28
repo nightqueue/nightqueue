@@ -24,10 +24,9 @@ the `🪞 Reflection:` line (Phase 10) and the `## Notice` section; both are man
 enter the ~30-line cap.
 
 **Non-happy path (any ⚠️, ❌, 🔁 or gate_stop):** the table already carries every execution
-with its Time and the `**Total:**`. Never compute a duration and never write a timestamp: the times belong to the runtime.
-Re-read the artifacts via Read for the detail (the handoff dropped them from context):
-`01-triage.md`, `05-qa.md` (last round), `06-verification.md` and `03-plan.md` when necessary.
-A missing artifact → a ⚠️ open item on its line, never a reconstruction nor a failed report.
+with its Time and the `**Total:**`. Never compute a duration and never write a timestamp: the times are the runtime's.
+Re-read via Read for the detail: `01-triage.md`, `05-qa.md` (last round), `06-verification.md` and `03-plan.md` when necessary.
+A missing artifact → a ⚠️ open item on its line, never a reconstruction.
 After the table, detail only what needs more than one line:
 
 0. **🎯 Objective met**: the `Expected outcome` of Phase 0 and the evidence item by item; an item
@@ -39,7 +38,8 @@ After the table, detail only what needs more than one line:
 3. **Verification**: the checks + the QA's PoCs run, the final result, the 🔁 count.
 4. **🛡️ Prevention**: the QA's recommendations to avoid recurrence.
 
-A run that ended without a commit leaves its line ❌/⚠️ and explains the block below the table.
+A run that ended without a PR leaves its line ❌/⚠️ and explains the block below the table; a
+terminated run carries `run_terminate`'s `notice` verbatim here and in `## Notice`.
 
 **Open items.** Translate every `## Open items` entry of the report into the Notice's Still open,
 in user language.
@@ -49,7 +49,7 @@ in user language.
 ## Notice
 
 Mandatory on BOTH paths: the executive notice the operator reviews before closing the job. A gate
-notice (the pauses of Phases 1, 3 and 7) is never written here: the runtime composes it from the
+notice (the pauses of Phases 1, 3, 5 and 7) is never written here: the runtime composes it from the
 gate's `run_outcome` record.
 
 Model (the fence delimits the MODEL in this document; the real report emits it **without** a fence):

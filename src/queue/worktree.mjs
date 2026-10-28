@@ -263,7 +263,7 @@ export function keptWorktreeLine({ path, reason, scratch }) {
 }
 
 // A notice without the kept-worktree paragraph a previous run appended at its end, so a resumed run never stacks it.
-function withoutKeptLine(notice) {
+export function withoutKeptLine(notice) {
   const text = typeof notice === "string" ? notice.trimEnd() : "";
   const cut = text.lastIndexOf("\n\n");
   const tail = cut < 0 ? text : text.slice(cut + 2);

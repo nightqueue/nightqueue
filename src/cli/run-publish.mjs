@@ -4,8 +4,10 @@ import { ghPrCreate, ghPrEditBody, ghPrUrlOfBranch } from "../host/gh.mjs";
 import { runGit } from "../host/git.mjs";
 import { commitTypeOf, publishedBranchName } from "../queue/branch-name.mjs";
 import { FILE_LIST, listedFiles } from "../queue/file-list.mjs";
+import { neverCommittedReason } from "../queue/never-committed.mjs";
 import { publishedBodyFile } from "../queue/pr-footer.mjs";
 import { readRunState } from "../queue/resume.mjs";
+import { WIP_REF_PREFIX } from "../queue/wip-commit.mjs";
 import { recordOutcome, recordPhaseDone, recordPrUrl, recordRunFields, RUNTIME_AUTHOR } from "../queue/run-state.mjs";
 import { checkArgs, parseCommand } from "./args.mjs";
 import { commitMessageProblems, conventionFile, CONVENTIONAL_SUBJECT_RE, findCommitTemplate } from "./commit-template.mjs";
@@ -21,9 +23,6 @@ export const PUBLISH_USAGE =
 const BASE_REFS = ["refs/remotes/origin/HEAD", "origin/main", "origin/master", "main", "master"];
 
 const ALREADY_EXISTS = /already exists/i;
-
-// Directories the pipeline never commits from, whoever asked for it: the host's own configuration and the scratch space of the run.
-const NEVER_COMMITTED_DIRS = [".claude", "tmp"];
 
 // Said after every refusal, so `--extra` is read as what it is — a way to add files, never a way to force a refused one through.
 export const EXTRA_IS_NOT_AN_OVERRIDE =
@@ -47,13 +46,6 @@ export function listedFromArtifact(run, filesFrom) {
   return { artifact, listed: listedFiles(readRequiredFile(artifact, "--files-from")) };
 }
 
-// Why the pipeline refuses to commit a path from a directory it never commits from, or null; the comparison folds the case, because the filesystem resolves `.Claude/hook.js` to the very `.claude/hook.js` this refusal exists for.
-function refusalReason(path) {
-  const segments = path.split("/").filter(Boolean).map((segment) => segment.toLowerCase());
-  const directory = segments.find((segment) => NEVER_COMMITTED_DIRS.includes(segment));
-  return directory ? `under \`${directory}/\`` : null;
-}
-
 // The same entries, each lockfile among them refused unless the paired-manifest rule lets it through for this publish set.
 function withLockfileReasons(entries, rule) {
   const set = new Set(entries.map((entry) => entry.path));
@@ -65,7 +57,7 @@ function candidates(cwd, paths) {
   return paths.map((raw) => {
     const path = relative(cwd, isAbsolute(raw) ? raw : join(cwd, raw));
     if (!path || path.startsWith("..")) return { path: raw, reason: `outside the worktree ${cwd}` };
-    return { path, reason: refusalReason(path) };
+    return { path, reason: neverCommittedReason(path) };
   });
 }
 
@@ -184,6 +176,27 @@ export function scratchProblemLines(cwd, run, env, pending = []) {
   return scratchFiles(paths, { cwd, runDir: run.runDir }).map(
     (path) => `REJECTED: scratch file ${path} — remove it, or promote it to a hermetic test with a real name, then commit and retry`,
   );
+}
+
+// The commits the runtime's wip refs name, by object id, each with its ref name.
+function wipRefTargets(cwd, env) {
+  const listed = runGit({ args: ["for-each-ref", "--format=%(objectname) %(refname)", WIP_REF_PREFIX], cwd, env });
+  if (!listed.ok) throw new UserError(`git could not list the runtime's wip refs: ${failureLine(listed)}`);
+  return new Map(outputLines(listed).map((line) => line.split(" ")).filter(([object, ref]) => object && ref).map(([object, ref]) => [object, ref]));
+}
+
+// One `REJECTED:` line per runtime wip commit the branch carries above its base, which is never pushed.
+export function wipProblemLines(cwd, env) {
+  const targets = wipRefTargets(cwd, env);
+  if (targets.size === 0) return [];
+  const ahead = runGit({ args: ["rev-list", `${baseRef(cwd, env)}..HEAD`], cwd, env });
+  if (!ahead.ok) throw new UserError(`git could not list the commits the branch adds: ${failureLine(ahead)}`);
+  return outputLines(ahead)
+    .filter((commit) => targets.has(commit))
+    .map(
+      (commit) =>
+        `REJECTED: the branch carries the runtime's wip commit ${commit.slice(0, 7)} (${targets.get(commit)}), which is never pushed: stop and record it as an open item; the operator squashes it or retries the job so the claim gives it back uncommitted`,
+    );
 }
 
 // The title of the pull request: the one the caller passed, or the `# <title>` the body opens with.
@@ -346,6 +359,8 @@ export async function runPublish(argv, ctx) {
   if (refused.length > 0) return refuse(refusedLines(refused), ctx);
   const scratch = scratchProblemLines(cwd, run, ctx.env, paths);
   if (scratch.length > 0) return refuse(scratch, ctx);
+  const wips = wipProblemLines(cwd, ctx.env);
+  if (wips.length > 0) return refuse(wips, ctx);
   const committed = await commitOnce({ run, cwd, paths, messageFile, ctx });
   if (committed !== 0) return committed;
   return await openPullRequest({ run, cwd, bodyFile, body, title, removeWorktree: values["remove-worktree"] === true, ctx });

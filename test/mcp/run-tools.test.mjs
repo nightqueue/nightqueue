@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
@@ -13,6 +13,7 @@ import { saveLesson } from "../../src/memory/lessons.mjs";
 import { decideResume } from "../../src/queue/resume.mjs";
 import { recordOutcome, recordPhaseDone, recordPrUrl, recordRunFields } from "../../src/queue/run-state.mjs";
 import { ensureProject, makeHome, makeProject, projectIdOf } from "../../test-support/memory.mjs";
+import { addWorktree, git, gitVars, makeDirty, publishedCheckout } from "../../test-support/worktrees.mjs";
 
 const CLI = fileURLToPath(new URL("../../bin/nightqueue.mjs", import.meta.url));
 const WORKER = "host:4242";
@@ -405,4 +406,67 @@ test("inside a job the recall drops what the run already saw, and gives it back 
 
   const exhausted = payloadOf(await client.callTool({ name: "lesson_recall", arguments: { query: "worker lease" } }));
   assert.equal(exhausted.length, 8, "the exclusion emptied the recall instead of retrying without it");
+});
+
+// A real worktree on a branch of its own with one uncommitted file, recorded as the run's worktree.
+function dirtyRecordedWorktree(t, env, name) {
+  const { checkout } = publishedCheckout(t, name);
+  const worktree = addWorktree(checkout, name);
+  makeDirty(worktree.path);
+  recordRunFields({ projectId: projectIdOf(env, "alpha"), slug: SLUG, fields: { worktree: worktree.path, branch: worktree.branch }, env });
+  return { ...worktree, base: git(["-C", worktree.path, "rev-parse", "HEAD"]).trim() };
+}
+
+test("run_terminate inside a job commits the dirty worktree as the wip and answers the notice with the job's retry line", async (t) => {
+  const { env: home, job } = makeRunningJob(t, "mcp-run-terminate-wip");
+  const env = { ...home, ...gitVars() };
+  const worktree = dirtyRecordedWorktree(t, env, "mcp-run-terminate-wip");
+  const client = await connect(t, { ...env, NIGHTQUEUE_JOB_ID: String(job.id) });
+
+  const ended = payloadOf(await client.callTool({ name: "run_terminate", arguments: { phase: "qa", reason: "INVALIDATED twice" } }));
+  const head = git(["-C", worktree.path, "rev-parse", "HEAD"]).trim();
+  assert.deepEqual([ended.wip.status, ended.wip.commit, ended.wip.branch, ended.wip.files], ["committed", head, worktree.branch, ["uncommitted.txt"]]);
+  assert.equal(git(["-C", worktree.path, "log", "-1", "--format=%s"]).trim(), `wip(${SLUG}): terminated at qa — INVALIDATED twice`);
+  assert.ok(ended.notice.includes(`Retry: nightqueue queue retry J-${job.id} `), ended.notice);
+  assert.ok(ended.notice.includes(`New job from it: start_branch: ${worktree.branch}`), ended.notice);
+  const state = readState(env, "alpha", SLUG);
+  assert.deepEqual([state.termination.phase, state.termination.reason, state.wip.commit], ["qa", "INVALIDATED twice", head]);
+});
+
+test("a refused run_terminate commits nothing, and an operator call with no job prints no retry line", async (t) => {
+  const { env: home, job } = makeRunningJob(t, "mcp-run-terminate-refused");
+  const env = { ...home, ...gitVars() };
+  const worktree = dirtyRecordedWorktree(t, env, "mcp-run-terminate-refused");
+  const inJob = await connect(t, { ...env, NIGHTQUEUE_JOB_ID: String(job.id) });
+  for (const args of [{ phase: "nope", reason: "why" }, { phase: "qa", reason: "  " }]) {
+    const refused = await inJob.callTool({ name: "run_terminate", arguments: args });
+    assert.equal(refused.isError, true, JSON.stringify(args));
+  }
+  assert.equal(git(["-C", worktree.path, "rev-parse", "HEAD"]).trim(), worktree.base, "a refused terminate made a commit");
+  assert.equal(readState(env, "alpha", SLUG).termination, undefined);
+
+  const operator = await connect(t, env);
+  const ended = payloadOf(await operator.callTool({ name: "run_terminate", arguments: { phase: "qa", reason: "by hand", project: "alpha", slug: SLUG } }));
+  assert.equal(ended.wip.status, "committed");
+  assert.equal(ended.notice.includes("Retry: "), false, ended.notice);
+});
+
+test("a run_terminate whose record was refused by a busy run lock, called again, records the same wip commit", async (t) => {
+  const { env: home, job } = makeRunningJob(t, "mcp-run-terminate-retried");
+  const env = { ...home, ...gitVars() };
+  const worktree = dirtyRecordedWorktree(t, env, "mcp-run-terminate-retried");
+  const client = await connect(t, { ...env, NIGHTQUEUE_JOB_ID: String(job.id) });
+  const lock = `${runDir(projectIdOf(env, "alpha"), SLUG, env)}.lock`;
+  mkdirSync(lock);
+  const refused = await client.callTool({ name: "run_terminate", arguments: { phase: "qa", reason: "INVALIDATED twice" } });
+  assert.equal(refused.isError, true, JSON.stringify(refused));
+  assert.equal(readState(env, "alpha", SLUG).wip, undefined);
+  rmSync(lock, { recursive: true, force: true });
+
+  const ended = payloadOf(await client.callTool({ name: "run_terminate", arguments: { phase: "qa", reason: "INVALIDATED twice" } }));
+  const head = git(["-C", worktree.path, "rev-parse", "HEAD"]).trim();
+  assert.deepEqual([ended.wip.status, ended.wip.commit], ["committed", head]);
+  assert.equal(readState(env, "alpha", SLUG).wip.commit, head);
+  assert.equal(ended.notice.includes("no wip commit"), false, ended.notice);
+  assert.equal(git(["-C", worktree.path, "rev-list", "--count", `${worktree.base}..HEAD`]).trim(), "1");
 });

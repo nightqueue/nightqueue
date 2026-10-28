@@ -70,6 +70,8 @@ Independent launches go in parallel; the runtime waits for every subagent and ba
      `question`/`from_artifact`, then end the turn with one plain line); the Phase 9 report of a
      `NO-CHANGE-NEEDED` run (`status: "no_change"`); and Phase 8's delivery, which `run publish`
      records itself.
+   - Terminate = `run_terminate` (phase, reason): the runtime commits the changes as
+     `wip(<slug>): terminated at <phase> — <reason>` and answers a `notice` for Phase 9; never commit by hand.
    - Tolerant: a failing `run_*` call is an open item of Phase 9, never an abort.
 
 8. No execution log by hand: never time a phase nor keep a table — `run report` derives them.
@@ -88,8 +90,7 @@ the brief. The context block is already inside the prompt: `## Applicable lesson
 `## Structural index` (explore only), `## Related jobs` and `## Job origin` (triager only); inside a
 job the server excludes by itself the lessons already injected in earlier phases of this session.
 
-Pass `prompt` to the launch verbatim with the answered `subagent_type` and `model` (the fix-loop
-coder's model comes answered too) — never rewrite a line of it, never add one; relaunch context goes
+Pass `prompt` to the launch verbatim with the answered `subagent_type` and `model` — never rewrite a line of it, never add one; relaunch context goes
 in `note` only. Then gate the answered `artifact` with `nightqueue run check <check>`. Each
 `open_items` line of the answer becomes an open item of Phase 9. `phase_prompt` refuses every target
 but the triager until `run check 01` wrote `<RUN_DIR>/00-brief.md`.
@@ -146,10 +147,9 @@ Launch **1 architect agent**: `phase_prompt` with `target: "architect"` (plus
 `delivery_constraints` when there is one, and `note` on a relaunch), then the launch with the
 answered `subagent_type`, `model` and `prompt` verbatim.
 
-**Never inject into the architect's prompt:** the
-DESIGN is theirs — never pre-qualify the fix level, name where the solution must go, or
-pre-disqualify an approach by diff size. The ONLY constraint is the delivery LIMIT, never the HOW,
-on the `Delivery constraints:` line.
+**Never inject the DESIGN into the architect's prompt** (fix level, where the solution goes, an
+approach ruled out by diff size): the ONLY constraint is the delivery LIMIT, on the
+`Delivery constraints:` line.
 
 **Gate:** run `nightqueue run check 03` (the artifact gate, step 6).
 
@@ -159,7 +159,7 @@ on the `Delivery constraints:` line.
 | `GATE: usage-coverage-*` (the usage-coverage gate) | relaunch the architect once (🔁) demanding `## Requires user confirmation`; still → `run_outcome` with `status: "gate"`, `from_artifact: { file: "03-plan.md", section: "## Usage coverage" }` and `question` = the `GATE:` lines verbatim, then end the turn |
 | `TYPE-MISMATCH: … — triage: bug/error …` together with `CONFIRM:` | ONE `run_outcome` with `status: "gate"`, `from_artifact: { file: "03-plan.md", section: "## Requires user confirmation" }` and `question` = "Is this a bug or a feature/refactor? <the TYPE-MISMATCH evidence>", then end the turn |
 | `TYPE-MISMATCH: … — triage: feature/refactor …` (the Type divergence valve) | `run_set` with `type: "feature/refactor"`, then Phase 4 |
-| `TYPE-MISMATCH: … — triage: bug/error …` | `run_outcome` with `status: "gate"` and `question` = "Is this a bug or a feature/refactor? <the TYPE-MISMATCH evidence>", then end the turn |
+| `TYPE-MISMATCH: … — triage: bug/error …` | the pause of the row with `CONFIRM:`, without `from_artifact` |
 | `CONFIRM: requires-user-confirmation` (the Confirmation pause) | `run_outcome` with `status: "gate"` and `from_artifact: { file: "03-plan.md", section: "## Requires user confirmation" }`, then end the turn |
 | plain `OK` | Phase 4 |
 
@@ -180,8 +180,7 @@ Run `nightqueue run check 04` (the artifact gate, step 6); `GENERATED` → accep
 user that the implementation did not complete successfully and terminate.
 
 **One coder lane per stage:** a brief/plan with numbered stages launches one coder per stage,
-in order, never in parallel. Each prompt carries `Stage: <n> — <title>` (the `stage` of `phase_prompt`) and reads
-`03-plan.md` (its stage) and `04-implementation.md` (what earlier lanes did, when it exists).
+in order, never in parallel, each with its `stage` in `phase_prompt`.
 Run `nightqueue run check 04` after each lane, then the verifier between stages (the Phase 6
 prompt and its fix loop): a failing stage is fixed before the next lane starts. After the last
 stage, Phase 5 (QA) and the final Phase 6 verification run as usual.
@@ -211,7 +210,7 @@ against `03-plan.md` itself.
 | `GATE: …` | relaunch the QA once (🔁, `note` = the `GATE:` lines; in `full` from the analyst); still, with a non-usage GATE → terminate per step 6 (⚠️ open item) |
 | only `GATE: usage-coverage-*`, after that relaunch | `run_outcome` with `status: "gate"`, `from_artifact: { file: "05-qa.md", section: "## Validated risks" }` and `question` = the `VERDICT:`/`GATE:`/`OPEN:` lines verbatim + "approve the QA or say what to adjust", then end the turn; never terminate |
 | `OPEN: …` | ⚠️ mandatory open item of Phase 9; the verdict is unchanged |
-| `INVALIDATED: …` | the plan was designed on a false base: relaunch the **architect** once (🔁) with the lines as `note`, then back to Phase 4 with the revised plan; a second one → terminate without a commit (Phase 9) |
+| `INVALIDATED: …` | relaunch the **architect** once (🔁, `note` = the lines), then Phase 4 with the revised plan; a second one → `run_outcome` with `status: "gate"`, `from_artifact: { file: "05-qa.md", section: "## Validated risks" }` and `question` = the `INVALIDATED:` lines verbatim + `## Modified files` of `04-implementation.md` + the last `VERDICT:` + "(a) one more architect round with your note, (b) ship as is, (c) terminate", then end the turn; never terminate |
 | `VERDICT: APPROVED` | Phase 6, with the PoCs as a regression net |
 | `VERDICT: NEEDS FIX` | Phase 6: `## Proven breaks` go to the coder, `## Generated PoCs` to the verifier to confirm the fix |
 | `VERDICT: NEEDS DISCUSSION` | ⚠️ mandatory open item of Phase 9, then Phase 6 |
@@ -219,7 +218,8 @@ against `03-plan.md` itself.
 That pause's answer resumes Phase 5: `run check 05` first, a pure read. Approved → the same
 `usage-coverage-*` `GATE:` lines it prints are answered: act on the `VERDICT:` row, those lines a
 ⚠️ open item — never a second relaunch, pause or terminate. Adjustments → relaunch the QA once
-(🔁, `note` = the answer); only there a usage-only gate pauses again.
+(🔁, `note` = the answer); only there a usage-only gate pauses again. The INVALIDATED pause's
+answer follows `references/resume.md`; never pause twice on the same lines.
 
 ### Phase 6 — Verification (final gate + correction loop)
 
@@ -227,19 +227,18 @@ Launch 1 verifier agent: `phase_prompt` with `target: "verifier"` (plus `stage` 
 stages of a staged plan), then the launch with the answered `subagent_type`, `model` and `prompt`
 verbatim.
 
-The verifier runs **after** the QA and is the independent executor: it **reproduces** the
-breaks proven by the QA. Neither the QA nor the coder validates its own work.
+The verifier runs **after** the QA, independently: it **reproduces** the QA's proven breaks. Neither the QA nor the coder validates its own work.
 
 **Gate and fix loop:** run `nightqueue run check 06` (the artifact gate, step 6).
 
 | `run check 06` answers | Action |
 | --- | --- |
 | `VERDICT: PASSED` | Phase 8 (Phase 7 first unless the change is purely static) |
-| `VERDICT: PASSED-STATIC` | checks ok, but the runtime path of the bug was not executed — do NOT treat it as PASSED: run Phase 7 covering the exact flow of the bug before Phase 8. If Phase 7 is not viable (no emulator/environment), take to the user the explicit decision of committing without real execution — never decide on your own nor present it as verified |
+| `VERDICT: PASSED-STATIC` | checks ok, but the bug's runtime path did not execute — never PASSED: run Phase 7 on the bug's exact flow before Phase 8; Phase 7 not viable (no environment) → the user decides on committing without real execution — never decide alone nor present it as verified |
 | `VERDICT: FAILED` | a project check OR a QA PoC failing: relaunch the coder (`coder-fix`) passing the verifier's failures + the QA's `## Proven breaks` still open + the validated brief, then relaunch the verifier |
 
 - **Maximum of iterations**: **max 2 fix iterations**.
-  If it still fails after the limit, **do not mask it**: skip Phase 8 (no commit),
+  If it still fails after the limit, **do not mask it**: skip Phase 8 (no PR),
   go to Phase 9 and report the remaining failures/breaks to the user.
 
 Prompt of the coder in the fix: `phase_prompt` with `target: "coder-fix"` and `note` = what the
@@ -274,11 +273,10 @@ change confirmed at runtime; a field position/value or a control-flow merely ASS
 | `VERDICT: UNAVAILABLE` | ⚠️ open item |
 
 **Symptom persisting with the plan applied → the CAUSE is wrong (bug).** Relaunch the
-**triager** (🔁) with the original diagnosis + the applied diff + the execution evidence that
-shows the symptom alive, and the instruction: "the confirmed cause was fixed and the symptom
-persists — the diagnosis is incomplete; look for the underestimated path (order of gates,
+**triager** (🔁) with the original diagnosis, the applied diff and the evidence of the live
+symptom, instructing: "the diagnosis is incomplete; look for the underestimated path (order of gates,
 preceding branch, race, data source)". Then Phase 3 → 4 → 6 → 7. **At most 1 re-triage per
-pipeline** — if it persists again, terminate without a commit and take the history to the user (Phase 9).
+pipeline** — if it persists again, terminate (no PR) and take the history to the user (Phase 9).
 
 Case (a) needs its 2 proofs, case (b) its screenshot, case (c) the user's verdict, and cases
 (d)/(d2) every line `MET` or `NOT MET / to confirm`.
@@ -286,7 +284,7 @@ Case (a) needs its 2 proofs, case (b) its screenshot, case (c) the user's verdic
 ### Phase 8 — Commit and PR
 
 Only when Phase 6 returned `## Verification: PASSED` **and** Phase 7 (when applicable) confirmed
-the change at runtime; otherwise do not commit — go straight to Phase 9. Read
+the change at runtime; otherwise no PR — go straight to Phase 9. Read
 `references/phase-8.md` now and follow it (inside a job, never ask before pushing).
 
 ### Phase 9 — Report
@@ -305,7 +303,7 @@ Launch: `phase_prompt` with `target: "reflector"`, then the launch with the answ
 `subagent_type` and `model`, and the `prompt` verbatim.
 
 There is no artifact, no `nightqueue run check` and no `run_phase_done` for this phase; the
-reflector applies the rubric and saves the run's lessons and memories on its own.
+reflector saves the run's lessons and memories itself.
 
 **Report line:** from the reflector's return, ONE line: `🪞 Reflection: L<id>, M<id>, …` with
 every ref it returned, or `🪞 Reflection: none` when it saved nothing. If `phase_prompt` or the

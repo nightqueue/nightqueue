@@ -76,6 +76,15 @@ What a runtime has to provide, and what it can rely on:
     retry. A runtime-written termination lasts one attempt: a completed `run check 01` that
     proceeds lifts it (`recorded: termination cleared`), and so does a `queue retry` of a `gate`
     job. One written by hand (no `by`) is never lifted.
+  - `wip{status, phase, at, commit?, short?, branch?, files?, amended?, reason?, ref?, parent?,
+    restored?}`: `run_terminate` (in the same write as `termination`), the runner at the finish
+    of a job that ended `cancelled` by itself, and the runner at a claim that gave a wip back;
+    what the runtime did with the terminated run's work (see "A terminated run keeps its work"
+    below). `status` is `committed`, `clean`, `skipped` or `failed`. `ref` is the
+    `refs/nightqueue/wip/<slug>` ref naming `commit`, `parent` its parent. `restored: true`
+    means the claim gave the work back and the end of the attempt has not yet put the branch
+    back on `commit`. The runner drops it once HEAD left both the wip commit and its parent.
+    It never records a `commit` phase nor an `outcome`.
   - `skips{<phase>:{by, reason?, at}}`: why a slot of the studio track did not run,
     for display only. Every run executes every phase, so the runtime writes no skip of
     its own; a `tier` entry (`by: "tier"`) an older runtime wrote is kept and shown as is.
@@ -556,7 +565,7 @@ dropped is answered with the older-definitions line):
 | `queue_close` | `job_id`, `force?` |
 | `queue_retry` | `job_id`, `note?`, `fresh?`, `run?` (a `closed` job, or a `done` job whose pull request is merged, is refused: a finished job does not resume) |
 | `run_phase_done` | `phase`, `artifact?`, `verdict?`, `note?`, `reason?` (why the phase ran again; omitted on its first run), `project?`, `slug?` |
-| `run_terminate` | `phase`, `reason`, `project?`, `slug?` |
+| `run_terminate` | `phase`, `reason`, `project?`, `slug?` (commits the recorded worktree's changes as the wip commit unless the worktree is adopted or on the default branch, the main checkout's branch or a detached HEAD; answers the record plus `wip{status, commit, branch, files, reason}` and `notice`, the paragraph that opens with `Terminated run: ` and carries `Retry: nightqueue queue retry J-<id>` inside a job and `New job from it: start_branch: <branch>`; a repeated call keeps the same wip commit, adopted through its `refs/nightqueue/wip/<slug>` ref even when the first call's record was refused; a refused phase or empty reason commits nothing) |
 | `run_skip` | `phase`, `by`, `reason`, `project?`, `slug?` |
 | `run_outcome` | `status` (`done`, `gate`, `no_change`), `notice?` (required with `no_change`), `question?` and `from_artifact?{file, section}` (`gate` only, never with `notice`: the runtime composes the whole `## Notice`; see "A gate notice is composed from the record" below), `project?`, `slug?` |
 | `run_set` | `type?`, `branch?`, `worktree?`, `qa_stage_a?{artifact, verdict?}`, `project?`, `slug?` |
@@ -567,6 +576,55 @@ own row, and a `project` or a `slug` sent there is REFUSED instead of silently
 overridden - naming another job's run from inside one is never an accident worth
 guessing at; outside a job both are required. A row that carries no slug yet is
 answered with the `SLUG:` line to print, never with a guessed run directory.
+
+**A terminated run keeps its work.** `run_terminate`, and the runner at the finish of a job
+that ended `cancelled` by itself (never an operator stop, a `failed` or a `done` ending),
+commit the worktree's changes on the job's branch as one local commit
+`wip(<slug>): terminated at <phase> — <first line of the reason, at most 120 characters>`.
+That commit runs no repository hook (`core.hooksPath=/dev/null`) and is never pushed. It takes every path git does not
+ignore except those under a `tmp/` or `.claude/` segment (the same rule as `run publish`). A
+second terminate of the same run amends it. In the same step as the commit the runtime writes
+the ref `refs/nightqueue/wip/<slug>` naming it; when that write fails the commit is undone and
+`wip` is `failed`, so a runtime wip commit exists only while a `refs/nightqueue/wip/*` ref names
+it. An amend drops every other wip ref that named the replaced commit. A repeated terminate
+whose HEAD is the commit the slug's ref names keeps that commit, even with no `wip` recorded.
+The runtime never commits in an adopted worktree, on the default branch, on the main
+checkout's branch or on a detached HEAD. The finish rebuilds the notice's one
+`Terminated run: ` paragraph from `state.json`'s `wip` and the job's id: the wip's short hash
+and branch, `Retry: nightqueue queue retry J-<id>`, and
+`New job from it: start_branch: <branch>`. Any other ending whose HEAD is still the recorded
+wip commit (`failed`, an operator stop, a `run_outcome` gate, `done` without a PR) gets instead
+`Wip commit: the branch <branch> keeps the wip commit <short> of a terminated attempt (local,
+never pushed, not reviewed); changes made after it stay uncommitted in <worktree>.` and the
+same `New job from it:` line, with no `Retry:` line. Earlier copies of either paragraph are
+dropped.
+
+At every claim, a same-job retry or a new job queued with `start_branch` alike, the runner
+checks whether a `refs/nightqueue/wip/*` ref names HEAD. When one does and HEAD's
+subject starts with `wip(`, it gives the wip back to the worktree as uncommitted changes
+(`git reset --mixed <wip>^`, never `--hard`), keeps the ref, records `wip` with `ref`, `parent`
+and `restored: true` in the claiming run's own `state.json`, and adds a `RESTORED WIP:` line to
+the prompt. A commit titled `wip(` that no ref names is never reset; when HEAD moved past the
+wip, or HEAD is its parent while neither the record nor the worktree carries its changes
+(discarded by hand), it resets nothing and drops `wip`. The phases restart: a terminated run is
+never resumed. The runtime never creates a wip commit in an adopted worktree, which may hold the
+person's own uncommitted work, but it does restore or re-anchor a wip it made itself there,
+because that fires only when HEAD is exactly the ref-keyed wip commit (or its parent, on the same
+branch, with the ref live), so it can never touch a commit the person made, and the
+`start_branch` flow depends on it.
+At the end of every attempt that got the work back (every ending but a lost row), when HEAD is
+still the wip's parent on the same branch, the runner moves the branch back onto the existing
+wip commit (`git reset --mixed <wip>`): no commit is made and the attempt's later edits stay
+uncommitted on top. When the attempt committed on the parent, nothing is reset and `wip` is
+dropped. A `--fresh` retry drops the run and leaves the old branch at its wip commit.
+
+`run publish` refuses, before it commits anything, a branch whose `<base>..HEAD` holds a commit
+a `refs/nightqueue/wip/*` ref names, with one line per commit:
+`REJECTED: the branch carries the runtime's wip commit <short> (<ref>), which is never pushed:
+stop and record it as an open item; the operator squashes it or retries the job so the claim
+gives it back uncommitted`. A human commit titled `wip(` is not refused. The refs are local:
+list them with `git for-each-ref refs/nightqueue/wip` and drop one with
+`git update-ref -d <ref>` once its work is delivered or abandoned.
 
 Retired fields (operator runs no longer exist). `queue_add` `run_dir`, and `run_set`
 `origin`, `evidence_level` and `plan_status`, are gone from the schemas, and a call that still
@@ -928,6 +986,8 @@ artifact (and, where a rule needs them, `00-brief.md`, `01-triage.md`, `02-explo
    `## Break hypotheses` holds no item other than `None`, so the orchestrator goes straight to
    `run check 05`; `provers` otherwise.
 9. `INVALIDATED: <item>`, one per item of `## Invalidated assumptions` other than `None` (`05`).
+   It is a pause: `05` does not record `qa` and, when no `GATE:` fired, the memo line is the
+   first `INVALIDATED:` line, so the answer to the orchestrator's gate resumes at `qa`.
 10. `DIFF-APPLIES: yes|no` (`07`, from `Diff applies plan:`; omitted on `n/a` or absent).
 11. `NEEDS-DEVICE` (`07`).
 12. `index: saved N files, M libs` | `index: not saved (<reason>)` (`02`).
@@ -1049,7 +1109,7 @@ The check then acts on what it found, and no effect ever changes the first line 
 code. A check **completes** its phase when the first line is `OK` or `GENERATED`, no `GATE:`
 fired and the verdict does not loop back (`06` `FAILED`, `07` `NOT-MET` and
 `SYMPTOM-PERSISTS`); a pause (`CONFIRM`, `TYPE-MISMATCH`, `NEEDS-DEVICE`, `UNAVAILABLE`)
-completes. On completion it records the phase (`recorded: phase_done <phase> <verdict>`, plus
+completes, except `INVALIDATED:` on `05`, which never does. On completion it records the phase (`recorded: phase_done <phase> <verdict>`, plus
 ` — reason: <reason>` on a re-run: the line the same check failed with, else
 `re-run after <check> <line>` of the newest failure, else `re-run`; ` (already)` when the same
 text was already recorded); otherwise it prints `recorded: none (<line>)`, and a write the

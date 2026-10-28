@@ -156,6 +156,26 @@ test("Phase 5 pauses a usage-coverage-only gate and never terminates it, and its
   assert.ok(folded(SKILL).includes("the usage-coverage gate of Phase 3 or 5"), "Phase 10 no longer skips the reflection at the Phase 5 pause");
 });
 
+test("a second INVALIDATED pauses at a gate, its answer has three paths, and no skill text terminates without a commit", () => {
+  const phase5 = folded(SKILL.slice(SKILL.indexOf("### Phase 5 —"), SKILL.indexOf("### Phase 6 —")));
+  const row = phase5.slice(phase5.indexOf("| `INVALIDATED: …` |"), phase5.indexOf("| `VERDICT: APPROVED` |"));
+  assert.ok(row.startsWith("| `INVALIDATED: …` | relaunch the **architect** once"), "Phase 5 lost the one architect relaunch on INVALIDATED");
+  for (const part of ["`run_outcome`", '`status: "gate"`', '{ file: "05-qa.md", section: "## Validated risks" }', "(a) one more architect round with your note, (b) ship as is, (c) terminate", "never terminate"]) {
+    assert.ok(row.includes(part), `the INVALIDATED row lost ${part}`);
+  }
+  assert.ok(phase5.includes("never pause twice on the same lines"), "the INVALIDATED pause may pause twice on the same lines");
+  const resume = folded(RESUME);
+  assert.ok(resume.includes("(a) changes → relaunch the architect once (🔁, `note` = answer + lines), then Phases 4-5, a further `INVALIDATED:` terminating"), "resume.md lost answer (a)");
+  assert.ok(resume.includes("(b) ship as is → the `VERDICT:` row, the lines ⚠️ open items"), "resume.md lost answer (b)");
+  assert.ok(resume.includes("(c) terminate → `run_terminate` (`qa`, the reason)"), "resume.md lost answer (c)");
+  assert.ok(resume.includes("Never pause twice on them."), "resume.md lets the INVALIDATED pause repeat");
+  assert.ok(RESUME.includes("`RESTORED WIP:` → the previous attempt's work is back uncommitted: keep it."), "resume.md no longer keeps a restored wip");
+  assert.ok(buildPrompt({ job: { prompt: "x" }, restoredWip: { short: "abc1234", subject: "wip(s): terminated at qa — why" } }).includes("RESTORED WIP: "), "the prompt no longer carries the RESTORED WIP line the skill reads");
+  const pluginDir = new URL("../plugin/", import.meta.url);
+  const files = readdirSync(pluginDir, { recursive: true }).map(String).filter((name) => name.endsWith(".md"));
+  assert.deepEqual(files.filter((name) => folded(readFileSync(new URL(name, pluginDir), "utf8")).includes("without a commit")), [], "a plugin text still says to terminate without a commit");
+});
+
 test("the coder prompts never carry pasted file content, and no fast variant ships", () => {
   for (const text of [SKILL, promptTemplate("coder"), promptTemplate("coder-fix")]) {
     assert.equal(text.includes("[CONTENT READ INLINE]"), false, "a coder prompt still pastes file content");

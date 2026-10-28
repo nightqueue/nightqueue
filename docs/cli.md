@@ -175,7 +175,8 @@ into `<RUN_DIR>/00-brief.md` (`recorded: brief 00-brief.md`), records the commit
 included (`recorded: run_terminate triage <VERDICT>`), and, last, the slug
 (`recorded: slug <slug>`, or `(renamed from <old>; run dir <path>)` when a job run still on
 its provisional slug takes the Brief's `**Slug:**`), and `05 --stage analyst` records the stage A marker
-(`recorded: qa_stage_a <verdict>`) and no phase. Every gate code, the completion rule and the record
+(`recorded: qa_stage_a <verdict>`) and no phase. `05` with `INVALIDATED:` lines records no
+`qa` (`recorded: none (INVALIDATED: …)`). Every gate code, the completion rule and the record
 semantics are in [Runtime contract](runtime-contract.md) ("The artifact check answers the gates").
 
 `run append 05 --group <id> --from <file> [--project <name> --slug <slug>]` appends one prover
