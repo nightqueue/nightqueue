@@ -44,7 +44,7 @@ Your independent enumeration of the entry points of the target code, written BEF
 {{/HAS_USAGE_COVERAGE}}
 ## Validated risks
 {{#IS_BUG}}
-First line: `Symptom coverage: <N vectors of the plan's table> · <command/criterion of your re-enumeration> · omitted: <file:line | none>`. N = the total lines of the plan's ## Symptom coverage table (covered + not-covered), NOT the vectors you confirmed in the diff: a not-covered vector counts towards N even without being in the diff, and an omitted vector you discovered does not enter N, only `omitted:`.
+First line: `Symptom coverage: <N> · <command/criterion of your re-enumeration> · omitted: <file:line | none>`. N = the total lines of the plan's ## Symptom coverage table (covered + not-covered), NOT the vectors you confirmed in the diff: a not-covered vector counts towards N even without being in the diff, and an omitted vector you discovered does not enter N, only `omitted:`.
 {{/IS_BUG}}
 {{#HAS_USAGE_COVERAGE}}
 Next line (the first, without the line above): `Usage coverage: <N> · <M> · divergences: <file:line, …|none> · unconfirmed decisions: <item, …|none>`. N = the scenario lines (starting with `- `) inside the plan's ## Usage coverage, from the heading to the next `## `, outside a code block — the **Diff axis:**, **Always-gate class:** and **Scenarios consulted:** lines do NOT count. M = the entry-point lines of your ## Access map (QA) — the `partial:` and `unimplemented intent:` lines do NOT count. Both counts are audited with these same definitions.
