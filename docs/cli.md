@@ -1225,12 +1225,17 @@ refusal with one line starting `operator guard:`:
   backslash) that is either `nightqueue|nq <command> …` with `<command>` one of `queue`,
   `project`, `org`, `connection`, `doctor`, `memory`, `lesson`, `libs`, `version` - never
   `queue session`, `project add|move` or `doctor --fix`, never `--follow` or `--foreground` -
-  or `git -C <dir> [--no-optional-locks] <read> …` on a registered checkout or the root of a
-  job worktree under the home whose `.git` points to the admin dir git keeps for it in the
-  checkout's `.git/worktrees` (`stash list` also reads there), `<read>` one
+  or `git -C <dir> [--no-optional-locks] <read> …` on a registered checkout, `<read>` one
   of `log`, `show`, `diff`, `blame`, `ls-tree`, `ls-files`, `rev-parse`, `branch --list` and
   `--no-optional-locks status` (never `--output*`, `--ext-diff`, `--no-index`, `--exec`, nor a
-  global option other than `-C`). A subagent's free Bash is one bare nightqueue read
+  global option other than `-C`, `--no-optional-locks` and the two hardening `-c` pairs below).
+  The root of a job worktree under the home whose `.git` points to the admin dir git keeps for
+  it in the checkout's `.git/worktrees` is read only hardened, `git -C <worktree>
+  -c core.fsmonitor=false -c core.hooksPath=/dev/null [--no-optional-locks] <read>` (`stash
+  list` also reads there), `status` and `diff` with `--ignore-submodules=all`, never another
+  `--submodule*` or `--recurse-submodules`, nor an abbreviation git accepts for one
+  (`--ignore-submod=none`); any other spelling there is never. A subagent's
+  free Bash is one bare nightqueue read
   (`queue status|log`, `project list`, `org list`, `connection list`, `memory stats`, `doctor`
   without `--fix`, `libs`, `version`), the main thread's `git -C` reads (also written
   `cd <checkout> && git <read>`), `gh pr view|diff|checks|list|status` or `gh issue view|list`.
@@ -1246,7 +1251,11 @@ refusal with one line starting `operator guard:`:
   with the cwd inside a checkout; any other shape, a glob or brace character (`* ? [ ] { }`)
   included, is refused with the accepted form. `nightqueue doctor --fix` is a `run` from any
   directory, covered only by a consent naming `--fix`, and only spelled so: another spelling of
-  the program (`/abs/bin/nightqueue doctor --fix`) is never. `home-maintenance` removes ONE run
+  the program (`/abs/bin/nightqueue doctor --fix`) or a wrapper before it (`env`, `nice`,
+  `sudo`, `FOO=1`, `stdbuf`, `sh -c`; only a leading `timeout <n>` may lead) is never. git and
+  home maintenance behind a wrapper, or git spelled by its path (`/usr/bin/git`), are refused
+  as a request and as a consent scope, and a consent covers exact words, wrappers included
+  (`run env NODE_ENV=test npm test` never covers `npm test`). `home-maintenance` removes ONE run
   dir or worktree of the home (`rm -rf <home>/runs/<project id>/<slug>`, `find <entry> -delete`,
   `git -C <checkout> worktree remove <absolute worktree path>`) or runs
   `git -C <checkout> worktree prune`, on the main thread only, and covers that exact command:
@@ -1255,12 +1264,17 @@ refusal with one line starting `operator guard:`:
   or `cd <checkout> &&`), never a worktree's, and `git worktree remove|move` of a worktree not
   named by its absolute path (`.`, a bare name, `../…`, a link) is never. `git worktree
   remove|prune` is never `git-write`. Salvage from a worktree of a closed or cancelled job is
-  `git -C <worktree root> stash|format-patch` (`git-write`, its `.git` pointing to git's admin
-  dir) or `cd <checkout> && cp <worktree>/… …` (`run`). A path is judged as the entry stored on
+  `git -C <worktree root> format-patch` (`git-write`, its `.git` pointing to git's admin
+  dir) or `cd <checkout> && cp <worktree>/… …` (`run`); `git stash` of a worktree under the
+  home is never. A path is judged as the entry stored on
   disk, so a case variant names the same owner. Before the grant and again on every call, the
   guard looks up the job that holds the entry (its slug, its start worktree or its run state's worktree) and refuses as never when
   it is `pending`, `running`, `gate` or being closed (`<path> belongs to J-248 (gate)`), when
-  the worktree is locked by a live process or by hand, or when the queue cannot be read;
+  the worktree is locked by a live process or by hand, or when the queue cannot be read; a
+  `done` owner with a pull request holds until `gh pr view` (3 s for the whole decision, each
+  pull request read once, in parallel, inside the hook's 5 s) answers merged or closed (`<path> belongs to J-248 (done, pull request <url> is open)`; a
+  draft, conflicts, a gh failure, `NIGHTQUEUE_NO_PR_CHECK=1` or a non-GitHub URL hold too),
+  and a `done` job with no pull request does not hold;
   salvage also refuses a
   `done` or `failed` owner. It passes
   only when a live consent of the session covers it, else
@@ -1275,7 +1289,10 @@ refusal with one line starting `operator guard:`:
   editable), naming `.env*` or `secrets.json` (a `<rev>:<path>`, a glob that could match one
   and a brace that expands to one included), the refused nightqueue forms
   (`queue add --run`, `queue session`, `project add|move`, `open`,
-  `sandbox worktree`, …), `sh -c`/`eval` text. A path is judged where it really points: a
+  `sandbox worktree`, …), `sh -c`/`eval` text, and a git global option other than `-C <dir>`,
+  `--no-optional-locks`, `--no-pager` and the exact `-c core.fsmonitor=false` /
+  `-c core.hooksPath=/dev/null` pairs (`--config-env`, `--attr-source`, `--git-dir`,
+  `-c <other>`, `--`, an unknown flag), behind every wrapper. A path is judged where it really points: a
   symlink, a dangling one included, is followed. Every segment of a chain is scanned, relative
   words against the cwd and then each `cd`, so `cd <checkout> && rm -rf x` is never, not a
   shape refusal.

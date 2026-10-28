@@ -146,17 +146,44 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
   of the home (`secrets.json`, `nightqueue.db*`, `logs/`, `.by-id`, `.start-points.lock`) stay
   never; a relative path, a glob, a brace, a wrapper or `sh -c` is refused. `git worktree
   remove|prune` is consented as `home-maintenance`, no longer as `git-write`. Files of a closed or
-  cancelled job's worktree can be salvaged with `git -C <worktree> stash|format-patch`
-  (`git-write`) or `cd <checkout> && cp <worktree>/… …` (`run`).
+  cancelled job's worktree can be salvaged with `git -C <worktree> format-patch` (`git-write`)
+  or `cd <checkout> && cp <worktree>/… …` (`run`); `git stash` of a worktree under the home is
+  never. A `done` job with a pull request holds its run
+  dir and worktree (never, `belongs to J-<n> (done, pull request <url> is open)`) until
+  `gh pr view` answers merged or closed; a draft, conflicts, a gh failure, gh not answering
+  within 3 s for the whole decision (the pull requests one command names are read once each, in
+  parallel; the PreToolUse hook has 5 s), `NIGHTQUEUE_NO_PR_CHECK=1` and a non-GitHub URL hold
+  too, and a `done` job with no pull request does not hold.
+- **The operator guard allows git global options by a list.** Only `-C <dir>`,
+  `--no-optional-locks`, `--no-pager` and the exact pairs `-c core.fsmonitor=false`,
+  `-c core.hooksPath=/dev/null` may precede a git subcommand; any other (`--config-env`,
+  `--attr-source`, `--git-dir`, `-c <other>`, `--`, `--version`, an unknown flag) is never,
+  past every wrapper (`env`, `nice`, `sudo`, `FOO=1`, `timeout <n>`, `stdbuf`, an unknown one),
+  inside `sh -c`/`eval` and when a consent is recorded. A word only sharing git's name is not
+  git (`src/host/git.mjs`, `git log --grep git`).
+- **git, `doctor --fix` and home maintenance run only as one bare command.** Behind a wrapper
+  (only a leading `timeout <n>` may lead) or with git spelled by its path (`/usr/bin/git`) they
+  are refused as a request and as a consent scope; a wrapped `doctor --fix` is never. A consent
+  still covers exact words: `nightqueue doctor --fix` is covered only by a scope naming it, and
+  `run env NODE_ENV=test npm test` never covers `npm test`.
+- ⚠️ Open items: textconv, external-diff and clean drivers a job writes into the checkout's
+  shared `.git/config` and triggers through its own `.gitattributes` stay outside the guard
+  (V9): the free hardened read of a worktree runs such a clean filter. It gets its own
+  follow-up job, which should weigh clearing those driver keys from the shared `.git/config` at
+  claim and finish against refusing the reads.
 
 ### Changed
 
 - **`nightqueue doctor --fix` is consentable in an operator session.** It is a `run` from any
   directory, covered only by a consent naming `--fix`, only spelled `nightqueue doctor --fix`
   (another spelling of the program stays never), and still never free nor on a subagent
-  thread. Reads at the root of a job worktree under the home (`git -C <worktree>
-  --no-optional-locks status`, `log`, `diff`, `stash list`) are free while its `.git` points to
-  the admin dir git keeps for it in the checkout.
+  thread. Reads at the root of a job worktree under the home are free while its `.git` points
+  to the admin dir git keeps for it in the checkout, spelled only `git -C <worktree>
+  -c core.fsmonitor=false -c core.hooksPath=/dev/null [--no-optional-locks] <read>` (`log`,
+  `stash list`, …), `status` and `diff` with `--ignore-submodules=all`, never another
+  submodule option nor an abbreviation git accepts for one (`--ignore-submod=none`,
+  `--recurse-submod`), so no fsmonitor, hook or nested-repo filter the job
+  planted runs; any other spelling there is never.
 - **The phases are whole numbers, 0 to 10, one artifact each.** The runtime phase is now
   Phase 7 (`07-runtime.md`, `nightqueue run check 07`), commit/PR Phase 8, the report Phase 9 and
   the reflector Phase 10; the old `06.5`/`06-runtime.md` are gone. The QA analyst no longer has

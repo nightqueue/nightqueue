@@ -4,7 +4,7 @@ import { UserError } from "../config/errors.mjs";
 import { isId } from "../config/ids.mjs";
 import { operatorConsentPath, operatorLogPath, worktreesDir } from "../config/paths.mjs";
 import { registeredCheckouts } from "../memory/registry-access.mjs";
-import { hasGlob, isHomeMaintenance, neverBashReason, neverWriteReason, scopeWords } from "./operator-bands.mjs";
+import { WRAPPED_GUARDED, hasGlob, isHomeMaintenance, isWrappedGuarded, neverBashReason, neverWriteReason, scopeWords } from "./operator-bands.mjs";
 import { homeMaintenanceForm, homeTargets, worktreeCall } from "./operator-home.mjs";
 import { GIT_READ_SUBCOMMANDS, isDoctorFix } from "./operator-scope.mjs";
 import { canonicalPath, insideRoots } from "./orchestrator-scope.mjs";
@@ -109,6 +109,11 @@ function refuseNever(shown, env) {
   if (never) throw new UserError(`\`${shown}\` is in the never band (${never}); no consent covers it`);
 }
 
+// Refuses a consent scope that runs git, `doctor --fix` or home maintenance behind a wrapper or git by its path, which no request is ever matched against.
+function refuseWrapped(words) {
+  if (isWrappedGuarded(words)) throw new UserError(`\`${words.join(" ")}\` has no consentable form: ${WRAPPED_GUARDED}`);
+}
+
 // The scope of a run or git-write consent: one bare command, its leading `cd <dir> &&` and `timeout <n>` dropped (and `git` for git-write).
 function commandScope({ kind, scope, env }) {
   const words = commandWords(kind, scope);
@@ -116,6 +121,7 @@ function commandScope({ kind, scope, env }) {
   const argv = kind === "git-write" && words[0] === "git" ? words.slice(1) : words;
   const shown = kind === "git-write" ? `git ${argv.join(" ")}` : argv.join(" ");
   refuseNever(shown, env);
+  refuseWrapped(words);
   if (isHomeMaintenance(kind === "git-write" ? ["git", ...argv] : argv)) throw new UserError(`\`${shown}\` deletes or removes a worktree: it is consented as kind ${HOME_MAINTENANCE}`);
   if (kind === "git-write" && (!argv[0] || argv[0].startsWith("-") || (GIT_READ_SUBCOMMANDS.has(argv[0]) && argv[0] !== "branch"))) {
     throw new UserError(`the scope of a git-write consent starts with a git subcommand that writes, and \`${shown}\` does not`);
@@ -150,6 +156,7 @@ function homeScope({ scope, project, env }) {
   if (!homeMaintenanceForm(words)) throw new UserError(HOME_MAINTENANCE_FORMS);
   const shown = words.join(" ");
   refuseNever(shown, env);
+  refuseWrapped(words);
   refuseForeignTargets(words, { project, env });
   return { scope: shown, argv: words };
 }

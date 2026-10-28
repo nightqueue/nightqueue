@@ -5,8 +5,10 @@ import { homeDir, userHomeDir } from "../config/paths.mjs";
 import { listHomeHolders } from "../memory/jobs.mjs";
 import { jobRef } from "../memory/refs.mjs";
 import { registeredCheckouts, withRegistry } from "../memory/registry-access.mjs";
-import { gitReadAllowed, programName } from "./operator-scope.mjs";
+import { GIT_READ_HARDENING, IGNORE_SUBMODULES, gitGlobals, gitReadAllowed, isBarePrefix, isSubmoduleArg, opensWithHardening, programName } from "./operator-scope.mjs";
+import { prStates } from "./operator-pr-budget.mjs";
 import { canonicalPath } from "./orchestrator-scope.mjs";
+import { flattenPrState, prStateKey } from "./pr-state.mjs";
 import { killProcess, probePid } from "./registry.mjs";
 import { isSafeSegment, readRunState } from "./resume.mjs";
 import { lockPid } from "./worktree.mjs";
@@ -19,7 +21,6 @@ const WORKTREE_FORCE = new Set(["-f", "--force"]);
 const PRUNE_FLAGS = new Set(["-n", "-v", "--dry-run", "--verbose"]);
 const PRUNE_EXPIRE = "--expire";
 const EXEC_FLAGS = new Set(["-exec", "-execdir", "-ok", "-okdir"]);
-const DURATION = /^\d+(\.\d+)?[smhd]?$/;
 const MAINTENANCE_ROOTS = new Set(["runs", "worktrees"]);
 const ENTRY_DEPTH = 2;
 const GIT_DIR_NAME = ".git";
@@ -28,6 +29,7 @@ const ONE_ENTRY =
 const ONE_BARE_COMMAND = "home maintenance runs as one bare command, never behind a wrapper, an env assignment or an inline shell";
 const HOLDING_STATUSES = new Set(["pending", "running", "gate"]);
 const SALVAGE_REFUSED_STATUSES = new Set(["done", "failed"]);
+const PR_HOLD_WORDS = { open: "is open", unknown: "is open", draft: "is a draft", conflicted: "has conflicts" };
 const STASH_SAVES = new Set(["push", "save"]);
 const COPY_OPTION = /^-[rRpafnv]+$/;
 const ABSENT_FILE_CODES = new Set(["ENOENT", "ENOTDIR", "EISDIR"]);
@@ -35,6 +37,12 @@ const GITDIR_LINE = /^gitdir:\s*(.+)$/m;
 const NON_LITERAL_HOME =
   "a path under the nightqueue home with a `.` or `..` component; name a run dir or worktree by its literal absolute path";
 const ADMIN_DIRS = "worktrees";
+const NO_LOCKS = "--no-optional-locks";
+const HARDENED_GIT = "git -C <worktree> -c core.fsmonitor=false -c core.hooksPath=/dev/null";
+export const WORKTREE_READ_SPELLING = `\`${HARDENED_GIT} [${NO_LOCKS}] <read>\` (\`status\` and \`diff\` with \`${IGNORE_SUBMODULES}\`)`;
+const WORKTREE_READ_HARDENED = `a worktree under the nightqueue home is read only hardened, so no program the job planted runs: ${WORKTREE_READ_SPELLING}, never another \`--submodule*\` or \`--recurse-submodules\``;
+const WORKTREE_NEVER_STASHED =
+  "a worktree under the nightqueue home is never stashed: `git stash` runs the clean filter of a nested repo the job planted, whatever the hardening; salvage it with `git -C <worktree> format-patch` or `cp`";
 
 // A word as an absolute path, `~` expanded and a relative path with a slash resolved against the segment's directory, or null.
 export function wordPath(word, { dir, env }) {
@@ -222,14 +230,36 @@ function trustedWorktree(entry, env, result) {
   return admin.refused ? { never: admin.refused } : result;
 }
 
-// The classification of a git read of a worktree under the home (`git -C <worktree> <read>`, `stash list` included): read, never for an untrusted pointer, or null.
+// Tells whether git words past the global options are a read of a directory: `stash list`, or an allowed read of it.
+function isGitRead(argv, { dir, noLocks }) {
+  if (argv[0] === "stash") return argv.length === 2 && argv[1] === "list";
+  return gitReadAllowed(["git", "-C", dir, ...(noLocks ? [NO_LOCKS] : []), ...argv], [canonicalPath(dir)]);
+}
+
+// Tells whether a read keeps out of submodules: `status` and `diff` carry exactly `--ignore-submodules=all`, any other read no submodule option.
+function submodulesIgnored([subcommand, ...args]) {
+  const steering = args.filter(isSubmoduleArg);
+  if (subcommand !== "status" && subcommand !== "diff") return steering.length === 0;
+  return steering.length === 1 && steering[0] === IGNORE_SUBMODULES;
+}
+
+// Tells whether the global options of a worktree read are exactly the hardened spelling: `-C <worktree>`, the hardening block, then `--no-optional-locks` when present.
+function hardenedGlobals(globalWords, { dir, noLocks }) {
+  const expected = ["-C", dir, ...GIT_READ_HARDENING, ...(noLocks ? [NO_LOCKS] : [])];
+  return globalWords.length === expected.length && expected.every((word, index) => globalWords[index] === word);
+}
+
+// The classification of a git read of a worktree under the home (`stash list` included): read when hardened, never when not or for an untrusted pointer, else null.
 function worktreeReadSegment(program, hits, env) {
   const entry = worktreeRootHit(program, hits);
   if (!entry) return null;
-  const rest = program[3] === "--no-optional-locks" ? program.slice(4) : program.slice(3);
-  const stashList = rest.length === 2 && rest[0] === "stash" && rest[1] === "list";
-  if (!stashList && !gitReadAllowed(program, [canonicalPath(program[2])])) return null;
-  return trustedWorktree(entry, env, { kind: "read" });
+  const globals = gitGlobals(program.slice(1));
+  if (globals.refused !== null) return null;
+  const argv = program.slice(1 + globals.index);
+  const spelling = { dir: program[2], noLocks: globals.noLocks };
+  if (!isGitRead(argv, spelling)) return null;
+  const hardened = hardenedGlobals(program.slice(1, 1 + globals.index), spelling) && submodulesIgnored(argv);
+  return trustedWorktree(entry, env, hardened ? { kind: "read" } : { never: WORKTREE_READ_HARDENED });
 }
 
 // The run dir or worktree an entry hit lies in (the hit itself at entry depth), so ownership is judged on the entry and not a path below it.
@@ -239,13 +269,15 @@ function entryTop(entry) {
   return { ...entry, depth: ENTRY_DEPTH, canonical };
 }
 
-// The classification of a salvage from a worktree under the home (`git -C <worktree> stash [push|save] …` or `format-patch …`): salvage, or null.
+// The classification of a salvage from a worktree under the home (`git -C <worktree> [<read hardening>] format-patch …`): salvage, never for any stash (`stash [push|save] …`), or null.
 function worktreeSalvageSegment(program, hits, env) {
   const entry = worktreeRootHit(program, hits);
   if (!entry) return null;
-  const [subcommand, mode] = program.slice(3);
+  const hardened = opensWithHardening(program.slice(3));
+  const [subcommand, mode] = program.slice(hardened ? 3 + GIT_READ_HARDENING.length : 3);
   const stashes = subcommand === "stash" && (mode === undefined || mode.startsWith("-") || STASH_SAVES.has(mode));
-  return stashes || subcommand === "format-patch" ? trustedWorktree(entry, env, { kind: "salvage", targets: [entry] }) : null;
+  if (!stashes && subcommand !== "format-patch") return null;
+  return trustedWorktree(entry, env, stashes ? { never: WORKTREE_NEVER_STASHED } : { kind: "salvage", targets: [entry] });
 }
 
 // The classification of a `cp` out of run dirs or worktrees: salvage when every home path is a source and the destination lies outside the home, else null.
@@ -257,12 +289,12 @@ function copySegment(program, hits) {
   return sources.every((entry) => isEntry(entry, { below: true })) ? { kind: "salvage", targets: sources.map(entryTop) } : null;
 }
 
-// Tells whether git words salvage a worktree under the home: `git -C <worktree> stash [push|save] …` or `git -C <worktree> format-patch …`.
+// Tells whether git words salvage a worktree under the home: `git -C <worktree> [<read hardening>] format-patch …`.
 export function isWorktreeSalvage(words, env = process.env) {
   return Array.isArray(words) && worktreeSalvageSegment(words, homeHits(words, env), env)?.kind === "salvage";
 }
 
-// Tells whether git words only read a worktree under the home: `git -C <worktree> [--no-optional-locks] <read>`.
+// Tells whether git words only read a worktree under the home, hardened: `git -C <worktree> <read hardening> [--no-optional-locks] <read>`.
 export function isWorktreeRead(words, env = process.env) {
   return Array.isArray(words) && worktreeReadSegment(words, homeHits(words, env), env)?.kind === "read";
 }
@@ -282,11 +314,6 @@ export function homeTargets(words, env = process.env) {
 // Tells whether the words have a home-maintenance form: a delete, or the strict `git [-C <abs dir>] worktree remove|prune`.
 export function homeMaintenanceForm(words) {
   return Array.isArray(words) && (deletes(words) || worktreeCall(words) !== null);
-}
-
-// Tells whether the words before a program leave it bare: nothing, or only `timeout <n>`.
-function isBare(prefix) {
-  return prefix.length === 0 || (prefix.length === 2 && prefix[0] === "timeout" && DURATION.test(prefix[1]));
 }
 
 // The program words' kind of home use, before the bare check: read for a `cd` or a git read, maintenance for a delete or a worktree removal, salvage for a copy out, null otherwise.
@@ -424,14 +451,67 @@ function salvageReason(rows, entry, env) {
   return owner ? `salvage copies from a closed or cancelled job; ${entry.canonical} belongs to ${holderLabel(owner)}` : null;
 }
 
-// Why a job of the entry's project still holds it (for a salvage, also a done or failed owner), or null when none does.
+// Tells whether a job row is done with a pull request URL recorded.
+function isDoneWithPr(row) {
+  return row.status === "done" && typeof row.pr_url === "string" && row.pr_url.trim() !== "";
+}
+
+// The GitHub pull request URLs of the done jobs among rows; one not on GitHub is left out, since gh cannot read it.
+function githubPrUrls(rows) {
+  return rows.filter(isDoneWithPr).map((row) => row.pr_url.trim()).filter((url) => prStateKey(url) !== null);
+}
+
+// The state of a done job's pull request among the states read, or why it cannot be told.
+function prView(url, states) {
+  if (!prStateKey(url)) return { ok: false, why: "it is not a GitHub pull request URL" };
+  return states.get(url) ?? { ok: false, why: "gh answered no readable pull request state" };
+}
+
+// Why a done job's pull request still holds what the job owns, an unreadable state counted as open; null once it is merged or closed.
+function pendingPr(view) {
+  const state = flattenPrState(view);
+  if (state === "merged" || state === "closed") return null;
+  return PR_HOLD_WORDS[state] ?? `could not be confirmed merged or closed: ${view.why ?? "gh answered no readable pull request state"}`;
+}
+
+// Why a done job of the entry still holds it while its pull request is not merged or closed, or null when none does.
+function prHoldReason(rows, entry, env) {
+  const owners = rows.filter((row) => isDoneWithPr(row) && ownsEntry(row, entry, env));
+  if (owners.length === 0) return null;
+  const states = prStates(githubPrUrls(owners), env);
+  for (const row of owners) {
+    const url = row.pr_url.trim();
+    const pending = pendingPr(prView(url, states));
+    if (pending) return `${entry.canonical} belongs to ${jobRef(row.id)} (done, pull request ${url} ${pending})`;
+  }
+  return null;
+}
+
+// The GitHub pull request URLs of the done jobs that own an entry.
+function ownerPrUrls(entry, env) {
+  if (!entry || entry.never || !entry.projectId) return [];
+  return githubPrUrls(holderRows(entry, env).filter((row) => ownsEntry(row, entry, env)));
+}
+
+// Reads at once the pull request states of the done jobs owning an entry the segments' words name, so a chained command spends the guard's gh budget once; answers false when it could not, the owner check that follows then reads them itself.
+export function prefetchPrStates(wordLists, env = process.env) {
+  try {
+    const urls = wordLists.flatMap((words) => [...homeHits(words, env).values()].flatMap((entry) => ownerPrUrls(entry, env)));
+    prStates(urls, env);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// Why a job of the entry's project still holds it (for a salvage, also a done or failed owner; otherwise a done owner whose pull request is not merged or closed), or null when none does.
 function jobReason(entry, { env, salvage }) {
   const rows = holderRows(entry, env);
   const choosing = rows.find((row) => row.status === "running" && !row.slug);
   if (choosing) return `${jobRef(choosing.id)} (running) is still choosing its run directory in this project`;
   const holder = rows.find((row) => isHolding(row) && ownsEntry(row, entry, env));
   if (holder) return `${entry.canonical} belongs to ${holderLabel(holder)}`;
-  return salvage ? salvageReason(rows, entry, env) : null;
+  return salvage ? salvageReason(rows, entry, env) : prHoldReason(rows, entry, env);
 }
 
 // Runs one ownership read, a failure turned into a refusal so an unreadable owner never counts as no owner.
@@ -469,7 +549,7 @@ export function homeSegment(words, { start = 0, env = process.env, nested = fals
   const result = segmentKind(program, hits, env);
   if (!result) return { unclassified: true };
   if (result.never) return result;
-  if (result.kind !== "read" && (nested || !isBare(words.slice(0, start)))) return { never: ONE_BARE_COMMAND };
+  if (result.kind !== "read" && (nested || !isBarePrefix(words.slice(0, start)))) return { never: ONE_BARE_COMMAND };
   const held = heldReason(result.targets ?? [], { env, salvage: result.kind === "salvage" });
   if (held) return { never: held };
   return { kind: result.kind, accepted: new Set([...hits.keys()].map((index) => program[index])) };

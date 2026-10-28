@@ -2,6 +2,7 @@ import { existsSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
 import { consentBash, neverBashReason, neverWriteReason } from "../queue/operator-bands.mjs";
 import { consentCovers, operatorSession } from "../queue/operator-consent.mjs";
+import { withPrBudget } from "../queue/operator-pr-budget.mjs";
 import { globStaticPrefix, insideRoots, isOrchestratorCall, readTarget } from "../queue/orchestrator-scope.mjs";
 import {
   OPERATOR_GUARD,
@@ -136,7 +137,7 @@ export function operatorDecision({ input, env = process.env }) {
   try {
     const malformed = malformedReason(input?.tool_name, input?.tool_input);
     if (malformed) return malformed;
-    return bandReason(input, env);
+    return withPrBudget(() => bandReason(input, env));
   } catch (err) {
     return READ_TOOLS.has(input?.tool_name) ? null : failClosedReason(input?.tool_name, err);
   }
