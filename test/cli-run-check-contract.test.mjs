@@ -493,6 +493,22 @@ test("a PROPOSE-ALTERNATIVE triage terminates the run, the gate answer lifts it,
   assert.deepEqual([decision.resume, decision.fromPhase], [true, "architecture"]);
 });
 
+test("a second-round INVALIDATED withholds qa, pauses at a gate from `## Validated risks`, and the answered run resumes at qa", async (t) => {
+  const seeded = seedRun(t, "invalidated-gate", readFixture("invalidated-second-round"));
+  for (const phase of ["triage", "explore", "architecture", "implementation"]) recordPhaseDone({ projectId: seeded.projectId, slug: SLUG, phase, env: seeded.env });
+  const { out } = await runCheck(seeded.env, "05");
+  assert.equal(out.filter((line) => line.startsWith("INVALIDATED: ")).length, 3, out.join("\n"));
+  assert.ok(!out.some((line) => line.startsWith("recorded: phase_done qa")), out.join("\n"));
+  assert.equal(out.at(-1), `recorded: none (${out.find((line) => line.startsWith("INVALIDATED: [H6]"))})`);
+  assert.equal(stateOf(seeded).termination, undefined);
+  const notice = composeGateNotice({ runDir: seeded.dir, fromArtifact: { file: "05-qa.md", section: "## Validated risks" } });
+  assert.match(notice, /R1 UPHELD by test\/list\.test\.mjs/);
+  openDb(seeded.env).prepare("UPDATE jobs SET status = 'gate' WHERE id = ?").run(jobIdOf(seeded));
+  await applyRetry({ id: jobIdOf(seeded), note: "(b) ship as is", env: seeded.env });
+  const decision = decideResume({ state: stateOf(seeded) });
+  assert.deepEqual([decision.resume, decision.fromPhase], [true, "qa"]);
+});
+
 test("a terminal triage with a partial Brief fires no field gate and still terminates", async (t) => {
   const partial = "## Brief\n**Affected area:** src/a.mjs\n**Commit type:**\n\n";
   const seeded = seedRun(t, "terminal-partial-brief", { fixture: { type: "bug/error" }, texts: { "01-triage.md": triageWith("NEEDS-CLARIFICATION", undefined, partial) } });

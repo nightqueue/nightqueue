@@ -1,24 +1,25 @@
 # Run resume
 
-If the job context brought a block ``RESUME CANDIDATE (slug `<slug>`)``, this run continues a
-previous one the runtime already read from `state.json`: trust the block and re-validate nothing
-BEFORE re-interpreting the task.
+A ``RESUME CANDIDATE (slug `<slug>`)`` block: this run continues one the runtime read from
+`state.json`; trust it, re-validate nothing BEFORE re-interpreting the task.
 
-- Take every field from the block itself: `RUN_DIR:` is the run dir of this run (as it
-  comes, never derived), `Branch:` and `Worktree:` are the ones to reuse (a queued job is
-  already in them; an interactive `/resolve` reuses them per `references/interactive-worktree.md`),
-  and execution STARTS at the phase in `Resume from phase:`. A `none` field has nothing to reuse.
-- Skip every phase up to `Last completed phase:` and read its artifact in `RUN_DIR` — do NOT re-triage, do NOT re-explore, do NOT re-architect.
-- **`From stage: qa-stage-b`** → Phase 5 re-enters at **Stage B (provers)**: read the
-  analyst's round of `<RUN_DIR>/05-qa.md` (its last `## Round` with `## Break hypotheses`) and
-  launch Stage B, then `run check 05`, never the analyst. Any other value → the whole of Phase 5, from Stage A.
+- Take every field from the block: `RUN_DIR:` is this run's dir (never derived), `Branch:` and
+  `Worktree:` the ones to reuse (Phase 0 step 4); execution STARTS at `Resume from phase:`.
+  `none` → nothing to reuse.
+- Skip every phase up to `Last completed phase:`, reading its artifact in `RUN_DIR` — never redo one.
+- **`From stage: qa-stage-b`** → Phase 5 re-enters at **Stage B**: read the analyst's last
+  `## Round` (with `## Break hypotheses`) of `<RUN_DIR>/05-qa.md`, launch the provers, then
+  `run check 05`, never the analyst. Any other value → the whole of Phase 5.
 - **Exception, an OPERATOR ANSWER resuming at `qa`:** `run check 05` first, whatever
   `From stage:` says; only `usage-coverage-*` `GATE:` lines → they are answered (SKILL.md
-  Phase 5): never a second relaunch, pause or terminate.
-- **Read-fail fallback:** a declared-completed phase's artifact missing or
-  unreadable → ignore the block and **start clean** from Phase 0.
-- **`Re-run: <phase> — <reason>` lines** → run that phase (the runtime refused to skip it) and
-  carry each line verbatim into Phase 9 as an open item and into the notice.
-- Safety invariant: the resume only happens on a retry of a TERMINAL job
-  (gate/failed/budget) or the first claim of a job queued from an operator run (no
-  worktree to reuse) — NEVER reuse the worktree of a job that is still running.
+  Phase 5): never a second relaunch, pause or terminate. `INVALIDATED:` lines → by the answer:
+  (a) changes → relaunch the architect once (🔁, `note` = answer + lines), then Phases 4-5, a
+  further `INVALIDATED:` terminating; (b) ship as is → the `VERDICT:` row, the lines ⚠️ open
+  items; (c) terminate → `run_terminate` (`qa`, the reason). Else (a). Never pause twice on them.
+- **Read-fail fallback:** a declared-completed artifact missing or unreadable → ignore the
+  block, **start clean** from Phase 0.
+- **`Re-run: <phase> — <reason>`** → run that phase (the runtime refused to skip it); each line
+  verbatim → open item of Phase 9 and the notice.
+- `RESTORED WIP:` → the previous attempt's work is back uncommitted: keep it.
+- Safety: a resume follows only a retry of a TERMINAL job or the first claim of an
+  operator-queued job — NEVER reuse a running job's worktree.

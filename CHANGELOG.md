@@ -339,6 +339,30 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A second `INVALIDATED:` at the QA pauses for the operator, and a terminated run keeps its
+  work.** After the one allowed architect relaunch, a second `INVALIDATED:` no longer
+  terminates. The orchestrator pauses the job at `gate` with `run_outcome` (notice from
+  `05-qa.md` `## Validated risks`, the `INVALIDATED:` lines, what is implemented and tested so
+  far, and the answers: one more architect round, ship as is, or terminate). `run check 05`
+  no longer records `qa` while it prints `INVALIDATED:` lines, so the answer resumes at the QA.
+  Every terminate (`run_terminate`, and the runner at the finish of a job that ended
+  `cancelled` by itself) commits the worktree's changes on the job's branch as one local wip
+  commit `wip(<slug>): terminated at <phase> — <reason>`. That commit skips hooks, is never
+  pushed, and leaves out `tmp/` and `.claude/` paths. It is never made in an adopted worktree,
+  on the default branch, on the main checkout's branch or on a detached HEAD. The notice names
+  the commit and prints `Retry: nightqueue queue retry J-<id>` and
+  `New job from it: start_branch: <branch>`. The runtime names the wip commit with the local
+  ref `refs/nightqueue/wip/<slug>`, written in the same step, so a repeated `run_terminate`
+  keeps the same commit even when its first record was refused. Every claim whose HEAD that
+  ref names, a non-fresh `queue retry` or a new job queued with `start_branch` on the branch,
+  gives the wip back uncommitted and tells the session with a `RESTORED WIP:` line; a commit
+  titled `wip(` with no ref is never reset. The end of every attempt that got the work back
+  and committed nothing puts the branch back on the same wip commit without a new one, so
+  `--fresh` leaves the old branch at the wip commit. A `failed`, stopped or gate ending whose
+  branch keeps the wip prints a `Wip commit:` paragraph with the `start_branch` line.
+  `run publish` refuses with a `REJECTED:` line a branch whose history carries a ref'd wip
+  commit, so it is never pushed. The resolve skill no longer says "terminate without a
+  commit": it meant without a PR.
 - **A usage-coverage gate at the QA no longer cancels an approved run.**
   `usage-coverage-held-on-pipeline` counts `HELD` only when it is set off from the prose
   (`R2 HELD by reading`, `item (…) HELD.`, `→ HELD`), never mid-prose (`is HELD by the

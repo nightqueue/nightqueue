@@ -186,6 +186,17 @@ test("the prompt asks for the pipeline, the slug line and the gate, and carries 
   assert.equal(buildPrompt({ job: JOB }).includes("RESUME CANDIDATE"), false);
 });
 
+test("the RESTORED WIP line names the subject in parentheses only when the record has one", () => {
+  const tail = " are back as uncommitted changes in the worktree; keep them.";
+  const withSubject = buildPrompt({ job: JOB, restoredWip: { short: "abc1234", subject: "wip(s): terminated\n at qa" } });
+  assert.ok(withSubject.includes(`RESTORED WIP: the previous attempt's changes from commit abc1234 (wip(s): terminated at qa)${tail}`), withSubject);
+  for (const subject of [undefined, "", "   "]) {
+    const prompt = buildPrompt({ job: JOB, restoredWip: { short: "abc1234", subject } });
+    assert.ok(prompt.includes(`RESTORED WIP: the previous attempt's changes from commit abc1234${tail}`), prompt);
+    assert.equal(prompt.includes("()"), false);
+  }
+});
+
 test("a note the prompt already carries as its Operator note section is not repeated as a gate answer", () => {
   const prompt = "## Task\nfix it\n\n## Operator note\nkeep the API\n\n## Issue\nIssue: x";
   const queued = buildPrompt({ job: { ...JOB, prompt, operator_note: "keep the API" } });

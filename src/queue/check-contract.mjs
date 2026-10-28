@@ -660,7 +660,7 @@ function memoLineOf(check, lines, verdict) {
   const [first] = lines;
   if (first !== "OK" && first !== "GENERATED") return first;
   const gateLine = lines.find((line) => line.startsWith("GATE: "));
-  const pause = lines.find((line) => line.startsWith("TYPE-MISMATCH: ") || line === CONFIRM_LINE);
+  const pause = lines.find((line) => line.startsWith("TYPE-MISMATCH: ") || line === CONFIRM_LINE || line.startsWith("INVALIDATED: "));
   const failing = FAILING[check]?.includes(verdict) ? `VERDICT: ${verdict}` : null;
   return gateLine ?? pause ?? failing ?? first;
 }
@@ -669,7 +669,7 @@ function memoLineOf(check, lines, verdict) {
 function resultOf({ check, first, facts = {}, type = null, evaluated = "" }) {
   const lines = contractLines(first, facts);
   const verdict = facts.verdict ?? null;
-  const passed = (first === "OK" || first === "GENERATED") && (facts.gates ?? []).length === 0;
+  const passed = (first === "OK" || first === "GENERATED") && (facts.gates ?? []).length === 0 && (facts.invalidated ?? []).length === 0;
   return {
     first,
     lines,

@@ -205,6 +205,41 @@ test("a scratch file in the list is rejected before the commit, naming the way o
   assert.deepEqual(ghCalls(env), []);
 });
 
+// Commits one unlisted file on the run's branch with a wip subject, the shape of a terminated attempt's wip commit.
+function commitWipShaped(worktree) {
+  writeFileSync(join(worktree, "notes.txt"), "earlier attempt\n");
+  git(["-C", worktree, "add", "notes.txt"]);
+  git(["-C", worktree, "-c", "commit.gpgsign=false", "commit", "-q", "--no-verify", "-m", `wip(${SLUG}): terminated at qa — why`]);
+  return git(["-C", worktree, "rev-parse", "HEAD"]).trim();
+}
+
+test("a branch carrying the runtime's wip commit is rejected, nothing is committed or pushed", async (t) => {
+  const { env, id, remote, worktree, dir } = makeRun(t, "publish-wip");
+  const wip = commitWipShaped(worktree);
+  git(["-C", worktree, "update-ref", `refs/nightqueue/wip/${SLUG}`, wip]);
+  const before = commitCount(worktree);
+
+  const { code, out } = await runCli(env, id, publishArgs(dir));
+
+  assert.equal(code, 1, out.join("\n"));
+  assert.ok(out.includes(`REJECTED: the branch carries the runtime's wip commit ${wip.slice(0, 7)} (refs/nightqueue/wip/${SLUG}), which is never pushed: stop and record it as an open item; the operator squashes it or retries the job so the claim gives it back uncommitted`), out.join("\n"));
+  assert.equal(out.at(-1), "nothing was committed or pushed: fix the problems above and call `nightqueue run publish` again");
+  assert.equal(commitCount(worktree), before);
+  assert.equal(git(["-C", remote, "for-each-ref", "refs/heads"]).includes(SLUG), false, "the wip branch was pushed");
+  assert.deepEqual(ghCalls(env), []);
+});
+
+test("a human commit titled `wip(` with no runtime ref is published as usual", async (t) => {
+  const { env, id, worktree, dir } = makeRun(t, "publish-human-wip");
+  commitWipShaped(worktree);
+
+  const { code, out, errText } = await runCli(env, id, publishArgs(dir));
+
+  assert.equal(code, 0, `${out.join("\n")}\n${errText}`);
+  assert.equal(out.some((line) => line.includes("wip commit")), false, out.join("\n"));
+  assert.equal(git(["-C", worktree, "log", "-1", "--format=%s"]).trim(), "feat(text): add slugify");
+});
+
 test("`run publish` requires the message and the body files", async (t) => {
   const { env, id, dir } = makeRun(t, "publish-usage");
   const noBody = await runCli(env, id, ["run", "publish", "--message-file", join(dir, "commit-message.txt")]);

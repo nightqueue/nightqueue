@@ -1,11 +1,10 @@
 # Phase 8 — Commit and PR
 
 Only execute this phase if Phase 6 returned `## Verification: PASSED` **and** Phase
-7 (when applicable) confirmed the change at runtime (a real payload confirmed in
-case (a), a screenshot in case (b), the user's verdict in case (c), the complete acceptance
-criteria in case (d)). If the verification failed after the fix iterations,
-or if the runtime validation showed the bug persisting, **do not commit** — go
-straight to Phase 9 and report.
+7 (when applicable) confirmed the change at runtime (its case's proof, SKILL.md
+Phase 7). If the verification failed after the fix iterations
+or the runtime validation showed the bug persisting, **no delivery commit/PR** — straight to
+Phase 9 (a terminated run's wip commit is the runtime's, never a delivery nor `run publish`).
 
 The command below owns the mechanics — staging, the commit, the branch name, the push and
 `gh pr create`. What stays yours is the judgment: which files, which message, which body.
@@ -29,8 +28,8 @@ before step 2 and after the pull request exists.
      listing only the checks that actually passed and the tracker's canonical ID (e.g. `Fixes
      PROJ-123`) when the task came from one. No `Co-Authored-By` trailer, agent, model or
      vendor name. Never write a `Refs:` trailer; `run publish` adds it.
-   - Write the message with Write to `<RUN_DIR>/commit-message.txt`, which lives outside the
-     worktree and is therefore never committed.
+   - Write the message with Write to `<RUN_DIR>/commit-message.txt`, outside the worktree,
+     never committed.
 
 2. **Open the pull request** (one command, `nightqueue run publish`):
    - The template of the body is the `prTemplate` `run start` answered — the repository's own
@@ -76,10 +75,11 @@ before step 2 and after the pull request exists.
      template in effect (a heading missing or out of order, a nightqueue heading against a
      repository template, the `## QA` subsections or the `Not tested:` line, a bare `#<number>`, a
      placeholder or a leftover `<...>` example) and nothing was pushed. Fix the body or the
-     evidence and call the command again.
+     evidence and call the command again; a `… wip commit` one: never rewrite history, open
+     item, no PR.
    - `run publish` records the delivery itself.
    - If `gh` is not installed or could not open the pull request, the command says so with the
-     branch already pushed: inform it and leave the pull request to be opened by hand.
+     branch already pushed: inform it; the pull request is opened by hand.
 
 3. **Cycle closing belongs to the runtime, not to this pipeline.** The pipeline ends at an open PR;
    merge, delivery, the issue tracker and the executive notice are the runtime's — never run them inline.

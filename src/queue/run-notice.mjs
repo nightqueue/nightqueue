@@ -1,5 +1,6 @@
 import { ABANDONED_COMMAND_PREFIX, NO_CHANGE_NEXT_STEP_LINE, NOTHING_TO_CLOSE_LINE, STRAY_PR_PREFIX, trailingStripped } from "./classify.mjs";
 import { CLOSED_PREFIX, POST_CLOSE_PREFIX } from "./close-view.mjs";
+import { WIP_KEPT_PREFIX, WIP_PREFIX } from "./wip-commit.mjs";
 import { KEPT_PREFIX } from "./worktree.mjs";
 
 // The line appended once when the last attempt shows the host backgrounding a task despite the disable env var the runtime sets.
@@ -9,6 +10,8 @@ export const DISABLED_BACKGROUND_ESCAPE_LINE =
 // The lines the runtime itself appends to a row's notice after a run finishes, never text a run wrote.
 const RUNTIME_APPENDED_LINE_PREFIXES = [
   KEPT_PREFIX,
+  WIP_PREFIX,
+  WIP_KEPT_PREFIX,
   ABANDONED_COMMAND_PREFIX,
   DISABLED_BACKGROUND_ESCAPE_LINE,
   CLOSED_PREFIX,
