@@ -8,6 +8,16 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **The operator uses the person's own MCP servers.** `nightqueue open` and `nightqueue queue
+  session` now start the operator with `--setting-sources user,project,local`, so the servers
+  the person configured (user, project and local scope, and their user-scope plugins) are
+  available, along with their user settings. The operator agent's `tools:` allowlist became a
+  `disallowedTools:` list of the 13 Claude Code 2.1.312 built-ins it never had, because `mcp__*`
+  in `tools:` matches nothing; its built-ins are unchanged, plus `ToolSearch`. nightqueue
+  pre-approves only `mcp__nightqueue__*`, `WebFetch` and `WebSearch`: every other server's call
+  goes through the host prompt, and the operator guard passes it there by a named branch. A
+  guard `deny` still wins over a user allow rule (Claude Code's precedence is `deny` > `defer` >
+  `ask` > `allow`). Jobs are unchanged: they keep `--strict-mcp-config --setting-sources project`.
 - **`nightqueue run check` answers the verdict and the gates.** The first line is unchanged
   (`OK`, `MISSING: <sections>`, `GENERATED`); after it come stable-prefix lines, one fact each,
   in a fixed order: `VERDICT:`, `GATE: <code> — <evidence>`, `OPEN:`, `TYPE-MISMATCH:`,

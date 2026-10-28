@@ -57,7 +57,7 @@ export const CLAUDE_COMMAND_NAMES = new Set([
 // The prompt that opens a fresh operator session: the agent answers with its opening message (its contract says what it holds).
 export const OPERATOR_OPENING_PROMPT = "The session just opened. Give your opening message.";
 
-// The argv that makes the operator the main thread: the agent (or its body as a fallback), the plugin, the nightqueue MCP server pinned to the session, the jobs' own hooks, the host's default permission mode, and the first prompt (the request given, else the opening prompt on a fresh session).
+// The argv that makes the operator the main thread: the agent (or its body as a fallback), the plugin, the nightqueue MCP server pinned to the session (it wins over a same-name user-scope one), the person's own MCP servers, plugins and settings, the jobs' own hooks, the host's default permission mode, and the first prompt (the request given, else the opening prompt on a fresh session).
 export function operatorArgs({ env, mode, resumeSession = null, prompt = null, session = null }) {
   const agent = mode === OPERATOR_MODE_AGENT ? ["--agent", OPERATOR_AGENT] : ["--append-system-prompt", operatorAgentBody()];
   const operator = session ? { mode: "operator", session, pid: String(process.pid) } : null;
@@ -70,7 +70,7 @@ export function operatorArgs({ env, mode, resumeSession = null, prompt = null, s
     "--permission-mode",
     "default",
     "--setting-sources",
-    "project,local",
+    "user,project,local",
     "--settings",
     JSON.stringify(operatorSettings(env)),
     ...(resumeSession === null

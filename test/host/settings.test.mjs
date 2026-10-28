@@ -5,6 +5,7 @@ import { test } from "node:test";
 import { RUNTIME_PACKAGE_TRAIL } from "../../src/config/paths.mjs";
 import { hostPackageRoot } from "../../src/host/paths.mjs";
 import {
+  OPERATOR_ALLOWED_TOOLS,
   desiredHooks,
   hookCommand,
   hookStatus,
@@ -19,6 +20,12 @@ const ENV = { NIGHTQUEUE_HOME: join(tmpdir(), "nightqueue-settings-fixture") };
 const [SESSION_START, PROMPT, AGENT_FOREGROUND] = desiredHooks(ENV);
 const LEGACY_SESSION_START = `node ${join(hostPackageRoot(ENV), "bin", "shift.mjs")} hook session-start`;
 const LEFTOVER_REFLECT = { type: "command", command: hookCommand("reflect", ENV), timeout: 15 };
+
+test("the operator pre-approves exactly the nightqueue server and the two web reads, never another MCP server", () => {
+  assert.deepEqual(OPERATOR_ALLOWED_TOOLS, ["mcp__nightqueue__*", "WebFetch", "WebSearch"]);
+  assert.deepEqual(OPERATOR_ALLOWED_TOOLS.filter((tool) => tool.startsWith("mcp__")), ["mcp__nightqueue__*"]);
+  assert.deepEqual(operatorSettings(ENV).permissions, { allow: OPERATOR_ALLOWED_TOOLS });
+});
 
 // Settings fixture with one third-party hook per event.
 function thirdPartySettings() {

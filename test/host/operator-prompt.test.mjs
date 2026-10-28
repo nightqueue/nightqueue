@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { CLAUDE_COMMAND_NAMES, OPERATOR_MODE_AGENT, operatorArgs, operatorPrompt } from "../../src/host/operator.mjs";
+import { CLAUDE_COMMAND_NAMES, OPERATOR_MODE_AGENT, OPERATOR_MODE_FALLBACK, operatorArgs, operatorPrompt } from "../../src/host/operator.mjs";
 import { makeHome } from "../../test-support/memory.mjs";
 
 // The claude operands of an operator argv: whatever follows the `--settings <json>` pair.
@@ -17,6 +17,18 @@ test("a prompt equal to a claude command name never reaches claude as that bare 
     assert.deepEqual(fresh, [`${name} `]);
     const resumed = operands(operatorArgs({ env, mode: OPERATOR_MODE_AGENT, resumeSession: "abc-12345", prompt }));
     assert.deepEqual(resumed, ["--resume", "abc-12345", `${name} `]);
+  }
+});
+
+test("the operator loads the person's own settings and MCP servers beside its pinned nightqueue server, in both modes", (t) => {
+  const env = makeHome(t, "operator-prompt-sources");
+  for (const mode of [OPERATOR_MODE_AGENT, OPERATOR_MODE_FALLBACK]) {
+    for (const resumeSession of [null, "abc-12345"]) {
+      const args = operatorArgs({ env, mode, resumeSession });
+      assert.equal(args[args.indexOf("--setting-sources") + 1], "user,project,local", `${mode} ${resumeSession}`);
+      assert.equal(args.includes("--strict-mcp-config"), false, `${mode} ${resumeSession}`);
+      assert.deepEqual(Object.keys(JSON.parse(args[args.indexOf("--mcp-config") + 1]).mcpServers), ["nightqueue"]);
+    }
   }
 });
 
