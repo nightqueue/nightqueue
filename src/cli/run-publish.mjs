@@ -7,6 +7,7 @@ import { FILE_LIST, listedFiles } from "../queue/file-list.mjs";
 import { neverCommittedReason } from "../queue/never-committed.mjs";
 import { publishedBodyFile } from "../queue/pr-footer.mjs";
 import { readRunState } from "../queue/resume.mjs";
+import { coverageRecordLine } from "../queue/usage-coverage-record.mjs";
 import { WIP_REF_PREFIX } from "../queue/wip-commit.mjs";
 import { recordOutcome, recordPhaseDone, recordPrUrl, recordRunFields, RUNTIME_AUTHOR } from "../queue/run-state.mjs";
 import { checkArgs, parseCommand } from "./args.mjs";
@@ -275,8 +276,8 @@ function worktreeRemoval(run, path, env) {
 
 // Renames the branch to its final name, pushes it, opens the pull request and prints what happened; the body is already checked.
 export async function openPullRequest({ run, cwd, bodyFile, body, title, removeWorktree, ctx }) {
-  const published = publishedBodyFile({ bodyFile, runDir: run.runDir, jobId: run.jobId, origins: run.origins ?? [] });
   const state = readRunState({ projectId: run.projectId, slug: run.slug, env: ctx.env });
+  const published = publishedBodyFile({ bodyFile, runDir: run.runDir, jobId: run.jobId, origins: run.origins ?? [], coverageLine: coverageRecordLine(state) });
   const current = currentBranch(cwd, ctx.env);
   const final = publishedBranchName(current, { type: state?.type, slug: run.slug, commitType: headCommitType(cwd, ctx.env) });
   const branch = renameBranch({ cwd, current, final, env: ctx.env });

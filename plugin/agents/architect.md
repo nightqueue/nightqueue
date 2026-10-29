@@ -140,7 +140,11 @@ AFTER, and who decided that difference — the ticket or the pipeline.
 2. Declare `**Always-gate class:**`. It is `yes` whenever the diff changes **WHICH records
    a query returns** (scope, tenant, authorization) — no matter whether for more or for
    less, whether it is fail-closed, whether it is "the correct thing" or whether nobody uses that path today. An always-gate
-   class of `yes` is a gate (When to stop and ask) in the SAME plan.
+   class of `yes` is a gate (When to stop and ask) in the SAME plan, unless every `changed=yes` line carries
+   `source=literal ticket "<quote>"` or `source=operator decision "<quote>"`: 3+ words copied word for word from
+   one paragraph of the job's own prompt, which the request names. A mechanical check verifies each quote against
+   that prompt. It reads every list item of `## Usage coverage`, headers too: never bullet a header. Prose never clears the gate, however it argues the change is decided (L268); only a quote the
+   check finds does.
 3. Cross its `unimplemented intent: <param> · governs <axis>` lines with
    your `**Diff axis:**`. The axis matched (not the count: ONE line is enough) → gate. A
    parameter that governs the same axis as your diff and is not used in any decision is a
@@ -173,8 +177,9 @@ AFTER, and who decided that difference — the ticket or the pipeline.
 item — "it is not a design ambiguity, therefore it does not open a gate", "it is known debt", "it is a
 separate ticket", "it is the product owner's decision", "nobody calls that path". None of these
 phrases is evidence about the behavior; they are labels about who should care. The
-TWO only exits without a gate are: `changed=no` (with TODAY and AFTER filled in and identical) or
-`source=literal ticket` with the quote from the ticket on the line itself. You do not know how to measure TODAY →
+TWO only exits without a gate are: `changed=no` (with TODAY and AFTER filled in and identical) or a quoted
+source on the line itself, `source=literal ticket "<quote>"` or `source=operator decision "<quote>"`, the quote
+copied from the job's own prompt. You do not know how to measure TODAY →
 `changed=yes`; when in doubt, the safe branch is the gate.
 
 The result of this axis becomes the usage-coverage part of what you deliver.
@@ -327,7 +332,8 @@ the objective question:
 - (c) an upgrade changes behavior/runtime/deploy (Step 3.2);
 - (d) a vector of the SAME symptom stays not-covered — covering it or not is the user's
   decision, never yours in silence (Step 1.5, axis 2);
-- (e) axis 3 yields a `changed=yes · source=pipeline` line, an always-gate class `yes`, a
+- (e) axis 3 yields a `changed=yes · source=pipeline` line, an always-gate class `yes` with a
+  `changed=yes` line lacking a quoted source, a
   `<field> of the same card` kept out of scope with `source=pipeline`, or a `**Diff axis:**`
   equal to the axis of an `unimplemented intent` line (with the step-3 exception).
 

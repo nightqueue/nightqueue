@@ -61,7 +61,7 @@ A `changed=no` scenario is a record, not a question: only the `changed=yes` and 
 **Success criteria:**
 [Observable behavior that confirms the implementation is correct. It REFINES the Expected outcome of the brief — never replaces it with another target. Disagreeing with the target is `## Requires user confirmation`, not a redefinition.]
 
-Declare `**Diff axis:**` and `**Always-gate class:**` here too when `## Usage coverage` is omitted.
+Without `## Usage coverage`, declare `**Diff axis:**` and `**Always-gate class:**` here.
 
 ## Symptom coverage  (mandatory when the Type is bug/error)
 **Ticket symptom:** [the observable behavior reported, in the ticket's terms]
@@ -83,15 +83,16 @@ The one exit without a table: when the Type says bug/error but the brief/triage 
 **Scenarios consulted:** <the access map | the spec's usage scenarios | own enumeration + the exact command you ran>
 
 - <scenario> · today: <current behavior + evidence> · after: <behavior after the diff> · changed=yes · source=pipeline
-- <scenario> · today: <…> · after: <…> · changed=no · source=literal ticket
+- <scenario> · today: <…> · after: <…> · changed=yes · source=literal ticket "<quote>"
+- <scenario> · today: <…> · after: <…> · changed=yes · source=operator decision "<quote>"
 
-Rules: one line per scenario, always in this spelling (`·` as the separator, `changed=` and `source=` without spaces around the `=`). `source=literal ticket` requires the quote of the ticket excerpt on the line itself. **Every `changed=yes · source=pipeline` line requires `## Requires user confirmation` in the SAME plan.** Declaring "the diff touches only 1 scenario" without having listed the access map you consulted is an escape, not a measurement: when in doubt, produce the section.
+Rules: one line per scenario (`·` separators, no spaces around `=`). A `"<quote>"` is 3+ verbatim words from one paragraph of `{{RUN_DIR}}/00-prompt.md`; `run check 03` verifies it. **Every `changed=yes · source=pipeline` line requires `## Requires user confirmation` in the SAME plan**, and so does an always-gate class `yes` unless every `changed=yes` line quotes. "The diff touches only 1 scenario" without the access map consulted is an escape: when in doubt, produce the section.
 
 **Sibling fields of the same card** — mandatory when the diff introduces or swaps the data source of a UI field: one line per remaining field of the SAME component/card that displays a fixed literal, a placeholder or a fallback (`'-'`, `'ACTIVE'`, `'N/A'`, `|| '-'`), with the command used to find them:
 
 - <field> of the same card · today: <exact literal/placeholder/fallback + file:line> · after: <uses the new source | stays <literal>> · changed=<yes|no> · source=pipeline · decision=<uses the new source | out of scope: <reason>>
 
-Its own gate: **every `<field> of the same card` line with `decision=out of scope` and `source=pipeline` requires `## Requires user confirmation` in the SAME plan.** The single exit without a gate: `source=literal ticket` with the quote of the ticket excerpt on the line itself.
+Its own gate: **every `<field> of the same card` line with `decision=out of scope` and `source=pipeline` requires `## Requires user confirmation` in the SAME plan**, unless it quotes.
 
 ## Assumptions
 - [P1] <assumption> — invalidated if: <evidence that would refute it>

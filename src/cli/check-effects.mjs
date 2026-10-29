@@ -6,7 +6,7 @@ import { derivedType, firstItem } from "../queue/check-contract.mjs";
 import { PHASE_ARTIFACTS, QA_ANALYST_STAGE } from "../queue/phase-artifacts.mjs";
 import { isSafeSegment, TERMINAL_VERDICT_LABELS } from "../queue/resume.mjs";
 import { adoptRunSlug, isProvisionalSlug } from "../queue/run-slug.mjs";
-import { clearTermination, recordCheck, recordRunFields, recordTermination, RUNTIME_AUTHOR } from "../queue/run-state.mjs";
+import { clearTermination, recordCheck, recordRunFields, recordTermination, recordUsageCoverageCleared, RUNTIME_AUTHOR } from "../queue/run-state.mjs";
 import { briefCommitType, briefSection, briefSlug, briefType } from "../queue/triage-brief.mjs";
 import { openStore } from "../store/open.mjs";
 import { saveIndexFromText } from "./index-save.mjs";
@@ -159,6 +159,15 @@ function phaseDoneLine(done, written) {
   return written.phase.reason ? `${base} — reason: ${written.phase.reason}` : base;
 }
 
+// The `recorded: usage coverage` line of an evaluated check 03: the quotes that cleared its always-gate class, or nothing when the record was dropped or absent.
+function usageCoverageLines({ run, result, ctx }) {
+  const quotes = result.usageCoverageCleared ?? null;
+  const written = recordUsageCoverageCleared({ projectId: run.projectId, slug: run.slug, quotes, env: ctx.env });
+  if (written.status === "absent") return [];
+  if (written.status !== "written") return [notRecorded(written)];
+  return quotes === null ? [] : [`recorded: usage coverage covered by ${quotes.length} quoted decisions`];
+}
+
 // Writes the check memo and, for a completed check of a phase, the phase itself; answers the `recorded:` line of the phase.
 function memoAndPhaseLines({ run, check, stage, result, ctx }) {
   const artifact = stage === "analyst" ? QA_ANALYST_STAGE : PHASE_ARTIFACTS.get(check);
@@ -179,10 +188,11 @@ export async function checkEffectLines({ run, check, stage = null, result, state
   const type = check === "01" ? typeLines(args) : [];
   const brief = triageDone ? briefLines(args) : [];
   const commitType = triageDone ? commitTypeLines(args) : [];
+  const coverage = check === "03" && result.first === "OK" ? usageCoverageLines(args) : [];
   const recorded = memoAndPhaseLines(args);
   const qaStageA = check === "05" && stage === "analyst" && result.completes ? qaStageALines(args) : [];
   const termination = triageDone ? terminationLines(args) : [];
   const lifted = triageDone ? liftedTerminationLines(args) : [];
   const slug = triageDone ? await slugLines(args) : [];
-  return [...index, ...type, ...brief, ...commitType, ...recorded, ...qaStageA, ...termination, ...lifted, ...slug];
+  return [...index, ...type, ...brief, ...commitType, ...coverage, ...recorded, ...qaStageA, ...termination, ...lifted, ...slug];
 }

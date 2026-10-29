@@ -5,6 +5,7 @@ import { writeFileAtomic } from "../config/store.mjs";
 import { FILE_LIST } from "../queue/file-list.mjs";
 import { CHECK_CONTEXT_FILES, evaluateCheck, fileListResult, repairedLine, roundDefectParts } from "../queue/check-contract.mjs";
 import { PHASE_ARTIFACTS, withClosedFence } from "../queue/phase-artifacts.mjs";
+import { jobPromptText } from "../queue/job-prompt.mjs";
 import { defaultGitImpl } from "../queue/preflight.mjs";
 import { consolidationNumbersOf, consolidationOf } from "../queue/qa-rounds.mjs";
 import { readRunState } from "../queue/resume.mjs";
@@ -175,8 +176,8 @@ export function validConsolidatedText(file, raw, consolidation) {
   return text;
 }
 
-// The gate of one phase, evaluated against the check contract on the artifact and the run files its rules read; a round artifact gets its open fence closed first.
-function checkArtifact({ run, check, stage, state, ctx }) {
+// The gate of one phase, evaluated against the check contract on the artifact, the run files its rules read and the job's prompt; a round artifact gets its open fence closed first.
+function checkArtifact({ run, check, stage, state, prompt, ctx }) {
   const artifact = PHASE_ARTIFACTS.get(check);
   const path = join(run.runDir, artifact.file);
   if (artifact.sections[0] === FILE_LIST) {
@@ -187,7 +188,7 @@ function checkArtifact({ run, check, stage, state, ctx }) {
   const gaps = check === "05" && stage === null ? consolidateQa(run, path, ctx.env) : [];
   const files = [...new Set([...CHECK_CONTEXT_FILES, artifact.file])];
   const texts = Object.fromEntries(files.map((file) => [file, readArtifact(join(run.runDir, file))]));
-  return { ...evaluateCheck({ check, stage, texts, state, gaps }), repaired };
+  return { ...evaluateCheck({ check, stage, texts, state, gaps, prompt }), repaired };
 }
 
 // The stage a check names, refused unless it is `analyst` on check `05`; null without one.
@@ -228,7 +229,8 @@ async function runCheck(argv, ctx) {
   const stage = checkStage(check, values.stage);
   const run = await resolveRun(values, ctx);
   const state = readRunState({ projectId: run.projectId, slug: run.slug, env: ctx.env });
-  const result = checkArtifact({ run, check, stage, state, ctx });
+  const prompt = check === "03" ? await jobPromptText(run, ctx.env) : null;
+  const result = checkArtifact({ run, check, stage, state, prompt, ctx });
   printCheck(result, await checkEffectLines({ run, check, stage, result, state, ctx }), ctx);
   return 0;
 }

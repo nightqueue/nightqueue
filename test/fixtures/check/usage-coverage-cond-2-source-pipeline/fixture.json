@@ -1,0 +1,1 @@
+{"check":"03","type":"feature/refactor","prompt":"## Brief\nA data-access change whose every changed scenario is already settled proceeds: the list view shows only active jobs.\n\n## Operator decisions (binding)\n1. The export keeps the archived\n   rows out of the export."}

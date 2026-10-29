@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { test } from "node:test";
 import { run } from "../src/cli/index.mjs";
 import { runDir } from "../src/config/paths.mjs";
@@ -73,7 +74,10 @@ test("`run start` answers the run, its agent models, and every phase but no task
     "prTemplate",
     "commitConvention",
     "commitTemplate",
+    "promptFile",
   ]);
+  assert.equal(answer.promptFile, join(answer.runDir, "00-prompt.md"));
+  assert.equal(readFileSync(answer.promptFile, "utf8"), "add slugify\n");
   assert.equal(answer.project, "alpha");
   assert.equal(answer.slug, SLUG);
   assert.equal(answer.runDir, runDir(ensureProject(env, "alpha"), SLUG, env));
@@ -101,7 +105,7 @@ test("`run start` reports the worktree the runtime recorded and never creates on
   assert.equal(answer.worktree, worktree);
   assert.equal(answer.branch, `worktree-${SLUG}`);
   assert.equal(existsSync(worktree), false, "run start created a worktree");
-  assert.deepEqual(readdirSync(answer.runDir).sort(), ["state.json"]);
+  assert.deepEqual(readdirSync(answer.runDir).sort(), ["00-prompt.md", "state.json"]);
 });
 
 test("`run start` without a recorded worktree answers null and reads the project's checkout", async (t) => {
@@ -257,6 +261,7 @@ test("outside a job `run start` works on the run the operator names, creating it
   const env = makeQueue(t, "run-start-operator");
   const answer = answerOf(await runCli(env, [...START, "--project", "alpha", "--slug", SLUG]));
   assert.equal(answer.slug, SLUG);
+  assert.equal(answer.promptFile, null);
   assert.equal(readRunState({ projectId: ensureProject(env, "alpha"), slug: SLUG, env }).type, "feature/refactor");
 
   const named = await runCli(env, [...START, "--project", "alpha", "--slug", SLUG], { jobId: boundJob(env) });

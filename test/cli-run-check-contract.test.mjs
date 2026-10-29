@@ -8,13 +8,16 @@ import { run } from "../src/cli/index.mjs";
 import { phasePrompt } from "../src/mcp/phase-prompt.mjs";
 import { openDb } from "../src/memory/db.mjs";
 import { addJob, getJob } from "../src/memory/jobs.mjs";
-import { evaluateCheck, qaModeOf } from "../src/queue/check-contract.mjs";
+import { evaluateCheck, qaModeOf, quotedSourceOf } from "../src/queue/check-contract.mjs";
 import { composeGateNotice } from "../src/queue/gate-notice.mjs";
+import { jobPromptText } from "../src/queue/job-prompt.mjs";
 import { nextRound } from "../src/queue/phase-artifacts.mjs";
+import { PR_FOOTER, publishedBodyFile } from "../src/queue/pr-footer.mjs";
 import { decideResume, readRunState } from "../src/queue/resume.mjs";
 import { applyRetry } from "../src/queue/retry.mjs";
 import { provisionalSlug } from "../src/queue/run-slug.mjs";
 import { recordPhaseDone, recordRunFields, recordTermination } from "../src/queue/run-state.mjs";
+import { coverageRecordLine } from "../src/queue/usage-coverage-record.mjs";
 import { ensureProject, makeHome, makeProject } from "../test-support/memory.mjs";
 
 const FIXTURES = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "check");
@@ -38,13 +41,14 @@ function readFixture(name) {
   return { fixture, texts, expected };
 }
 
-// A job bound to the run slug with the fixture's files in its run directory and its Type recorded.
+// A job bound to the run slug, with the fixture's prompt and operator note, its files in its run directory and its Type recorded.
 function seedRun(t, name, { fixture, texts }) {
   const env = makeHome(t, `check-contract-${name}`);
   makeProject(t, env, "alpha");
   const projectId = ensureProject(env, "alpha");
-  const id = addJob({ projectId, prompt: "check the contract" }, env).id;
+  const id = addJob({ projectId, prompt: fixture.prompt ?? "check the contract" }, env).id;
   openDb(env).prepare("UPDATE jobs SET slug = ? WHERE id = ?").run(SLUG, id);
+  if (fixture.operatorNote) openDb(env).prepare("UPDATE jobs SET operator_note = ? WHERE id = ?").run(fixture.operatorNote, id);
   if (fixture.type) recordRunFields({ projectId, slug: SLUG, fields: { type: fixture.type }, env });
   const dir = runDir(projectId, SLUG, env);
   mkdirSync(dir, { recursive: true });
@@ -621,4 +625,159 @@ test("a provisional run keeps its slug when the Brief's slug is taken, missing o
 
   const invalid = seedProvisional(t, "slug-invalid", triageWith("PROCEED", undefined, briefOf("**Slug:** ../escape\n")));
   assert.equal((await runCheck(invalid.env, "01")).out.at(-1), `recorded: slug ${invalid.slug} (kept: \`../escape\` is not a valid run slug)`);
+});
+
+const CLEARED = "usage-coverage-cond-2-cleared";
+const COND_2_GATE = "GATE: usage-coverage-cond-2 — **Always-gate class:** yes — the queries change which rows they return";
+const CLEARED_QUOTES = ["the list view shows only active jobs", "keeps the archived rows out of the export"];
+const COVERAGE_LINE = 'data access changed, covered by the quoted decisions: "the list view shows only active jobs"; "keeps the archived rows out of the export"';
+const PLUGIN = join(dirname(fileURLToPath(import.meta.url)), "..", "plugin");
+
+// The cond-2 answer of the cleared fixture's plan, one text of it optionally replaced, against the given job prompt.
+function cond2Answer({ prompt, from = null, to = "" }) {
+  const { texts } = readFixture(CLEARED);
+  const plan = from === null ? texts["03-plan.md"] : texts["03-plan.md"].replace(from, to);
+  const result = evaluateCheck({ check: "03", texts: { ...texts, "03-plan.md": plan }, state: { type: "feature/refactor" }, prompt });
+  return { gated: result.lines.includes(COND_2_GATE), cleared: result.usageCoverageCleared };
+}
+
+// The state.json of a seeded check-contract run.
+function seededState(seeded) {
+  return readRunState({ projectId: seeded.projectId, slug: SLUG, env: seeded.env });
+}
+
+test("the plan template's own quoted scenario lines parse, one per label, and the agent doc teaches the same syntax", () => {
+  const template = readFileSync(join(PLUGIN, "skills", "resolve", "references", "prompts", "architect.md"), "utf8");
+  const quoted = template.split("\n").filter((line) => line.startsWith("- <scenario>") && line.includes("changed=yes"));
+  const labels = quoted.map(quotedSourceOf).filter(Boolean).map((source) => source.label);
+  assert.deepEqual(labels.sort(), ["literal ticket", "operator decision"], quoted.join("\n"));
+  const agent = readFileSync(join(PLUGIN, "agents", "architect.md"), "utf8");
+  for (const label of ["literal ticket", "operator decision"]) assert.ok(agent.includes(`source=${label} "<quote>"`), `architect.md lacks source=${label} "<quote>"`);
+});
+
+test("cond-2 clears only when every changed=yes line quotes, in three words or more, a source the job prompt holds", () => {
+  const prompt = readFixture(CLEARED).fixture.prompt;
+  assert.deepEqual(cond2Answer({ prompt }), { gated: false, cleared: CLEARED_QUOTES });
+  assert.deepEqual(cond2Answer({ prompt: null }), { gated: true, cleared: null }, "outside a job");
+  assert.deepEqual(cond2Answer({ prompt: "  " }), { gated: true, cleared: null }, "an empty prompt");
+  const from = 'source=literal ticket "the list view shows only active jobs"';
+  const variants = [
+    ['source=literal ticket "only active"', true, "a two-word quote"],
+    ['source=literal ticket ""', true, "an empty quote"],
+    ['source=literal ticket ("the list view shows only active jobs")', true, "the parenthesised form"],
+    ['source=literal ticket "The List View shows only active jobs"', true, "another case"],
+    ['source=ticket "the list view shows only active jobs"', true, "an unknown label"],
+    ['source=literal ticket "the list view shows only active jobs" and more', true, "text after the quote"],
+    ['source=literal ticket "the  list\tview shows   only active jobs"', false, "other whitespace"],
+    ['source=operator decision "the list view shows only active jobs"', false, "the other label"],
+  ];
+  for (const [to, gated, name] of variants) assert.equal(cond2Answer({ prompt, from, to }).gated, gated, name);
+  assert.equal(cond2Answer({ prompt, from: "after: active rows only", to: "to confirm" }).gated, true, "a bare to confirm field");
+});
+
+test("cond-2 gates a scenario item changed in any spelling or indent left unquoted, prose and non-list header lines ignored, a mid-word quote and a `to confirm` inside a field", () => {
+  const prompt = readFixture(CLEARED).fixture.prompt;
+  const detail = "- detail view · today: one row · after: one row · changed=no · source=pipeline";
+  const changedVariants = [
+    ["- detail view · today: one row · after: one row · changed=YES · source=pipeline", "an upper-case changed=YES"],
+    ["- detail view · today: one row · after: one row · changed=yes (guess) · source=pipeline", "a changed=yes with trailing text"],
+    ["  - detail view · today: one row · after: one row · changed=yes · source=pipeline", "an indented changed=yes line"],
+    ["- detail view · today: one row · after: one row · Changed = maybe · source=pipeline", "a changed token that is not changed=no"],
+    ["> - detail view · today: one row · after: one row · changed=yes · source=pipeline", "a blockquoted changed=yes line"],
+    ["- detail view · today: one row · after: one row · changed＝yes · source=pipeline", "a fullwidth changed＝yes"],
+    ["* detail view · today: one row · after: one row · changed=yes · source=pipeline", "a `*` item"],
+    ["   * detail view · today: one row · after: one row · Changed=Yes trailing · source=pipeline", "an indented `*` item, mixed case, trailing text"],
+    ["- detail view · today: one row · after: one row · chаnged=yes · source=pipeline", "a Cyrillic a in the changed word"],
+    ["- detail view · today: one row · after: one row · chang​ed=yes · source=pipeline", "a zero-width space in the changed word"],
+    ["- detail view · today: one row · after: one row · chan­ged=yes · source=pipeline", "a soft hyphen in the changed word"],
+    ['- detail view · today: one row · after: one row · source=pipeline · changed=yes · source=literal ticket "the list view shows only active jobs"', "a pipeline source next to a found quote"],
+    ['- **Diff axis:** detail view · today: one row · after: one row · changed=yes · source=literal ticket "bogus"', "a bold-led header label carrying a changed= field"],
+    ["- **Scenarios consulted:** every changed=yes query", "a bulleted bold header"],
+    ["* **Diff axis:** filter — changed=yes rows", "a `*`-bulleted bold header"],
+    ["+ detail view · today: one row · after: one row · changed=yes · source=pipeline", "a `+` item"],
+    ["- **Diff axis:** filter — the list rows · changed=YES", "a bulleted bold header with changed=YES"],
+    ["  + **Always-gate class:** yes · changed=yes", "an indented `+` bold header"],
+    ["1. detail view · today: one row · after: one row · changed=yes · source=pipeline", "an ordered item"],
+    ["> * **Diff axis:** filter · changed=yes", "a blockquoted bold header item"],
+    ["- **Diff​ axis:** filter · changed=yes", "a zero-width space inside the header label"],
+    ["- detail view · today: one row · after: one row · changed=yes · source=pipeline", "a no-break space after the marker"],
+  ];
+  for (const [to, name] of changedVariants) assert.deepEqual(cond2Answer({ prompt, from: detail, to }), { gated: true, cleared: null }, name);
+  const ignoredVariants = [
+    ["detail view · today: one row · after: one row · changed=yes · source=pipeline", "a changed=yes line with no list marker"],
+    ["the changed=yes rows are listed above", "a prose line"],
+    ["> audit log · today: every row logged · after: active rows logged · changed＝yes · source=pipeline", "a blockquote without a list marker"],
+    ["- **Diff axis:** filter — only the list rows", "a bulleted bold header with no change token"],
+    ["-detail view · today: one row · after: one row · changed=yes · source=pipeline", "a marker glued to the text"],
+  ];
+  for (const [to, name] of ignoredVariants) assert.deepEqual(cond2Answer({ prompt, from: detail, to }), { gated: false, cleared: CLEARED_QUOTES }, name);
+  const unchangedVariants = ["> - detail view · today: one row · after: one row · changed=no · source=pipeline", "- detail view · today: one row · after: one row · changed＝no · source=pipeline", "- **Diff axis:** filter · changed=no"];
+  for (const to of unchangedVariants) assert.equal(cond2Answer({ prompt, from: detail, to }).gated, false, to);
+  const from = 'source=literal ticket "the list view shows only active jobs"';
+  const quoteVariants = [
+    ['source=literal ticket "ist view shows only active jo"', true, "a quote cut mid-word at both ends"],
+    ['source=literal ticket "list view shows only active job"', true, "a quote cut mid-word at its end"],
+    ['source=literal ticket "list view shows only active jobs."', false, "a quote ending on the prompt's punctuation"],
+  ];
+  for (const [to, gated, name] of quoteVariants) assert.equal(cond2Answer({ prompt, from, to }).gated, gated, name);
+  const confirmVariants = ["to confirm (ask)", "after: to confirm with the operator", "after: TO CONFIRM"];
+  for (const to of confirmVariants) assert.equal(cond2Answer({ prompt, from: "after: active rows only", to }).gated, true, to);
+});
+
+test("a header line of the section mentioning a change never blocks the quotes that clear cond-2", () => {
+  const { fixture, texts } = readFixture(CLEARED);
+  const headers = texts["03-plan.md"].split("\n").filter((line) => /^\*\*(?:Diff axis|Always-gate class|Scenarios consulted):\*\*/.test(line));
+  assert.equal(headers.length, 3, headers.join("\n"));
+  for (const from of headers) assert.deepEqual(cond2Answer({ prompt: fixture.prompt, from, to: `${from} — the changed rows` }), { gated: false, cleared: CLEARED_QUOTES }, from);
+});
+
+test("a quote found only in the job's current operator note clears cond-2 through `run check 03`", async (t) => {
+  const fixture = readFixture(CLEARED);
+  const seeded = seedRun(t, "cond-2-note", { fixture: { ...fixture.fixture, prompt: "list the active jobs", operatorNote: fixture.fixture.prompt }, texts: fixture.texts });
+  assert.deepEqual((await runCheck(seeded.env, "03")).out, fixture.expected);
+});
+
+test("a quote planted in a run file but absent from the job row never clears cond-2", async (t) => {
+  const fixture = readFixture(CLEARED);
+  const planted = { ...fixture.texts, "00-prompt.md": fixture.fixture.prompt, "00-brief.md": fixture.fixture.prompt };
+  const seeded = seedRun(t, "cond-2-forged", { fixture: { ...fixture.fixture, prompt: "list the active jobs" }, texts: planted });
+  assert.ok((await runCheck(seeded.env, "03")).out.includes(COND_2_GATE));
+  assert.equal("usageCoverageCleared" in seededState(seeded), false);
+});
+
+test("a cleared run lists its quotes in the report and before the PR footer, and a later check 03 that gates drops them", async (t) => {
+  const fixture = readFixture(CLEARED);
+  const seeded = seedRun(t, "cond-2-record", fixture);
+  await runCheck(seeded.env, "03");
+  assert.deepEqual(seededState(seeded).usageCoverageCleared.quotes, CLEARED_QUOTES);
+  assert.equal(coverageRecordLine(seededState(seeded)), COVERAGE_LINE);
+
+  const report = [];
+  assert.equal(await run(["run", "report", "--json"], { env: seeded.env, out: (line) => report.push(line), err: () => {}, stdout: { write: () => {} } }), 0);
+  assert.ok(JSON.parse(report[0]).openItems.includes(`usage coverage: ${COVERAGE_LINE}`), report[0]);
+
+  const bodyFile = join(seeded.dir, "pr-body.md");
+  writeFileSync(bodyFile, "## Report\nthe body\n");
+  const published = publishedBodyFile({ bodyFile, runDir: seeded.dir, jobId: null, coverageLine: coverageRecordLine(seededState(seeded)) });
+  assert.equal(readFileSync(published, "utf8"), `## Report\nthe body\n\n${COVERAGE_LINE}\n\n${PR_FOOTER}\n`);
+
+  writeFileSync(join(seeded.dir, "03-plan.md"), readFixture("usage-coverage-cond-2-quote-absent").texts["03-plan.md"]);
+  assert.ok((await runCheck(seeded.env, "03")).out.includes(COND_2_GATE));
+  assert.equal("usageCoverageCleared" in seededState(seeded), false);
+  assert.equal(coverageRecordLine(seededState(seeded)), null);
+});
+
+test("`run_set` refuses the runtime's usage coverage record", async (t) => {
+  const seeded = seedRun(t, "cond-2-run-set", readFixture(CLEARED));
+  const refused = recordRunFields({ projectId: seeded.projectId, slug: SLUG, fields: { usageCoverageCleared: { quotes: CLEARED_QUOTES } }, env: seeded.env });
+  assert.deepEqual(refused, { status: "kept", path: null, reason: "`usageCoverageCleared` is written by the runtime only" });
+});
+
+test("the job prompt text is the row's prompt then its current note, and null outside a job or for an unknown job", async (t) => {
+  const fixture = readFixture(CLEARED);
+  const seeded = seedRun(t, "job-prompt", { fixture: { ...fixture.fixture, operatorNote: "keep  the \"raw\" note" }, texts: {} });
+  const own = { jobId: Number(seeded.env.NIGHTQUEUE_JOB_ID) };
+  assert.equal(await jobPromptText(own, seeded.env), `${fixture.fixture.prompt}\n\nkeep  the "raw" note`);
+  assert.equal(await jobPromptText({ jobId: null }, seeded.env), null);
+  assert.equal(await jobPromptText({ jobId: 99999 }, seeded.env), null);
 });
