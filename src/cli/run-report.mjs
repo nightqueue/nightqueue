@@ -7,6 +7,7 @@ import { isStateObject } from "../queue/resume.mjs";
 import { renderSkillTemplate, skillReferencesDir } from "../queue/skill-template.mjs";
 import { sectionOf } from "../queue/stream.mjs";
 import { runDurationS } from "../queue/telemetry.mjs";
+import { coverageRecordLine } from "../queue/usage-coverage-record.mjs";
 import { checkArgs, parseCommand } from "./args.mjs";
 import { durationCell, phaseRows, readJobLog, requireRunState, resolveRun, RUN_OPTIONS } from "./run-context.mjs";
 
@@ -220,9 +221,15 @@ function checkOpenLines(runDir, state) {
   return OPEN_CHECKS.flatMap((check) => openLinesOf(check, runDir, state));
 }
 
+// The `usage coverage:` item of a run whose always-gate class was cleared by quoted decisions, for the merge review.
+function usageCoverageItems(state) {
+  const line = coverageRecordLine(state);
+  return line === null ? [] : [`usage coverage: ${line}`];
+}
+
 // The items the run leaves open, which the Notice translates into its Still open.
 function runOpenItems(runDir, state) {
-  return [...dedicatedTickets(runDir), ...checkOpenLines(runDir, state)];
+  return [...dedicatedTickets(runDir), ...checkOpenLines(runDir, state), ...usageCoverageItems(state)];
 }
 
 // The telemetry row of the run, derived from its state.json.

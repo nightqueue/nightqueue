@@ -28,6 +28,16 @@ const BLANK_REASONS = new Set(["", "-", "n/a", "not applicable"]);
 const BLANK_EVIDENCE = new Set(["", "-", "none", "not run"]);
 const CONFIRM_LINE = "CONFIRM: requires-user-confirmation";
 const ALWAYS_GATE_YES = "**Always-gate class:** yes";
+// A scenario's quoted source: one of the two labels, then the quote in plain double quotes, closing the field.
+const QUOTED_SOURCE_RE = /·\s*source=(literal ticket|operator decision) "([^"]*)"(?=\s*(?:·|$))/;
+const QUOTE_MIN_WORDS = 3;
+const CHANGED_WORD_RE = /\bchanged\b/i;
+const UNNAMED_CHANGE_RE = /^source\s*=|=\s*yes\b/i;
+const PIPELINE_SOURCE_RE = /^source\s*=\s*pipeline\b/i;
+const FORMAT_CHAR_RE = /\p{Cf}/gu;
+const BLOCKQUOTE_RE = /^(?:>\s*)+/;
+const TO_CONFIRM_RE = /\bto confirm\b/i;
+const WORD_CHAR_RE = /[\p{L}\p{N}_]/u;
 const HIGH_RISK = "🔴";
 const LIST_ITEM_RE = /^(?:[-*+]|\d+[.)])\s/;
 const RISK_ID_RE = /^(?:\*\*)?(?:\[R\d+\]|\(R\d+\))/;
@@ -318,12 +328,88 @@ function toConfirmLines(ctx) {
     .map((line) => line.trim());
 }
 
-// The four usage-coverage conditions of the plan, evaluated only while the plan asks the user nothing.
+// The label and quote of a scenario line's `source=literal ticket "<q>"` or `source=operator decision "<q>"`, or null when it has neither.
+export function quotedSourceOf(line) {
+  const match = QUOTED_SOURCE_RE.exec(String(line ?? ""));
+  return match === null ? null : { label: match[1], quote: match[2] };
+}
+
+// Whether a quote of at least three words is a case-sensitive whole-word phrase of the prompt, both whitespace-normalized.
+function quoteFound(quote, prompt) {
+  const flat = flatLine(quote);
+  return flat.split(" ").filter(Boolean).length >= QUOTE_MIN_WORDS && holdsWholePhrase(flatLine(prompt), flat);
+}
+
+// Whether the text holds the phrase with no word character glued to either of its word-character ends.
+function holdsWholePhrase(text, phrase) {
+  const escaped = phrase.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const before = WORD_CHAR_RE.test(phrase[0]) ? "(?<![\\p{L}\\p{N}_])" : "";
+  const after = WORD_CHAR_RE.test(phrase.at(-1)) ? "(?![\\p{L}\\p{N}_])" : "";
+  return new RegExp(`${before}${escaped}${after}`, "u").test(text);
+}
+
+// The fields of a scenario line, compatibility-normalized and stripped of invisible format characters at any indent, blockquote or list marker, split on its `·` separators and trimmed.
+function scenarioFields(line) {
+  return line
+    .normalize("NFKC")
+    .replace(FORMAT_CHAR_RE, "")
+    .trim()
+    .replace(BLOCKQUOTE_RE, "")
+    .replace(LIST_ITEM_RE, "")
+    .split("·")
+    .map((field) => field.trim());
+}
+
+// Whether a scenario field is left `to confirm` anywhere inside it.
+function isToConfirm(field) {
+  return TO_CONFIRM_RE.test(field);
+}
+
+// Whether a line of the section is a scenario item: every list item at any indent or blockquote depth, a bold-labelled header item included.
+function isScenarioItem(line) {
+  const text = line.normalize("NFKC").replace(FORMAT_CHAR_RE, "").trim().replace(BLOCKQUOTE_RE, "");
+  return LIST_ITEM_RE.test(text);
+}
+
+// Whether a scenario item declares a change: a `changed` word in a field that is not exactly `changed=no`, or, with no `changed` word recognised, a `source=` or `=yes` field.
+function declaresChange(line) {
+  const fields = scenarioFields(line);
+  const changedFields = fields.filter((field) => CHANGED_WORD_RE.test(field));
+  if (changedFields.length === 0) return fields.some((field) => UNNAMED_CHANGE_RE.test(field));
+  return !changedFields.every((field) => field === "changed=no");
+}
+
+// The quoted source of a changed scenario item, or null when a field is left `to confirm` or names the pipeline as a source.
+function clearingSourceOf(line) {
+  const fields = scenarioFields(line);
+  if (fields.some(isToConfirm) || fields.some((field) => PIPELINE_SOURCE_RE.test(field))) return null;
+  return quotedSourceOf(line);
+}
+
+// The quotes clearing condition 2: every line declaring a change quotes, with no `to confirm` or pipeline source field, a source the prompt holds; null otherwise.
+function clearedQuotes(lines, prompt) {
+  if (typeof prompt !== "string" || prompt.trim() === "") return null;
+  const changed = lines.filter(isScenarioItem).filter(declaresChange);
+  const sources = changed.map(clearingSourceOf);
+  if (changed.length === 0 || sources.some((source) => source === null || !quoteFound(source.quote, prompt))) return null;
+  return sources.map((source) => flatLine(source.quote));
+}
+
+// The quotes that clear the plan's always-gate class `yes` by code, or null when the plan asks the user, declares no such class or a quote misses.
+function usageCoverageCleared(ctx) {
+  if (hasGateMarker(ctx.plan)) return null;
+  const lines = bodyLines(ctx.plan, "## Usage coverage") ?? [];
+  if (!lines.some((line) => line.trim().startsWith(ALWAYS_GATE_YES))) return null;
+  return clearedQuotes(lines, ctx.prompt);
+}
+
+// The four usage-coverage conditions of the plan, evaluated only while the plan asks the user nothing; condition 2 yields to quotes the job prompt holds.
 function usageCoverageGates(ctx) {
   if (hasGateMarker(ctx.plan)) return [];
   const lines = bodyLines(ctx.plan, "## Usage coverage") ?? [];
   const scenarios = lines.filter((line) => line.startsWith("- ") && line.includes("changed=yes · source=pipeline"));
-  const alwaysGate = lines.filter((line) => line.trim().startsWith("**Always-gate class:** yes"));
+  const cleared = usageCoverageCleared(ctx) !== null;
+  const alwaysGate = cleared ? [] : lines.filter((line) => line.trim().startsWith("**Always-gate class:** yes"));
   return [
     ...scenarios.map((line) => gate("usage-coverage-cond-1", line)),
     ...alwaysGate.map((line) => gate("usage-coverage-cond-2", line)),
@@ -349,7 +435,7 @@ function triageFacts(ctx) {
   return { gates: [...briefGates(ctx.text, ctx.verdict), ...symptomProofGates(ctx)] };
 }
 
-// The facts of the plan: its gates, its Type mismatch, its pause for confirmation and its QA mode.
+// The facts of the plan: its gates, its Type mismatch, its pause for confirmation, its QA mode and the quotes that cleared condition 2.
 function planFacts(ctx) {
   const mismatch = typeMismatchOf(ctx.plan);
   const triage = diagnosisFilled(ctx.triage) ? `${BUG} (## Diagnosis filled)` : `${FEATURE} (## Diagnosis absent or empty)`;
@@ -358,6 +444,7 @@ function planFacts(ctx) {
     typeMismatch: mismatch === null ? null : `${evidenceLine(mismatch)} — triage: ${triage}`,
     confirm: hasGateMarker(ctx.plan),
     qaMode: qaModeOf(ctx.plan),
+    usageCoverageCleared: usageCoverageCleared(ctx),
   };
 }
 
@@ -679,6 +766,7 @@ function resultOf({ check, first, facts = {}, type = null, evaluated = "" }) {
     completes: passed && !(LOOP_BACK[check] ?? []).includes(verdict),
     memoLine: memoLineOf(check, lines, verdict),
     script: facts.script ?? [],
+    usageCoverageCleared: facts.usageCoverageCleared ?? null,
   };
 }
 
@@ -742,15 +830,15 @@ function analystFacts(ctx) {
 // The run files a check may read besides its own artifact: the request, the triage, the explore map and the plan.
 export const CHECK_CONTEXT_FILES = Object.freeze(["00-brief.md", "01-triage.md", "02-explore.md", "03-plan.md"]);
 
-// Evaluates the artifact of one phase (or the analyst stage of check 05) against the check contract; `texts` maps each run file name to its content, `state` is the run's state.json.
-export function evaluateCheck({ check, stage = null, texts = {}, state = null, gaps = [] }) {
+// Evaluates the artifact of one phase (or the analyst stage of check 05) against the check contract; `texts` maps each run file name to its content, `state` is the run's state.json, `prompt` the job's own prompt text.
+export function evaluateCheck({ check, stage = null, texts = {}, state = null, gaps = [], prompt = null }) {
   const artifact = checkedArtifact(check, stage);
   const read = (file) => normalize(texts[file]);
   const raw = texts[artifact.file] ?? "";
   const text = artifact.rounds ? normalize(lastRound(raw)) : read(artifact.file);
   const triage = read("01-triage.md");
   const type = (check === "01" ? briefType(text) : null) ?? runType(state, triage);
-  const base = { check, artifact, text, triage, brief: read("00-brief.md"), explore: read("02-explore.md"), plan: read("03-plan.md"), type };
+  const base = { check, artifact, text, triage, brief: read("00-brief.md"), explore: read("02-explore.md"), plan: read("03-plan.md"), type, prompt };
   const ctx = { ...base, analystText: artifact.rounds ? analystTextOf(raw, text) : text, verdict: artifact.verdict ? readVerdict(text, artifact.verdict) : null };
   const common = { check: stage === null ? check : `${check}-${stage}`, type: ctx.type, evaluated: text };
   const defects = artifact.rounds ? [...new Set([...gaps, ...roundDefectParts(artifact.file, raw)])] : gaps;

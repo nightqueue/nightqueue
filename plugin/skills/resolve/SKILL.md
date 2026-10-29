@@ -154,7 +154,7 @@ approach ruled out by diff size): the ONLY constraint is the delivery LIMIT, on 
 | --- | --- |
 | `MISSING` | relaunch the architect once (🔁, `note` = the lines); still → inform the user and terminate (⚠️ open item) |
 | `GATE: coverage-*` | the same relaunch; still → ONE `run_outcome` for every line: `status: "gate"`, `from_artifact: { file: "03-plan.md", section: "## Requires user confirmation" }` (no `CONFIRM:` → `"## Symptom coverage"`), `question` = the `GATE:` lines verbatim + "answer the open decision or say what to adjust", then end the turn; never terminate |
-| `GATE: usage-coverage-*` (the usage-coverage gate) | relaunch the architect once (🔁) demanding `## Requires user confirmation`; still → `run_outcome` with `status: "gate"`, `from_artifact: { file: "03-plan.md", section: "## Usage coverage" }` and `question` = the `GATE:` lines verbatim, then end the turn |
+| `GATE: usage-coverage-*` | the same relaunch, asking `## Requires user confirmation` or a quoted source per `changed=yes` line; still → `run_outcome` with `status: "gate"`, `from_artifact: { file: "03-plan.md", section: "## Usage coverage" }` and `question` = the `GATE:` lines verbatim, then end the turn |
 | `TYPE-MISMATCH: … — triage: bug/error …` together with `CONFIRM:` | ONE `run_outcome` with `status: "gate"`, `from_artifact: { file: "03-plan.md", section: "## Requires user confirmation" }` and `question` = "Is this a bug or a feature/refactor? <the TYPE-MISMATCH evidence>", then end the turn |
 | `TYPE-MISMATCH: … — triage: feature/refactor …` (the Type divergence valve) | `run_set` with `type: "feature/refactor"`, then Phase 4 |
 | `TYPE-MISMATCH: … — triage: bug/error …` | the pause of the row with `CONFIRM:`, without `from_artifact` |

@@ -24,13 +24,14 @@ export function footerLine({ jobId = null, origins = [] } = {}) {
   return parts.join(" · ");
 }
 
-// The body file `run pr` publishes: a copy of the agent's body in the run directory ending with the footer.
-export function publishedBodyFile({ bodyFile, runDir, jobId, origins = [] }) {
+// The body file `run pr` publishes: a copy of the agent's body in the run directory, then the runtime's coverage line when given, ending with the footer.
+export function publishedBodyFile({ bodyFile, runDir, jobId, origins = [], coverageLine = null }) {
   try {
     const body = readFileSync(bodyFile, "utf8");
     mkdirSync(runDir, { recursive: true });
     const published = join(runDir, PUBLISHED_BODY_FILE);
-    writeFileSync(published, `${body.replace(/\s+$/, "")}\n\n${footerLine({ jobId, origins })}\n`);
+    const coverage = typeof coverageLine === "string" && coverageLine.trim() ? `${coverageLine.trim()}\n\n` : "";
+    writeFileSync(published, `${body.replace(/\s+$/, "")}\n\n${coverage}${footerLine({ jobId, origins })}\n`);
     return published;
   } catch (error) {
     const source = jobId === null || jobId === undefined ? "outside a job" : `from ${jobRef(jobId)}`;

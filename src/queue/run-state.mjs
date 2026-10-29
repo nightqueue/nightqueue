@@ -17,7 +17,10 @@ export const RUN_OUTCOME_STATUSES = ["done", "gate", "no_change"];
 export const NO_CHANGE_OUTCOME = "no_change";
 
 // The keys of `state.json` only the runtime writes: no pipeline writer may set them, whole or by a dotted name.
-export const RUNTIME_ONLY_KEYS = ["job"];
+export const RUNTIME_ONLY_KEYS = ["job", "usageCoverageCleared"];
+
+// The record of an always-gate class `yes` that `run check 03` cleared by quotes the job prompt holds.
+const USAGE_COVERAGE_CLEARED = "usageCoverageCleared";
 
 // Why a second record of the same job's block is kept: the block is written once, and a retry keeps the first one.
 export const JOB_BLOCK_ALREADY_RECORDED = "already recorded";
@@ -444,6 +447,29 @@ function saveJobBlock({ projectId, slug, block, env }) {
   if (held !== null && held.id === block.id) return kept(JOB_BLOCK_ALREADY_RECORDED);
   if (held !== null) return kept(`the run directory belongs to ${jobRef(held.id)}`);
   return saveRunState({ projectId, slug, env, state: { ...state, job: jobBlockRecord(block), updatedAt: new Date().toISOString() } });
+}
+
+// The state with the cleared-coverage record set to the quotes, or dropped when there are none; null when nothing changes.
+function withCoverageRecord(state, quotes) {
+  const { [USAGE_COVERAGE_CLEARED]: held, ...rest } = state;
+  if (quotes.length > 0) return { ...rest, [USAGE_COVERAGE_CLEARED]: { quotes, at: new Date().toISOString() } };
+  return held === undefined ? null : rest;
+}
+
+// Records the quotes that cleared the always-gate class of the plan, or drops the record when `quotes` is null; answers `absent` when there was nothing to drop.
+export function recordUsageCoverageCleared({ projectId, slug, quotes, env = process.env } = {}) {
+  const list = Array.isArray(quotes) ? quotes.filter((quote) => typeof quote === "string" && quote.trim() !== "") : [];
+  if (quotes !== null && list.length === 0) return kept("a cleared usage coverage needs its quotes");
+  return underRunLock({
+    projectId,
+    slug,
+    env,
+    write: () => {
+      const next = withCoverageRecord(withFixedFields(readRunState({ projectId, slug, env }), { projectId, slug }), list);
+      if (next === null) return { status: "absent", path: null, reason: null };
+      return saveRunState({ projectId, slug, env, state: { ...next, updatedAt: new Date().toISOString() } });
+    },
+  });
 }
 
 // Records who the run belongs to — the runtime's own block, written before the spawn, which lets the run know itself without the database.

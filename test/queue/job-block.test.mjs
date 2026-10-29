@@ -112,7 +112,7 @@ test("`run_set` refuses `job` and any `job.*` name, and no pipeline writer ever 
   const projectId = ensureProject(env, "alpha");
   const block = { id: 7, ref: "J-7", projectKey: "AP", createdAt: "2026-01-01T00:00:00.000Z" };
   assert.equal(recordJobBlock({ projectId, slug: SLUG, block, env }).status, "written");
-  assert.deepEqual(RUNTIME_ONLY_KEYS, ["job"]);
+  assert.deepEqual(RUNTIME_ONLY_KEYS, ["job", "usageCoverageCleared"]);
 
   for (const name of ["job", "job.id", "job.projectKey"]) {
     const refused = recordRunFields({ projectId, slug: SLUG, fields: { [name]: "x" }, env });

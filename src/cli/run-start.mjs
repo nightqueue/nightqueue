@@ -1,7 +1,10 @@
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { UserError } from "../config/errors.mjs";
 import { PIPELINE_TASK_TYPES } from "../memory/runs.mjs";
 import { COMMIT_TYPES } from "../queue/branch-name.mjs";
+import { jobPromptText } from "../queue/job-prompt.mjs";
 import { isSafeSegment, isStateObject, PRE_RENUMBERING_REFUSAL, preRenumberingArtifact, readRunState } from "../queue/resume.mjs";
 import { callerJobId } from "../queue/retry.mjs";
 import { agentModels, modelTable, phasesFor } from "../queue/routing.mjs";
@@ -15,6 +18,8 @@ import { resolveRun, RUN_OPTIONS, worktreeOf } from "./run-context.mjs";
 
 export const START_USAGE =
   "nightqueue run start [--type <bug/error|feature/refactor>] [--commit-type <type>] [--expect-slug <slug>] [--project <name> --slug <slug>] | --routing";
+
+const PROMPT_FILE = "00-prompt.md";
 
 const TIER_REMOVED = "`--tier` was removed: every run executes the one pipeline; run `nightqueue run start` without it";
 
@@ -94,6 +99,21 @@ function recordTemplate(run, cwd, ctx) {
   return { source: template.source, label: template.source === "repo" ? template.label : "nightqueue (fallback)", headings: template.headings };
 }
 
+// Writes the job's own prompt and current operator note to `00-prompt.md`, the text the architect quotes; answers its path, or null outside a job or on any failure, which never fails the start.
+async function writePromptFile(run, ctx) {
+  const text = await jobPromptText(run, ctx.env);
+  if (text === null) return null;
+  const path = join(run.runDir, PROMPT_FILE);
+  try {
+    mkdirSync(run.runDir, { recursive: true });
+    writeFileSync(path, `${text}\n`);
+    return path;
+  } catch (error) {
+    ctx.err(`nightqueue: ${PROMPT_FILE} was not written: ${error?.message ?? String(error)}`);
+    return null;
+  }
+}
+
 // A text field of state.json, or null when the run never recorded it.
 function stateText(state, field) {
   return isStateObject(state) && typeof state[field] === "string" && state[field].trim() ? state[field].trim() : null;
@@ -121,6 +141,7 @@ export async function runStart(argv, ctx) {
   recordType(run, type, ctx);
   const cwd = worktreeOf(run, ctx.env);
   const prTemplate = recordTemplate(run, cwd, ctx);
+  const promptFile = await writePromptFile(run, ctx);
   const state = readRunState({ projectId: run.projectId, slug: run.slug, env: ctx.env });
   const answer = {
     project: run.project,
@@ -137,6 +158,7 @@ export async function runStart(argv, ctx) {
     prTemplate,
     commitConvention: commitConvention(cwd, ctx.env),
     commitTemplate: findCommitTemplate(cwd, ctx.env),
+    promptFile,
   };
   ctx.out(JSON.stringify(answer));
   return 0;
