@@ -17,10 +17,7 @@ export const RUN_OUTCOME_STATUSES = ["done", "gate", "no_change"];
 export const NO_CHANGE_OUTCOME = "no_change";
 
 // The keys of `state.json` only the runtime writes: no pipeline writer may set them, whole or by a dotted name.
-export const RUNTIME_ONLY_KEYS = ["job", "usageCoverageCleared"];
-
-// The record of an always-gate class `yes` that `run check 03` cleared by quotes the job prompt holds.
-const USAGE_COVERAGE_CLEARED = "usageCoverageCleared";
+export const RUNTIME_ONLY_KEYS = ["job", "gateQuestionDigest", "draftPrUrl"];
 
 // Why a second record of the same job's block is kept: the block is written once, and a retry keeps the first one.
 export const JOB_BLOCK_ALREADY_RECORDED = "already recorded";
@@ -107,8 +104,18 @@ function withoutRuntimeKeys(change) {
   return Object.fromEntries(Object.entries(isStateObject(change) ? change : {}).filter(([name]) => runtimeOnlyKey(name) === null));
 }
 
-// Writes one change into the state.json of a run: the runtime stamps the time, and an `updatedAt` written by an agent is overwritten, never trusted.
-function record({ projectId, slug, env, change }) {
+// The state with the runtime's own fields applied: a null drops the key and an undefined leaves it alone.
+function withRuntimeFields(state, runtimeFields) {
+  const next = { ...state };
+  for (const [name, value] of Object.entries(runtimeFields)) {
+    if (value === null) delete next[name];
+    else if (value !== undefined) next[name] = value;
+  }
+  return next;
+}
+
+// Writes one change into the state.json of a run, with the runtime's own fields in the same write: the runtime stamps the time, and an `updatedAt` written by an agent is overwritten, never trusted.
+function record({ projectId, slug, env, change, runtimeFields = {} }) {
   return underRunLock({
     projectId,
     slug,
@@ -116,7 +123,7 @@ function record({ projectId, slug, env, change }) {
     write: () => {
       const at = new Date().toISOString();
       const state = withFixedFields(readRunState({ projectId, slug, env }), { projectId, slug });
-      return saveRunState({ projectId, slug, env, state: { ...state, ...withoutRuntimeKeys(change(state, at)), updatedAt: at } });
+      return saveRunState({ projectId, slug, env, state: { ...withRuntimeFields({ ...state, ...withoutRuntimeKeys(change(state, at)) }, runtimeFields), updatedAt: at } });
     },
   });
 }
@@ -275,19 +282,52 @@ export function clearTermination({ projectId, slug, phase = null, onlyBy = RUNTI
   });
 }
 
-// Records how the run ended; the pull request URL is the runtime's to write, so an outcome already carrying one keeps it.
-export function recordOutcome({ projectId, slug, status, notice, env = process.env } = {}) {
+// How many failures a delivery leaves open, in the words of the sentence that names them.
+function failuresRemain(failures) {
+  return failures === 1 ? "1 failure remains" : `${failures} failures remain`;
+}
+
+// The line naming a draft delivery and the failures it leaves open, with the pull request's URL when the caller has it.
+export function draftLine(failures, url = "") {
+  return `draft pull request ${url ? `${url} ` : ""}— ${failuresRemain(failures)}`;
+}
+
+// The line naming a normal pull request opened because gh refused the draft, and the failures it leaves open.
+export function refusedDraftLine(failures, url = "") {
+  return `pull request ${url ? `${url} ` : ""}— ${failuresRemain(failures)} (gh refused the draft)`;
+}
+
+// Whether a value is a count of failures a delivery can record.
+function isFailureCount(failures) {
+  return Number.isInteger(failures) && failures > 0;
+}
+
+// An outcome without any earlier draft record, carrying this call's own: the failures whenever they remain, the draft only when the pull request really is one.
+function withDraftRecord(outcome, { draft, failures, staysDraft }) {
+  const { draft: _draft, draftFailures: _draftFailures, staysDraft: _staysDraft, ...rest } = outcome;
+  return {
+    ...rest,
+    ...(draft === true ? { draft: true } : {}),
+    ...(isFailureCount(failures) ? { draftFailures: failures } : {}),
+    ...(staysDraft === true ? { staysDraft: true } : {}),
+  };
+}
+
+// Records how the run ended and, at the top level of the state where they outlive the outcome the next attempt clears, the digest of the question a pause showed and the draft the run opened (each dropped by a null, left alone when not sent); the pull request URL is the runtime's to write, so an outcome already carrying one keeps it.
+export function recordOutcome({ projectId, slug, status, notice, questionDigest, draft = false, failures = 0, draftPrUrl, staysDraft = false, env = process.env } = {}) {
   if (!RUN_OUTCOME_STATUSES.includes(status)) return refuseEnum("status", status, RUN_OUTCOME_STATUSES);
   if (status === NO_CHANGE_OUTCOME && trimmedText(notice) === null) {
     return kept("a no_change outcome needs the run's conclusion as its notice: it is what the origins are told on close");
   }
+  if (draft === true && !isFailureCount(failures)) return kept(`a draft outcome needs a positive failure count, not \`${String(failures)}\``);
   return record({
     projectId,
     slug,
     env,
     change: (state, at) => ({
-      outcome: withText({ ...(isStateObject(state.outcome) ? state.outcome : {}), status, at }, { notice }),
+      outcome: withText(withDraftRecord({ ...(isStateObject(state.outcome) ? state.outcome : {}), status, at }, { draft, failures, staysDraft }), { notice }),
     }),
+    runtimeFields: { gateQuestionDigest: questionDigest, draftPrUrl },
   });
 }
 
@@ -447,29 +487,6 @@ function saveJobBlock({ projectId, slug, block, env }) {
   if (held !== null && held.id === block.id) return kept(JOB_BLOCK_ALREADY_RECORDED);
   if (held !== null) return kept(`the run directory belongs to ${jobRef(held.id)}`);
   return saveRunState({ projectId, slug, env, state: { ...state, job: jobBlockRecord(block), updatedAt: new Date().toISOString() } });
-}
-
-// The state with the cleared-coverage record set to the quotes, or dropped when there are none; null when nothing changes.
-function withCoverageRecord(state, quotes) {
-  const { [USAGE_COVERAGE_CLEARED]: held, ...rest } = state;
-  if (quotes.length > 0) return { ...rest, [USAGE_COVERAGE_CLEARED]: { quotes, at: new Date().toISOString() } };
-  return held === undefined ? null : rest;
-}
-
-// Records the quotes that cleared the always-gate class of the plan, or drops the record when `quotes` is null; answers `absent` when there was nothing to drop.
-export function recordUsageCoverageCleared({ projectId, slug, quotes, env = process.env } = {}) {
-  const list = Array.isArray(quotes) ? quotes.filter((quote) => typeof quote === "string" && quote.trim() !== "") : [];
-  if (quotes !== null && list.length === 0) return kept("a cleared usage coverage needs its quotes");
-  return underRunLock({
-    projectId,
-    slug,
-    env,
-    write: () => {
-      const next = withCoverageRecord(withFixedFields(readRunState({ projectId, slug, env }), { projectId, slug }), list);
-      if (next === null) return { status: "absent", path: null, reason: null };
-      return saveRunState({ projectId, slug, env, state: { ...next, updatedAt: new Date().toISOString() } });
-    },
-  });
 }
 
 // Records who the run belongs to — the runtime's own block, written before the spawn, which lets the run know itself without the database.

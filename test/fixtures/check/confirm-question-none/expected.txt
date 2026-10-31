@@ -1,0 +1,4 @@
+OK
+OPEN: ## Requires user confirmation has no filled **Question:**
+QA: lite
+recorded: phase_done architecture OK

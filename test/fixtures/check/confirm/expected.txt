@@ -1,4 +1,4 @@
 OK
-CONFIRM: requires-user-confirmation
+CONFIRM: requires-user-confirmation — approve fixing the retry path only?
 QA: lite
 recorded: phase_done architecture OK

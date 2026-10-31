@@ -89,13 +89,17 @@ function carriesDeliver(request, name) {
   return shared.length > 0;
 }
 
-// The triager frames the raw request itself, and its request asks for the Brief, the critique and the alternative verdict.
-test("the triager frames the request, and its request delivers the Brief and the request critique", () => {
+// The triager frames the raw request itself, its request asks for the Brief and the critique, and neither text offers a verdict that waits for an answer.
+test("the triager frames the request, its request delivers the Brief and the request critique, and no verdict waits for an answer", () => {
   const agent = readFileSync(join(ROOT, "plugin/agents/triager.md"), "utf8");
   assert.ok(agent.split("\n").includes("## Framing the request"), "the triager agent has no ## Framing the request section");
   const request = readFileSync(join(PROMPTS, "triager.md"), "utf8");
-  for (const part of ["\n## Brief\n", "\n## Request critique\n", "PROPOSE-ALTERNATIVE"]) {
+  for (const part of ["\n## Brief\n", "\n## Request critique\n", "\n## Verdict: PROCEED | NO-CHANGE-NEEDED | NOT-REPRODUCIBLE\n"]) {
     assert.ok(request.includes(part), `the triager request does not carry ${part.trim()}`);
+  }
+  for (const word of ["NEEDS-CLARIFICATION", "PROPOSE-ALTERNATIVE"]) {
+    assert.equal(agent.includes(word), false, `the triager agent still offers ${word}`);
+    assert.equal(request.includes(word), false, `the triager request still offers ${word}`);
   }
 });
 

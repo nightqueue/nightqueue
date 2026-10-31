@@ -88,7 +88,7 @@ test("every versioned file of the published directories is in the tarball", (t) 
   const tracked = trackedFiles();
   if (!tracked) return t.skip("git did not answer `ls-files`");
   const packed = new Set(tarball.files);
-  for (const file of tracked) {
+  for (const file of tracked.filter((path) => existsSync(join(ROOT, path)))) {
     assert.ok(packed.has(file), `${file} is versioned under ${PACKED_DIRS.join(", ")} and is missing from the tarball`);
   }
 });

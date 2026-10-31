@@ -3,7 +3,7 @@ Read before acting (via Read):
 - `<RUN_DIR>/01-triage.md` — ## Validated brief; on a bug, ## Diagnosis (the plan MUST
   attack this cause; its symptom proof is the baseline the runtime validation re-runs
   without-fix vs with-fix); ## Intent note and ## Depth note when present (the intent note of
-  your Step 1, the depth note of your Step 1.5); ## Intent signals and ## Request gaps (axis 3).
+  your Step 1, the depth note of your Step 1.5); ## Intent signals (axis 3) and ## Request gaps (each one a line of `## Decisions taken`).
 - `<RUN_DIR>/02-explore.md` when it exists — ## File map (the file map of
   your Step 2), ## Access map with its `unimplemented intent` lines (the access map of axis 3),
   ## Third-party libraries (the installed versions of Step 3).
@@ -23,30 +23,33 @@ Delivery constraints (the limit of what may be delivered — NEVER design; omit 
 
 ## Deliver
 
-Write these sections to ARTIFACT_PATH, with these headings. `## Implementation plan`, `## Assumptions`, `## Pre-mortem` and `## Identified risks` are mandatory on every plan (`nightqueue run check 03` fails without any of them); the other three follow their own condition. When `## Requires user confirmation` is emitted it comes FIRST, before the plan, and the plan describes the proposed solution marked as pending confirmation.
+Write these sections to ARTIFACT_PATH, with these headings. `## Implementation plan`, `## Assumptions`, `## Pre-mortem` and `## Identified risks` are mandatory on every plan (`nightqueue run check 03` fails without any of them); the other four follow their own condition. You decide the gaps of the request; you do not ask. When `## Requires user confirmation` is emitted it comes FIRST, before the plan, and the plan describes the recommended option.
 
-## Requires user confirmation  (when a trigger of your When to stop and ask fired)
-- **What the ticket expected:** [...]
-- **Why that is a problem:** [...]
-- **Proposed solution:** [...]
-- **Expected result:** [...]
-- **Question:** [...]
+## Requires user confirmation  (ONLY when a decision changes observable behaviour, data or scope AND the request does not settle it AND choosing wrong would be costly to undo)
+**Question:** [...]
+**Options:** [...]
+**On go ahead:** [...]
 
-A `changed=no` scenario is a record, not a question: only the `changed=yes` and the `to confirm` lines go into the question.
+The question carries its `?`: only that reads as a question, and with nothing to ask the section is left out. A relaunch whose note carries the operator's answer applies it to the plan and its rows and drops the answered `## Requires user confirmation`; keep that section only for a NEW question.
 
 ## Implementation plan
 **Files to create/modify:**
 **Approach:**
+**Order of work:**
+**Tests:**
 **Fix level:**
 - root (dissolves the family — does not enumerate variants) | symptom (real root = <X>, untouchable due to <reason>, follow-up = <ticket>)
 **External APIs/libs:**  (omit if there are none; cite the source read)
 **Arsenal reused:**  (omit if there is none)
 **Upgrade impact:**  (only when the scope touches a version)
-- [Change that touches this code] — classification: user confirmation | mechanical | exposed debt (out of scope)
+- [Change that touches this code] — classification: decision taken | mechanical | exposed debt (out of scope)
 **What to avoid:**
 **Success criteria:**
 
 Without `## Usage coverage`, declare `**Diff axis:**` and `**Always-gate class:**` here.
+
+## Decisions taken  (mandatory when `## Request gaps` has an item)
+- <gap> · <option chosen> · <why>
 
 ## Symptom coverage  (mandatory when the Type is bug/error)
 **Ticket symptom:** [...]
@@ -56,7 +59,7 @@ Without `## Usage coverage`, declare `**Diff axis:**` and `**Always-gate class:*
 | V1 | [...] | covered | [...] |
 | V2 | [...] | not-covered | [...] |
 
-Rules: list ALL the paths that produce the symptom of the ticket, not only the reproduced one. `not applicable`/`n/a` is FORBIDDEN — a single path is listed with how you confirmed it is the only one. A path that literally produces the symptom of the ticket is never "outside the reported symptom". Every `not-covered` vector requires `## Requires user confirmation` in the SAME plan.
+Rules: list ALL the paths that produce the symptom of the ticket, not only the reproduced one. `not applicable`/`n/a` is FORBIDDEN — a single path is listed with how you confirmed it is the only one. A path that literally produces the symptom of the ticket is never "outside the reported symptom". A `not-covered` row states its reason and the decision taken inline.
 The one exit without a table: when the Type says bug/error but the brief/triage describes no observable symptom, write only `**Type mismatch:** the request declared bug/error, but <literal quote from the brief/triage that shows the absence of a symptom>`. The quote is mandatory: a claim without a quoted excerpt is an escape.
 
 ## Usage coverage  (mandatory when the Type is bug/error and the diff touches 2+ scenarios of the access map, or when the always-gate class is yes)
@@ -64,17 +67,14 @@ The one exit without a table: when the Type says bug/error but the brief/triage 
 **Always-gate class:** yes | no — <the diff changes/does not change WHICH records a query returns, with file:line>
 **Scenarios consulted:** <the access map | the spec's usage scenarios | own enumeration + the exact command you ran>
 
-- <scenario> · today: <current behavior + evidence> · after: <behavior after the diff> · changed=yes · source=pipeline
-- <scenario> · today: <…> · after: <…> · changed=yes · source=literal ticket "<quote>"
-- <scenario> · today: <…> · after: <…> · changed=yes · source=operator decision "<quote>"
+- <entry point> · today: <current behavior + evidence> · after: <behavior after the diff> · changed=yes · decision: <the decision taken>
+- <entry point> · today: <…> · after: <the same> · changed=no · decision: <the decision taken>
 
-Rules: one line per scenario (`·` separators, no spaces around `=`). A `"<quote>"` is 3+ verbatim words from one paragraph of `<RUN_DIR>/00-prompt.md`; `run check 03` verifies it. **Every `changed=yes · source=pipeline` line requires `## Requires user confirmation` in the SAME plan**, and so does an always-gate class `yes` unless every `changed=yes` line quotes. "The diff touches only 1 scenario" without the access map consulted is an escape: when in doubt, produce the section.
+Rules: one line per entry point of the diff (`·` separators, no spaces around `=`). The always-gate class describes the diff: `yes` raises the QA to `full` and never pauses. "The diff touches only 1 scenario" without the access map consulted is an escape: when in doubt, produce the section.
 
 **Sibling fields of the same card** — mandatory when the diff introduces or swaps the data source of a UI field: one line per remaining field of the SAME component/card that displays a fixed literal, a placeholder or a fallback (`'-'`, `'ACTIVE'`, `'N/A'`, `|| '-'`), with the command used to find them:
 
-- <field> of the same card · today: <exact literal/placeholder/fallback + file:line> · after: <uses the new source | stays <literal>> · changed=<yes|no> · source=pipeline · decision=<uses the new source | out of scope: <reason>>
-
-Its own gate: **every `<field> of the same card` line with `decision=out of scope` and `source=pipeline` requires `## Requires user confirmation` in the SAME plan**, unless it quotes.
+- <field> of the same card · today: <exact literal/placeholder/fallback + file:line> · after: <uses the new source | stays <literal>> · changed=<yes|no> · decision: <uses the new source | out of scope: <reason>>
 
 ## Assumptions
 - [P1] <assumption> — invalidated if: <evidence that would refute it>

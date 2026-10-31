@@ -1,19 +1,18 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { CHECK_CONTEXT_FILES, evaluateCheck } from "../queue/check-contract.mjs";
+import { openQuestion } from "../queue/gate-question.mjs";
 import { lastRound, PHASE_ARTIFACTS } from "../queue/phase-artifacts.mjs";
 import { attemptSince, derivedGateStop, derivedOutcome, recordPipelineRun, statePipelinePhases, verdictIcon, verdictWord } from "../queue/pipeline-record.mjs";
 import { isStateObject } from "../queue/resume.mjs";
+import { draftLine, refusedDraftLine } from "../queue/run-state.mjs";
 import { renderSkillTemplate, skillReferencesDir } from "../queue/skill-template.mjs";
 import { sectionOf } from "../queue/stream.mjs";
 import { runDurationS } from "../queue/telemetry.mjs";
-import { coverageRecordLine } from "../queue/usage-coverage-record.mjs";
 import { checkArgs, parseCommand } from "./args.mjs";
 import { durationCell, phaseRows, readJobLog, requireRunState, resolveRun, RUN_OPTIONS } from "./run-context.mjs";
 
 export const REPORT_USAGE = "nightqueue run report [--json] [--project <name> --slug <slug>]";
-
-const CONFIRMATION_HEADING = /^## Requires user confirmation\s*$/m;
 
 // The steps of the report, in order: the canonical phase, the step label and the agent of the visual identity.
 const STEPS = [
@@ -28,7 +27,7 @@ const STEPS = [
   { phase: null, step: "9 Report", agent: "🗂️ Report" },
 ];
 
-const OPEN_CHECKS = ["05", "07"];
+const OPEN_CHECKS = ["03", "05", "07"];
 const DEDICATED_TICKET = "dedicated ticket: yes";
 const EMPTY = durationCell(null);
 
@@ -44,10 +43,23 @@ function passedWithoutRuntimeDebt(state) {
   return last !== undefined && verdictWord(last.verdict) === "PASSED";
 }
 
+// The failures the run's pull request leaves open, or null when it delivered with none.
+function draftFailuresOf(state) {
+  const outcome = isStateObject(state.outcome) ? state.outcome : {};
+  return outcome.draftFailures ?? (outcome.draft === true ? "unknown" : null);
+}
+
+// The line naming the failures a delivery leaves open, in the words of a real draft or of one gh refused; null when it left none.
+function openFailuresLine(state, url = "") {
+  const failures = draftFailuresOf(state);
+  if (failures === null) return null;
+  return state.outcome.draft === true ? draftLine(failures, url) : refusedDraftLine(failures, url);
+}
+
 // The delivery fact the runtime recorded: the pull request, or the conclusion that none was needed; null when neither.
 function deliveryNote(state) {
   const outcome = isStateObject(state.outcome) ? state.outcome : {};
-  if (outcome.status === "done" && typeof outcome.prUrl === "string") return `PR ${outcome.prUrl}`;
+  if (outcome.status === "done" && typeof outcome.prUrl === "string") return openFailuresLine(state, outcome.prUrl) ?? `PR ${outcome.prUrl}`;
   if (outcome.status === "no_change") return "no change needed - resolved without a pull request";
   return null;
 }
@@ -149,6 +161,8 @@ function gateDetail(row) {
 
 // The first gate that keeps the run from being happy, or null when every gate is positively clean.
 function firstFailingGate(state, rows, plan) {
+  const openFailures = openFailuresLine(state);
+  if (openFailures !== null) return openFailures;
   if (isStateObject(state.termination)) return `terminated at ${state.termination.phase}: ${state.termination.reason}`;
   const failed = rows.find((row) => row.icon === "❌");
   if (failed) return `${failed.step} ❌ ${gateDetail(failed)}`;
@@ -156,7 +170,7 @@ function firstFailingGate(state, rows, plan) {
   if (rerun) return `${stepCell(rerun)} ${gateDetail(rerun)}`;
   const warned = rows.find((row) => row.icon === "⚠️");
   if (warned) return `${warned.step} ⚠️ ${gateDetail(warned)}`;
-  if (CONFIRMATION_HEADING.test(plan)) return "the plan carries ## Requires user confirmation";
+  if (openQuestion(plan, state)) return "the plan carries ## Requires user confirmation";
   const status = isStateObject(state.outcome) ? state.outcome.status : null;
   return status === "done" ? null : `the run recorded no delivery (outcome ${status ?? "none"})`;
 }
@@ -216,20 +230,21 @@ function openLinesOf(check, runDir, state) {
   }
 }
 
-// The `OPEN:` lines the QA and runtime checks answer for their artifacts.
+// The `OPEN:` lines the plan, QA and runtime checks answer for their artifacts.
 function checkOpenLines(runDir, state) {
   return OPEN_CHECKS.flatMap((check) => openLinesOf(check, runDir, state));
 }
 
-// The `usage coverage:` item of a run whose always-gate class was cleared by quoted decisions, for the merge review.
-function usageCoverageItems(state) {
-  const line = coverageRecordLine(state);
-  return line === null ? [] : [`usage coverage: ${line}`];
+// The open item of a pull request gh would not turn ready, whose failures are gone.
+function staysDraftItems(state) {
+  const outcome = isStateObject(state.outcome) ? state.outcome : {};
+  return outcome.staysDraft === true ? [`pull request ${outcome.prUrl ?? "of this run"} stays a draft`] : [];
 }
 
 // The items the run leaves open, which the Notice translates into its Still open.
 function runOpenItems(runDir, state) {
-  return [...dedicatedTickets(runDir), ...checkOpenLines(runDir, state), ...usageCoverageItems(state)];
+  const openFailures = openFailuresLine(state);
+  return [...(openFailures === null ? [] : [openFailures]), ...staysDraftItems(state), ...dedicatedTickets(runDir), ...checkOpenLines(runDir, state)];
 }
 
 // The telemetry row of the run, derived from its state.json.

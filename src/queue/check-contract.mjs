@@ -1,5 +1,6 @@
 import { PIPELINE_TASK_TYPES } from "../memory/runs.mjs";
-import { consolidatedRoundsOf, lastRound, nextRound, PHASE_ARTIFACTS, QA_ANALYST_STAGE, roundDefects, roundsOf } from "./phase-artifacts.mjs";
+import { lastRound, nextRound, PHASE_ARTIFACTS, QA_ANALYST_STAGE, roundDefects } from "./phase-artifacts.mjs";
+import { gateQuestion, labelBlock, questionDigest, unreadableQuestion } from "./gate-question.mjs";
 import { backtickRunAt, codeSpanEnd, hasGateMarker, sectionOf, unfencedLines, withoutHtmlComments } from "./stream.mjs";
 import { briefGates, briefType } from "./triage-brief.mjs";
 
@@ -12,36 +13,20 @@ const FEATURE = "feature/refactor";
 const EVIDENCE_MAX = 160;
 // A re-runnable method: a backtick-quoted span or one of these command words.
 const METHOD_RE = /`[^`]+`|\b(?:grep|rg|glob|ast-grep)\b|\b(?:git|find|ls|sed|awk|node|npm)\s/i;
-const GENERIC_METHOD_RE = /\b(?:reviewed|read|analy[sz]ed) the plan\b/i;
-const INTENT_RE = /unimplemented intent:\s*(.+?)\s*·\s*governs\s+`?([A-Za-z0-9/_-]+)/i;
-// The shapes of a code identifier, tried on each word: a path, dotted, camelCase, PascalCase with an inner capital, snake_case, a call.
-const CODE_TOKEN_RES = [
-  /[\w$.-]*\/[\w$./-]*[\w$]/,
-  /[A-Za-z_$][\w$]*(?:\.[A-Za-z_$][\w$]*)+/,
-  /[a-z][a-z0-9]*[A-Z][\w$]*/,
-  /[A-Z][a-z0-9]+[A-Z][\w$]*/,
-  /[A-Za-z][A-Za-z0-9]*_[\w$]+/,
-  /[\w$]+\(\)/,
-];
 const SEPARATOR_CELL_RE = /^:?-+:?$/;
 const BLANK_REASONS = new Set(["", "-", "n/a", "not applicable"]);
 const BLANK_EVIDENCE = new Set(["", "-", "none", "not run"]);
 const CONFIRM_LINE = "CONFIRM: requires-user-confirmation";
+const CONFIRM_ANSWERED = "CONFIRM: answered";
+const UNREADABLE_QUESTION = "## Requires user confirmation (no **Question:** line with a ?: write the question with its ?, or drop the section when nothing is asked)";
 const ALWAYS_GATE_YES = "**Always-gate class:** yes";
-// A scenario's quoted source: one of the two labels, then the quote in plain double quotes, closing the field.
-const QUOTED_SOURCE_RE = /·\s*source=(literal ticket|operator decision) "([^"]*)"(?=\s*(?:·|$))/;
-const QUOTE_MIN_WORDS = 3;
-const CHANGED_WORD_RE = /\bchanged\b/i;
-const UNNAMED_CHANGE_RE = /^source\s*=|=\s*yes\b/i;
-const PIPELINE_SOURCE_RE = /^source\s*=\s*pipeline\b/i;
-const FORMAT_CHAR_RE = /\p{Cf}/gu;
-const BLOCKQUOTE_RE = /^(?:>\s*)+/;
-const TO_CONFIRM_RE = /\bto confirm\b/i;
-const WORD_CHAR_RE = /[\p{L}\p{N}_]/u;
 const HIGH_RISK = "🔴";
 const LIST_ITEM_RE = /^(?:[-*+]|\d+[.)])\s/;
 const RISK_ID_RE = /^(?:\*\*)?(?:\[R\d+\]|\(R\d+\))/;
 const SEVERITY_RE = /🔴|🟡|🟢/u;
+// The lines of a QA report that carry what stays open.
+const QA_OPEN_LABELS = ["omitted", "divergences", "unconfirmed decisions"];
+const NONE_VALUE_RE = /^none\.?$/i;
 // The verdicts that send the pipeline back instead of completing the phase.
 const LOOP_BACK = { "06": ["FAILED"], "07":["NOT-MET", "SYMPTOM-PERSISTS"] };
 // The verdicts a check memo keeps as its notable line when nothing else fired.
@@ -99,16 +84,6 @@ function fieldValue(lines, label) {
   const prefix = `${label.toLowerCase()}:`;
   for (const line of lines ?? []) {
     const plain = line.trim().replace(/^[-*]\s+/, "").replace(/\*\*/g, "");
-    if (plain.toLowerCase().startsWith(prefix)) return plain.slice(prefix.length).trim();
-  }
-  return null;
-}
-
-// The text after a line's label, the label matched at the line's start (a bullet allowed), or null when no line opens with it.
-function labelledValue(lines, label) {
-  const prefix = label.toLowerCase();
-  for (const line of lines ?? []) {
-    const plain = line.trim().replace(/^[-*]\s+/, "");
     if (plain.toLowerCase().startsWith(prefix)) return plain.slice(prefix.length).trim();
   }
   return null;
@@ -187,11 +162,17 @@ function verdictIn(text, values) {
   return longestFirst.find((value) => plain.startsWith(value) && !/^[A-Z0-9-]/.test(plain.slice(value.length))) ?? null;
 }
 
+// The accepted verdict the text states: its value, or the value a retired word reads as; null when it is neither.
+function statedVerdict(text, spec) {
+  const verdict = verdictIn(text, [...spec.values, ...Object.keys(spec.legacy)]);
+  return spec.legacy[verdict] ?? verdict;
+}
+
 // The verdict of the artifact, read where its phase writes it; null when it is none of the accepted values.
 export function readVerdict(text, spec) {
-  if (spec.from === "first-line") return verdictIn(firstLineUnder(text, spec.heading) ?? "", spec.values);
+  if (spec.from === "first-line") return statedVerdict(firstLineUnder(text, spec.heading) ?? "", spec);
   const line = unfencedLines(text).find((candidate) => candidate.trimEnd().startsWith(spec.heading));
-  return line === undefined ? null : verdictIn(line.slice(spec.heading.length).replace(/^\s*:/, ""), spec.values);
+  return line === undefined ? null : statedVerdict(line.slice(spec.heading.length).replace(/^\s*:/, ""), spec);
 }
 
 // Whether the triage's `## Diagnosis` carries a confirmed cause or a symptom proof.
@@ -256,165 +237,23 @@ function vectorGap(row) {
   return BLANK_REASONS.has(row.reason.toLowerCase()) ? `${row.id} · Reason: ${row.reason || "(empty)"}` : null;
 }
 
-// The `**How I enumerated:**` value when it names no re-runnable method, `line absent` without one, or null when it holds.
+// The `**How I enumerated:**` block, fenced commands and bullets included, when it names no re-runnable method, `line absent` without the label, or null when it holds.
 function enumerationGap(plan) {
-  const label = "**How I enumerated:**";
-  const line = (bodyLines(plan, "## Symptom coverage") ?? []).find((candidate) => candidate.includes(label));
-  if (line === undefined) return "line absent";
-  const value = line.slice(line.indexOf(label) + label.length).trim();
+  const lines = (sectionOf(plan, "## Symptom coverage") ?? "").split("\n");
+  const block = labelBlock(lines, "**How I enumerated:**");
+  if (block === null) return "line absent";
+  const tableAt = block.findIndex((line) => line.trim().startsWith("|"));
+  const value = flatLine((tableAt < 0 ? block : block.slice(0, tableAt)).join(" "));
   return METHOD_RE.test(value) ? null : value || "(empty)";
 }
 
-// The three symptom-coverage gates of a bug plan, in their contract order.
-function coverageGates(ctx) {
+// The open items of a bug plan's coverage, informative and never a relaunch: each vector with no status or reason, then an enumeration with no method.
+function coverageOpen(ctx) {
   if (!needsCoverage(ctx)) return [];
-  const rows = coverageRows(ctx.plan);
   const enumeration = enumerationGap(ctx.plan);
-  const unconfirmed = hasGateMarker(ctx.plan) ? [] : rows.filter((row) => row.status === "not-covered");
   return [
-    ...rows.map(vectorGap).filter(Boolean).map((evidence) => gate("coverage-vector-no-reason", evidence)),
-    ...(enumeration === null ? [] : [gate("coverage-enumeration-no-method", enumeration)]),
-    ...unconfirmed.map((row) => gate("coverage-not-covered-without-confirmation", row.id)),
-  ];
-}
-
-// The first word of the plan's `**Diff axis:**` value, lowercased, or null without one.
-function diffAxis(plan) {
-  const label = "**Diff axis:**";
-  const line = unfencedLines(plan).find((candidate) => candidate.includes(label));
-  const word = line === undefined ? null : /^[\s`*]*([A-Za-z0-9/_-]+)/.exec(line.slice(line.indexOf(label) + label.length));
-  return word ? word[1].toLowerCase() : null;
-}
-
-// The code token of an unimplemented-intent parameter: its first backtick span, else its first code-shaped identifier, else null (prose).
-function codeTokenOf(param) {
-  const quoted = /`([^`]+)`/.exec(param)?.[1];
-  if (quoted !== undefined) return quoted;
-  const words = param.split(/\s+/).filter(Boolean);
-  return words.map((word) => CODE_TOKEN_RES.map((re) => re.exec(word)?.[0]).find(Boolean)).find(Boolean) ?? null;
-}
-
-// Whether the text names the token whole: not preceded by `[\w$.]`, not followed by `[\w$]`, case-sensitive.
-function namesWholeToken(text, token) {
-  const escaped = token.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  return new RegExp(`(?<![\\w$.])${escaped}(?![\\w$])`).test(text);
-}
-
-// Whether an unimplemented-intent parameter is the ticket's own deliverable: its code token is named whole in the validated brief or the objective.
-function isOwnDeliverable(param, ctx) {
-  const token = codeTokenOf(param);
-  if (token === null) return false;
-  const validated = sectionOf(ctx.triage, "## Validated brief") ?? "";
-  const objective = unfencedLines(ctx.brief).find((line) => line.includes("**Objective:**")) ?? "";
-  return namesWholeToken(validated, token) || namesWholeToken(objective, token);
-}
-
-// Condition 3: an explore `unimplemented intent` line that governs the plan's own diff axis and is not the ticket's deliverable.
-function intentLines(ctx) {
-  const axis = diffAxis(ctx.plan);
-  if (axis === null) return [];
-  return unfencedLines(ctx.explore)
-    .map((line) => ({ line: line.trim(), match: INTENT_RE.exec(line) }))
-    .filter(({ match }) => match !== null && match[2].toLowerCase() === axis && !isOwnDeliverable(match[1], ctx))
-    .map(({ line }) => line);
-}
-
-// Condition 4: a scenario line of the request whose value is exactly `to confirm`.
-function toConfirmLines(ctx) {
-  return [ctx.brief, ctx.triage]
-    .flatMap((text) => unfencedLines(text))
-    .filter((line) => line.startsWith("- ") && line.includes(" · "))
-    .filter((line) => line.slice(2).split(" · ").some((field) => field.trim() === "to confirm"))
-    .map((line) => line.trim());
-}
-
-// The label and quote of a scenario line's `source=literal ticket "<q>"` or `source=operator decision "<q>"`, or null when it has neither.
-export function quotedSourceOf(line) {
-  const match = QUOTED_SOURCE_RE.exec(String(line ?? ""));
-  return match === null ? null : { label: match[1], quote: match[2] };
-}
-
-// Whether a quote of at least three words is a case-sensitive whole-word phrase of the prompt, both whitespace-normalized.
-function quoteFound(quote, prompt) {
-  const flat = flatLine(quote);
-  return flat.split(" ").filter(Boolean).length >= QUOTE_MIN_WORDS && holdsWholePhrase(flatLine(prompt), flat);
-}
-
-// Whether the text holds the phrase with no word character glued to either of its word-character ends.
-function holdsWholePhrase(text, phrase) {
-  const escaped = phrase.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const before = WORD_CHAR_RE.test(phrase[0]) ? "(?<![\\p{L}\\p{N}_])" : "";
-  const after = WORD_CHAR_RE.test(phrase.at(-1)) ? "(?![\\p{L}\\p{N}_])" : "";
-  return new RegExp(`${before}${escaped}${after}`, "u").test(text);
-}
-
-// The fields of a scenario line, compatibility-normalized and stripped of invisible format characters at any indent, blockquote or list marker, split on its `·` separators and trimmed.
-function scenarioFields(line) {
-  return line
-    .normalize("NFKC")
-    .replace(FORMAT_CHAR_RE, "")
-    .trim()
-    .replace(BLOCKQUOTE_RE, "")
-    .replace(LIST_ITEM_RE, "")
-    .split("·")
-    .map((field) => field.trim());
-}
-
-// Whether a scenario field is left `to confirm` anywhere inside it.
-function isToConfirm(field) {
-  return TO_CONFIRM_RE.test(field);
-}
-
-// Whether a line of the section is a scenario item: every list item at any indent or blockquote depth, a bold-labelled header item included.
-function isScenarioItem(line) {
-  const text = line.normalize("NFKC").replace(FORMAT_CHAR_RE, "").trim().replace(BLOCKQUOTE_RE, "");
-  return LIST_ITEM_RE.test(text);
-}
-
-// Whether a scenario item declares a change: a `changed` word in a field that is not exactly `changed=no`, or, with no `changed` word recognised, a `source=` or `=yes` field.
-function declaresChange(line) {
-  const fields = scenarioFields(line);
-  const changedFields = fields.filter((field) => CHANGED_WORD_RE.test(field));
-  if (changedFields.length === 0) return fields.some((field) => UNNAMED_CHANGE_RE.test(field));
-  return !changedFields.every((field) => field === "changed=no");
-}
-
-// The quoted source of a changed scenario item, or null when a field is left `to confirm` or names the pipeline as a source.
-function clearingSourceOf(line) {
-  const fields = scenarioFields(line);
-  if (fields.some(isToConfirm) || fields.some((field) => PIPELINE_SOURCE_RE.test(field))) return null;
-  return quotedSourceOf(line);
-}
-
-// The quotes clearing condition 2: every line declaring a change quotes, with no `to confirm` or pipeline source field, a source the prompt holds; null otherwise.
-function clearedQuotes(lines, prompt) {
-  if (typeof prompt !== "string" || prompt.trim() === "") return null;
-  const changed = lines.filter(isScenarioItem).filter(declaresChange);
-  const sources = changed.map(clearingSourceOf);
-  if (changed.length === 0 || sources.some((source) => source === null || !quoteFound(source.quote, prompt))) return null;
-  return sources.map((source) => flatLine(source.quote));
-}
-
-// The quotes that clear the plan's always-gate class `yes` by code, or null when the plan asks the user, declares no such class or a quote misses.
-function usageCoverageCleared(ctx) {
-  if (hasGateMarker(ctx.plan)) return null;
-  const lines = bodyLines(ctx.plan, "## Usage coverage") ?? [];
-  if (!lines.some((line) => line.trim().startsWith(ALWAYS_GATE_YES))) return null;
-  return clearedQuotes(lines, ctx.prompt);
-}
-
-// The four usage-coverage conditions of the plan, evaluated only while the plan asks the user nothing; condition 2 yields to quotes the job prompt holds.
-function usageCoverageGates(ctx) {
-  if (hasGateMarker(ctx.plan)) return [];
-  const lines = bodyLines(ctx.plan, "## Usage coverage") ?? [];
-  const scenarios = lines.filter((line) => line.startsWith("- ") && line.includes("changed=yes · source=pipeline"));
-  const cleared = usageCoverageCleared(ctx) !== null;
-  const alwaysGate = cleared ? [] : lines.filter((line) => line.trim().startsWith("**Always-gate class:** yes"));
-  return [
-    ...scenarios.map((line) => gate("usage-coverage-cond-1", line)),
-    ...alwaysGate.map((line) => gate("usage-coverage-cond-2", line)),
-    ...intentLines(ctx).map((line) => gate("usage-coverage-cond-3", line)),
-    ...toConfirmLines(ctx).map((line) => gate("usage-coverage-cond-4", line)),
+    ...coverageRows(ctx.plan).map(vectorGap).filter(Boolean).map((evidence) => `coverage-vector-no-reason — ${evidenceLine(evidence)}`),
+    ...(enumeration === null ? [] : [`coverage-enumeration-no-method — ${evidenceLine(enumeration)}`]),
   ];
 }
 
@@ -435,16 +274,36 @@ function triageFacts(ctx) {
   return { gates: [...briefGates(ctx.text, ctx.verdict), ...symptomProofGates(ctx)] };
 }
 
-// The facts of the plan: its gates, its Type mismatch, its pause for confirmation, its QA mode and the quotes that cleared condition 2.
+// The `CONFIRM:` line of a filled question: answered once a note exists and the recorded digest is this question's, else the pause; null without a question.
+function confirmLine(ctx, question) {
+  if (question === null) return null;
+  const hasNote = typeof ctx.operatorNote === "string" && ctx.operatorNote.trim() !== "";
+  if (hasNote && ctx.state?.gateQuestionDigest === questionDigest(question)) return CONFIRM_ANSWERED;
+  return `${CONFIRM_LINE} — ${evidenceLine(question)}`;
+}
+
+// The open items of the plan: its coverage, a confirmation section that asks nothing, and a Type mismatch with the Type the run keeps.
+function planOpen(ctx, question) {
+  const mismatch = typeMismatchOf(ctx.plan);
+  const kept = diagnosisFilled(ctx.triage) ? BUG : FEATURE;
+  return [
+    ...coverageOpen(ctx),
+    ...(question === null && hasGateMarker(ctx.plan) ? ["## Requires user confirmation has no filled **Question:**"] : []),
+    ...(mismatch === null ? [] : [`type mismatch — ${evidenceLine(mismatch)} — kept ${kept}`]),
+  ];
+}
+
+// The facts of the plan, none of which gates it: its open items, its Type mismatch, its pause for a filled question and its QA mode.
 function planFacts(ctx) {
   const mismatch = typeMismatchOf(ctx.plan);
+  const question = gateQuestion(ctx.plan);
   const triage = diagnosisFilled(ctx.triage) ? `${BUG} (## Diagnosis filled)` : `${FEATURE} (## Diagnosis absent or empty)`;
   return {
-    gates: [...coverageGates(ctx), ...usageCoverageGates(ctx)],
+    gates: [],
+    open: planOpen(ctx, question),
     typeMismatch: mismatch === null ? null : `${evidenceLine(mismatch)} — triage: ${triage}`,
-    confirm: hasGateMarker(ctx.plan),
+    confirm: confirmLine(ctx, question),
     qaMode: qaModeOf(ctx.plan),
-    usageCoverageCleared: usageCoverageCleared(ctx),
   };
 }
 
@@ -498,138 +357,6 @@ export function qaModeOf(plan) {
   return declaresAlwaysGate(text) || highRisks(text).length >= 2 ? "full" : "lite";
 }
 
-// The three gates of the QA's `Symptom coverage:` line against the plan's table, its N read as the field's leading integer.
-function symptomCoverageGates(ctx, risks) {
-  if (!needsCoverage(ctx)) return [];
-  const value = labelledValue(risks, "Symptom coverage:");
-  if (value === null) return [gate("symptom-coverage-n-mismatch", "line absent")];
-  const fields = value.split(" · ").map((field) => field.trim());
-  const planRows = coverageRows(ctx.plan).length;
-  const omitted = fields.find((field) => /^omitted:/i.test(field));
-  const method = fields.slice(1).find((field) => !/^omitted:/i.test(field)) ?? "";
-  return [
-    ...(leadingCount(fields[0], "N") === planRows ? [] : [gate("symptom-coverage-n-mismatch", `N=${fields[0] || "(empty)"} plan=${planRows}`)]),
-    ...(omitted && omitted.slice("omitted:".length).trim() !== "" ? [] : [gate("symptom-coverage-omitted-empty", omitted ? "omitted: (empty)" : "omitted: field absent")]),
-    ...(METHOD_RE.test(method) && !GENERIC_METHOD_RE.test(method) ? [] : [gate("symptom-coverage-method-generic", method || "(empty)")]),
-  ];
-}
-
-// The entry points the QA mapped itself: `- ` lines of `## Access map (QA)` other than `partial:` and `unimplemented intent:`.
-function accessMapCount(text) {
-  const lines = bodyLines(text, "## Access map (QA)");
-  if (lines === null) return null;
-  return lines.filter((line) => line.startsWith("- ") && !/^(?:partial:|unimplemented intent:)/.test(line.slice(2).trim())).length;
-}
-
-const SECOND_NUMBER_RE = String.raw`\s*[-/+~–—]\s*\d|\s+(?:of|or|to|out of|de|ou|em|a)\s*\d`;
-
-// The leading integer of a coverage count field (optionally prefixed by its own `<letter>=`), or null when it has none or it is followed by a second number.
-function leadingCount(field, letter) {
-  const match = new RegExp(`^(?:${letter}\\s*=\\s*)?(\\d+)(?!\\w|[.,]\\d|${SECOND_NUMBER_RE})`, "i").exec(plainValue(field));
-  return match ? Number(match[1]) : null;
-}
-
-// The evidence text of one count field: its parsed number, `(empty)` or the unparsed field.
-function countEvidence(field, count) {
-  if (count !== null) return String(count);
-  return field === "" ? "(empty)" : `(unparsed: "${field}")`;
-}
-
-// The N/M gate of the QA's `Usage coverage:` line against the plan's scenarios and its own access map.
-function usageCountGates(ctx, { value, scenarios }) {
-  if (value === null) return [gate("usage-coverage-nm-mismatch", "line absent")];
-  const mapped = accessMapCount(ctx.text);
-  if (mapped === null) return [gate("usage-coverage-nm-mismatch", "## Access map (QA) absent")];
-  const [n = "", m = ""] = value.split(" · ").map((field) => field.trim());
-  const nCount = leadingCount(n, "N");
-  const mCount = leadingCount(m, "M");
-  const holds = nCount === scenarios.length && mCount === mapped;
-  return holds ? [] : [gate("usage-coverage-nm-mismatch", `N=${countEvidence(n, nCount)}/${scenarios.length} M=${countEvidence(m, mCount)}/${mapped}`)];
-}
-
-// The value of one `<label> <value>` field of the `Usage coverage:` line, or null when the field is absent.
-function usageField(value, label) {
-  const field = (value ?? "").split(" · ").find((candidate) => candidate.trim().toLowerCase().startsWith(label));
-  return field === undefined ? null : field.trim().slice(label.length).trim();
-}
-
-// The `divergences:` and `unconfirmed decisions:` fields the QA left absent or empty.
-function usageFieldGates(value) {
-  if (value === null) return [];
-  return ["divergences:", "unconfirmed decisions:"]
-    .map((label) => ({ label, field: usageField(value, label) }))
-    .filter(({ field }) => field === null || field === "")
-    .map(({ label, field }) => gate("usage-coverage-divergences-empty", `${label} ${field === null ? "field absent" : "(empty)"}`));
-}
-
-// The bullets of the plan's `**What to avoid:**` block and `## What to avoid` section.
-function avoidItems(plan) {
-  const lines = unfencedLines(plan);
-  const start = lines.findIndex((line) => line.trim().startsWith("**What to avoid:**"));
-  const block = [];
-  for (const line of start < 0 ? [] : lines.slice(start + 1)) {
-    if (line.trim() !== "" && !line.startsWith("- ")) break;
-    block.push(line);
-  }
-  return [...block, ...(bodyLines(plan, "## What to avoid") ?? [])]
-    .filter((line) => line.startsWith("- "))
-    .map((line) => line.slice(2).trim())
-    .filter(Boolean);
-}
-
-const OPERATOR_LABEL_RE = /unconfirmed by the operator/i;
-const HELD_NEGATION_RE = /(?:\b(?:not|no|never|non|un)|n't)[\s-]*$/i;
-const QUOTED_SPAN_RE = /`[^`]*`|"[^"]*"|“[^”]*”/g;
-const BESIDE_HELD = "[\\s\\p{Extended_Pictographic}\\uFE0F]*";
-const WORD_BEFORE_RE = new RegExp(`[\\p{L}\\p{N}_]${BESIDE_HELD}$`, "u");
-const ITEM_ID_BEFORE_RE = new RegExp(`\\b[A-Z]{1,3}\\d+[a-z]?${BESIDE_HELD}$`, "u");
-const WORD_AFTER_RE = new RegExp(`^${BESIDE_HELD}[\\p{L}\\p{N}_]`, "u");
-
-// The text of a risk line without its bullet, its quoted spans and its bold markers.
-function verdictText(line) {
-  return line.trim().replace(/^[-*+]\s+/, "").replace(QUOTED_SPAN_RE, " ").replaceAll("**", "");
-}
-
-// Whether the `HELD` at `at` is set off from the prose: no word right before it (an item id such as `R2` or `PM1` is not prose) or no word right after it; spaces and emoji in between are skipped.
-function setOffFromProse(text, at) {
-  const before = text.slice(0, at);
-  return !WORD_BEFORE_RE.test(before) || ITEM_ID_BEFORE_RE.test(before) || !WORD_AFTER_RE.test(text.slice(at + "HELD".length));
-}
-
-// Whether a risk line states a `HELD` verdict: a standalone `HELD` set off from the prose, not negated, not quoted, on a line not labelled unconfirmed by the operator.
-function heldVerdict(line) {
-  if (OPERATOR_LABEL_RE.test(line)) return false;
-  const text = verdictText(line);
-  return [...text.matchAll(/\bHELD\b/g)].some(({ index }) => !HELD_NEGATION_RE.test(text.slice(0, index)) && setOffFromProse(text, index));
-}
-
-// A risk line of the QA with a `HELD` verdict that names a pipeline-sourced scenario or a forbidden item of the plan.
-function heldOnPipelineGates(ctx, { risks, scenarios }) {
-  const names = scenarios.filter((line) => line.includes("source=pipeline")).map((line) => line.slice(2).split(" · ")[0].trim());
-  const markers = ["source=pipeline", "what to avoid", ...names, ...avoidItems(ctx.plan)].map((marker) => marker.toLowerCase()).filter(Boolean);
-  return risks
-    .filter((line) => heldVerdict(line) && markers.some((marker) => line.toLowerCase().includes(marker)))
-    .map((line) => gate("usage-coverage-held-on-pipeline", line.trim()));
-}
-
-// Whether the plan asks the usage coverage audit: a `## Usage coverage` section or an always-gate class.
-function auditsUsage(plan) {
-  return sectionOf(plan, "## Usage coverage") !== null || declaresAlwaysGate(plan);
-}
-
-// The usage-coverage gates of the QA and its open unconfirmed decisions; the held-on-pipeline gate reads only the analyst's risk lines.
-function usageAudit(ctx, risks) {
-  if (!auditsUsage(ctx.plan)) return { gates: [], open: [] };
-  const scenarios = (bodyLines(ctx.plan, "## Usage coverage") ?? []).filter((line) => line.startsWith("- "));
-  const value = labelledValue(risks, "Usage coverage:");
-  const unconfirmed = usageField(value, "unconfirmed decisions:");
-  const analystRisks = bodyLines(ctx.analystText, "## Validated risks") ?? [];
-  return {
-    gates: [...usageCountGates(ctx, { value, scenarios }), ...usageFieldGates(value), ...heldOnPipelineGates(ctx, { risks: analystRisks, scenarios })],
-    open: unconfirmed && !/^none$/i.test(unconfirmed) ? [`unconfirmed decisions — ${unconfirmed}`] : [],
-  };
-}
-
 // Every item of `## Invalidated assumptions` other than `None`.
 function invalidatedItems(text) {
   const lines = (bodyLines(text, "## Invalidated assumptions") ?? []).map((line) => line.trim()).filter(Boolean);
@@ -637,15 +364,18 @@ function invalidatedItems(text) {
   return (bullets.length > 0 ? bullets : lines).map((line) => line.replace(/^[-*]\s+/, "").trim()).filter((item) => !/^none\b/i.test(plainValue(item)));
 }
 
-// The facts of the QA report: its coverage gates, its open decisions and its invalidated assumptions.
+// One `<label> — <value>` per filled `omitted:`, `divergences:` or `unconfirmed decisions:` line of `## Validated risks` other than `none`.
+function qaOpenItems(text) {
+  const risks = bodyLines(text, "## Validated risks") ?? [];
+  return QA_OPEN_LABELS.flatMap((label) => {
+    const value = fieldValue(risks, label);
+    return isFilled(value) && !NONE_VALUE_RE.test(plainValue(value)) ? [`${label} — ${value}`] : [];
+  });
+}
+
+// The facts of the QA report: its open lines and its invalidated assumptions.
 function qaFacts(ctx) {
-  const risks = bodyLines(ctx.text, "## Validated risks") ?? [];
-  const usage = usageAudit(ctx, risks);
-  return {
-    gates: [...symptomCoverageGates(ctx, risks), ...usage.gates],
-    open: usage.open,
-    invalidated: invalidatedItems(ctx.text),
-  };
+  return { gates: [], open: qaOpenItems(ctx.text), invalidated: invalidatedItems(ctx.text) };
 }
 
 // The rows of the runtime's acceptance table: scenario, result and evidence.
@@ -716,7 +446,7 @@ function verdictSectionGaps(ctx) {
 function missingParts(ctx) {
   const { artifact, text } = ctx;
   const absent = [...artifact.sections.filter((heading) => sectionOf(text, heading) === null), ...verdictSectionGaps(ctx)];
-  const coverage = ctx.check === "03" ? coverageMissing(ctx) : [];
+  const coverage = ctx.check === "03" ? [...coverageMissing(ctx), ...(unreadableQuestion(ctx.plan) ? [UNREADABLE_QUESTION] : [])] : [];
   if (absent.length + coverage.length > 0) return [...absent, ...coverage];
   if (text.trim() === "") return [`${artifact.file} (not written)`];
   const under = artifact.firstLineUnder;
@@ -733,7 +463,7 @@ function contractLines(first, facts) {
     ...(facts.gates ?? []).map(({ code, evidence }) => `GATE: ${code} — ${evidenceLine(evidence)}`),
     ...(facts.open ?? []).map((text) => `OPEN: ${flatLine(text)}`),
     ...(facts.typeMismatch ? [`TYPE-MISMATCH: ${facts.typeMismatch}`] : []),
-    ...(facts.confirm ? [CONFIRM_LINE] : []),
+    ...(facts.confirm ? [facts.confirm] : []),
     ...(facts.qaMode ? [`QA: ${facts.qaMode}`] : []),
     ...(facts.qaStage ? [`QA-STAGE: ${facts.qaStage}`] : []),
     ...(facts.invalidated ?? []).map((text) => `INVALIDATED: ${flatLine(text)}`),
@@ -747,7 +477,7 @@ function memoLineOf(check, lines, verdict) {
   const [first] = lines;
   if (first !== "OK" && first !== "GENERATED") return first;
   const gateLine = lines.find((line) => line.startsWith("GATE: "));
-  const pause = lines.find((line) => line.startsWith("TYPE-MISMATCH: ") || line === CONFIRM_LINE || line.startsWith("INVALIDATED: "));
+  const pause = lines.find((line) => line.startsWith("TYPE-MISMATCH: ") || line.startsWith(CONFIRM_LINE) || line.startsWith("INVALIDATED: "));
   const failing = FAILING[check]?.includes(verdict) ? `VERDICT: ${verdict}` : null;
   return gateLine ?? pause ?? failing ?? first;
 }
@@ -766,7 +496,6 @@ function resultOf({ check, first, facts = {}, type = null, evaluated = "" }) {
     completes: passed && !(LOOP_BACK[check] ?? []).includes(verdict),
     memoLine: memoLineOf(check, lines, verdict),
     script: facts.script ?? [],
-    usageCoverageCleared: facts.usageCoverageCleared ?? null,
   };
 }
 
@@ -814,32 +543,24 @@ export function repairedLine(file, closed) {
   return `REPAIRED: the code fence of ${roundName(closed.round)} opened at line ${closed.line} of ${file} never closed; the runtime appended \`${closed.marker}\` at line ${closed.at}`;
 }
 
-// The text the held-on-pipeline gate reads: the analyst's round a consolidation lists first, else the round read.
-function analystTextOf(raw, text) {
-  const numbers = consolidatedRoundsOf(lastRound(raw));
-  if (numbers === null) return text;
-  const analyst = roundsOf(raw).find((round) => round.number === numbers[0]);
-  return analyst === undefined ? text : normalize(analyst.text);
-}
-
 // The facts of the QA analyst stage: its verdict and whether stage B has provers to launch.
 function analystFacts(ctx) {
   return { verdict: ctx.verdict, qaStage: firstItem(ctx.text, "## Break hypotheses") === null ? "skip" : "provers" };
 }
 
-// The run files a check may read besides its own artifact: the request, the triage, the explore map and the plan.
-export const CHECK_CONTEXT_FILES = Object.freeze(["00-brief.md", "01-triage.md", "02-explore.md", "03-plan.md"]);
+// The run files a check may read besides its own artifact: the triage and the plan.
+export const CHECK_CONTEXT_FILES = Object.freeze(["01-triage.md", "03-plan.md"]);
 
-// Evaluates the artifact of one phase (or the analyst stage of check 05) against the check contract; `texts` maps each run file name to its content, `state` is the run's state.json, `prompt` the job's own prompt text.
-export function evaluateCheck({ check, stage = null, texts = {}, state = null, gaps = [], prompt = null }) {
+// Evaluates the artifact of one phase (or the analyst stage of check 05) against the check contract; `texts` maps each run file name to its content, `state` is the run's state.json, `operatorNote` the job's current answer.
+export function evaluateCheck({ check, stage = null, texts = {}, state = null, gaps = [], operatorNote = null }) {
   const artifact = checkedArtifact(check, stage);
   const read = (file) => normalize(texts[file]);
   const raw = texts[artifact.file] ?? "";
   const text = artifact.rounds ? normalize(lastRound(raw)) : read(artifact.file);
   const triage = read("01-triage.md");
   const type = (check === "01" ? briefType(text) : null) ?? runType(state, triage);
-  const base = { check, artifact, text, triage, brief: read("00-brief.md"), explore: read("02-explore.md"), plan: read("03-plan.md"), type, prompt };
-  const ctx = { ...base, analystText: artifact.rounds ? analystTextOf(raw, text) : text, verdict: artifact.verdict ? readVerdict(text, artifact.verdict) : null };
+  const base = { check, artifact, text, triage, plan: read("03-plan.md"), type, state, operatorNote };
+  const ctx = { ...base, verdict: artifact.verdict ? readVerdict(text, artifact.verdict) : null };
   const common = { check: stage === null ? check : `${check}-${stage}`, type: ctx.type, evaluated: text };
   const defects = artifact.rounds ? [...new Set([...gaps, ...roundDefectParts(artifact.file, raw)])] : gaps;
   if (defects.length > 0) return resultOf({ ...common, first: `MISSING: ${defects.join("; ")}` });

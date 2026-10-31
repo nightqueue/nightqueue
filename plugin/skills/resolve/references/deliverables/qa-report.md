@@ -44,15 +44,18 @@ Your independent enumeration of the entry points of the target code, written BEF
 {{/HAS_USAGE_COVERAGE}}
 ## Validated risks
 {{#IS_BUG}}
-First line: `Symptom coverage: <N> · <command/criterion of your re-enumeration> · omitted: <file:line | none>`. N = the total lines of the plan's ## Symptom coverage table (covered + not-covered), NOT the vectors you confirmed in the diff: a not-covered vector counts towards N even without being in the diff, and an omitted vector you discovered does not enter N, only `omitted:`.
+`omitted: <file:line, …|none>` — the vectors you found outside the plan's ## Symptom coverage table.
 {{/IS_BUG}}
 {{#HAS_USAGE_COVERAGE}}
-Next line (the first, without the line above): `Usage coverage: <N> · <M> · divergences: <file:line, …|none> · unconfirmed decisions: <item, …|none>`. N = the scenario lines (starting with `- `) inside the plan's ## Usage coverage, from the heading to the next `## `, outside a code block — the **Diff axis:**, **Always-gate class:** and **Scenarios consulted:** lines do NOT count. M = the entry-point lines of your ## Access map (QA) — the `partial:` and `unimplemented intent:` lines do NOT count. Both counts are audited with these same definitions.
+`divergences: <file:line, …|none>` — where your ## Access map (QA) and the plan differ.
+`unconfirmed decisions: <item, …|none>` — the plan's decisions no named consumer proves or breaks.
 {{/HAS_USAGE_COVERAGE}}
+Each of these lines, when filled, is an open item of the delivery and never stops the run.
 Then the HELD/BROKE result of each risk of the plan, of the regression in callers and of the Robustness test (an analysis writes "→ hypothesis H<n>" for a runtime one).
 
 ## Invalidated assumptions
 (the assumption knocked down + the evidence; or `None`)
+List only assumptions proven false; one that held is not an item here.
 
 ## Generated PoCs
 (the *.poc.test.* / *.fuzz.test.* / *.regression.test.* files created under `{{RUN_DIR}}/poc/`, with the vector each one attacks; or `None — nothing exercisable at runtime`)

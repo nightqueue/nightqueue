@@ -1,0 +1,5 @@
+OK
+VERDICT: PROCEED
+GATE: brief-type-invalid — bug/error | feature/refactor
+recorded: type feature/refactor
+recorded: none (GATE: brief-type-invalid — bug/error | feature/refactor)

@@ -363,9 +363,10 @@ export async function ghPrDiffNames(url, { env = process.env, execFileImpl = exe
 }
 
 // Opens a pull request for a branch already on the remote; the URL it answers is information, never the record of the run.
-export function ghPrCreate({ title, bodyFile, head, base, cwd, env = process.env, spawnSyncImpl = spawnSync } = {}) {
+export function ghPrCreate({ title, bodyFile, head, base, draft = false, cwd, env = process.env, spawnSyncImpl = spawnSync } = {}) {
   const args = ["pr", "create", "--title", String(title ?? ""), "--body-file", String(bodyFile ?? ""), "--head", String(head ?? "")];
   if (base) args.push("--base", String(base));
+  if (draft === true) args.push("--draft");
   const result = runGh(args, { env, spawnSyncImpl, cwd });
   const lines = result.stdout.split("\n").map((line) => line.trim()).filter(Boolean);
   return { ok: result.ok, url: result.ok ? (lines.at(-1) ?? null) : null, stderr: result.stderr, missing: result.missing };
@@ -389,6 +390,18 @@ export function ghPrUrlOfBranch({ head, cwd, env = process.env, spawnSyncImpl = 
 // Replaces the body of an existing pull request with the content of a file.
 export function ghPrEditBody({ url, bodyFile, cwd, env = process.env, spawnSyncImpl = spawnSync } = {}) {
   const result = runGh(["pr", "edit", String(url ?? ""), "--body-file", String(bodyFile ?? "")], { env, spawnSyncImpl, cwd });
+  return { ok: result.ok, stderr: result.stderr };
+}
+
+// Turns an existing pull request back into a draft.
+export function ghPrConvertToDraft({ url, cwd, env = process.env, spawnSyncImpl = spawnSync } = {}) {
+  const result = runGh(["pr", "ready", String(url ?? ""), "--undo"], { env, spawnSyncImpl, cwd });
+  return { ok: result.ok, stderr: result.stderr };
+}
+
+// Turns an existing draft pull request ready for review.
+export function ghPrMarkReady({ url, cwd, env = process.env, spawnSyncImpl = spawnSync } = {}) {
+  const result = runGh(["pr", "ready", String(url ?? "")], { env, spawnSyncImpl, cwd });
   return { ok: result.ok, stderr: result.stderr };
 }
 
