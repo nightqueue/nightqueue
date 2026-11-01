@@ -1,6 +1,6 @@
 ## Deliver
 
-`05-qa.md` holds three kinds of `## Round`: a lite or analyst round, written by its lane; a prover round, appended by the runtime through `nightqueue run append 05`; and the consolidated round, written by `nightqueue run check 05` (`source: runtime consolidation`). Never write a consolidated round yourself.
+`05-qa.md` holds four kinds of `## Round`: a triage round (`source: qa-triage`) and a lite or analyst round, each written by its lane; a prover round, appended by the runtime through `nightqueue run append 05`; and the consolidated round, written by `nightqueue run check 05` (`source: runtime consolidation`). Never write a consolidated round yourself.
 
 {{#GROUP}}
 Write the PoC files assigned to your group, with their assigned names, under `{{RUN_DIR}}/poc/` — never in the repo. Your round draft carries, in this order and with these headings (the runtime stamps its `source: prover · group:` line, never write one):

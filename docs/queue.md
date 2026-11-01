@@ -210,12 +210,13 @@ code change.` followed by the run's conclusion, with no PR field, no link and th
 **Every job runs the one pipeline.** There is no risk tier: every run executes every
 phase (triager, exploration, architect, coder, QA and verifier), each agent on its own
 model (the defaults of `src/queue/routing.mjs`, overridable per project with
-`nightqueue project models`, see [CLI](cli.md)). How deep the QA goes is decided by the
-plan, not by the operator: `run check 03` answers `QA: full` when the plan holds two or
-more 🔴 risks or declares an always-gate class, else `QA: lite`. `queue add --tier` and
+`nightqueue project models`, see [CLI](cli.md)). How deep the QA goes is decided from the
+real change, not by the operator: a short triage lane classifies the diff and
+`run check 05 --stage triage` answers `QA-MODE: skip`, `lite` or `full`. A `skip` launches no
+attack lane, and the verifier always runs. `queue add --tier` and
 the `tier` parameter of `queue_add` were removed: a value is refused with
 ``\`tier\` was removed: every job runs the one /resolve pipeline (one model per agent, QA
-mode chosen by `run check 03`); drop it - a client still sending it is an older
+mode chosen by `run check 05 --stage triage`); drop it - a client still sending it is an older
 nightqueue plugin, update it``, and nothing is registered or queued. A prompt queued by an
 older runtime may still carry a `Tier:` line; the title ignores it and the run does not
 read it.

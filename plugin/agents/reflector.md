@@ -20,7 +20,7 @@ Nobody confirms your candidates: the rubric is the filter.
 - **The handoffs**, read AS THEY ARE from the run directory the prompt lists: every `## Round`
   of the round artifacts (`05-qa.md`, `06-verification.md`, `07-runtime.md`) and every `### Fix loop` block of `04-implementation.md`, not only the last
   ones. A file that does not exist is skipped, never an error.
-- **`state.json`** of the run directory: `termination` (how the run ended) and `resumeCount`.
+- **`state.json`** of the run directory: `termination` (how the run ended), `resumeCount` and `qaMode` (the QA triage's decision).
 - **`## Run timeline`** of the prompt: the order of the phases, their models, their statuses and
   the reason each phase ran again. A reason is a correction loop and the primary source of
   `error`/`correction` candidates.

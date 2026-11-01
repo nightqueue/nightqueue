@@ -11,7 +11,7 @@ import { ghPrUrlOfBranch } from "../src/host/gh.mjs";
 import { classifyJobResult } from "../src/queue/classify.mjs";
 import { provenEditedPrUrls } from "../src/queue/edit-proof.mjs";
 import { clearRunOutcome, readRunState } from "../src/queue/resume.mjs";
-import { recordOutcome, recordPrUrl, recordRunFields, recordTermination } from "../src/queue/run-state.mjs";
+import { recordOutcome, recordPrUrl, recordQaMode, recordRunFields, recordTermination } from "../src/queue/run-state.mjs";
 import { codeChangePublishedEvent, resultEvent, systemInitEvent, toNdjson } from "../test-support/streams.mjs";
 import { initGitRepo } from "../test-support/git.mjs";
 import { FAKE_GH_PR_URL, isolatedHostVars } from "../test-support/host.mjs";
@@ -41,6 +41,13 @@ const BODY = [
   "Not tested: nothing else; the helper is pure.",
   "",
 ].join("\n");
+
+const SKIP_REASON = "only documentation text changed.";
+
+// The body with the line placed right under its QA heading.
+function bodyWithQaLine(line, body = BODY) {
+  return body.replace("## QA\n", `## QA\n\n${line}\n`);
+}
 
 // A git environment that depends on nothing of the machine.
 function gitVars() {
@@ -148,6 +155,64 @@ test("an invalid body commits nothing and pushes nothing", async (t) => {
   assert.equal(out.at(-1), "nothing was committed or pushed: fix the problems above and call `nightqueue run publish` again");
   assert.equal(commitCount(worktree), before, "an invalid body still committed");
   assert.deepEqual(ghCalls(env), []);
+});
+
+test("a recorded QA skip refuses a body without its exact line, whatever the agent wrote instead", async (t) => {
+  const bodies = [
+    ["absent", BODY],
+    ["another-reason", bodyWithQaLine("QA: skipped — it looked fine to me.")],
+    ["fenced", bodyWithQaLine(`\`\`\`\nQA: skipped — ${SKIP_REASON}\n\`\`\``)],
+    ["commented", bodyWithQaLine(`<!-- QA: skipped — ${SKIP_REASON} -->`)],
+  ];
+  for (const [name, body] of bodies) {
+    const { env, id, worktree, dir, projectId } = makeRun(t, `publish-skip-${name}`);
+    recordQaMode({ projectId, slug: SLUG, mode: "skip", reason: SKIP_REASON, env });
+    writeFileSync(join(dir, "pr-body.md"), body);
+    const before = commitCount(worktree);
+
+    const { code, out } = await runCli(env, id, publishArgs(dir));
+
+    assert.equal(code, 1, name);
+    assert.ok(out.includes(`REJECTED: the QA of this run was skipped, so the body carries this exact line under its test section's heading: QA: skipped — ${SKIP_REASON}`), out.join("\n"));
+    assert.equal(commitCount(worktree), before, `${name} still committed`);
+    assert.deepEqual(ghCalls(env), []);
+  }
+});
+
+test("a recorded QA skip publishes a body with its exact line", async (t) => {
+  const { env, id, dir, projectId } = makeRun(t, "publish-skip-exact");
+  recordQaMode({ projectId, slug: SLUG, mode: "skip", reason: SKIP_REASON, env });
+  writeFileSync(join(dir, "pr-body.md"), bodyWithQaLine(`QA: skipped — ${SKIP_REASON}`));
+
+  const { code, out, errText } = await runCli(env, id, publishArgs(dir));
+
+  assert.equal(code, 0, `${out.join("\n")}\n${errText}`);
+  assert.ok(out.includes(`PR: ${FAKE_GH_PR_URL}`), out.join("\n"));
+});
+
+test("a skip reason that names the slug or a bare reference never makes the owed line unpublishable, and the rest of the body is still read", async (t) => {
+  const reason = `covered by test/${SLUG}.test.mjs, see #12.`;
+  const { env, id, dir, projectId } = makeRun(t, "publish-skip-words");
+  recordQaMode({ projectId, slug: SLUG, mode: "skip", reason, env });
+  writeFileSync(join(dir, "pr-body.md"), bodyWithQaLine(`QA: skipped — ${reason}`).replace("## Changes\n", "## Changes\n\nSee #12.\n"));
+  const refused = await runCli(env, id, publishArgs(dir));
+  assert.equal(refused.code, 1, "a bare reference outside the owed line still counts");
+  assert.ok(refused.out.some((line) => line.includes("#12")), refused.out.join("\n"));
+
+  writeFileSync(join(dir, "pr-body.md"), bodyWithQaLine(`QA: skipped — ${reason}`));
+  const { code, out, errText } = await runCli(env, id, publishArgs(dir));
+  assert.equal(code, 0, `${out.join("\n")}\n${errText}`);
+});
+
+test("a `lite`, a `full` or no recorded QA mode owes no skip line", async (t) => {
+  for (const mode of ["lite", "full", null]) {
+    const { env, id, dir, projectId } = makeRun(t, `publish-no-skip-${mode}`);
+    if (mode !== null) recordQaMode({ projectId, slug: SLUG, mode, reason: "a real reason.", env });
+
+    const { code, out, errText } = await runCli(env, id, publishArgs(dir));
+
+    assert.equal(code, 0, `${mode}: ${out.join("\n")}\n${errText}`);
+  }
 });
 
 test("a message with a `Co-Authored-By:` trailer is rejected before anything is committed or pushed", async (t) => {

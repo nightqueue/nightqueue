@@ -69,7 +69,7 @@ test("`project models` shows every agent on its default, sets and unsets an over
 test("an unknown agent, the merger, a model outside the aliases or a bad assignment is refused, and nothing is stored", async (t) => {
   const { env, projectId } = makeModelsHome(t, "models-refusals");
   const cases = [
-    [["--set", "nobody=opus"], "unknown agent `nobody`; accepted: triager, explore, architect, coder, qa-analyst, qa-prover, verifier, reflector"],
+    [["--set", "nobody=opus"], "unknown agent `nobody`; accepted: triager, explore, architect, coder, qa-triage, qa-analyst, qa-prover, verifier, reflector"],
     [["--set", "merger=opus"], "unknown agent `merger`"],
     [["--set", "coder=gpt"], "unknown model `gpt`; accepted: opus, sonnet, haiku"],
     [["--set", "coder"], "`coder` is not <agent>=<model>"],

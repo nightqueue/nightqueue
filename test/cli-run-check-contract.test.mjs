@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
@@ -8,7 +8,7 @@ import { run } from "../src/cli/index.mjs";
 import { phasePrompt } from "../src/mcp/phase-prompt.mjs";
 import { openDb } from "../src/memory/db.mjs";
 import { addJob, getJob } from "../src/memory/jobs.mjs";
-import { evaluateCheck, qaModeOf } from "../src/queue/check-contract.mjs";
+import { evaluateCheck } from "../src/queue/check-contract.mjs";
 import { composeGateNotice, gateDigestOf } from "../src/queue/gate-notice.mjs";
 import { questionDigest } from "../src/queue/gate-question.mjs";
 import { jobOperatorNote, jobPromptText } from "../src/queue/job-prompt.mjs";
@@ -17,7 +17,7 @@ import { clearRunOutcome, decideResume, readRunState } from "../src/queue/resume
 import { applyRetry } from "../src/queue/retry.mjs";
 import { provisionalSlug } from "../src/queue/run-slug.mjs";
 import { recordOutcome, recordPhaseDone, recordRunFields, recordTermination, RUNTIME_AUTHOR } from "../src/queue/run-state.mjs";
-import { ensureProject, makeHome, makeProject } from "../test-support/memory.mjs";
+import { ensureProject, makeDir, makeHome, makeProject } from "../test-support/memory.mjs";
 
 const FIXTURES = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "check");
 const SLUG = "check-contract";
@@ -350,29 +350,403 @@ test("table cells keep a pipe inside a code span, and a lone backtick is plain t
   const texts = readFixture("coverage-table-pipes").texts;
   const plan = texts["03-plan.md"].replace("| 2 | a \\| b path |", "| 2 | a ` b path |");
   const result = evaluateCheck({ check: "03", texts: { ...texts, "03-plan.md": plan }, state: { type: "bug/error" } });
-  assert.deepEqual(result.lines, ["OK", "QA: lite"]);
+  assert.deepEqual(result.lines, ["OK"]);
 });
 
-test("the QA mode counts 🔴 risk items of `## Identified risks` only: list items and table body rows", () => {
-  const risks = (body) => `## Implementation plan\n- x\n\n## Identified risks\n${body}`;
-  assert.equal(qaModeOf(risks("| ID | 🔴 severity | Scenario |\n|---|---|---|\n| R1 | 🔴 | a |\n| R2 | 🟡 | b |\n")), "lite", "a 🔴 table header is no risk");
-  assert.equal(qaModeOf(risks("| ID | Severity | Scenario |\n|---|---|---|\n| R1 | 🔴 | a |\n| R2 | 🔴 | b |\n")), "full");
-  assert.equal(qaModeOf(risks("* [R1] 🔴 a\n+ [R2] 🔴 b\n")), "full");
-  assert.equal(qaModeOf(risks("- [R1] 🔴 a\n<!-- - [R2] 🔴 b -->\n")), "lite", "a commented-out risk is not counted");
-  assert.equal(qaModeOf(`${risks("- [R1] 🔴 a\n")}\n## Notes\n- [R2] 🔴 b\n`), "lite", "a 🔴 in a later section is not a risk");
-  assert.equal(qaModeOf("## Implementation plan\n- x\n"), "lite", "a plan without risks is lite");
-  assert.equal(qaModeOf("  **Always-gate class:** yes — rows change\n"), "full");
-  assert.equal(qaModeOf("**Always-gate class:** no\n"), "lite");
-});
-
-test("the QA line never changes completion nor the memo line of check 03", () => {
-  const { texts } = readFixture("qa-full-risks");
-  const result = evaluateCheck({ check: "03", texts, state: { type: "feature/refactor" } });
+test("check 03 prints no QA line, whatever always-gate class and 🔴 risks the plan declares", () => {
+  const plan = "## Implementation plan\n- x\n\n**Always-gate class:** yes — rows change\n\n## Assumptions\n- a\n\n## Pre-mortem\n- b\n\n## Identified risks\n- [R1] 🔴 a\n- [R2] 🔴 b\n";
+  const result = evaluateCheck({ check: "03", texts: { "03-plan.md": plan }, state: { type: "feature/refactor" } });
+  assert.deepEqual(result.lines, ["OK"]);
+  assert.equal(result.qaMode, null);
   assert.equal(result.completes, true);
-  assert.equal(result.memoLine, "OK");
-  const confirm = evaluateCheck({ check: "03", texts: readFixture("confirm").texts, state: { type: "bug/error" } });
-  assert.deepEqual(confirm.lines.slice(-2), ["CONFIRM: requires-user-confirmation — approve fixing the retry path only?", "QA: lite"]);
-  for (const check of ["05", "06", "07"]) assert.equal(evaluateCheck({ check, texts }).lines.some((line) => line.startsWith("QA: ")), false, check);
+});
+
+// ---- The QA triage stage: `run check 05 --stage triage`.
+
+const TRIAGE_ARGS = ["--stage", "triage"];
+
+// A triage round of the given number, from its classification, its new risk and its QA mode line.
+function triageRound(number, { kinds = "- copy/docs: README.md", risk = "none", mode = "skip — only text changed." } = {}) {
+  return `## Round ${number}\nsource: qa-triage\n\n## Diff classification\n${kinds}\n\n## New risk\n${risk}\n\n## QA mode\n${mode}\n`;
+}
+
+// The first line check 05 --stage triage answers for a whole `05-qa.md`.
+function triageFirstLine(qa) {
+  return evaluateCheck({ check: "05", stage: "triage", texts: { "05-qa.md": qa } }).first;
+}
+
+test("a skip records the mode and one SKIPPED qa entry, and a second check leaves both untouched", async (t) => {
+  const seeded = seedRun(t, "triage-skip-record", readFixture("qa-triage-skip"));
+  const why = "only documentation text changed, with no runtime effect.";
+  await runCheck(seeded.env, "05", TRIAGE_ARGS);
+  const first = stateOf(seeded);
+  assert.deepEqual({ ...first.qaMode, at: null }, { mode: "skip", reason: why, at: null });
+  assert.equal(typeof first.qaMode.at, "string");
+  assert.deepEqual({ ...first.phases[0], at: null }, { phase: "qa", at: null, artifact: "05-qa.md", verdict: "SKIPPED", note: why, reason: `QA skipped: ${why}`, by: "runtime" });
+  await nextMillisecond();
+  const again = await runCheck(seeded.env, "05", TRIAGE_ARGS);
+  assert.deepEqual(again.out.slice(-2), ["recorded: phase_done qa SKIPPED (already)", "recorded: qa_mode skip (already)"]);
+  const second = stateOf(seeded);
+  assert.deepEqual(second.qaMode, first.qaMode);
+  assert.deepEqual(second.phases, first.phases);
+});
+
+test("a skip whose mode write was lost records it on the next check, without a second qa entry", async (t) => {
+  const seeded = seedRun(t, "triage-skip-partial", readFixture("qa-triage-skip"));
+  await runCheck(seeded.env, "05", TRIAGE_ARGS);
+  const path = join(seeded.dir, "state.json");
+  const { qaMode: _lost, ...withoutMode } = stateOf(seeded);
+  writeFileSync(path, JSON.stringify(withoutMode));
+  const { out } = await runCheck(seeded.env, "05", TRIAGE_ARGS);
+  assert.ok(out.includes("recorded: qa_mode skip"), out.join("\n"));
+  assert.equal(stateOf(seeded).phases.length, 1);
+});
+
+test("a lite or full mode records the mode and no phase, so `run check 05` keeps its single qa entry", async (t) => {
+  for (const [name, mode] of [["qa-triage-lite-logic", "lite"], ["qa-triage-full-migration", "full"]]) {
+    const seeded = seedRun(t, name, readFixture(name));
+    await runCheck(seeded.env, "05", TRIAGE_ARGS);
+    const state = stateOf(seeded);
+    assert.equal(state.qaMode.mode, mode);
+    assert.equal(state.phases, undefined);
+  }
+});
+
+test("a refused triage records neither a mode nor a phase", async (t) => {
+  for (const name of ["qa-triage-missing-section", "qa-triage-bad-word", "qa-triage-migration-not-full", "qa-triage-no-round"]) {
+    const seeded = seedRun(t, name, readFixture(name));
+    const { out } = await runCheck(seeded.env, "05", TRIAGE_ARGS);
+    assert.equal(out.length, 1, out.join("\n"));
+    const state = stateOf(seeded);
+    assert.equal(state.qaMode, undefined);
+    assert.equal(state.phases, undefined);
+    assert.equal(state.checks["05-triage"].completed, false);
+  }
+});
+
+test("the triage gate refuses an empty section, a placeholder reason and every contradicting mode, and reads what the lane wrote", () => {
+  assert.equal(triageFirstLine(triageRound(1, { risk: "" })), "MISSING: ## New risk (empty)");
+  assert.equal(triageFirstLine(triageRound(1, { kinds: "" })), "MISSING: ## Diff classification (empty)");
+  assert.equal(triageFirstLine(triageRound(1, { mode: "" })), "MISSING: ## QA mode (empty)");
+  for (const mode of ["skip — <why>", "skip", "skip — ", "Skip — text", "- skip — text"]) {
+    assert.ok(triageFirstLine(triageRound(1, { mode })).startsWith("MISSING: ## QA mode: "), mode);
+  }
+  for (const kind of ["data/migration", "route/endpoint", "auth/permission", "payment", "concurrency", "external-input parsing", "personal data"]) {
+    const kinds = `- **${kind}**: \`src/a.mjs\``;
+    assert.match(triageFirstLine(triageRound(1, { kinds, mode: "skip — small." })), new RegExp(`^MISSING: ## QA mode \\(skip with ${kind}`), kind);
+    assert.match(triageFirstLine(triageRound(1, { kinds, mode: "lite — small." })), new RegExp(`^MISSING: ## QA mode \\(lite with ${kind}`), kind);
+    assert.equal(triageFirstLine(triageRound(1, { kinds, mode: "full — it asks it." })), "OK", kind);
+  }
+  assert.equal(triageFirstLine(triageRound(1, { kinds: "- data/migration: none\n- copy/docs: README.md" })), "OK", "a kind with no file is no danger");
+  const logic = { kinds: "- logic: src/a.mjs" };
+  assert.equal(triageFirstLine(triageRound(1, { ...logic, mode: "skip — `test/a.test.mjs` exercises it." })), "OK");
+  assert.ok(triageFirstLine(triageRound(1, { ...logic, mode: "skip — a test covers it." })).startsWith("MISSING: "));
+  assert.match(triageFirstLine(triageRound(1, { kinds: "- migration: db/1.sql", mode: "lite — a label off the list." })), /^MISSING: ## Diff classification \(migration is off the list: write /);
+});
+
+test("the triage gate reads the kinds in any case and refuses a label off the list unless the answer is full", () => {
+  const offList = ["Data migration: db/1.sql", "**Payments**: src/pay.mjs", "PII: src/user.mjs", "Logic changes: src/a.mjs", "code: src/a.mjs", "db/migrations/1.sql"];
+  for (const line of offList) {
+    assert.match(triageFirstLine(triageRound(1, { kinds: `- ${line}` })), /^MISSING: ## Diff classification /, line);
+    assert.match(triageFirstLine(triageRound(1, { kinds: `- ${line}`, mode: "lite — small." })), /^MISSING: ## Diff classification /, line);
+    assert.equal(triageFirstLine(triageRound(1, { kinds: `- ${line}`, mode: "full — unsure of the kind." })), "OK", line);
+  }
+  assert.match(triageFirstLine(triageRound(1, { kinds: "- Personal Data: src/user.mjs" })), /^MISSING: ## QA mode \(skip with personal data/);
+  assert.equal(triageFirstLine(triageRound(1, { kinds: "- Copy/Docs: README.md\n- other: none\n\n- none" })), "OK", "a line that lists nothing is no kind");
+});
+
+test("a logic skip needs a real test path in its sentence, never a word that merely contains test or spec", () => {
+  const refused = ["see the latest.md notes.", "by inspect.js.", "in contest.txt.", "see respect.md.", "in latest/notes.md.", "a test covers it."];
+  for (const why of refused) assert.match(triageFirstLine(triageRound(1, { kinds: "- logic: src/a.mjs", mode: `skip — ${why}` })), /the sentence must name the test's path/, why);
+  const named = ["test/a.mjs", "tests/a.py", "src/__tests__/a.js", "spec/a_spec.rb", "src/a.test.ts", "pkg/a_test.go", "test_a.py", "src/AppTest.java", "a.spec.ts"];
+  for (const path of named) assert.equal(triageFirstLine(triageRound(1, { kinds: "- logic: src/a.mjs", mode: `skip — covered by ${path}.` })), "OK", path);
+});
+
+// A logic skip round on a seeded run whose worktree holds the given files.
+function seedCitedTest(t, name, { why, files = [] }) {
+  const seeded = seedRun(t, name, { fixture: {}, texts: { "05-qa.md": triageRound(1, { kinds: "- logic: src/list.mjs", mode: `skip — ${why}` }) } });
+  const worktree = makeDir(t, `${name}-worktree`);
+  for (const file of files) {
+    mkdirSync(dirname(join(worktree, file)), { recursive: true });
+    writeFileSync(join(worktree, file), "// a file of the worktree\n");
+  }
+  recordRunFields({ projectId: seeded.projectId, slug: SLUG, fields: { worktree }, env: seeded.env });
+  return { ...seeded, worktree };
+}
+
+// Asserts the check refused the cited test with the given text and recorded neither a mode nor a phase.
+function assertSkipRefused(seeded, out, refusal) {
+  assert.equal(out.length, 1, out.join("\n"));
+  assert.match(out[0], refusal);
+  const state = stateOf(seeded);
+  assert.equal(state.qaMode, undefined);
+  assert.equal(state.phases, undefined);
+  assert.equal(state.checks["05-triage"].completed, false);
+}
+
+test("a logic skip citing a test file of the worktree is recorded", async (t) => {
+  const seeded = seedCitedTest(t, "cited-test-exists", { why: "covered by `test/list.test.mjs`.", files: ["test/list.test.mjs"] });
+  const { out } = await runCheck(seeded.env, "05", TRIAGE_ARGS);
+  assert.equal(out[0], "OK", out.join("\n"));
+  assert.equal(stateOf(seeded).qaMode.mode, "skip");
+  assert.deepEqual(stateOf(seeded).phases.map((entry) => [entry.phase, entry.verdict]), [["qa", "SKIPPED"]]);
+});
+
+test("a logic skip citing a test the worktree does not prove records no skip", async (t) => {
+  const refused = [
+    ["invented", "covered by test/does-not-exist.test.mjs.", /test\/does-not-exist\.test\.mjs is not a test file inside the worktree/],
+    ["one-of-two-invented", "covered by test/list.test.mjs and test/does-not-exist.test.mjs.", /: test\/does-not-exist\.test\.mjs is not a test file/],
+    ["existing-non-test", "covered by src/list.mjs.", /the sentence must name the test's path/],
+    ["dot-escape", "covered by ../test/list.test.mjs.", /\.\.\/test\/list\.test\.mjs is not a test file/],
+    ["inner-escape", "covered by test/../../test/list.test.mjs.", /is not a test file inside the worktree/],
+    ["absolute", "covered by /tmp/test/list.test.mjs.", /the sentence must name the test's path/],
+    ["segment-only-in-the-spelling", "covered by test/../src/list.mjs.", /test\/\.\.\/src\/list\.mjs is not a test file/],
+    ["directory", "covered by test/list.dir.", /test\/list\.dir is not a test file/],
+  ];
+  for (const [name, why, refusal] of refused) {
+    const seeded = seedCitedTest(t, `cited-${name}`, { why, files: ["test/list.test.mjs", "src/list.mjs", "test/list.dir/inner.txt"] });
+    const { out } = await runCheck(seeded.env, "05", TRIAGE_ARGS);
+    assertSkipRefused(seeded, out, refusal);
+  }
+});
+
+test("a logic skip citing a link that leaves the worktree, or points at a non-test inside it, records no skip", async (t) => {
+  const outside = makeDir(t, "cited-link-outside");
+  writeFileSync(join(outside, "real.test.mjs"), "// outside the worktree\n");
+  const seeded = seedCitedTest(t, "cited-link", { why: "covered by test/out.test.mjs and test/in.test.mjs.", files: ["src/list.mjs", "test/keep.test.mjs"] });
+  symlinkSync(join(outside, "real.test.mjs"), join(seeded.worktree, "test/out.test.mjs"));
+  symlinkSync(join(seeded.worktree, "src/list.mjs"), join(seeded.worktree, "test/in.test.mjs"));
+  const { out } = await runCheck(seeded.env, "05", TRIAGE_ARGS);
+  assertSkipRefused(seeded, out, /test\/out\.test\.mjs, test\/in\.test\.mjs is not a test file/);
+});
+
+test("a logic skip citing a documentation or non-code file with a test's shape records no skip", async (t) => {
+  const cited = ["docs/spec/overview.md", "docs/api-spec.md", "docs/tests/plan.md", "test/README.MD", "test/plan.txt", "test/data.json", "test/config.yaml", "spec/page.html", "test/list.test.snap", "test/list.test"];
+  for (const path of cited) {
+    const seeded = seedCitedTest(t, `cited-doc-${path.replace(/\W/g, "-")}`, { why: `covered by ${path}.`, files: [path] });
+    const { out } = await runCheck(seeded.env, "05", TRIAGE_ARGS);
+    assertSkipRefused(seeded, out, new RegExp(`: ${path.replace(/\./g, "\\.")} is not a test file inside the worktree`));
+  }
+});
+
+test("a logic skip citing a test under a vendored directory records no skip, at any depth and in any case", async (t) => {
+  const cited = ["node_modules/pkg/test/a.test.js", "vendor/lib/test/b.test.js", "packages/a/node_modules/p/test/c.test.js", "third_party/lib/d_test.go", ".venv/lib/site-packages/p/tests/test_e.py", "VENDOR/lib/test/f.test.js"];
+  for (const path of cited) {
+    const seeded = seedCitedTest(t, `cited-vendored-${path.replace(/\W/g, "-")}`, { why: `covered by ${path}.`, files: [path] });
+    const { out } = await runCheck(seeded.env, "05", TRIAGE_ARGS);
+    assertSkipRefused(seeded, out, new RegExp(`: ${path.replace(/\./g, "\\.")} is not a test file inside the worktree`));
+  }
+});
+
+test("a vendored test beside a real one, a link to a vendored test or to a doc, and a directory named as code record no skip", async (t) => {
+  const beside = seedCitedTest(t, "cited-beside-vendored", { why: "covered by test/list.test.mjs and node_modules/pkg/test/a.test.js.", files: ["test/list.test.mjs", "node_modules/pkg/test/a.test.js"] });
+  assertSkipRefused(beside, (await runCheck(beside.env, "05", TRIAGE_ARGS)).out, /: node_modules\/pkg\/test\/a\.test\.js is not a test file/);
+  const linked = seedCitedTest(t, "cited-link-own", { why: "covered by test/dep.test.mjs and test/doc.test.mjs.", files: ["node_modules/pkg/test/a.test.js", "docs/api-spec.md", "test/keep.test.mjs"] });
+  symlinkSync(join(linked.worktree, "node_modules/pkg/test/a.test.js"), join(linked.worktree, "test/dep.test.mjs"));
+  symlinkSync(join(linked.worktree, "docs/api-spec.md"), join(linked.worktree, "test/doc.test.mjs"));
+  assertSkipRefused(linked, (await runCheck(linked.env, "05", TRIAGE_ARGS)).out, /test\/dep\.test\.mjs, test\/doc\.test\.mjs is not a test file/);
+  const directory = seedCitedTest(t, "cited-code-directory", { why: "covered by test/suite.mjs.", files: ["test/suite.mjs/inner.txt"] });
+  assertSkipRefused(directory, (await runCheck(directory.env, "05", TRIAGE_ARGS)).out, /test\/suite\.mjs is not a test file/);
+});
+
+test("a logic skip citing a test of the worktree's own tree stays recorded in every test shape", async (t) => {
+  const cited = ["test/a.mjs", "tests/a.py", "src/__tests__/a.js", "spec/a_spec.rb", "src/a.test.ts", "pkg/a_test.go", "test_a.py", "src/AppTest.java", "a.spec.ts", "test/a.PY", "docs/tests/plan.test.mjs", "test/vendored/a.test.mjs"];
+  for (const path of cited) {
+    const seeded = seedCitedTest(t, `cited-own-${path.replace(/\W/g, "-")}`, { why: `covered by ${path}.`, files: [path] });
+    const { out } = await runCheck(seeded.env, "05", TRIAGE_ARGS);
+    assert.equal(out[0], "OK", `${path}: ${out.join("\n")}`);
+    assert.equal(stateOf(seeded).qaMode.mode, "skip", path);
+  }
+});
+
+test("a worktree the check cannot read never records a logic skip, and a copy skip never reads it", async (t) => {
+  const seeded = seedCitedTest(t, "cited-gone", { why: "covered by test/list.test.mjs.", files: ["test/list.test.mjs"] });
+  rmSync(seeded.worktree, { recursive: true, force: true });
+  const { out } = await runCheck(seeded.env, "05", TRIAGE_ARGS);
+  assertSkipRefused(seeded, out, /the worktree cannot be read, so test\/list\.test\.mjs is not verified: /);
+  writeFileSync(join(seeded.dir, "05-qa.md"), triageRound(1));
+  const copy = await runCheck(seeded.env, "05", TRIAGE_ARGS);
+  assert.equal(copy.out[0], "OK", copy.out.join("\n"));
+  assert.equal(stateOf(seeded).qaMode.mode, "skip");
+});
+
+test("a lite or full round citing an invented test keeps its mode: only a skip is held against the worktree", async (t) => {
+  for (const mode of ["lite", "full"]) {
+    const seeded = seedRun(t, `cited-${mode}`, { fixture: {}, texts: { "05-qa.md": triageRound(1, { kinds: "- logic: src/list.mjs", mode: `${mode} — test/does-not-exist.test.mjs is thin.` }) } });
+    const { out } = await runCheck(seeded.env, "05", TRIAGE_ARGS);
+    assert.equal(out[0], "OK", out.join("\n"));
+    assert.equal(stateOf(seeded).qaMode.mode, mode);
+  }
+});
+
+test("a reworded relaunch of a skip is the same decision: it keeps the one entry and the first reason", async (t) => {
+  const seeded = seedRun(t, "triage-reworded", { fixture: {}, texts: { "05-qa.md": triageRound(1) } });
+  await runCheck(seeded.env, "05", TRIAGE_ARGS);
+  const first = stateOf(seeded);
+  assert.equal(first.phases.length, 1);
+  writeFileSync(join(seeded.dir, "05-qa.md"), triageRound(1, { mode: "skip — docs only, nothing executes." }));
+  const { out } = await runCheck(seeded.env, "05", TRIAGE_ARGS);
+  assert.deepEqual(out.slice(-2), ["recorded: phase_done qa SKIPPED (already)", "recorded: qa_mode skip (already)"]);
+  assert.deepEqual(stateOf(seeded).phases, first.phases);
+  assert.deepEqual(stateOf(seeded).qaMode, first.qaMode);
+});
+
+test("a skip refused or moved in between stays one entry when the skip comes back", async (t) => {
+  const seeded = seedRun(t, "triage-back", { fixture: {}, texts: { "05-qa.md": triageRound(1) } });
+  await runCheck(seeded.env, "05", TRIAGE_ARGS);
+  for (const mode of ["maybe — unsure.", "lite — one small file."]) {
+    writeFileSync(join(seeded.dir, "05-qa.md"), triageRound(1, { mode }));
+    await runCheck(seeded.env, "05", TRIAGE_ARGS);
+    writeFileSync(join(seeded.dir, "05-qa.md"), triageRound(1));
+    await runCheck(seeded.env, "05", TRIAGE_ARGS);
+    assert.equal(stateOf(seeded).phases.length, 1, mode);
+    assert.equal(stateOf(seeded).qaMode.mode, "skip", mode);
+  }
+});
+
+test("a skip after a QA that ran is a new entry: only the runtime's own last SKIPPED is repeated", async (t) => {
+  const seeded = seedRun(t, "triage-after-qa", { fixture: {}, texts: { "05-qa.md": triageRound(1) } });
+  await runCheck(seeded.env, "05", TRIAGE_ARGS);
+  const written = recordPhaseDone({ projectId: seeded.projectId, slug: SLUG, phase: "qa", verdict: "APPROVED", by: "orchestrator", env: seeded.env });
+  assert.equal(written.status, "written");
+  await runCheck(seeded.env, "05", TRIAGE_ARGS);
+  assert.deepEqual(stateOf(seeded).phases.map((entry) => entry.verdict), ["SKIPPED", "APPROVED", "SKIPPED"]);
+});
+
+test("a skip moved to lite or full owes the QA on a resume, even past a later verification, and a skip that stands does not", async (t) => {
+  const seeded = seedRun(t, "triage-owed", { fixture: {}, texts: { "05-qa.md": triageRound(1) } });
+  await runCheck(seeded.env, "05", TRIAGE_ARGS);
+  const target = { projectId: seeded.projectId, slug: SLUG, env: seeded.env };
+  assert.equal(recordPhaseDone({ ...target, phase: "implementation", verdict: "fixed" }).status, "written");
+  assert.equal(decideResume({ state: stateOf(seeded) }).fromPhase, "verification");
+  for (const mode of ["lite — one small file.", "full — the retry path changed."]) {
+    writeFileSync(join(seeded.dir, "05-qa.md"), triageRound(1, { kinds: "- logic: src/a.mjs", risk: "- the retry path", mode }));
+    await runCheck(seeded.env, "05", TRIAGE_ARGS);
+    assert.equal(decideResume({ state: stateOf(seeded) }).fromPhase, "qa", mode);
+  }
+  assert.equal(recordPhaseDone({ ...target, phase: "verification", verdict: "FAILED" }).status, "written");
+  assert.equal(decideResume({ state: stateOf(seeded) }).fromPhase, "qa");
+  assert.equal(recordPhaseDone({ ...target, phase: "qa", verdict: "APPROVED" }).status, "written");
+  assert.equal(decideResume({ state: stateOf(seeded) }).fromPhase, "runtime", "the QA that ran pays what was owed");
+});
+
+test("a lite or full decision drops the skip and still owes the QA past a verification recorded before it", async (t) => {
+  for (const mode of ["lite — one small file.", "full — the retry path changed."]) {
+    const seeded = seedRun(t, `triage-owed-past-${mode.slice(0, 4)}`, { fixture: {}, texts: { "05-qa.md": triageRound(1) } });
+    await runCheck(seeded.env, "05", TRIAGE_ARGS);
+    const target = { projectId: seeded.projectId, slug: SLUG, env: seeded.env };
+    assert.equal(recordPhaseDone({ ...target, phase: "implementation", verdict: "fixed" }).status, "written");
+    assert.equal(recordPhaseDone({ ...target, phase: "verification", verdict: "FAILED" }).status, "written");
+    await nextMillisecond();
+    writeFileSync(join(seeded.dir, "05-qa.md"), triageRound(1, { kinds: "- logic: src/a.mjs", risk: "- the retry path", mode }));
+    await runCheck(seeded.env, "05", TRIAGE_ARGS);
+    assert.deepEqual(stateOf(seeded).phases.map((entry) => entry.phase), ["implementation", "verification"], mode);
+    assert.equal(decideResume({ state: stateOf(seeded) }).fromPhase, "qa", mode);
+  }
+});
+
+test("a mode decided after a QA that ran owes a new QA and keeps that QA's entry, only the runtime's skip goes", async (t) => {
+  const seeded = seedRun(t, "triage-after-real-qa", { fixture: {}, texts: { "05-qa.md": triageRound(1, { kinds: "- logic: src/a.mjs", mode: "lite — one small file." }) } });
+  await runCheck(seeded.env, "05", TRIAGE_ARGS);
+  const target = { projectId: seeded.projectId, slug: SLUG, env: seeded.env };
+  assert.equal(recordPhaseDone({ ...target, phase: "qa", verdict: "APPROVED", by: "orchestrator" }).status, "written");
+  assert.equal(decideResume({ state: stateOf(seeded) }).fromPhase, "verification", "the QA ran after the decision");
+  await nextMillisecond();
+  writeFileSync(join(seeded.dir, "05-qa.md"), triageRound(1, { kinds: "- logic: src/a.mjs", risk: "- the retry path", mode: "full — the retry path changed." }));
+  await runCheck(seeded.env, "05", TRIAGE_ARGS);
+  assert.deepEqual(stateOf(seeded).phases.map((entry) => entry.verdict), ["APPROVED"]);
+  assert.equal(decideResume({ state: stateOf(seeded) }).resume, false, "no phase before the QA is left to resume after");
+});
+
+test("a qa SKIPPED nobody decided stays on the state when a lite or full decision lands", async (t) => {
+  const seeded = seedRun(t, "triage-forged-stays", { fixture: {}, texts: { "05-qa.md": triageRound(1, { kinds: "- logic: src/a.mjs", mode: "lite — one small file." }) } });
+  const target = { projectId: seeded.projectId, slug: SLUG, env: seeded.env };
+  assert.equal(recordPhaseDone({ ...target, phase: "qa", verdict: "SKIPPED", by: "orchestrator" }).status, "written");
+  await runCheck(seeded.env, "05", TRIAGE_ARGS);
+  assert.deepEqual(stateOf(seeded).phases.map((entry) => entry.by), ["orchestrator"]);
+});
+
+test("a stale skip beside the same lite or full mode goes on the next check, instead of answering already", async (t) => {
+  const seeded = seedRun(t, "triage-stale-same-mode", { fixture: {}, texts: { "05-qa.md": triageRound(1) } });
+  await runCheck(seeded.env, "05", TRIAGE_ARGS);
+  const state = stateOf(seeded);
+  writeFileSync(join(seeded.dir, "state.json"), JSON.stringify({ ...state, qaMode: { mode: "lite", reason: "the skip's mode write was lost.", at: state.qaMode.at } }));
+  writeFileSync(join(seeded.dir, "05-qa.md"), triageRound(1, { kinds: "- logic: src/a.mjs", mode: "lite — one small file." }));
+  const first = await runCheck(seeded.env, "05", TRIAGE_ARGS);
+  assert.ok(first.out.includes("recorded: qa_mode lite"), first.out.join("\n"));
+  assert.deepEqual(stateOf(seeded).phases, []);
+  const again = await runCheck(seeded.env, "05", TRIAGE_ARGS);
+  assert.ok(again.out.includes("recorded: qa_mode lite (already)"), again.out.join("\n"));
+});
+
+test("a triage round relaunched after a refusal is the one read, and its entry says why the QA was skipped", async (t) => {
+  const refused = triageRound(1, { mode: "maybe — unsure." });
+  const seeded = seedRun(t, "triage-relaunch", { fixture: {}, texts: { "05-qa.md": refused } });
+  assert.ok((await runCheck(seeded.env, "05", TRIAGE_ARGS)).out[0].startsWith("MISSING: "));
+  writeFileSync(join(seeded.dir, "05-qa.md"), `${refused}\n${triageRound(2)}`);
+  const { out } = await runCheck(seeded.env, "05", TRIAGE_ARGS);
+  assert.equal(out[1], "QA-MODE: skip — only text changed.");
+  assert.equal(stateOf(seeded).phases[0].reason, "QA skipped: only text changed.");
+});
+
+test("a triage round after a lite round is read as is and the artifact is not written", async (t) => {
+  const fixture = readFixture("qa-triage-after-lite-round");
+  const seeded = seedRun(t, "triage-resume", fixture);
+  await runCheck(seeded.env, "05", TRIAGE_ARGS);
+  assert.equal(readFileSync(join(seeded.dir, "05-qa.md"), "utf8"), fixture.texts["05-qa.md"]);
+});
+
+test("a fence left open in a later round is closed and reported, and the triage round still answers", async (t) => {
+  const open = `${triageRound(1)}\n## Round 2\n\`\`\`text\nunclosed\n`;
+  const seeded = seedRun(t, "triage-open-fence", { fixture: {}, texts: { "05-qa.md": open } });
+  const { out } = await runCheck(seeded.env, "05", TRIAGE_ARGS);
+  assert.equal(out[0], "OK");
+  assert.match(out[1], /^REPAIRED: the code fence of round 2 /);
+  assert.equal(out[2], "QA-MODE: skip — only text changed.");
+});
+
+test("a triage round as the last one needs no consolidation, and plain check 05 answers MISSING on it", async (t) => {
+  const seeded = seedRun(t, "triage-plain-05", readFixture("qa-triage-skip"));
+  const before = readFileSync(join(seeded.dir, "05-qa.md"), "utf8");
+  const { out } = await runCheck(seeded.env, "05");
+  assert.ok(out[0].startsWith("MISSING: "), out.join("\n"));
+  assert.equal(readFileSync(join(seeded.dir, "05-qa.md"), "utf8"), before);
+});
+
+test("a triage round before the analyst stays out of the consolidation of a full QA", async (t) => {
+  const seeded = seedRun(t, "qa-full-after-triage", readFixture("qa-full-after-triage"));
+  await runCheck(seeded.env, "05");
+  const written = readFileSync(join(seeded.dir, "05-qa.md"), "utf8");
+  const consolidated = written.slice(written.indexOf("## Round 5\n"));
+  assert.equal(consolidated.split("\n")[1], "source: runtime consolidation · rounds 2, 3, 4");
+  assert.equal(consolidated.includes("## Diff classification"), false, consolidated);
+});
+
+test("a skipped QA resumes at the verification and never re-enters Phase 5", async (t) => {
+  const seeded = seedRun(t, "triage-skip-resume", readFixture("qa-triage-skip"));
+  for (const phase of ["triage", "explore", "architecture", "implementation"]) recordPhaseDone({ projectId: seeded.projectId, slug: SLUG, phase, env: seeded.env });
+  await runCheck(seeded.env, "05", TRIAGE_ARGS);
+  const decision = decideResume({ state: stateOf(seeded) });
+  assert.deepEqual([decision.resume, decision.fromPhase, decision.lastPhase], [true, "verification", "qa"]);
+});
+
+test("`run_set` refuses the QA mode, whole or dotted, and `--stage` accepts no inherited name", async (t) => {
+  const seeded = seedRun(t, "qa-mode-run-set", readFixture("qa-triage-skip"));
+  for (const name of ["qaMode", "qaMode.mode"]) {
+    const refused = recordRunFields({ projectId: seeded.projectId, slug: SLUG, fields: { [name]: "skip" }, env: seeded.env });
+    assert.deepEqual(refused, { status: "kept", path: null, reason: "`qaMode` is written by the runtime only" }, name);
+  }
+  const inherited = await runCheck(seeded.env, "05", ["--stage", "constructor"]);
+  assert.equal(inherited.code, 1);
+  assert.match(inherited.err.join("\n"), /unknown stage `constructor` of check `05`; the stages are `05 --stage analyst\|triage`/);
+  assert.throws(() => evaluateCheck({ check: "05", stage: "constructor", texts: {} }), /unknown stage/);
+  assert.throws(() => evaluateCheck({ check: "06", stage: "triage", texts: {} }), /unknown stage/);
+});
+
+test("the round shape the lane is asked for is the one the skip fixture proves", () => {
+  const template = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "plugin", "skills", "resolve", "references", "prompts", "qa-triage.md"), "utf8");
+  const round = readFixture("qa-triage-skip").texts["05-qa.md"].split("\n").slice(1);
+  for (const line of round.filter((text) => text !== "")) assert.ok(template.split("\n").includes(line), `the prompt lost the line: ${line}`);
 });
 
 test("a `###` confirmation heading the check announces is the section the gate notice composes", async (t) => {

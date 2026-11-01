@@ -169,7 +169,7 @@ export function messageProblemLines(cwd, messageFile, env) {
 }
 
 // The first ref among the remote and local default branches that exists in the worktree: the base the branch is compared with.
-function baseRef(cwd, env) {
+export function baseRef(cwd, env) {
   const found = BASE_REFS.find((ref) => runGit({ args: ["rev-parse", "--verify", "--quiet", ref], cwd, env }).ok);
   if (!found) throw new UserError(`no base branch (${BASE_REFS.join(", ")}) exists in ${cwd}: the files the branch adds cannot be checked for scratch`);
   return found;
@@ -406,6 +406,23 @@ function draftProblemLines(isDraft, failures) {
   return isDraft && failures === 0 ? ["REJECTED: a draft pull request lists each failure on a Remaining failure: <what> line of its QA/verification section"] : [];
 }
 
+// The exact line a body owes for the run's recorded QA skip, its text from the state and never from an agent; null when the QA was not skipped.
+function requiredQaSkipLine(state) {
+  return state?.qaMode?.mode === "skip" ? `QA: skipped — ${state.qaMode.reason}` : null;
+}
+
+// The refusal of a body without the owed line, which a fenced or commented copy does not satisfy.
+function qaSkipProblemLines(required, body) {
+  if (required === null) return [];
+  const carried = unfencedLines(withoutHtmlComments(body)).some((line) => line.trim() === required);
+  return carried ? [] : [`REJECTED: the QA of this run was skipped, so the body carries this exact line under its test section's heading: ${required}`];
+}
+
+// The body the template's rules read: the owed line is the runtime's own text, so a word of its reason never makes the body unpublishable.
+function withoutQaSkipLine(body, required) {
+  return required === null ? body : body.split("\n").filter((line) => line.trim() !== required).join("\n");
+}
+
 // Runs `run publish`: checks the message and the body, commits the list once, refuses scratch files, then pushes and opens the pull request.
 export async function runPublish(argv, ctx) {
   const values = publishOptions(argv);
@@ -417,7 +434,9 @@ export async function runPublish(argv, ctx) {
   const title = publishTitle(values.title, body, messageFile);
   const isDraft = values.draft === true;
   const failures = isDraft ? remainingFailures(body) : 0;
-  const problems = [...messageProblemLines(cwd, messageFile, ctx.env), ...bodyProblemLines({ run, template: findPrTemplate(cwd), body }), ...draftProblemLines(isDraft, failures)];
+  const qaSkipLine = requiredQaSkipLine(readRunState({ projectId: run.projectId, slug: run.slug, env: ctx.env }));
+  const templateBody = withoutQaSkipLine(body, qaSkipLine);
+  const problems = [...messageProblemLines(cwd, messageFile, ctx.env), ...bodyProblemLines({ run, template: findPrTemplate(cwd), body: templateBody }), ...qaSkipProblemLines(qaSkipLine, body), ...draftProblemLines(isDraft, failures)];
   if (problems.length > 0) return refuse(problems, ctx);
   const { listed } = listedFromArtifact(run, values["files-from"]);
   const { paths, refused } = stageable({ cwd, listed, extras: values.extra ?? [], env: ctx.env });

@@ -55,7 +55,7 @@ Independent launches go in parallel; the runtime waits for every subagent and ba
    line is `OK`, `MISSING: <sections>` or `GENERATED` (only `04`: the file list was derived
    from the worktree's own changes).
    Then come stable-prefix lines that each phase's table maps to the next action: `REPAIRED:`,
-   `VERDICT:`, `GATE:`, `OPEN:`, `TYPE-MISMATCH:`, `CONFIRM:`, `QA:`, `QA-STAGE:`,
+   `VERDICT:`, `GATE:`, `OPEN:`, `TYPE-MISMATCH:`, `CONFIRM:`, `QA-MODE:`, `QA-STAGE:`,
    `INVALIDATED:`, `DIFF-APPLIES:`, `NEEDS-DEVICE`, `index:`, `recorded:`, `SCRIPT:`.
    - `MISSING` → relaunch the subagent once with the `MISSING:`/`REPAIRED:` lines as `note`; still
      `MISSING` → before Phase 4, its phase's row; from Phase 4 on, proceed with what the artifact
@@ -85,7 +85,7 @@ Independent launches go in parallel; the runtime waits for every subagent and ba
 
 Every subagent prompt comes from ONE `phase_prompt` call (MCP `nightqueue`) with `target` = the
 prompt of the phase (`triager` | `explore` | `architect` | `coder` | `coder-fix` | `verifier` |
-`runtime` | `qa-lite` | `qa-analyst` | `qa-prover` | `reflector`) and, optionally, `query` = 2–4 keywords from
+`runtime` | `qa-triage` | `qa-lite` | `qa-analyst` | `qa-prover` | `reflector`) and, optionally, `query` = 2–4 keywords from
 the brief. The context block is already inside the prompt: `## Applicable lessons`, `## Project memory`,
 `## Structural index` (explore only), `## Related jobs` and `## Job origin` (triager only); inside a
 job the server excludes by itself the lessons already injected in earlier phases of this session.
@@ -188,17 +188,24 @@ two coders in one tree, and no `git stash`/`checkout`/`reset` while a batch is a
 
 ### Phase 5 — Adversarial QA (attack)
 
-**Mode:** read the `QA: lite|full` line of the last `nightqueue run check 03` answer (run the
-check again on a resume): `lite` → one qa-guardian with `qa-lite`; `full` → Stage A analyst then
-N provers, then `run check 05` consolidates. Nothing else decides the mode.
+**Triage first:** 1 qa-guardian with `phase_prompt` `qa-triage`, then `nightqueue run check 05 --stage triage`. On a resume at Phase 5 run the check first (a pure read); launch the lane only on its `MISSING`. Stage B of a resume skips this.
+
+| `run check 05 --stage triage` answers | Action |
+| --- | --- |
+| `QA-MODE: skip — <why>` | recorded by the check; Phase 6, no attack lane |
+| `QA-MODE: lite — <why>` | one qa-guardian with `qa-lite` |
+| `QA-MODE: full — <why>` | Stage A analyst then N provers, then `run check 05` consolidates |
+| `MISSING` | relaunch once (`note` = the lines); still → `lite`, ⚠️ open item |
+
+The `QA-MODE:` line decides, and nothing else.
 
 The QA is **adversarial and fixes nothing**; the fixes happen in the Phase 6 loop.
 
 Read `references/qa-phase.md` before launching any qa-guardian: it carries the Stage A gate and
-the consolidation. The prompts come from `phase_prompt` (`qa-lite`, `qa-analyst`, `qa-prover`
-with its `group`).
+the consolidation. The prompts come from `phase_prompt` (`qa-triage`, `qa-lite`, `qa-analyst`,
+`qa-prover` with its `group`).
 
-**Gate:** `nightqueue run check 05` reads the last round of `05-qa.md`.
+**Gate of `lite` and `full`:** `nightqueue run check 05` reads the last round of `05-qa.md`.
 
 | `run check 05` answers | Action |
 | --- | --- |

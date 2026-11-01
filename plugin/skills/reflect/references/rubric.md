@@ -41,6 +41,17 @@ Do not propose:
 
 No candidate at all is a valid result.
 
+## A QA skip
+
+A run skipped its QA when `state.json` says `qaMode.mode` is `skip`. The skipped area is what
+the `source: qa-triage` round of `05-qa.md` classified.
+
+- A QA skip plus a later defect in the skipped area (found by verification, at runtime, or by a
+  close or production report in the request) is an `error` with `target: qa`. Its lesson
+  describes the misclassification by the kind of change, so it reaches the next triage.
+- A defect outside the skipped area says nothing about the skip.
+- A skip that held is not a candidate: nothing is saved about it.
+
 ## Dedup before proposing
 
 1. For a lesson, run `lesson_recall` with `query` = the candidate's title plus its prevention,

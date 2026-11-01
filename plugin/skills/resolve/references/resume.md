@@ -9,7 +9,7 @@ A ``RESUME CANDIDATE (slug `<slug>`)`` block: this run continues one the runtime
   `OPERATOR ANSWER TO THE GATE:` line, run Phase 3's answer rule first. `From stage: qa-stage-b`
   → Phase 5 at **Stage B**: read the analyst's last `## Round` (with `## Break hypotheses`) of
   `<RUN_DIR>/05-qa.md`, launch the provers, then `run check 05`, never the analyst; any other
-  value → the whole of Phase 5. `Re-run: <phase> — <reason>` → run that phase, each line verbatim
+  value → the whole of Phase 5, whose first step on a resume is `run check 05 --stage triage`. `Re-run: <phase> — <reason>` → run that phase, each line verbatim
   an open item of Phase 9 and the notice.
 - **Never redo a completed phase:** skip every phase up to `Last completed phase:`, reading its
   artifact in `RUN_DIR`. A declared artifact missing or unreadable → ignore the block, start clean

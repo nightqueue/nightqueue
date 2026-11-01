@@ -5,6 +5,9 @@ Step 0 — BEFORE reading 03-plan.md: read
 plan is a rubber stamp, not an enumeration.
 
 {{/HAS_USAGE_COVERAGE}}
+A triage round precedes this lane in `05-qa.md`: its `## New risk` is input to attack. A `skip`
+is a recorded decision the reflector audits when a defect appears in the skipped area.
+
 What `03-plan.md` (once open) demands: ## Identified risks (MANDATORY to attack each one),
 ## Assumptions (attack each one with real evidence), ## Pre-mortem (validate each declared
 mitigation AND attack each "accepted because" justification).

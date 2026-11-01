@@ -382,7 +382,7 @@ test("`queue add --tier` is refused with the line naming its removal and queues 
   for (const tier of ["simple", "urgent"]) {
     const refused = runCli(env, ["queue", "add", "--tier", tier, "fix the worker"], { cwd: repo });
     assert.equal(refused.status, 1, refused.stdout);
-    assert.match(refused.stderr, /`tier` was removed: every job runs the one \/resolve pipeline \(one model per agent, QA mode chosen by `run check 03`\)/);
+    assert.match(refused.stderr, /`tier` was removed: every job runs the one \/resolve pipeline \(one model per agent, QA mode chosen by `run check 05 --stage triage`\)/);
   }
   assert.equal(getJob(1, env), null, "a refused `--tier` still queued a job");
 

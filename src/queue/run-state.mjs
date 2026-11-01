@@ -17,7 +17,10 @@ export const RUN_OUTCOME_STATUSES = ["done", "gate", "no_change"];
 export const NO_CHANGE_OUTCOME = "no_change";
 
 // The keys of `state.json` only the runtime writes: no pipeline writer may set them, whole or by a dotted name.
-export const RUNTIME_ONLY_KEYS = ["job", "gateQuestionDigest", "draftPrUrl"];
+export const RUNTIME_ONLY_KEYS = ["job", "gateQuestionDigest", "draftPrUrl", "qaMode"];
+
+// The QA modes a triage may decide.
+const QA_MODES = ["skip", "lite", "full"];
 
 // Why a second record of the same job's block is kept: the block is written once, and a retry keeps the first one.
 export const JOB_BLOCK_ALREADY_RECORDED = "already recorded";
@@ -186,15 +189,21 @@ function reRunReason({ previous, phases, phase, lastFailure }) {
   return failedSince ? `re-run after ${lastFailure.check} ${lastFailure.line}` : "re-run";
 }
 
-// The phases after a completed check, and what was decided: `already` when the runtime recorded this same artifact last, else `appended` with its reason.
+// Whether a completed check repeats the runtime's last entry of the phase: a decision while that entry states it, any other check on the same artifact.
+function repeatsRuntimeEntry({ previous, memo, done, last }) {
+  if (last?.by !== RUNTIME_AUTHOR) return false;
+  if (done.decision === true) return last.verdict === done.verdict;
+  return isStateObject(previous) && previous.completed === true && previous.digest === memo.digest;
+}
+
+// The phases after a completed check, and what was decided: `already` when it repeats the runtime's last entry, else `appended` with its reason.
 function phasesAfterCheck({ state, check, memo, done, at }) {
   const phases = phaseEntries(state);
   const checks = checkMemos(state);
   const previous = checks[check];
-  const same = isStateObject(previous) && previous.completed === true && previous.digest === memo.digest;
-  if (same && lastEntryOf(phases, done.phase)?.by === RUNTIME_AUTHOR) return { phases, decided: { status: "already", reason: null } };
-  const reason = reRunReason({ previous, phases, phase: done.phase, lastFailure: checks.lastFailure });
-  const entry = withText({ phase: done.phase, at }, { artifact: done.artifact, verdict: done.verdict, reason, by: RUNTIME_AUTHOR });
+  if (repeatsRuntimeEntry({ previous, memo, done, last: lastEntryOf(phases, done.phase) })) return { phases, decided: { status: "already", reason: null } };
+  const reason = trimmedText(done.reason) ?? reRunReason({ previous, phases, phase: done.phase, lastFailure: checks.lastFailure });
+  const entry = withText({ phase: done.phase, at }, { artifact: done.artifact, verdict: done.verdict, note: done.note, reason, by: RUNTIME_AUTHOR });
   return { phases: [...phases, entry], decided: { status: "appended", reason } };
 }
 
@@ -216,6 +225,25 @@ export function recordCheck({ projectId, slug, check, memo, done = null, env = p
     },
   });
   return { ...written, phase: written.status === "written" ? decided : null };
+}
+
+// Whether a phase entry is the runtime's record of a QA skip.
+function isRuntimeQaSkip(entry) {
+  return isStateObject(entry) && entry.phase === "qa" && entry.by === RUNTIME_AUTHOR && entry.verdict === "SKIPPED";
+}
+
+// Whether a QA mode leaves a recorded skip behind: a lite or full decision on a state that still holds one.
+export function leavesStaleQaSkip(state, mode) {
+  return mode !== "skip" && phaseEntries(state).some(isRuntimeQaSkip);
+}
+
+// Records the QA mode the triage decided and its reason, a key only the runtime writes; in the same write a lite or full decision drops the skip it supersedes.
+export function recordQaMode({ projectId, slug, mode, reason, env = process.env } = {}) {
+  if (!QA_MODES.includes(mode)) return refuseEnum("QA mode", mode, QA_MODES);
+  const why = trimmedText(reason);
+  if (why === null) return kept("a QA mode needs its reason");
+  const change = (state) => (leavesStaleQaSkip(state, mode) ? { phases: phaseEntries(state).filter((entry) => !isRuntimeQaSkip(entry)) } : {});
+  return record({ projectId, slug, env, change, runtimeFields: { qaMode: { mode, reason: why, at: new Date().toISOString() } } });
 }
 
 // Records that the run stopped on purpose at a phase, which is what keeps a retry from resuming it.

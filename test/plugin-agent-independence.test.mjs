@@ -13,7 +13,7 @@ const REQUESTS = {
   explore: ["explore"],
   architect: ["architect"],
   coder: ["coder", "coder-fix"],
-  "qa-guardian": ["qa-lite", "qa-analyst", "qa-prover"],
+  "qa-guardian": ["qa-triage", "qa-lite", "qa-analyst", "qa-prover"],
   verifier: ["verifier", "runtime"],
 };
 const INDEPENDENT = Object.keys(REQUESTS);
@@ -105,7 +105,7 @@ test("the triager frames the request, its request delivers the Brief and the req
 
 // What the agent must deliver and how it returns lives in the request the pipeline renders.
 test("each pipeline-independent agent's request owns the deliverable, the handoff and the shell rule", () => {
-  assert.equal(Object.values(REQUESTS).flat().length, 10, "the six agents no longer map to their ten requests");
+  assert.equal(Object.values(REQUESTS).flat().length, 11, "the six agents no longer map to their eleven requests");
   for (const name of Object.values(REQUESTS).flat()) {
     const request = readFileSync(join(PROMPTS, `${name}.md`), "utf8");
     assert.ok(carriesDeliver(request, name), `the ${name} request does not carry ## Deliver`);

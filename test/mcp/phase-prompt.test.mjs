@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
@@ -9,9 +10,9 @@ import { openDb } from "../../src/memory/db.mjs";
 import { addJob, claimJobById, persistRunFacts } from "../../src/memory/jobs.mjs";
 import { saveLesson } from "../../src/memory/lessons.mjs";
 import { recordInjected } from "../../src/hooks/state.mjs";
-import { recordRunFields } from "../../src/queue/run-state.mjs";
+import { recordQaMode, recordRunFields } from "../../src/queue/run-state.mjs";
 import { RUNTIME_PROMPT_RE } from "../../src/queue/narrate.mjs";
-import { PHASE_ARTIFACTS, QA_ANALYST_STAGE } from "../../src/queue/phase-artifacts.mjs";
+import { PHASE_ARTIFACTS, QA_ANALYST_STAGE, QA_TRIAGE_STAGE } from "../../src/queue/phase-artifacts.mjs";
 import { renderSkillTemplate } from "../../src/queue/skill-template.mjs";
 import { setProjectAgents, setProjectDemoRepo } from "../../src/memory/registry.mjs";
 import { AGENT_MODELS } from "../../src/queue/routing.mjs";
@@ -58,6 +59,7 @@ const FULL = {
   ROUND: "2",
   FIX_LOOP: "1",
   DEMO_REPO: "/demo/checkout",
+  BASE_REF: "origin/main",
 };
 
 // The template each golden fixture was moved into; the attack brief lives inside both QA prompts that paste it.
@@ -69,13 +71,14 @@ const GOLDEN = [
   ["verifier", ["verifier"]],
   ["coder-fix", ["coder-fix"]],
   ["runtime", ["runtime"]],
+  ["qa-triage", ["qa-triage"]],
   ["qa-lite", ["qa-lite"]],
   ["qa-analyst", ["qa-analyst"]],
   ["qa-prover", ["qa-prover"]],
   ["qa-attack-brief", ["qa-lite", "qa-analyst"]],
 ];
 
-const TEMPLATES = ["triager", "explore", "architect", "coder", "verifier", "coder-fix", "runtime", "qa-lite", "qa-analyst", "qa-prover"];
+const TEMPLATES = ["triager", "explore", "architect", "coder", "verifier", "coder-fix", "runtime", "qa-triage", "qa-lite", "qa-analyst", "qa-prover"];
 
 // A fixture of the templates as the skill carried them before the move.
 function fixture(name) {
@@ -189,14 +192,16 @@ const CHECK_OF = {
   architect: "03",
   coder: "04",
   "coder-fix": "04",
+  "qa-triage": "05 --stage triage",
   "qa-lite": "05",
   "qa-analyst": "05 --stage analyst",
   verifier: "06",
   runtime: "07",
 };
 
-// The sections the gate of a check id requires, the analyst stage of check 05 included.
+// The sections the gate of a check id requires, the analyst and triage stages of check 05 included.
 function gateSections(check) {
+  if (check === "05 --stage triage") return QA_TRIAGE_STAGE.sections;
   return check === "05 --stage analyst" ? QA_ANALYST_STAGE.sections : PHASE_ARTIFACTS.get(check).sections;
 }
 
@@ -522,6 +527,7 @@ const TARGET_AGENTS = {
   "coder-fix": "coder",
   verifier: "verifier",
   runtime: "verifier",
+  "qa-triage": "qa-triage",
   "qa-lite": "qa-analyst",
   "qa-analyst": "qa-analyst",
   "qa-prover": "qa-prover",
@@ -565,21 +571,64 @@ test("a store that cannot read the project's agent models answers the default mo
   assert.ok(answer.open_items.some((item) => item.startsWith("the project's agent models failed: ")), String(answer.open_items));
 });
 
-test("a QA target the plan's QA mode does not ask is rendered anyway, with an open item naming the mode", async (t) => {
+test("the QA triage runs on sonnet in its own round of 05-qa.md, answers its gate and carries the reads that see an uncommitted or untracked change", async (t) => {
+  const { env, run, dir } = makeRun(t, "phase-prompt-qa-triage");
+  writeFileSync(join(dir, "05-qa.md"), "## Round 1\nsource: earlier\n");
+  const answer = await phasePrompt({ target: "qa-triage" }, { run, env });
+  assert.equal(answer.subagent_type, "nightqueue:qa-guardian");
+  assert.equal(answer.model, "sonnet");
+  assert.equal(answer.artifact, join(dir, "05-qa.md"));
+  assert.equal(answer.check, "05 --stage triage");
+  assert.ok(answer.prompt.includes("this launch is ## Round 2"), answer.prompt);
+  for (const read of ["git diff HEAD --stat", "git status --short", "## Modified files", "## Identified risks", "00-brief.md"]) {
+    assert.ok(answer.prompt.includes(read), `the triage does not read ${read}`);
+  }
+  for (const attack of ["QA attack brief", "QA_SKILL:"]) assert.equal(answer.prompt.includes(attack), false, `the triage carries ${attack}`);
+});
+
+test("a project override of qa-triage changes only that lane's model", async (t) => {
+  const { env, home, run } = makeRun(t, "phase-prompt-qa-triage-override");
+  setProjectAgents(openDb(home), { id: run.projectId, value: { "qa-triage": { model: "opus" } } });
+  assert.equal((await phasePrompt({ target: "qa-triage" }, { run, env })).model, "opus");
+  assert.equal((await phasePrompt({ target: "qa-lite" }, { run, env })).model, AGENT_MODELS["qa-analyst"]);
+});
+
+test("the triage compares with the repository's base branch; none found answers HEAD with one open item, never a throw", async (t) => {
+  const { env, run, repo } = makeRun(t, "phase-prompt-qa-triage-base");
+  const noBase = await phasePrompt({ target: "qa-triage" }, { run, env });
+  assert.ok(noBase.prompt.includes("`git diff HEAD...HEAD --stat`"), noBase.prompt);
+  assert.deepEqual(noBase.open_items.filter((item) => item.startsWith("the base branch lookup failed: ")).length, 1, String(noBase.open_items));
+  const git = (...args) => execFileSync("git", args, { cwd: repo, stdio: "ignore" });
+  git("init", "-q", "-b", "main");
+  git("-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false", "commit", "-q", "--allow-empty", "-m", "base");
+  const found = await phasePrompt({ target: "qa-triage" }, { run, env });
+  assert.ok(found.prompt.includes("`git diff main...HEAD --stat`"), found.prompt);
+  assert.deepEqual(found.open_items, []);
+  const coder = await phasePrompt({ target: "coder" }, { run, env });
+  assert.deepEqual(coder.open_items, [], "another target looks up no base branch");
+});
+
+test("a QA target the run's recorded QA mode does not ask is rendered anyway, with an open item naming the mode", async (t) => {
   const { env, run, dir } = makeRun(t, "phase-prompt-qa-mode");
-  const modeItem = (answer) => answer.open_items.filter((item) => item.startsWith("the plan's QA mode is "));
-  for (const target of ["qa-lite", "qa-analyst", "qa-prover"]) assert.deepEqual(modeItem(await promptOf(target, { run, env })), [], `${target} without a plan`);
-  writeFileSync(join(dir, "03-plan.md"), "## Identified risks\n- [R1] 🔴 one high risk — how to test it: a test.\n- [R2] 🟡 a medium one — how to test it: a test.\n");
+  const modeItem = (answer) => answer.open_items.filter((item) => item.startsWith("the run's QA mode is "));
+  const record = (mode) => recordQaMode({ projectId: run.projectId, slug: run.slug, mode, reason: "the triage said so", env });
+  writeFileSync(join(dir, "03-plan.md"), "**Always-gate class:** yes\n\n## Identified risks\n- [R1] 🔴 one — how to test it: a test.\n- [R2] 🔴 two — how to test it: a test.\n");
+  for (const target of ["qa-lite", "qa-analyst", "qa-prover"]) assert.deepEqual(modeItem(await promptOf(target, { run, env })), [], `${target} with no record, whatever the plan says`);
+  assert.equal(record("lite").status, "written");
   assert.deepEqual(modeItem(await promptOf("qa-lite", { run, env })), []);
   for (const target of ["qa-analyst", "qa-prover"]) {
     const answer = await promptOf(target, { run, env });
     assert.ok(answer.prompt.length > 0, target);
-    assert.deepEqual(modeItem(answer), [`the plan's QA mode is lite (\`run check 03\`); ${target} was rendered anyway`]);
+    assert.deepEqual(modeItem(answer), [`the run's QA mode is lite (\`run check 05 --stage triage\`); ${target} was rendered anyway`]);
   }
-  writeFileSync(join(dir, "03-plan.md"), "## Identified risks\n- [R1] 🔴 one — how to test it: a test.\n- [R2] 🔴 two — how to test it: a test.\n");
+  assert.equal(record("full").status, "written");
   assert.deepEqual(modeItem(await promptOf("qa-analyst", { run, env })), []);
-  assert.deepEqual(modeItem(await promptOf("qa-lite", { run, env })), ["the plan's QA mode is full (`run check 03`); qa-lite was rendered anyway"]);
+  assert.deepEqual(modeItem(await promptOf("qa-lite", { run, env })), ["the run's QA mode is full (`run check 05 --stage triage`); qa-lite was rendered anyway"]);
+  assert.equal(record("skip").status, "written");
+  assert.deepEqual(modeItem(await promptOf("qa-lite", { run, env })), ["the run's QA mode is skip (`run check 05 --stage triage`); qa-lite was rendered anyway"]);
   assert.deepEqual(modeItem(await promptOf("coder", { run, env })), [], "a non-QA target never reads the mode");
+  assert.equal(record("maybe").status, "kept");
+  assert.equal(recordQaMode({ projectId: run.projectId, slug: run.slug, mode: "lite", reason: "  ", env }).status, "kept");
 });
 
 test("an `artifact` argument from an older plugin is ignored: the runtime lane always writes 07-runtime.md under its gate", async (t) => {

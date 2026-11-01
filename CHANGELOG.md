@@ -183,6 +183,24 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **The QA triages the real diff and decides how much QA it gets.** Phase 5 now opens with a short
+  `sonnet` lane (`phase_prompt` target `qa-triage`, overridable with `project models`) that
+  classifies what changed and writes a `source: qa-triage` round in `05-qa.md`. `nightqueue run
+  check 05 --stage triage` prints `QA-MODE: skip|lite|full — <why>`, the only line the orchestrator
+  follows, and records `qaMode{mode, reason, at}`. `full` answers a migration, a new route, auth,
+  payment, concurrency, parsing of external input, personal data or a 🔴 plan risk; `skip` needs no
+  new risk and only copy, docs, inert config, a pure rename, tests, or logic covered by a test the
+  sentence names; anything else is `lite`. A classification line off the list of kinds is refused
+  unless the answer is `full`. A skip launches no attack lane, the verifier still runs,
+  `run report` shows `5 QA ⏭️ no new risk: <why>` and stays happy, and `run publish` refuses a body
+  without the exact line `QA: skipped — <state.qaMode.reason>`. A logic skip must name a test file
+  that exists inside the worktree, read on disk with `..` and links resolved; an invented path, an
+  escape or a worktree the check cannot read answers `MISSING:` and records no skip. A `qa` `SKIPPED` with no `qaMode` of `skip` behind it reads `⚠️` and a resume
+  still owes that QA; a reworded relaunch of the same skip records nothing new, and a `lite` or `full`
+  decision after a skip removes its `SKIPPED` entry, so the real QA is no re-run. The reflector saves a `target: qa` lesson only when a defect later appears
+  in the skipped area. This replaces the plan-decided QA mode of the `Added` section above:
+  `run check 03` no longer prints `QA:`, and the plan's `**Always-gate class:**` field no longer
+  decides the mode. The `tier` refusal line now names the new check.
 - **A `/resolve` run pauses only at Phase 3, on a real question.** A job now runs unattended from
   request to pull request unless the architect writes a filled `**Question:**` under
   `## Requires user confirmation`, which it does only when the decision changes behaviour, data or

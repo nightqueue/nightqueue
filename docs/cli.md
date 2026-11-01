@@ -29,6 +29,7 @@ job is refused; outside one, `--project <name> --slug <slug>` is required.
 ```sh
 nightqueue run dir            # the absolute directory of this run: runs/<project_id>/<slug>
 nightqueue run check 03       # is the plan there, with the sections the pipeline reads?
+nightqueue run check 05 --stage triage   # how much QA does this change get? QA-MODE: skip|lite|full
 nightqueue run log            # one line per phase of this run, plus the total
 nightqueue run log --json     # the same table as the only thing on stdout
 nightqueue run commit --message-file msg.txt   # stage what the implementation listed, and commit it
@@ -89,6 +90,13 @@ already happened (every listed path clean and the branch ahead of its base) prin
 It prints the same `CONVENTION:`, `COMMITTED:`, `BRANCH:`, `PR:` and `WORKTREE:`
 lines as the two commands, which keep working unchanged.
 
+A run whose `state.json` holds `qaMode.mode` `skip` owes the plain line
+`QA: skipped — <state.qaMode.reason>`, outside fenced code and HTML comments. The text comes from
+the state, so a body without it or with another reason prints `REJECTED: the QA of this run was
+skipped, so the body carries this exact line under its test section's heading: <line>` and nothing
+is committed or pushed. The template's rules do not read that line, so a word of its reason never
+blocks the body. `lite`, `full` or no `qaMode` owe nothing. `run pr` does not enforce this line.
+
 `--draft` is how a run that reached its fix limit still delivers. The body lists each failure
 on a plain `Remaining failure: <what>` line outside fenced code and HTML comments, and those lines
 are the only source of the count: a `--draft` with none prints `REJECTED: a draft pull request
@@ -121,7 +129,9 @@ suffixed `🔁N`), plus one row per planned step with no record at its nominal p
 verification; `8 Commit/PR` reads the recorded delivery; a last `9 Report` row that is
 always `⏳ this report` and never counts against Happy). `Result` is the status icon plus
 the verdict word; `Note` the reason and note recorded, `-` when empty; `Time` the measured
-duration, `-` when none. The `8 Commit/PR` note of a draft reads `draft pull request <url> — N
+duration, `-` when none. A QA the triage skipped reads `| 5 QA | 🛡️ QA-Guardian | ⏭️ | no new
+risk: <why> | <time> |` and does not turn the run non-happy; a `qa` `SKIPPED` with no recorded
+`qaMode` of `skip`, and a `SKIPPED` verdict of any other phase, stay `⚠️`. The `8 Commit/PR` note of a draft reads `draft pull request <url> — N
 failures remain`. Then the `**Total:**`, then a `Happy: yes|no — <first failing
 gate>` line decided by the fail-safe rule (failures a pull request leaves open, a termination, a
 failed verdict, a re-run, a planned phase never recorded, a plan whose
@@ -146,13 +156,15 @@ or `not recorded: <reason>`). A failed
 record is the fixed open item `the run was not recorded in the telemetry` (the reason stays
 only in `recorded`), never a non-zero exit.
 
-`run check <NN> [--stage analyst]` is the artifact gate of a phase: it reads
+`run check <NN> [--stage analyst|triage]` is the artifact gate of a phase: it reads
 `<RUN_DIR>/<NN-phase>.md` and prints `OK` or `MISSING: <sections>` - the
 sections required are `## Brief` (`00`, the `00-brief.md` written by `run check 01`; an older plugin writes it by hand), `## Verdict` (with `Evidence level: <1|2|3|4>` as its first line), `## Validated brief`, `## Out of scope` and `## Request gaps` (`01`), `## File map`, `## Access map` and
 `## Third-party libraries` (`02`), the four sections of the plan (`03`),
 `## Modified files` (`04`), `## Proven breaks`, `## Break hypotheses`, `## Test recipe`,
 `## Validated risks`, `## Invalidated assumptions` and `## Verdict` (`05 --stage analyst`, the
-analyst's round of `05-qa.md`), `## Proven breaks`,
+analyst's round of `05-qa.md`), `## Diff classification`, `## New risk` and `## QA mode`
+(`05 --stage triage`, the last `source: qa-triage` round of `05-qa.md`, whichever rounds follow
+it), `## Proven breaks`,
 `## Validated risks`, `## Invalidated assumptions`, `## Generated PoCs` and `## Verdict` (`05`),
 `## Checks run` and `## Verification` (`06`) and `## Runtime verdict`
 (`07`, the runtime lane's `07-runtime.md`). Each list is the mandatory part of the
@@ -179,7 +191,7 @@ artifact and prints `GENERATED` - and a worktree with no change at all prints
 `MISSING: ## Modified files (no changed files)` without writing anything. The
 three answers exit `0`: they are findings the orchestrator routes (relaunch the phase once,
 then follow the phase's row), not failures of the command; only an unknown `<NN>`, a stage other than
-`05 --stage analyst`, a retired id of the old numbering (`renumbered: use <NN>`) or a run that
+`05 --stage analyst|triage`, a retired id of the old numbering (`renumbered: use <NN>`) or a run that
 cannot be resolved exits `1`. In a full QA, `run check 05` first writes the consolidated round
 (`source: runtime consolidation`) of the analyst's and the provers' rounds and answers over it
 (see [Runtime contract](runtime-contract.md), "The QA consolidation is the check's own").
@@ -191,7 +203,9 @@ fact per line under a stable prefix, in this order: `VERDICT: <value>` (`01`, `0
 `CONFIRM: requires-user-confirmation — <question>` or `CONFIRM: answered` (`03`, only with a
 filled question, one with a `?`; a confirmation section with a `?` no label shape places, or a
 filled label with no `?`, is a `MISSING:`),
-`QA: lite|full` (`03`), `QA-STAGE: provers|skip`
+`QA-MODE: skip|lite|full — <why>` (`05 --stage triage`; a `skip` with a `logic` line must name a
+test file inside the run's worktree, which the check reads on disk, a code file by extension and
+outside a vendored directory, else `MISSING:`), `QA-STAGE: provers|skip`
 (`05 --stage analyst`), `INVALIDATED: <item>`, `DIFF-APPLIES: yes|no`,
 `NEEDS-DEVICE`, `index: …` (`02`), the `recorded: …` lines, and `SCRIPT:` followed by the
 device script, always last. A `MISSING:` first line prints nothing else but a `REPAIRED:` line. Headings are matched
@@ -207,7 +221,10 @@ into `<RUN_DIR>/00-brief.md` (`recorded: brief 00-brief.md`), records the commit
 (`recorded: run_terminate triage <VERDICT>`), and, last, the slug
 (`recorded: slug <slug>`, or `(renamed from <old>; run dir <path>)` when a job run still on
 its provisional slug takes the Brief's `**Slug:**`), and `05 --stage analyst` records the stage A marker
-(`recorded: qa_stage_a <verdict>`) and no phase. `05` with `INVALIDATED:` lines records no
+(`recorded: qa_stage_a <verdict>`) and no phase. `05 --stage triage` records the decision
+(`recorded: qa_mode <mode>`, `(already)` when the same mode stands, however it is worded) and, only
+on a `skip`, the `qa` phase with the verdict `SKIPPED`, once while it is the phase's last entry; a `lite` or `full` decision removes that `SKIPPED`, and its QA records its phase through
+`05`. `05` with `INVALIDATED:` lines records no
 `qa` (`recorded: none (INVALIDATED: …)`). `03` and `05` print no `GATE:`: what they find is an
 `OPEN:` line, and the only human stop of a run is `CONFIRM: requires-user-confirmation`. Every gate
 code, the completion rule and the record
@@ -488,8 +505,8 @@ integrations`); detection only reports, it never sets `expo.ota`.
 **Project models.** `project models <project> [--set <agent>=<model>]... [--unset
 <agent>]... [--json]` shows or changes the model each agent of the pipeline runs on for
 that project. The defaults live in `src/queue/routing.mjs` (`run start --routing` prints
-them): triager `sonnet`, explore `haiku`, architect `opus`, coder `opus`, qa-analyst
-`sonnet`, qa-prover `haiku`, verifier `haiku`, reflector `haiku` (the merger runs on
+them): triager `sonnet`, explore `haiku`, architect `opus`, coder `opus`, qa-triage
+`sonnet`, qa-analyst `sonnet`, qa-prover `haiku`, verifier `haiku`, reflector `haiku` (the merger runs on
 `sonnet` and is not overridable). With no option it prints one `<agent>=<model>
 (default|project)` line per agent; `--json` gives `{project, agents: {<agent>: {model,
 source}}}`. `--set` takes an agent of that list and a model among `opus`, `sonnet` and

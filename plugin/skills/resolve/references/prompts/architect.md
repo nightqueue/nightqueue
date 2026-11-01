@@ -109,7 +109,7 @@ A likely cause with neither a mitigation nor a justification means the plan is n
 ## Identified risks
 Every scenario the change can break or degrade, even a low-probability one, concrete and testable — it feeds whoever attacks the plan:
 - [R1] 🔴|🟡|🟢 <failure scenario> — how to test it: <minimum steps>
-Each risk line carries ONE severity marker: 🔴 high (breaks a contract, data, security or a primary flow), 🟡 medium, 🟢 low. `run check 03` counts the 🔴 lines: two or more → the QA runs `full`, else `lite`.
+Each risk line carries ONE severity marker: 🔴 high (breaks a contract, data, security or a primary flow), 🟡 medium, 🟢 low. Any 🔴 line makes the QA triage answer `full`.
 Or `- None`; never omit the section.
 
 {{>_shell-rule}}

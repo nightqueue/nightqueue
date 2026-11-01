@@ -34,6 +34,15 @@ test("the rubric recalls before proposing and re-saves a recurrence with the exa
   assert.ok(RUBRIC.includes("No candidate at all is a valid result."));
 });
 
+test("the rubric audits a QA skip: a later defect in the skipped area is a qa lesson, a skip that held saves nothing", () => {
+  const section = RUBRIC.slice(RUBRIC.indexOf("## A QA skip"), RUBRIC.indexOf("## Dedup before proposing"));
+  assert.ok(section.includes("`qaMode.mode` is `skip`"), section);
+  assert.ok(section.includes("`source: qa-triage` round"), section);
+  assert.match(section, /later defect in the skipped area .*`target: qa`/);
+  assert.ok(section.includes("describes the misclassification"), section);
+  assert.ok(section.includes("A skip that held is not a candidate: nothing is saved about it."), section);
+});
+
 test("the rubric names no decision tool: lessons and memories are its only outputs", () => {
   assert.equal(RUBRIC.includes("decision_save"), false);
   assert.equal(RUBRIC.includes("decision_update"), false);
@@ -94,4 +103,11 @@ test("the reflector template has no artifact handoff and names the rubric, state
   assert.ok(TEMPLATE.includes("## Lessons given to this run\n{{INJECTED_LESSONS}}"));
   assert.ok(TEMPLATE.includes("Read every round and every fix-loop block; never the job's stream/log."));
   assert.ok(TEMPLATE.includes("{{>_footer}}"));
+});
+
+test("the reflector template reads qaMode and points a QA skip to the rubric's rule", () => {
+  const folded = TEMPLATE.replace(/\s+/g, " ");
+  assert.ok(folded.includes("`state.json` (`termination`, `resumeCount`, `qaMode`)"), folded);
+  assert.ok(folded.includes("a QA skip follows the rubric's `## A QA skip`"), folded);
+  assert.match(folded, /later defect in the skipped area is a lesson with `target: qa`, a skip that held saves nothing/);
 });

@@ -49,6 +49,17 @@ export const QA_ANALYST_STAGE = {
   verdict: QA_VERDICT,
 };
 
+// The triage stage of the QA (`run check 05 --stage triage`): its own named round of `05-qa.md`, which decides the QA mode and carries no verdict.
+export const QA_TRIAGE_STAGE = {
+  file: "05-qa.md",
+  phase: null,
+  sections: ["## Diff classification", "## New risk", "## QA mode"],
+  rounds: true,
+  source: /^source:\s*qa-triage\s*$/i,
+};
+
+export const QA_STAGES = { analyst: QA_ANALYST_STAGE, triage: QA_TRIAGE_STAGE };
+
 export const ROUND_HEADING = /^## Round (\d+)\b/i;
 export const FIX_LOOP_HEADING = /^### Fix loop (\d+)\b/;
 
@@ -206,6 +217,11 @@ export function roundSourceLine(roundText) {
     .slice(1)
     .find((candidate) => candidate.trim() !== "");
   return (line ?? "").replace(/[*`]/g, "").trim();
+}
+
+// The last round whose source line matches the pattern, as its number and text, or null when no round does.
+export function lastRoundWithSource(text, pattern) {
+  return roundsOf(text).findLast((round) => pattern.test(roundSourceLine(round.text))) ?? null;
 }
 
 // The round numbers a consolidated round lists on its `source: runtime consolidation · rounds …` line, or null when the round is no consolidation.

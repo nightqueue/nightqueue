@@ -23,7 +23,7 @@ const REQUESTS = {
   explore: ["explore"],
   architect: ["architect"],
   coder: ["coder", "coder-fix"],
-  "qa-guardian": ["qa-lite", "qa-analyst", "qa-prover"],
+  "qa-guardian": ["qa-triage", "qa-lite", "qa-analyst", "qa-prover"],
   verifier: ["verifier", "runtime"],
 };
 const INDEPENDENT = Object.keys(REQUESTS);
