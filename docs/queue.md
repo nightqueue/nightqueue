@@ -627,10 +627,11 @@ only where the notice holds exactly the line its checklist recorded.
 
 A `gate` job the preflight refused to start also carries a reason, in its own
 `blocked_code` column (a job whose worktree the runtime could not place gates the same way,
-with `worktree-failed`, a job whose run directory was written under the old phase
-numbering with `pre-renumbering-run`, and a job whose run directory another job's witness stamped
+with `worktree-failed`, a job whose run started under another pipeline version
+with `pipeline-version-changed`, and a job whose run directory another job's witness stamped
 with `foreign-run`; the notice of both answers with `queue retry <ref> --fresh`
-because a plain retry is refused) - it answers a different question than `status`: not where
+because a plain retry is refused, and `pipeline-version-unknown` while the installed
+manifest cannot be read, answered by repairing the plugin and a plain retry) - it answers a different question than `status`: not where
 the job is, but why the runner never started it, and it is what lets `queue retry`
 send that job back without a `--note`. See **What the runner requires of the
 checkout** below for what sets and clears it.
@@ -670,11 +671,13 @@ of this off.
 
 `queue cancel` moves a job into `cancelled` (from `pending`, `gate`, an orphan, `done` or
 `failed`), and `queue retry` moves it back to `pending` (from `gate`,
-`failed` or `cancelled`). Cancelling a `done` or `failed` job also releases its worktree by
+`failed` or `cancelled`). Cancelling a `done`, `failed` or `gate` job also releases its worktree by
 the rule of *Worktrees* below - the text output adds `worktree removed: <path>` or `worktree
 kept: <path> - <reason>` after `cancelled J-N`, and `--json` and the MCP `queue_cancel`
-answer `{ job, worktree }` (`{ path, status, reason? }`, or `null`); a pending, gated or
-orphaned cancel leaves the worktree where it is. The MCP `queue_cancel` with `stop: true`
+answer `{ job, worktree }` (`{ path, status, reason? }`, or `null`); a pending or
+orphaned cancel leaves the worktree where it is. For a `gate` job the rule does not ask for a
+pushed branch: the branch stays, so a clean worktree is removed and a retry places it again on
+that branch; a dirty one is kept, and the job is cancelled anyway. The MCP `queue_cancel` with `stop: true`
 cancels a job running on a runner of this host in one call. It moves the job from `running`
 straight to `cancelled` in one write that only succeeds while that runner still owns it, so no
 other runner can claim the job in between, and it gives the attempt back. Only then does it stop
@@ -734,10 +737,28 @@ job's status: the question stays on the row, so retry again. The ceiling of thos
 lives in the `state.json` of the run (`resumeCount` against `maxResumes`, default
 `1`), not in the database: a SECOND retry without `--fresh` starts the run from
 scratch because the runtime decided so, which is the intended behaviour and not a
-bug of the retry. `--fresh` asks for that from the start: it clears slug, branch
-and session and drops the run directory - and only a plain directory of this home,
-never a symlink, never a path outside `<home>/runs/`; anything else is kept, with
-the reason printed, and the retry goes on.
+bug of the retry. `--fresh` asks for that from the start, on a new branch: it clears slug,
+branch and session, releases the worktree and drops the run directory - and only a plain
+directory of this home, never a symlink, never a path outside `<home>/runs/`; anything else is
+kept, with the reason printed, and the retry goes on.
+
+The release is never forced and does not ask for a pushed branch, because the branch stays with
+its commits: a clean worktree is removed, the answer names the branch (`New job from it:
+start_branch: <branch>`; `--json` and `queue_retry` carry `worktree` and `keptBranch`), and the
+next claim takes a new slot. A worktree with uncommitted changes refuses the retry with `the
+worktree has uncommitted changes at <path>; commit or stash them, or retry without --fresh`, and
+one kept for another reason, such as a live lock, refuses naming it. A detached HEAD with commits no
+branch, tag or remote reaches refuses naming both ways past it: retry without `--fresh`, and the run
+puts its own branch on that HEAD; or run the printed `git -C '<path>' switch -c <name>` and retry
+`--fresh`, which keeps that branch, the one way open on a run another pipeline version refuses to
+resume. Every refusal comes before anything is written. The branch the answer names is the one
+`git worktree list` shows the worktree holding at that moment, which may not be the one the state
+recorded; a path git does not register as a linked worktree of the checkout answers the recorded
+branch. A worktree the job entered from its queued starting point stays without refusing, reported
+as kept. A directory that is already gone has nothing to release. When the release keeps a worktree
+the check had passed (it was locked or turned dirty in between), the run directory stays with it,
+because its state is what names that worktree; the job still goes back to the queue and takes a new
+slot, and `nightqueue doctor` lists that directory and worktree until the operator acts on them.
 
 A run that terminated left its work as a local wip commit
 `wip(<slug>): terminated at <phase> — <reason>` on the job's branch, and the runtime names that
@@ -751,8 +772,7 @@ no `Retry:` line.
 
 The next attempt starts on that commit, with a clean tree: a retry without `--fresh`, in the
 same worktree or one recreated from the branch, and a new job queued with `start_branch` on that
-branch. The runner resets nothing and the prompt says nothing about it. The phases restart,
-because a terminated run is never resumed. `--fresh` leaves the old branch at its wip commit.
+branch. The runner resets nothing and the prompt says nothing about it. `--fresh` leaves the old branch at its wip commit, and names that branch.
 `run publish` and `run commit` fold the run's own wip commits into the single delivery commit,
 so the wip is never pushed. `run pr` refuses a branch still carrying one, naming `run publish`.
 The ref stays on the old commit, which is the way back to it. A `wip(` commit that is not the
@@ -790,15 +810,63 @@ session with that directory as its cwd. `branch` and `worktree` are recorded in 
 failed add sets the record back to what git actually holds (the branch when git created it,
 never a directory it did not), so the retry succeeds once the cause is gone. A retry reuses
 the worktree its state records (a legacy `.claude/worktrees/` one included) only when git
-registers it on the recorded branch and can work in it - one git cannot use (the checkout
-moved, say) gates `worktree-failed` with the hint to run `nightqueue doctor --fix` - recreates
-it under the home from the recorded branch when its directory is gone, and gates the job with
-`worktree-failed` (the reason in `result`, like a preflight block) when the path is taken by
-something else, a `worktree-<slug>` branch the state does not name already exists, or the
-job has no slug; nothing is ever deleted or forced. A provisional slug whose worktree path or
-`worktree-<slug>` branch is still taken (another job renamed its run away from it, or a
-`retry --fresh` left the earlier worktree behind) is skipped when the slug is claimed: the job
-takes the next free variant (`<slug>-2`, ...) and the kept worktree stays for the operator.
+registers it on the recorded branch and can work in it. One git cannot use because its link
+broke (the checkout moved, say) is repaired with `git worktree repair` and checked again; one
+that links to another repository is never repaired. When the directory is gone the worktree is
+recreated under the home from the recorded branch: the recorded name when it exists, else the
+newest of its names, logging the pick and leaving the others untouched.
+
+Placement ends in a worktree or in a refusal, and it never asks the operator to rename, delete
+or repair a name the runtime chose. A refusal gates with `worktree-failed` (the reason in
+`result`, like a preflight block), and nothing is ever deleted or forced:
+
+- **The branch name is taken.** When a name of `worktree-<slug>` exists locally and the state
+  does not name it, another open job holding it gates naming that job. Otherwise the run takes
+  the next free `worktree-<slug>-<n>` (up to `-99`, past which it gates naming the range), records
+  it and writes one log line. That branch publishes as `<type>/<slug>-<n>`, and `run publish` moves to the next free `-<n>` when
+  the name it would rename to already exists locally.
+- **A branch lookup goes unanswered.** Only git's own "no such ref" reads as absent. A read that
+  fails or times out gates asking for a retry, before anything is created, so it never records a
+  branch the run did not create and never abandons recorded work for a fresh branch. On the ladder,
+  one unreadable rung is skipped and logged; a second one gates.
+- **A name git cannot parse.** A start branch written around `queue add`, or a lookup git answers
+  with a name `git check-ref-format` refuses, gets one refusal quoting the name: ``the branch
+  `<name>` does not exist and never can``, with no retry offered, because none can succeed.
+- **The recorded worktree is on a detached HEAD.** The run puts its own branch on that HEAD and goes
+  on there, uncommitted changes included, with one log line naming both branches: `worktree-<slug>`
+  when that name is free, else the next free rung. The old branch stays untouched. A live session's
+  lock refuses, and so does a rebase in progress, where `git switch` refuses and the state is set
+  back: finish or abort it, then retry. A worktree the job was queued to start in is the operator's
+  and never gets a branch: the run recreates its recorded branch at the job's path. The same worktree
+  detached before its first placement is refused, naming `git -C '<path>' switch -c <name>`.
+- **The path holds a registered worktree on another branch.** The run adopts it: the state
+  follows the branch it holds, with one log line, and a later release may still remove it. A job
+  queued on a start branch follows too, and a second line names both branches. It
+  is refused when that branch is the default branch or the main checkout's, when another open
+  job holds it, and when a live session locked the worktree. On a detached HEAD it takes the job's
+  own branch, as a recorded detached worktree does.
+- **Branch names compare under any case.** `MAIN` is the default branch `main`, and `FEAT/X` is the
+  branch another open job holds as `feat/x`, on every filesystem, so the refusals above apply and
+  name the real spelling. A job queued on another spelling of a branch git lists works under the name
+  git lists, with one log line naming both, because packed refs are looked up case-sensitively and
+  the other spelling would leave its worktree on an unborn HEAD. When a repository holds both
+  spellings, the job takes the one it asked for.
+- **The path holds a directory git does not register.** The refusal says it is a stray directory
+  and names one command that cannot destroy what it holds: `rmdir <path>` when it is empty, else
+  `mv -n <path> <path>.stray` (or the next free `.stray-<n>`). When git cannot list the worktrees,
+  the refusal asks for a retry and never calls the path stray.
+- **A first placement on a start branch finds its path occupied.** It never adopts, because the
+  job was queued on that branch. Another open job holding the path is named. Otherwise the refusal
+  says what occupies the path, prints no command, and its notice answers with
+  `queue retry <ref> --fresh`, which places the job at a new path and leaves that worktree alone.
+- **The job has no slug.** It gates.
+
+A provisional slug whose worktree path or `worktree-<slug>` branch is still taken (another job
+renamed its run away from it, or a `retry --fresh` left the earlier branch or a kept worktree
+behind), or whose slot git cannot read, is skipped when the slug is claimed, and the reason goes
+to the job log: the job takes the next free variant (`<slug>-2`, ...) and what was left behind
+stays for the operator.
+
 nightqueue never writes inside a project's `.git/` or `.claude/`. The dirty check reads
 `git status --porcelain -z` (an untracked directory stays one entry, however large), expands
 an untracked `.claude/` directory git collapsed with
@@ -834,8 +902,10 @@ empty) or a pull request is recorded. A lock left by a session whose pid is gone
 first; a lock held by a live pid, or one with no pid, keeps the worktree. A run that ends
 `gate` or `failed` keeps its worktree for the resume and for the session that attaches to it;
 `nightqueue queue close` (once the job is `done` and its pull request merged) or `nightqueue queue
-cancel` (of a `done` or `failed` job) removes it later under the same rule. A worktree nightqueue would refuse
-to remove - dirty, never pushed, ahead of its upstream, locked or unreadable - is named whatever
+cancel` (of a `done` or `failed` job) removes it later under the same rule, and the cancel of a
+`gate` job removes a clean one even when its branch was never pushed, since the branch stays. Whatever
+the rule, a detached HEAD with commits no branch, tag or remote reaches keeps its worktree. A worktree nightqueue would refuse
+to remove - dirty, never pushed, ahead of its upstream, detached with such commits, locked or unreadable - is named whatever
 the ending: the line `Worktree kept: <path> - <reason>.` is appended after a blank line to the
 notice that exists (the run's own, its fallback, or the notice the row already held when the
 run produced none), never replacing it, and a resumed run replaces its own earlier line instead
@@ -843,7 +913,8 @@ of stacking it. A clean, published worktree kept only because the run stopped at
 `failed` is not named. Nothing is ever forced, no branch is deleted and nothing on the remote is
 touched; ignored files inside a removed worktree (a local `.env`, build output) go with it.
 `nightqueue doctor` lists what is left under `<NIGHTQUEUE_HOME>/worktrees/` and under the legacy
-`.claude/worktrees/` of each checkout with the command that cleans it, marks a legacy worktree
+`.claude/worktrees/` of each checkout with the command that cleans it, offers only a read for a
+worktree `--fresh` kept with its run directory, marks a legacy worktree
 an open job still runs in as `legacy-in-use`, and `nightqueue doctor --fix` runs
 `git worktree repair` for a home worktree whose checkout or home moved
 (see [Doctor](cli.md#doctor)). In a `nightqueue open` session the operator runs
@@ -1139,12 +1210,26 @@ Run `git status --short` in the worktree first.
 `From stage: qa-stage-b` is the one sub-phase with a marker of its own, so a run
 that died in the QA does not pay the analyst twice: it is given only while the stage A marker
 names `05-qa.md` and is newer than the last `implementation` record, so a re-implemented run
-never re-enters with the analyst round of its old implementation. A run that started before
-the phases became whole numbers is never resumed, on any path: a retry is refused with
-``run started before the renumbering; retry with `fresh` `` (nothing written), the runner
-gates a claimed job as `pre-renumbering-run` before it
-writes anything or spawns, and `run start` on such a run directory refuses with the same
-line; `fresh` starts it clean. A run the decision refuses -
+never re-enters with the analyst round of its old implementation. A run with completed phases
+whose `state.json` records a `pipeline.version` other than the installed one is never resumed,
+on any path: a retry is refused with
+``this run started under <name>@<old>; retry with --fresh to start it over under @<new>``
+(nothing written), the runner gates a claimed job (a swept or re-queued one included) as
+`pipeline-version-changed` before it writes anything or spawns, and `run start` on such a run
+directory refuses with the same line; `--fresh` starts it clean. `run start` writes the version
+only on a run with no phase yet and never over a run with phases, so each new plugin version gates
+the runs in progress, and the record always says what the run started under. A state with no
+`pipeline`, as in a run started before this record existed, stays unrecorded and is never gated, on
+any version, so such a run finishes or is retried once. A first `run start` that could not record
+the version (an unreadable manifest, a refused write) says so on stderr and marks the state, and the
+run's notice then ends with one `Pipeline version: this run recorded none (<reason>), so a later
+pipeline update will not gate it.` line, never told to the origins; a later `run start` before any
+phase pins the run and drops it. The runtime recognises that line only whole, and only while the state
+carries the mark, so a run's own paragraph that starts alike stays. A recorded version under a manifest that
+cannot be read gates as `pipeline-version-unknown` on those same paths, with its own line (``this
+run started under <name>@<old> and the installed pipeline version cannot be read from <manifest>;
+repair the plugin, then retry``): nothing is known to have changed, so it asks for no fresh start,
+and a plain retry resumes once the manifest is back. A run the decision refuses -
 no state, a deliberate termination, a resume budget already spent - gets no block
 at all and starts clean, and the runtime counts the resume in `state.json` itself:
 the pipeline never touches that file. With `queue.resumeSession: true` in

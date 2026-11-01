@@ -1,16 +1,22 @@
+import { resolve } from "node:path";
 import { UserError } from "../config/errors.mjs";
 import { callerJobId } from "../config/job-home.mjs";
+import { runDir } from "../config/paths.mjs";
 import { ghPrViewAsync } from "../host/gh.mjs";
 import { openStore } from "../store/open.mjs";
 import { flattenPrState } from "./pr-state.mjs";
-import { discardRunDir, PRE_RENUMBERING_REFUSAL, preRenumberingArtifact, rowClaimOrdinal } from "./resume.mjs";
-import { consumeRunConclusion } from "./run-state.mjs";
+import { pipelineVersionBlock } from "./pipeline-version.mjs";
+import { discardRunDir, keptRunDir, readRunState, rowClaimOrdinal } from "./resume.mjs";
+import { consumeRunConclusion, recordFreshRetry } from "./run-state.mjs";
+import { ADOPTED_WORKTREE_REASON, DETACHED_WORK_PREFIX, heldBranchOf, inspectJobWorktree, releaseJobWorktree, UNCOMMITTED_WORKTREE_REASON } from "./worktree.mjs";
+import { shellQuote } from "../host/shell.mjs";
 import { jobRef } from "../memory/refs.mjs";
 import { OPERATOR_NOTE_LIMIT } from "../memory/jobs.mjs";
 
 export { callerJobId };
 
 const FINISHED_JOB_TAIL = "a finished job does not resume; queue a new one";
+const RETRYABLE_STATUSES = new Set(["gate", "failed", "cancelled"]);
 
 // Refuses a retry aimed at another job from inside an unattended run: the note becomes a human answer in the next prompt of that job, and the run directory of that job would be deleted.
 function requireOwnJob(id, env) {
@@ -42,9 +48,10 @@ async function refuseFinishedJob(id, job, { env, prStateImpl }) {
   }
 }
 
-// Refuses to resume a run directory written under the old phase numbering, before anything is written; only a fresh retry starts it over.
-function refusePreRenumberingRun(job, env) {
-  if (preRenumberingArtifact({ projectId: job?.project_id, slug: job?.slug, env }) !== null) throw new UserError(PRE_RENUMBERING_REFUSAL);
+// Refuses to resume a run started under another pipeline version, before anything is written; only a fresh retry starts it over.
+function refuseVersionChangedRun(run) {
+  const block = pipelineVersionBlock(readRunState(run), run.env);
+  if (block !== null) throw new UserError(block.message);
 }
 
 // Refuses an operator answer longer than the resumed prompt carries, before anything is written, so it is never cut silently.
@@ -108,20 +115,69 @@ async function commitAfterConsumption({ id, note, store, consumed }) {
   }
 }
 
-// Retries one job and, only with `fresh`, drops the run directory of the previous attempt; a plain retry first consumes the last attempt's conclusion, before the commit, so nothing a claimed run records is ever erased and a refused retry touches nothing.
+// Refuses a fresh retry whose worktree could not be released, read-only and before anything is written, answering what it read; a worktree the job adopted is the operator's and stays without refusing.
+async function refuseUnreleasableWorktree(job, env) {
+  if (!RETRYABLE_STATUSES.has(job?.status)) return null;
+  const inspected = await inspectJobWorktree({ job, branchStays: true, env });
+  if (!inspected || inspected.removable || inspected.reason === ADOPTED_WORKTREE_REASON) return inspected;
+  if (inspected.reason === UNCOMMITTED_WORKTREE_REASON) {
+    throw new UserError(`the worktree has uncommitted changes at ${inspected.path}; commit or stash them, or retry without --fresh`);
+  }
+  const unreleased = `the worktree at ${inspected.path} could not be released (${inspected.reason})`;
+  if (inspected.reason.startsWith(DETACHED_WORK_PREFIX)) throw new UserError(`${unreleased}; ${detachedExits(inspected.path)}`);
+  throw new UserError(`${unreleased}; retry without --fresh`);
+}
+
+// The two ways past a detached HEAD holding work: a plain retry places the run's branch on it, and a branch put there by hand makes the fresh retry possible.
+function detachedExits(path) {
+  const ownBranch = `git -C ${shellQuote(path)} switch -c <name>`;
+  return `retry without --fresh and the run puts its own branch on that HEAD and goes on there, or put a branch on it yourself (${ownBranch}) and retry --fresh, which keeps that branch`;
+}
+
+// The branch a job's run recorded, which a fresh retry leaves behind, or null when it recorded none.
+function recordedBranch(run) {
+  const branch = readRunState(run)?.branch;
+  return typeof branch === "string" && branch.trim() ? branch.trim() : null;
+}
+
+// The branch that carries the work a fresh retry leaves behind: the one the inspected worktree really holds, else the one the run recorded.
+async function leftBehindBranch(run, job, inspected) {
+  const held = inspected ? await heldBranchOf({ job, path: inspected.path, env: run.env }) : null;
+  return held ?? recordedBranch(run);
+}
+
+// Marks the state of a fresh retry that may leave its run directory behind, so doctor can name it; answers why it could not, or null.
+function markFreshRetry(run, jobId, inspected) {
+  if (!inspected || inspected.reason === ADOPTED_WORKTREE_REASON) return null;
+  const written = recordFreshRetry({ ...run, jobId });
+  return written.status === "written" ? null : written.reason;
+}
+
+// The run directory of a fresh retry after the release: kept with a worktree that stayed, since its state is what names that worktree; dropped when none stayed, or when the one that stayed was adopted.
+function settleRunDir(run, { worktree, unmarked }) {
+  if (worktree?.status !== "kept" || worktree.reason === ADOPTED_WORKTREE_REASON) return discardRunDir(run);
+  const unlisted = unmarked === null ? "" : `; doctor cannot list it (${unmarked})`;
+  return keptRunDir(resolve(runDir(run.projectId, run.slug, run.env)), `its worktree ${worktree.path} was kept${unlisted}`);
+}
+
+// Retries one job and, only with `fresh`, releases the previous attempt's worktree and drops its run directory, naming the branch that stays; a plain retry first consumes the last attempt's conclusion, before the commit, so nothing a claimed run records is ever erased, and the order is fixed, so a refused retry never deletes anything.
 export async function applyRetry({ id, note, fresh = false, env = process.env, prStateImpl = ghPrViewAsync, storeImpl = openStore } = {}) {
   requireOwnJob(id, env);
   refuseOverlongNote(note);
   const store = storeImpl(env);
   const before = await store.jobs.getJob(id);
   await refuseFinishedJob(id, before, { env, prStateImpl });
-  if (fresh !== true) refusePreRenumberingRun(before, env);
-  await refuseUnretryableRow(id, note, store);
   const run = { projectId: before?.project_id, slug: before?.slug, env };
-  if (fresh === true) {
-    const job = await store.jobs.retryJob(id, { note, fresh });
-    return { job, runDir: discardRunDir(run) };
+  if (fresh !== true) refuseVersionChangedRun(run);
+  await refuseUnretryableRow(id, note, store);
+  if (fresh !== true) {
+    const consumed = await consumeLastConclusion({ id, before, run, store });
+    return { job: await commitAfterConsumption({ id, note, store, consumed }), runDir: null, worktree: null, keptBranch: null };
   }
-  const consumed = await consumeLastConclusion({ id, before, run, store });
-  return { job: await commitAfterConsumption({ id, note, store, consumed }), runDir: null };
+  const inspected = await refuseUnreleasableWorktree(before, env);
+  const keptBranch = await leftBehindBranch(run, before, inspected);
+  const job = await store.jobs.retryJob(id, { note, fresh });
+  const unmarked = markFreshRetry(run, before?.id ?? id, inspected);
+  const worktree = await releaseJobWorktree({ job: before, branchStays: true, env });
+  return { job, runDir: settleRunDir(run, { worktree, unmarked }), worktree, keptBranch };
 }

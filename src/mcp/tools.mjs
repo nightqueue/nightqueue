@@ -1309,7 +1309,7 @@ function toolDefinitions(env, state) {
       config: {
         description:
           "Cancels a pending, gated, done, failed or orphaned job. A job running under a live lease, a done job being closed under a live close lease, and a done job whose close was interrupted (resume that one with queue_close), are refused with the exact reason and no write; `closed` and `cancelled` jobs are refused as already finished. " +
-          "Cancelling a `done` or `failed` job also releases its worktree: removed when clean and published, otherwise kept with the reason. The answer carries `worktree` (`{ path, status, reason? }`, or null when nothing was released). " +
+          "Cancelling a `done` or `failed` job also releases its worktree: removed when clean and published, otherwise kept with the reason. Cancelling a gated job releases it too, removed when clean, pushed or not, because its branch stays for a later retry; a dirty one is kept with the reason. The answer carries `worktree` (`{ path, status, reason? }`, or null when nothing was released). " +
           "A done job resolved without change is cancelled like any done job; nothing is sent to its origins. " +
           "With `stop: true` a job running on a runner of this host is cancelled in one call: the job goes from `running` straight to `cancelled` in one write that only succeeds while that runner still owns it - no other runner can claim it in between - and its attempt is given back; then that runner alone is stopped exactly like `queue_stop` with its pid (SIGTERM, up to 10 s), and `runner` answers `{ outcome, pid, message }`. " +
           "The runner notices the stop only at its next heartbeat, so `alive` is an expected answer when `queue.leaseHeartbeatS` is long: that runner ends by itself and the job stays cancelled.`release_worktree: true` (only with `stop`) then releases the job's worktree by the same rule as a done or failed cancel, once the runner is gone. " +
@@ -1348,8 +1348,8 @@ function toolDefinitions(env, state) {
       config: {
         description:
           "Sends a gated, failed or cancelled job back to the queue. A gated job only moves with `note`, which reaches the run as the answer to its gate - except a job the preflight gated (its `blocked_code` is set: dirty checkout, wrong branch, missing checkout or `claude`, or `store-unavailable`: the session could not reach this server), which moves without one once its cause is fixed. A finished job never resumes: a `closed` job, or a `done` job whose pull request is merged, is refused with \"a finished job does not resume; queue a new one\". " +
-          "Without `fresh` the run resumes from the last phase, keeping slug, branch, session and run directory; with `fresh` it starts from phase 0 and the run directory is dropped. " +
-          "A run whose branch carries a terminated run's wip commit starts on it, and `run publish` folds it into the delivery commit; `fresh` starts on a new branch and leaves that one untouched. " +
+          "Without `fresh` the run resumes from the last phase, keeping slug, branch, session and run directory; with `fresh` it starts from phase 0, the clean worktree is removed (never forced) and the run directory is dropped. These refuse `fresh` and delete nothing: a worktree with uncommitted changes (commit or stash them, or retry without `fresh`); a detached HEAD holding commits on no branch (retry without `fresh`, and the run puts its own branch on that HEAD, or put a branch on it by hand and retry `fresh`); a locked or unreadable worktree (retry without `fresh`). A worktree that a lock taken after the row moved kept keeps its run directory too, answered in `runDir` with status `kept` and listed by `nightqueue doctor`. " +
+          "A run whose branch carries a terminated run's wip commit starts on it, and `run publish` folds it into the delivery commit; `fresh` starts on a new branch and leaves that one untouched, answering it as `keptBranch` beside the released `worktree`. " +
           "`run` starts a DETACHED runner, the same one `queue_run` starts - and the same one the `--run` of the CLI starts, unless it is asked for `--foreground`; a job that cannot be claimed right now answers `waiting` and starts nothing. " +
           "Inside an unattended run this tool only accepts the id of the job it is running: retrying another job is refused, because the note is delivered as a human answer in that job's next prompt.",
         inputSchema: {
@@ -1360,10 +1360,10 @@ function toolDefinitions(env, state) {
         },
       },
       handler: async (args) => {
-        const { job, runDir } = await applyRetry({ id: parseJobRef(args.job_id), note: args.note, fresh: args.fresh === true, env });
+        const { job, runDir, worktree, keptBranch } = await applyRetry({ id: parseJobRef(args.job_id), note: args.note, fresh: args.fresh === true, env });
         const started = args.run === true ? await startQueueRunner({ jobId: job.id, env }) : null;
         const answer = started ? runnerAnswer(started, env, await startAdvisoryLines({ env })) : { runner: null, hint: queuedRunnerLine(env, job.id) };
-        return { ok: true, job, runDir, ...answer };
+        return { ok: true, job, runDir, worktree, keptBranch, ...answer };
       },
     },
     {

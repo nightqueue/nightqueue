@@ -5,6 +5,7 @@ export const WORKTREE_BRANCH_PREFIX = "worktree-";
 export const COMMIT_TYPES = ["feat", "fix", "refactor", "docs", "style", "build", "chore", "test"];
 
 const COMMIT_SUBJECT_RE = new RegExp(`^(${COMMIT_TYPES.join("|")})(\\([^)]*\\))?!?:\\s`);
+const RUNG_RE = /^(?:[2-9]|[1-9]\d+)$/;
 
 // The commit type a Conventional Commits subject starts with, or null when it follows no known type.
 export function commitTypeOf(subject) {
@@ -16,9 +17,41 @@ function branchText(name) {
   return typeof name === "string" ? name.trim() : "";
 }
 
+// A branch name in the one case two spellings of it compare under.
+function foldedName(name) {
+  return branchText(name).toLowerCase();
+}
+
+// Tells whether two spellings name one ref, whichever case each is written in; an absent name is never equal to anything.
+export function sameRefName(a, b) {
+  const left = foldedName(a);
+  return left !== "" && left === foldedName(b);
+}
+
 // The branch prefix of a run whose worktree name carried no `<type>` to restore, read from the task type the run recorded.
 function branchPrefix(type) {
   return type === "bug/error" ? "fix" : "feat";
+}
+
+// The slug a runtime branch publishes over: `<slug>-<n>` for a rung `worktree-<slug>-<n>` of the run's own slug, else the slug as given.
+function publishedSlug(name, slug) {
+  const own = branchText(slug);
+  const rungPrefix = `${WORKTREE_BRANCH_PREFIX}${own.replaceAll("+", "-")}-`;
+  if (!own || !name.startsWith(rungPrefix)) return slug;
+  const rung = name.slice(rungPrefix.length);
+  return RUNG_RE.test(rung) ? `${own}-${rung}` : slug;
+}
+
+// Explains a pull request on the plain `<type>/<slug>` of a run on a rung of that slug, whose own published name is another; null for any other pair.
+export function rungCollisionNote(head, branch, { slug } = {}) {
+  const own = branchText(slug);
+  const name = branchText(branch);
+  const rungSlug = own ? publishedSlug(name, own) : own;
+  if (rungSlug === own) return null;
+  const headText = branchText(head);
+  const type = COMMIT_TYPES.find((commitType) => headText === `${commitType}/${own}`);
+  if (!type) return null;
+  return `\`${headText}\` is the published name of \`${WORKTREE_BRANCH_PREFIX}${own.replaceAll("+", "-")}\`; this run's \`${name}\` publishes as \`${type}/${rungSlug}\``;
 }
 
 // The name the branch of a run is published under: the `<type>/<slug>` the worktree mangled, or the commit type (else the task type) over the run's slug.
@@ -26,7 +59,7 @@ export function publishedBranchName(current, { type, slug, commitType } = {}) {
   if (!current.startsWith(WORKTREE_BRANCH_PREFIX)) return current;
   const mangled = current.slice(WORKTREE_BRANCH_PREFIX.length);
   const separator = mangled.indexOf("+");
-  return separator > 0 ? `${mangled.slice(0, separator)}/${mangled.slice(separator + 1)}` : `${commitType ?? branchPrefix(type)}/${slug}`;
+  return separator > 0 ? `${mangled.slice(0, separator)}/${mangled.slice(separator + 1)}` : `${commitType ?? branchPrefix(type)}/${publishedSlug(current, slug)}`;
 }
 
 // The worktree form of a published `<type>/<slug>` name, or null when the name has no such shape.
@@ -39,7 +72,7 @@ function worktreeBranchName(name) {
 // The names a runtime-created `worktree-<slug>` branch may be published under: one per commit type, over the run's slug.
 function commitTypeAliases(text, slug) {
   if (text.includes("+") || !branchText(slug)) return [];
-  return COMMIT_TYPES.map((commitType) => `${commitType}/${branchText(slug)}`);
+  return COMMIT_TYPES.map((commitType) => `${commitType}/${branchText(publishedSlug(text, slug))}`);
 }
 
 // Every name one branch of a run may carry: itself, its published forms and its worktree form; empty when there is no name.
@@ -61,10 +94,14 @@ export function sameBranch(a, b, hints = {}) {
   return sameRunBranch(a, hints, b, hints);
 }
 
-// Tells whether the branches of two runs are the same, each name expanded by its own run's slug/type; an absent name is never equal to anything.
+// The aliases of a name read in one case, so a spelling in another case still expands to its published forms.
+function foldedAliases(name, hints) {
+  return branchAliases(foldedName(name), { ...hints, slug: foldedName(hints?.slug) });
+}
+
+// Tells whether the branches of two runs are the same under any case, each name expanded by its own run's slug/type; an absent name is never equal to anything.
 export function sameRunBranch(a, hintsA = {}, b, hintsB = {}) {
-  const left = branchAliases(a, hintsA ?? {});
+  const left = foldedAliases(a, hintsA);
   if (left.length === 0) return false;
-  const right = branchAliases(b, hintsB ?? {});
-  return right.some((name) => left.includes(name));
+  return foldedAliases(b, hintsB).some((name) => left.includes(name));
 }

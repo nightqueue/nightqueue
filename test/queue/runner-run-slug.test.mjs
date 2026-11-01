@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
@@ -62,6 +62,26 @@ function sessionHome(t, name, triage = triageText()) {
 function prStream(sessionId) {
   return toNdjson([systemInitEvent({ sessionId }), assistantEvent(noticeText(), { sessionId, messageId: "msg_notice" }), resultEvent({ text: "Done. Pull request: https://github.com/acme/api/pull/42", sessionId })]);
 }
+
+test("a checkout git refuses gives no slot: the job log names the failure and no candidate is bound", async (t) => {
+  const env = makeHome(t, "slot-broken-git-home");
+  const checkout = makeProject(t, env, "alpha");
+  rmSync(join(checkout, ".git", "HEAD"));
+  const planPath = useFakeClaude(env, makeDir(t, "slot-broken-git-plan"), [{ stdout: doneStream(), exitCode: 0 }]);
+  const projectId = ensureProject(env, "alpha");
+  const id = addJob({ projectId, prompt: "fix the worker", maxAttempts: 1 }, env).id;
+  const provisional = provisionalSlug(getJob(id, env));
+
+  const cycle = await runCycle({ jobId: id, env, deps: { gitImpl: fakeGit() } });
+
+  const log = readFileSync(jobLogPath(id, env), "utf8");
+  assert.match(log, new RegExp(`the worktree slot of \`${provisional}\` could not be read \\(git could not read refs/heads/`));
+  assert.match(log, new RegExp(`the worktree slot of \`${provisional}\` is taken or unreadable`));
+  assert.equal(existsSync(runDir(projectId, provisional, env)), false, "a run directory was created on a slot nobody could read");
+  assert.equal(getJob(id, env).slug, null);
+  assert.deepEqual(cycle.processed[0], { id, status: "gated", code: "worktree-failed" });
+  assert.equal(fakeCalls(planPath).length, 0, "a session was spawned with no worktree");
+});
 
 test("the retry attempt after an in-session rename is prompted with the NEW run dir, not the old one", async (t) => {
   const { env, signal, exec, projectId } = sessionHome(t, "retry-rundir");

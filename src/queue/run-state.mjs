@@ -29,7 +29,7 @@ export const RUN_OUTCOME_STATUSES = ["done", "gate", "no_change"];
 export const NO_CHANGE_OUTCOME = "no_change";
 
 // The keys of `state.json` only the runtime writes: no pipeline writer may set them, whole or by a dotted name.
-export const RUNTIME_ONLY_KEYS = ["job", "usageCoverageCleared"];
+export const RUNTIME_ONLY_KEYS = ["job", "usageCoverageCleared", "pipeline", "freshRetry", "pipelineUnpinned"];
 
 // The record of an always-gate class `yes` that `run check 03` cleared by quotes the job prompt holds.
 const USAGE_COVERAGE_CLEARED = "usageCoverageCleared";
@@ -594,6 +594,57 @@ export function recordUsageCoverageCleared({ projectId, slug, quotes, env = proc
       const next = withCoverageRecord(withFixedFields(readRunState({ projectId, slug, env }), { projectId, slug }), list);
       if (next === null) return { status: "absent", path: null, reason: null };
       return saveRunState({ projectId, slug, env, state: { ...next, updatedAt: new Date().toISOString() } });
+    },
+  });
+}
+
+// The pipeline a run with recorded phases started under, its name null when it recorded none; null when no version is recorded or no phase ran yet.
+export function pinnedPipeline(state) {
+  const version = isStateObject(state?.pipeline) ? trimmedText(state.pipeline.version) : null;
+  if (version === null || phaseEntries(state).length === 0) return null;
+  return { name: trimmedText(state.pipeline.name), version };
+}
+
+// Records the pipeline a run starts under; a run that already has phases started earlier, under what it recorded then or nothing, and answers `unchanged`.
+export function recordPipeline({ projectId, slug, pipeline, env = process.env } = {}) {
+  return underRunLock({
+    projectId,
+    slug,
+    env,
+    write: () => {
+      const state = withFixedFields(readRunState({ projectId, slug, env }), { projectId, slug });
+      if (phaseEntries(state).length > 0) return { status: "unchanged", path: null, reason: null };
+      const { pipelineUnpinned: _dropped, ...pinned } = state;
+      return saveRunState({ projectId, slug, env, state: { ...pinned, pipeline, updatedAt: new Date().toISOString() } });
+    },
+  });
+}
+
+// Records why a run stayed with no pipeline version, so its notice can say so; a state that already records a version answers `unchanged`.
+export function recordPipelineUnpinned({ projectId, slug, reason, env = process.env } = {}) {
+  return underRunLock({
+    projectId,
+    slug,
+    env,
+    write: () => {
+      const state = withFixedFields(readRunState({ projectId, slug, env }), { projectId, slug });
+      if (isStateObject(state.pipeline) && trimmedText(state.pipeline.version) !== null) return { status: "unchanged", path: null, reason: null };
+      const at = new Date().toISOString();
+      return saveRunState({ projectId, slug, env, state: { ...state, pipelineUnpinned: { reason, at }, updatedAt: at } });
+    },
+  });
+}
+
+// Records that a fresh retry of a job is leaving this run behind, so a directory it could not delete stays listed by doctor.
+export function recordFreshRetry({ projectId, slug, jobId, env = process.env } = {}) {
+  return underRunLock({
+    projectId,
+    slug,
+    env,
+    write: () => {
+      const state = withFixedFields(readRunState({ projectId, slug, env }), { projectId, slug });
+      const at = new Date().toISOString();
+      return saveRunState({ projectId, slug, env, state: { ...state, freshRetry: { jobId, at }, updatedAt: at } });
     },
   });
 }

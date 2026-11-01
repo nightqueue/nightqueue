@@ -6,6 +6,7 @@ import { jobLogPath } from "../config/paths.mjs";
 import { registrationOffer } from "../config/projects.mjs";
 import { loadConfig } from "../config/store.mjs";
 import { launchOperator, operatorPrompt } from "../host/operator.mjs";
+import { shellQuote } from "../host/shell.mjs";
 import { updateNoticeLine } from "../host/update-notice.mjs";
 import { JOB_STATUSES, jobView, truncateByCodePoint } from "../memory/jobs.mjs";
 import { ensureStoreExists, openStore, openStoreReadOnly, withReadOnlyStore } from "../store/open.mjs";
@@ -52,6 +53,7 @@ import { stopReport, stopRunners } from "../queue/stop.mjs";
 import { runCloseHere, runPostCloseSteps, startCloseDetached } from "../queue/close-start.mjs";
 import { CLOSE_FAILED_LABEL, CLOSE_STALLED_LABEL, CLOSE_STEP_ICONS, CLOSING_LABEL, closeChecklistLines, closeStoppedLine, queueWorkers, statusLabel } from "../queue/close-view.mjs";
 import { registerForegroundRunner, runnerMode, startQueueRunner } from "../queue/start.mjs";
+import { WIP_NEW_JOB_PREFIX } from "../queue/wip-commit.mjs";
 import { parseWallClock } from "../queue/window.mjs";
 import { checkArgs, parseCommand } from "./args.mjs";
 import { keyOption, registerProject } from "./project.mjs";
@@ -1140,7 +1142,7 @@ async function runRun(argv, ctx) {
   return await runGuardedHere({ jobId, json, ctx, run: () => runCycleHere({ jobId, max, json }, ctx) });
 }
 
-// Runs `queue cancel`, which refuses without writing when the job is running or being closed under a live lease, and releases the worktree of a done or failed job.
+// Runs `queue cancel`, which refuses without writing when the job is running or being closed under a live lease, and releases the worktree of a done, failed or gated job.
 async function runCancel(argv, ctx) {
   const { values, positionals } = parseCommand(argv, { reason: { type: "string" }, json: { type: "boolean" } });
   checkArgs(positionals, { min: 1, usage: USAGE.cancel });
@@ -1354,6 +1356,12 @@ function retriedLine(job, values, ctx) {
   return values.run === true ? line : `${line}. ${queuedRunnerLine(ctx, job.id)}`;
 }
 
+// Prints what a fresh retry left behind: the released or kept worktree and the branch a new job can start from.
+function reportFreshLeftovers({ worktree, keptBranch }, ctx) {
+  if (worktree) ctx.out(worktreeLine(worktree));
+  if (keptBranch) ctx.out(`${WIP_NEW_JOB_PREFIX} start_branch: ${keptBranch}`);
+}
+
 // Runs `queue retry`, which sends a gated, failed or cancelled job back to the queue; a gated one only moves with a note, unless a preflight block gated it.
 async function runRetry(argv, ctx) {
   const { values, positionals } = parseCommand(argv, {
@@ -1365,14 +1373,18 @@ async function runRetry(argv, ctx) {
   });
   checkArgs(positionals, { min: 1, usage: USAGE.retry });
   checkForegroundNeedsRun(values, USAGE.retry);
-  const { job, runDir } = await applyRetry({
+  const { job, runDir, worktree, keptBranch } = await applyRetry({
     id: parseJobRef(positionals[0]),
     note: values.note,
     fresh: values.fresh === true,
     env: ctx.env,
   });
-  if (values.json) ctx.out(JSON.stringify({ job }));
-  else ctx.out(retriedLine(job, values, ctx));
+  if (values.json) {
+    ctx.out(JSON.stringify({ job, worktree, keptBranch }));
+  } else {
+    ctx.out(retriedLine(job, values, ctx));
+    reportFreshLeftovers({ worktree, keptBranch }, ctx);
+  }
   reportRunDir(runDir, ctx);
   return values.run === true ? await runNow(job, values, ctx) : 0;
 }
@@ -1542,11 +1554,6 @@ const SESSION_OPTIONS = { print: { type: "boolean" }, json: { type: "boolean" },
 function sessionLine(resolved) {
   const base = `${jobRef(resolved.jobId)} · attempt ${resolved.attempt} · session ${resolved.session} · cwd ${resolved.cwd}`;
   return resolved.worktreeReleased ? `${base} (worktree released, using the checkout)` : base;
-}
-
-// Wraps a text in single quotes for a POSIX shell.
-function shellQuote(text) {
-  return `'${text.replaceAll("'", "'\\''")}'`;
 }
 
 // The shell command `--print` answers: the operator resuming the session, run from its cwd, with the request when one was given.

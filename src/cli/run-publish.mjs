@@ -25,6 +25,8 @@ const BASE_REFS = ["refs/remotes/origin/HEAD", "origin/main", "origin/master", "
 
 const ALREADY_EXISTS = /already exists/i;
 
+const LAST_RENAME_RUNG = 99;
+
 // Said after every refusal, so `--extra` is read as what it is — a way to add files, never a way to force a refused one through.
 export const EXTRA_IS_NOT_AN_OVERRIDE =
   "`--extra` adds files to the list, it never overrides this refusal: stop here and record it as an open item of the report, " +
@@ -324,12 +326,28 @@ function headCommitType(cwd, env) {
   return subject.ok ? commitTypeOf(subject.stdout.trim()) : null;
 }
 
+// Tells whether a local branch exists in the worktree's repository.
+function localBranchExists(cwd, branch, env) {
+  return runGit({ args: ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`], cwd, env }).ok;
+}
+
+// The name a rename can land on: the final name, or its next free `-<n>` when another local branch already carries it.
+function freeBranchName({ cwd, final, env }) {
+  if (!localBranchExists(cwd, final, env)) return final;
+  for (let rung = 2; rung <= LAST_RENAME_RUNG; rung += 1) {
+    const candidate = `${final}-${rung}`;
+    if (!localBranchExists(cwd, candidate, env)) return candidate;
+  }
+  return final;
+}
+
 // Renames the local branch to the name the remote should carry, which is what the push and the pull request then use.
 function renameBranch({ cwd, current, final, env }) {
   if (final === current) return current;
-  const renamed = runGit({ args: ["branch", "-m", current, final], cwd, env });
-  if (!renamed.ok) throw new UserError(`git could not rename \`${current}\` to \`${final}\`: ${failureLine(renamed)}`);
-  return final;
+  const target = freeBranchName({ cwd, final, env });
+  const renamed = runGit({ args: ["branch", "-m", current, target], cwd, env });
+  if (!renamed.ok) throw new UserError(`git could not rename \`${current}\` to \`${target}\`: ${failureLine(renamed)}`);
+  return target;
 }
 
 // Records on the run the branch the worktree now holds, before anything external can fail; a refused record is reported, never fatal.

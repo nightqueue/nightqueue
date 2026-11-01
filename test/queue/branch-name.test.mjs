@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { branchAliases, COMMIT_TYPES, commitTypeOf, publishedBranchName, sameBranch, sameRunBranch, WORKTREE_BRANCH_PREFIX } from "../../src/queue/branch-name.mjs";
+import { branchAliases, COMMIT_TYPES, commitTypeOf, publishedBranchName, rungCollisionNote, sameBranch, sameRefName, sameRunBranch, WORKTREE_BRANCH_PREFIX } from "../../src/queue/branch-name.mjs";
 
 // The rename `run pr` applied before the rule moved here, kept verbatim as the reference the module must match.
 function legacyFinalBranch(current, { type, slug }) {
@@ -45,6 +45,30 @@ test("different branches, and absent names, are never the same branch", () => {
   assert.equal(sameBranch(null, null), false);
   assert.equal(sameBranch(undefined, "feat/x"), false);
   assert.equal(sameBranch("feat/x", null), false);
+});
+
+test("two spellings of one ref are one name, and an absent name is none", () => {
+  assert.equal(sameRefName("Main", "main"), true);
+  assert.equal(sameRefName(" FEAT/X ", "feat/x"), true);
+  assert.equal(sameRefName(null, null), false);
+  assert.equal(sameRefName("", ""), false);
+  assert.equal(sameRefName("main", null), false);
+  assert.equal(sameRefName("main", "develop"), false);
+  assert.equal(sameRefName("straße", "STRASSE"), false, "toLowerCase is no full case fold, and the queue says so");
+});
+
+test("branches compare under any case, the published forms included, and every different name stays different", () => {
+  assert.equal(sameBranch("FEAT/X", "feat/x"), true);
+  assert.equal(sameRunBranch("WORKTREE-x", { slug: "x" }, "fix/x", {}), true);
+  assert.equal(sameRunBranch("fix/x", {}, "WORKTREE-x", { slug: "x" }), true);
+  assert.equal(sameRunBranch("worktree-x", { slug: "X" }, "FIX/x", {}), true);
+  assert.equal(sameBranch("worktree-x-2", "fix/x", { slug: "x" }), false);
+  assert.equal(sameBranch("WORKTREE-x-2", "FIX/x", { slug: "x" }), false);
+  assert.equal(sameBranch("MAIN", "develop"), false);
+});
+
+test("the aliases of a branch keep the spelling they are given, since git receives them", () => {
+  assert.deepEqual(branchAliases("Feat/X"), ["Feat/X", "worktree-Feat+X"]);
 });
 
 test("the aliases of a branch are itself, its published form and its worktree form", () => {
@@ -93,6 +117,51 @@ test("the branches of two runs never match through one run's slug: unrelated `wo
   assert.equal(sameRunBranch(candidate, { slug: "botao-entregar-tudo-modal" }, hold, holdHints), false, "swapped sides");
   assert.equal(sameRunBranch("worktree-a", { slug: "a" }, "worktree-b", { slug: "b" }), false);
   assert.ok(sameRunBranch("worktree-a", { slug: "a" }, "worktree-a", { slug: null }), "a name is itself");
+});
+
+test("a rung `worktree-<slug>-<n>` of the run's slug publishes and aliases over `<slug>-<n>`, never over `<slug>`", () => {
+  const hints = { slug: "x", type: "bug/error" };
+  assert.equal(publishedBranchName("worktree-x-2", hints), "fix/x-2");
+  assert.equal(publishedBranchName("worktree-x-10", { slug: "x", commitType: "docs" }), "docs/x-10");
+  assert.equal(publishedBranchName("worktree-a-b-2", { slug: "a+b", commitType: "docs" }), "docs/a+b-2");
+  const aliases = branchAliases("worktree-x-2", hints);
+  assert.ok(aliases.includes("fix/x-2") && aliases.includes("feat/x-2"), aliases.join(" "));
+  assert.equal(aliases.includes("fix/x"), false, "the rung carries the old branch's published name");
+  assert.equal(sameBranch("worktree-x-2", "fix/x", hints), false);
+  assert.ok(sameBranch("worktree-x-2", "fix/x-2", hints));
+});
+
+test("a rung's run never takes the plain published name as its own, and the collision note explains the pair", () => {
+  assert.equal(sameBranch("fix/x", "worktree-x-2", { slug: "x" }), false);
+  assert.equal(rungCollisionNote("fix/x", "worktree-x-2", { slug: "x" }), "`fix/x` is the published name of `worktree-x`; this run's `worktree-x-2` publishes as `fix/x-2`");
+  assert.equal(rungCollisionNote("feat/x", "worktree-x-11", { slug: "x" }), "`feat/x` is the published name of `worktree-x`; this run's `worktree-x-11` publishes as `feat/x-11`");
+});
+
+test("the collision note stays silent on every other pair", () => {
+  for (const [head, branch, slug] of [
+    ["fix/y", "worktree-x-2", "x"],
+    ["nope/x", "worktree-x-2", "x"],
+    ["fix/x", "worktree-x", "x"],
+    ["fix/x", "worktree-x-1", "x"],
+    ["fix/x-2", "worktree-x-2", "x"],
+    ["fix/x", "worktree-y-2", "x"],
+    ["fix/x", "fix/x-2", "x"],
+    ["fix/x", "worktree-x-2", null],
+    [null, "worktree-x-2", "x"],
+    ["fix/x", null, "x"],
+  ]) {
+    assert.equal(rungCollisionNote(head, branch, { slug }), null, JSON.stringify([head, branch, slug]));
+  }
+  assert.equal(rungCollisionNote("fix/x", "worktree-x-2"), null);
+});
+
+test("a near-miss of a rung is no rung: it keeps the run's own slug", () => {
+  for (const near of ["worktree-x-1", "worktree-x-02", "worktree-x-2b", "worktree-xy-2"]) {
+    assert.equal(publishedBranchName(near, { slug: "x", commitType: "fix" }), "fix/x", near);
+    assert.ok(branchAliases(near, { slug: "x" }).includes("fix/x"), near);
+  }
+  assert.equal(publishedBranchName("worktree-x-2", { slug: "x-2", commitType: "fix" }), "fix/x-2", "the slug's own suffix is not a rung");
+  assert.deepEqual(branchAliases("worktree-x-2", { slug: "x-2" }).includes("fix/x-2-2"), false);
 });
 
 test("the branch of one run still matches its published form across runs, each side by its own slug", () => {

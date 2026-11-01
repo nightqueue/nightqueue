@@ -308,13 +308,17 @@ test("the job's files are empty for a run with neither a publication nor a wip, 
   assert.deepEqual(resultOf(run).files, []);
 });
 
-test("a fresh retry drops the run and leaves the old branch at the wip commit", async (t) => {
+test("a fresh retry drops the run, removes the worktree and leaves the old branch, named in its answer and its notice, at the wip commit", async (t) => {
   const run = await terminatedAttempt(t, "wip-fresh");
   const wip = readRunState({ projectId: run.projectId, slug: SLUG, env: run.env }).wip;
-  await applyRetry({ id: run.id, fresh: true, env: run.env });
+  assert.ok(getJob(run.id, run.env).notice_md.includes(`add --fresh to start over on a new branch, keeping ${run.branch})`));
+  const answer = await applyRetry({ id: run.id, fresh: true, env: run.env });
   assert.equal(getJob(run.id, run.env).slug, null);
   assert.equal(readRunState({ projectId: run.projectId, slug: SLUG, env: run.env }), null);
   assert.equal(git(["-C", run.checkout, "rev-parse", run.branch]).trim(), wip.commit);
+  assert.equal(answer.keptBranch, run.branch);
+  assert.deepEqual(answer.worktree, { path: run.path, status: "removed" });
+  assert.equal(existsSync(run.path), false, "the worktree of the old attempt stayed");
 });
 
 test("a worktree removed by hand is recreated from the branch that carries the wip, sitting on it", async (t) => {

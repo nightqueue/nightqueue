@@ -11,6 +11,9 @@ export const WORKTREE_READ_TIMEOUT_MS = 5000;
 export const WORKTREE_REMOVE_TIMEOUT_MS = 60000;
 export const KEPT_PREFIX = "Worktree kept: ";
 export const ADOPTED_WORKTREE_REASON = "it is the worktree this job was queued to start in; nightqueue removes only the worktrees it creates";
+export const UNCOMMITTED_WORKTREE_REASON = "it has uncommitted changes";
+export const DETACHED_WORK_PREFIX = "its detached HEAD has ";
+const HEADS = "refs/heads/";
 const DROPPED_NAMES_MAX = 10;
 const LOCK_PID_RE = /\(pid (\d+)\b/;
 const WORKTREE_FIELD = "worktree ";
@@ -164,6 +167,27 @@ async function publicationReason(path, env) {
   return count > 0 ? unpushedReason(count) : null;
 }
 
+// Why a detached HEAD keeps its worktree: commits no branch, tag or remote reaches, which a removal would drop; null on a branch or with nothing to lose.
+async function detachedReason(entry, path, env) {
+  if (entry.branch !== null) return null;
+  const listed = await gitRead(["rev-list", "--count", "HEAD", "--not", "--branches", "--tags", "--remotes"], path, env);
+  const count = listed.ok ? Number.parseInt(listed.stdout.trim(), 10) : Number.NaN;
+  if (!Number.isFinite(count)) return "git could not read it";
+  return count > 0 ? `${DETACHED_WORK_PREFIX}${count} commit(s) on no branch` : null;
+}
+
+// The branch a linked worktree of the job's checkout holds right now, as git lists it; null when git does not register the path there, it is detached, or git cannot say.
+export async function heldBranchOf({ job, path, env = process.env } = {}) {
+  try {
+    const checkout = checkoutOfJob(job, env);
+    if (!checkout) return null;
+    const { entry } = await linkedEntry(checkout, path, env);
+    return entry?.branch?.startsWith(HEADS) ? entry.branch.slice(HEADS.length) : null;
+  } catch {
+    return null;
+  }
+}
+
 // Decides about one registered worktree: kept with a reason, or removable with whether its stale lock must go first.
 async function judgeRegistered({ entry, path, prRecorded, env, killImpl }) {
   const lock = lockState(entry, killImpl);
@@ -171,7 +195,9 @@ async function judgeRegistered({ entry, path, prRecorded, env, killImpl }) {
   if (locked) return kept(path, locked);
   const status = await gitRead(["status", "--porcelain", "--untracked-files=all"], path, env);
   if (!status.ok) return kept(path, "git could not read it");
-  if (status.stdout.trim()) return kept(path, "it has uncommitted changes", untrackedScratch(status.stdout));
+  if (status.stdout.trim()) return kept(path, UNCOMMITTED_WORKTREE_REASON, untrackedScratch(status.stdout));
+  const detached = await detachedReason(entry, path, env);
+  if (detached) return kept(path, detached);
   const unpublished = prRecorded ? null : await publicationReason(path, env);
   return unpublished ? kept(path, unpublished) : { path, removable: true, staleLock: lock === "stale" };
 }
@@ -293,23 +319,49 @@ async function forceRelease({ checkout, path, env, killImpl }) {
   return removed.dropped ? { path, status: "removed", dropped: removed.dropped } : { path, status: "removed" };
 }
 
-// The worktree a closed job's run recorded, removed when it is clean and published (or always with `force`, unless locked), else kept with its reason; null when the job has none. Never throws.
-export async function releaseJobWorktree({ job, env = process.env, killImpl = killProcess, force = false } = {}) {
+// The run state and the worktree path a job's run recorded, or null when it records none.
+function recordedWorktree(job, env) {
+  if (typeof job?.project !== "string" || !job.project || typeof job?.slug !== "string" || !job.slug) return null;
+  const state = readRunState({ projectId: job.project_id, slug: job.slug, env });
+  const path = typeof state?.worktree === "string" && state.worktree.trim() ? state.worktree.trim() : null;
+  return path ? { state, path } : null;
+}
+
+// Judges a job's recorded worktree without changing anything: null when git does not register it, else the inspection plus its checkout, which is null when no removal can even be attempted.
+async function judgeJobWorktree({ job, state, path, branchStays, env, killImpl }) {
+  if (isAdoptedWorktree(state)) return { ...kept(path, ADOPTED_WORKTREE_REASON), checkout: null };
+  const checkout = checkoutOfJob(job, env);
+  if (!checkout) return { ...kept(path, `the project \`${job.project}\` is not registered`), checkout: null };
+  const prRecorded = branchStays || isPrUrl(job.pr_url) || isPrUrl(state?.outcome?.prUrl);
+  const inspected = await inspectRunWorktree({ checkout, path, prRecorded, env, killImpl });
+  return inspected ? { ...inspected, checkout } : null;
+}
+
+// What a release would answer for a job's recorded worktree, read-only: null when there is nothing to release, else removable or kept with its reason; `branchStays` skips the publication check because the branch outlives the removal.
+export async function inspectJobWorktree({ job, branchStays = false, env = process.env, killImpl = killProcess } = {}) {
+  const recorded = recordedWorktree(job, env);
+  if (!recorded) return null;
+  try {
+    return await judgeJobWorktree({ job, ...recorded, branchStays, env, killImpl });
+  } catch (err) {
+    return kept(recorded.path, err?.message ?? String(err));
+  }
+}
+
+// The worktree a closed job's run recorded, removed when it is clean and published (or clean with `branchStays`, or always with `force`, unless locked), else kept with its reason; null when the job has none. Never throws.
+export async function releaseJobWorktree({ job, env = process.env, killImpl = killProcess, force = false, branchStays = false } = {}) {
   let path = null;
   try {
-    if (typeof job?.project !== "string" || !job.project || typeof job?.slug !== "string" || !job.slug) return null;
-    const state = readRunState({ projectId: job.project_id, slug: job.slug, env });
-    path = typeof state?.worktree === "string" && state.worktree.trim() ? state.worktree.trim() : null;
-    if (!path) return null;
-    if (isAdoptedWorktree(state)) return { path, status: "kept", reason: ADOPTED_WORKTREE_REASON };
-    const checkout = checkoutOfJob(job, env);
-    if (!checkout) return { path, status: "kept", reason: `the project \`${job.project}\` is not registered` };
-    const prRecorded = isPrUrl(job.pr_url) || isPrUrl(state?.outcome?.prUrl);
-    const inspected = await inspectRunWorktree({ checkout, path, prRecorded, env, killImpl });
-    if (!inspected) return null;
+    const recorded = recordedWorktree(job, env);
+    if (!recorded) return null;
+    path = recorded.path;
+    const judged = await judgeJobWorktree({ job, ...recorded, branchStays, env, killImpl });
+    if (!judged) return null;
+    const { checkout } = judged;
+    if (checkout === null) return { path, status: "kept", reason: judged.reason };
     if (force) return await forceRelease({ checkout, path, env, killImpl });
-    if (!inspected.removable) return unremovedVerdict(path, inspected.reason);
-    const removed = await removeRunWorktree({ checkout, path, staleLock: inspected.staleLock, env });
+    if (!judged.removable) return unremovedVerdict(path, judged.reason);
+    const removed = await removeRunWorktree({ checkout, path, staleLock: judged.staleLock, env });
     return removed.ok ? { path, status: "removed" } : { path, status: "kept", reason: removed.reason };
   } catch (err) {
     return path ? unremovedVerdict(path, err?.message ?? String(err)) : null;

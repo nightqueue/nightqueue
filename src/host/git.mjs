@@ -29,6 +29,7 @@ function asyncResult(err, stdout, stderr, timeoutMs) {
     stdout: typeof stdout === "string" ? stdout : "",
     stderr: typeof stderr === "string" && stderr.trim() && !timedOut ? stderr : reason,
     missing: err?.code === "ENOENT",
+    exitCode: typeof err?.code === "number" ? err.code : err ? null : 0,
   };
 }
 
@@ -40,7 +41,7 @@ export function runGitAsync({ args, cwd, env = process.env, timeoutMs = CALL_TIM
         done(asyncResult(err, stdout, stderr, timeoutMs)),
       );
     } catch (err) {
-      done({ ok: false, stdout: "", stderr: err?.message ?? String(err), missing: err?.code === "ENOENT" });
+      done({ ok: false, stdout: "", stderr: err?.message ?? String(err), missing: err?.code === "ENOENT", exitCode: null });
     }
   });
 }

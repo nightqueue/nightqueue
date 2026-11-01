@@ -661,7 +661,7 @@ dropped.
 
 At every claim, a same-job retry or a new job queued with `start_branch` alike, the session
 starts on the branch as it is: the runner resets nothing, records nothing about the wip and adds
-nothing to the prompt. The phases restart: a terminated run is never resumed. The runtime never
+nothing to the prompt. The runtime never
 creates a wip commit in an adopted worktree, which may hold the person's own uncommitted work. A
 `--fresh` retry drops the run and leaves the old branch at its wip commit.
 A retry without `fresh` consumes the termination, so the retried run resumes after its last completed phase, on the kept wip commit.
@@ -936,8 +936,8 @@ that track (`phase` is `null` when the phase is unknown); `last.kind` is `tool` 
 the result event reports them, and no cost is ever estimated. `queue_run`
 starts the runner detached and answers right away with the path of its log,
 `queue_cancel` cancels a `pending`, `gate`, orphaned, `done` or `failed` job and answers `{ ok,
-job, worktree }` - `worktree` is `{ path, status, reason? }` when cancelling a `done` or `failed`
-job released (`removed`) or kept (`kept`, with the reason) its worktree, and `null` otherwise; it
+job, worktree }` - `worktree` is `{ path, status, reason? }` when cancelling a `done`, `failed` or
+`gate` job released (`removed`) or kept (`kept`, with the reason) its worktree, and `null` otherwise; it
 refuses a job running under a live lease, or one whose close is in flight or was interrupted, without
 writing anything (an interrupted close is resumed with `queue_close`, never cancelled blind).
 With `stop: true` it cancels a job running on a live registered runner of this host in one
@@ -986,8 +986,9 @@ a lock held by a live session or set by hand: the worktree is kept with the lock
 status is read once before the removal and what it drops is named in the close line and in the
 settle step's `worktree` entry: `worktree removed: <path> (dropped uncommitted: a, b, c)` (at
 most 10 names, then `, … and N more`); a clean removal stays `worktree removed: <path>`. The
-runner's `done` path and a cancel are unchanged: a dirty or unpushed worktree is kept with its
-reason. `nightqueue doctor --fix` also force-removes a home worktree whose every owning job is `closed`
+runner's `done` path and a cancel of a `done` or `failed` job are unchanged: a dirty or unpushed
+worktree is kept with its reason. A cancel of a `gate` job removes a clean worktree even when
+unpushed, because its branch stays for a later retry; a dirty one is kept with its reason. `nightqueue doctor --fix` also force-removes a home worktree whose every owning job is `closed`
 or `cancelled` (naming what it dropped; one no job names stays listed), prunes an entry git registers whose directory is gone, and removes an
 orphaned empty directory; an orphaned directory with content is only listed with its `rm -rf`
 command. These two paths are the only ones that remove a worktree with uncommitted work;

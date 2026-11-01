@@ -5,7 +5,7 @@ import { killProcess, listRunnerRecords, registryReadError, STOP_TIMEOUT_MS, sto
 import { stopReport } from "./stop.mjs";
 import { releaseJobWorktree } from "./worktree.mjs";
 
-const RELEASED_FROM = new Set(["done", "failed"]);
+const RELEASED_FROM = new Set(["done", "failed", "gate"]);
 
 // How many times a stop-and-cancel re-reads a row that moved between its read and its write before it gives up.
 const STOP_CANCEL_ROUNDS = 3;
@@ -19,10 +19,11 @@ const NOT_LIVE_WHY = {
   unreadable: "its registration cannot be read",
 };
 
-// Cancels a job in one store write and only then, for a job cancelled from `done` or `failed`, releases its worktree; a refused cancel touches nothing on disk.
+// Cancels a job in one store write and only then, for a job cancelled from `done`, `failed` or `gate`, releases its worktree, a gate's keeping its branch for a retry; a refused cancel touches nothing on disk.
 export async function cancelJobAndWorktree({ store, id, reason, env = process.env, killImpl = killProcess } = {}) {
   const job = await store.jobs.cancelJob(id, { reason });
-  const worktree = RELEASED_FROM.has(job?.cancelled_from) ? await releaseJobWorktree({ job, env, killImpl }) : null;
+  const branchStays = job?.cancelled_from === "gate";
+  const worktree = RELEASED_FROM.has(job?.cancelled_from) ? await releaseJobWorktree({ job, env, killImpl, branchStays }) : null;
   return { job, worktree };
 }
 

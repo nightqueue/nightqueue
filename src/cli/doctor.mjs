@@ -17,6 +17,8 @@ import {
   legacyOperatorQaDir,
   qaDir,
   queuePausedPath,
+  runDir,
+  runsDir,
   secretsPath,
   shimNames,
   worktreesDir,
@@ -38,7 +40,7 @@ import { hookStatus, readHostSettings } from "../host/settings.mjs";
 import { TOOL_CONTRACT } from "../mcp/tool-contract.mjs";
 import { loadPty } from "../studio/pty.mjs";
 import { readStudioStampFile } from "../studio/stamp.mjs";
-import { PATH_MARK, binDirInPath, rcFilePath, shadowingDir } from "../host/shell.mjs";
+import { PATH_MARK, binDirInPath, rcFilePath, shadowingDir, shellQuote } from "../host/shell.mjs";
 import { EMBEDDING_MODEL_TAG, embeddingLibraryEntry, isModelCached } from "../memory/embedding.mjs";
 import { HOST_COMMANDS_SAMPLE_SIZE } from "../memory/jobs.mjs";
 import { hasLegacyRegistry } from "../memory/migration/v18.mjs";
@@ -47,6 +49,7 @@ import { keepAwakeMode, resolveCaffeinateBin } from "../queue/keep-awake.mjs";
 import { findLostJobs, logOnlyTail, scanDisk } from "../queue/lost-rows.mjs";
 import { isRegistryFailure, killProcess, listRunnerRecords, liveRunnersReport, registryReadError } from "../queue/registry.mjs";
 import { closesSummary } from "../queue/close-view.mjs";
+import { isStateObject, readRunState } from "../queue/resume.mjs";
 import { canonicalPath, droppedNames, jobWorktreeOwners, lockState, parseWorktreeList, removeEmptyDir, sameDir } from "../queue/worktree.mjs";
 import { compactStamp } from "../queue/runner.mjs";
 import { QA_WORKTREE_TTL_MS, listQaWorktrees, sweepQaWorktrees } from "../queue/qa-worktree.mjs";
@@ -1145,11 +1148,6 @@ async function checkProjects(ctx) {
   return found.projects.map((project) => checkProject(ctx, project));
 }
 
-// Quotes a path for a POSIX shell, so a hint can be pasted as is whatever the path holds.
-function shellQuote(value) {
-  return `'${String(value).replaceAll("'", "'\\''")}'`;
-}
-
 // Tells whether a path is a directory, never throwing.
 function isDirectory(path) {
   try {
@@ -1198,6 +1196,13 @@ function unregisteredCheck(name, { project, dir, where }) {
   return check(name, "warn", `${where}left over: it links to git but ${project.path} does not register it, no open job owns it`, `${repair}, then git worktree remove it`);
 }
 
+// The row of a worktree a fresh retry left behind with its run directory: named, with a hint that never removes, since what it holds is the operator's to decide; a lock is named and its unlock is the hint.
+function keptFreshLeftover(name, { keptRun, entry, lock, unlock }) {
+  const detail = `kept by \`queue retry --fresh\` of ${jobRef(keptRun.jobId)} with its run directory ${keptRun.dir}: no job works in it now`;
+  if (lock === "none") return check(name, "warn", detail, `git -C ${shellQuote(keptRun.worktree)} status --short`);
+  return check(name, "warn", `${detail}; it is locked (${entry.locked || "no reason"})`, unlock);
+}
+
 // The report of one worktree directory: legacy-in-use when an open job owns a legacy one, a leftover when none owns it, null when owned or a live session holds it.
 function leftoverCheck(ctx, { project, dir, entries, owners, legacy, kind = "worktree" }) {
   const canonical = canonicalPath(dir);
@@ -1208,12 +1213,14 @@ function leftoverCheck(ctx, { project, dir, entries, owners, legacy, kind = "wor
   }
   const where = legacy ? "legacy location, " : "";
   const entry = entries.find((candidate) => canonicalPath(candidate.path) === canonical);
-  if (!entry) return unregisteredCheck(name, { project, dir, where });
-  const lock = lockState(entry, ctx.killImpl ?? killProcess);
+  const lock = entry ? lockState(entry, ctx.killImpl ?? killProcess) : "none";
   if (lock === "live") return null;
+  const unlock = `git -C ${shellQuote(project.path)} worktree unlock ${shellQuote(dir)}`;
+  const keptRun = ctx.keptFresh?.get(canonical);
+  if (keptRun) return keptFreshLeftover(name, { keptRun, entry, lock, unlock });
+  if (!entry) return unregisteredCheck(name, { project, dir, where });
   const remove = `git -C ${shellQuote(project.path)} worktree remove ${shellQuote(dir)}`;
   if (lock === "none") return check(name, "warn", `${where}left over: registered in git, no open job owns it`, remove);
-  const unlock = `git -C ${shellQuote(project.path)} worktree unlock ${shellQuote(dir)}`;
   return check(name, "warn", `${where}left over: registered in git and locked (${entry.locked || "no reason"}), no open job owns it`, `${unlock} && ${remove}`);
 }
 
@@ -1460,8 +1467,49 @@ function hasHomeWorktrees(env) {
   return [worktreesDir(env), legacyOperatorQaDir(env), qaDir(env)].some((dir) => worktreeDirsOrNone(dir).length > 0);
 }
 
+// The kept runs that recorded a worktree, keyed by its canonical path.
+function keptFreshByWorktree(env) {
+  return new Map(keptFreshRuns(env).filter((kept) => kept.worktree !== null).map((kept) => [canonicalPath(kept.worktree), kept]));
+}
+
+// One kept run of a project, as a row source, or null when the directory holds no fresh-retry record; only ever reads.
+function keptFreshRun({ projectId, slug, env }) {
+  const state = readRunState({ projectId, slug, env });
+  if (!isStateObject(state) || !isStateObject(state.freshRetry)) return null;
+  const worktree = typeof state.worktree === "string" && state.worktree.trim() ? state.worktree.trim() : null;
+  return { projectId, slug, dir: runDir(projectId, slug, env), jobId: state.freshRetry.jobId, worktree };
+}
+
+// The run directories a fresh retry left behind, read from the runs directory; one it cannot read is skipped.
+function keptFreshRuns(env) {
+  return worktreeDirsOrNone(runsDir(env)).flatMap((projectRoot) =>
+    worktreeDirsOrNone(projectRoot)
+      .map((dir) => keptFreshRun({ projectId: basename(projectRoot), slug: basename(dir), env }))
+      .filter(Boolean),
+  );
+}
+
+// The row of one kept run directory: a warning while its worktree is on disk, informative once nothing is left to act on.
+function keptRunRow(kept, projects) {
+  const projectName = projects.find((project) => project.id === kept.projectId)?.name ?? kept.projectId;
+  const name = `run ${projectName}/${kept.slug}`;
+  const start = `kept by \`queue retry --fresh\` of ${jobRef(kept.jobId)} at ${kept.dir}`;
+  if (kept.worktree !== null && existsSync(kept.worktree)) return check(name, "warn", `${start}; its worktree ${kept.worktree} is kept`, `ls ${shellQuote(kept.dir)}`);
+  const left = kept.worktree === null ? "it recorded no worktree" : `its worktree ${kept.worktree} is gone, and nothing here needs it`;
+  return check(name, "ok", `${start}; ${left}`);
+}
+
+// Reports the run directories a fresh retry kept, naming each; nothing is offered for removal.
+async function checkKeptRunDirs(ctx) {
+  const kept = keptFreshRuns(ctx.env);
+  if (kept.length === 0) return [];
+  const projects = await checkoutsOrNone(ctx);
+  return kept.map((run) => keptRunRow(run, projects));
+}
+
 // Reports the worktrees of the home and the legacy ones under `.claude/worktrees`, with the command that cleans each; the only write is `git worktree repair` with `--fix`.
-async function checkWorktreeLeftovers(ctx, values) {
+async function checkWorktreeLeftovers(base, values) {
+  const ctx = { ...base, keptFresh: keptFreshByWorktree(base.env) };
   const projects = await checkoutsOrNone(ctx);
   const legacy = projectsWithLegacyWorktrees(projects);
   if (!legacy.length && !hasHomeWorktrees(ctx.env)) return [];
@@ -1531,6 +1579,7 @@ async function collect(ctx, values) {
     ...(await checkQueue(ctx)),
     ...(await checkProjects(ctx)),
     ...(await checkWorktreeLeftovers(ctx, values)),
+    ...(await checkKeptRunDirs(ctx)),
     ...checkUpdates(ctx, values),
   ];
 }

@@ -1,9 +1,10 @@
 import { UserError } from "../config/errors.mjs";
 import { parseRunId, parseRunRepo } from "../host/gh.mjs";
-import { sameBranch } from "./branch-name.mjs";
+import { rungCollisionNote, sameBranch } from "./branch-name.mjs";
 import { defaultCloseDeps } from "./close-deps.mjs";
 import { jobTitle } from "./job-title.mjs";
 import { closedLine, parseCloseChecklist, postCloseLine, resolvedLine } from "./close-view.mjs";
+import { readRunState } from "./resume.mjs";
 import { noChangeConclusion, runOwnNotice } from "./run-notice.mjs";
 import { isNoChangeJob } from "../memory/jobs.mjs";
 import { resolveConflictedRebase } from "./merger.mjs";
@@ -486,7 +487,9 @@ function attributionVerdict(ctx, pr) {
   if (!branch) return { note: "branch not recorded; attribution not checked" };
   if (sameBranch(pr.headRefName, branch, { type: ctx.type, slug: ctx.slug })) return { note: null };
   const head = pr.headRefName || "unknown";
-  const note = `PR #${pr.number} is on branch \`${head}\`, but ${jobRef(ctx.jobId)} ran on \`${branch}\`; it is not this job's pull request. Fix the job's pr_url before closing it`;
+  const collision = rungCollisionNote(head, branch, { slug: ctx.slug });
+  const way = collision ? `${collision}. Fix the job's pr_url before closing it, or cancel the job if that pull request carries its work` : "Fix the job's pr_url before closing it";
+  const note = `PR #${pr.number} is on branch \`${head}\`, but ${jobRef(ctx.jobId)} ran on \`${branch}\`; it is not this job's pull request. ${way}`;
   return { problem: failed("pr-not-the-job-branch", note) };
 }
 
@@ -1498,6 +1501,7 @@ function originsOf(job) {
 // The context a post-close step reads: the close's own, plus the job's origins, the project's integrations and the merge.
 function postCloseContext(run, stepName) {
   const { job, checklist, facts } = run;
+  const state = readRunState({ projectId: job.project_id, slug: job.slug, env: run.env });
   return {
     ...buildContext(run, stepName),
     progress: (note) => run.onStep?.({ name: stepName, status: "running", note, earlier: false }),
@@ -1512,7 +1516,7 @@ function postCloseContext(run, stepName) {
     mergeSha: checklist.data.mergeSha ?? null,
     mergedAt: checklist.data.mergedAt ?? null,
     resolution: isNoChangeJob(job) ? "no-change" : "merged",
-    conclusion: isNoChangeJob(job) ? noChangeConclusion(job.notice_md) : runOwnNotice(job.notice_md),
+    conclusion: isNoChangeJob(job) ? noChangeConclusion(job.notice_md, state) : runOwnNotice(job.notice_md, state),
     resolvedAt: checklist.data.resolvedAt ?? null,
   };
 }

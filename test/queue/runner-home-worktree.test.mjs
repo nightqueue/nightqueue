@@ -124,13 +124,16 @@ test("a job whose worktree cannot be placed gates with worktree-failed, the mess
   const run = makeHomeRun(t, "home-wt-gate", [{ stdout: doneStream(), runState: recordedDone(), exitCode: 0 }]);
   openDb(run.env).prepare("UPDATE jobs SET slug = ? WHERE id = ?").run(SLUG, run.id);
   git(["-C", run.checkout, "branch", `worktree-${SLUG}`]);
+  const owner = addJob({ projectId: run.projectId, prompt: "the job holding the branch" }, run.env).id;
+  openDb(run.env).prepare("UPDATE jobs SET slug = ? WHERE id = ?").run("holding-run", owner);
+  recordRunFields({ projectId: run.projectId, slug: "holding-run", fields: { branch: `worktree-${SLUG}` }, env: run.env });
 
   const cycle = await runCycle({ jobId: run.id, env: run.env });
 
   assert.deepEqual(cycle.processed, [{ id: run.id, status: "gated", code: "worktree-failed" }]);
   const row = getJob(run.id, run.env);
   assert.equal(row.status, "gate");
-  assert.match(row.notice_md, /^worktree-failed: the branch `worktree-fix-the-worker` already exists/);
+  assert.match(row.notice_md, new RegExp(`^worktree-failed: \`worktree-fix-the-worker\` belongs to J-${owner}\\b`));
   assert.deepEqual(fakeCalls(run.planPath), [], "the child was spawned without a worktree");
 });
 

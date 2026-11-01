@@ -1,5 +1,6 @@
 import { ABANDONED_COMMAND_PREFIX, IGNORED_RECORD_LINE, NO_CHANGE_NEXT_STEP_LINE, NOTHING_TO_CLOSE_LINE, STRAY_PR_PREFIX, trailingStripped } from "./classify.mjs";
 import { CLOSED_PREFIX, POST_CLOSE_PREFIX } from "./close-view.mjs";
+import { carriesUnpinnedMark, isUnpinnedLine } from "./pipeline-version.mjs";
 import { WIP_KEPT_PREFIX, WIP_PREFIX } from "./wip-commit.mjs";
 import { KEPT_PREFIX } from "./worktree.mjs";
 
@@ -24,14 +25,19 @@ const RUNTIME_APPENDED_LINE_PREFIXES = [
 // The runtime lines never told to the origins, which also exclude the line naming another pull request.
 const ORIGIN_EXCLUDED_LINE_PREFIXES = [...RUNTIME_APPENDED_LINE_PREFIXES, STRAY_PR_PREFIX];
 
+// The predicate of the unpinned line for one notice view: its exact line, under the state's mark; a caller with no state at hand passes none and only the exact line counts.
+function ownUnpinnedLine(state) {
+  return (paragraph) => isUnpinnedLine(paragraph) && (state === undefined || carriesUnpinnedMark(state));
+}
+
 // A row's notice with every trailing paragraph the runtime itself appended stripped off, so only what a run actually wrote remains.
-export function withoutRuntimeAppendedLines(notice) {
-  return trailingStripped(notice, RUNTIME_APPENDED_LINE_PREFIXES);
+export function withoutRuntimeAppendedLines(notice, state) {
+  return trailingStripped(notice, RUNTIME_APPENDED_LINE_PREFIXES, ownUnpinnedLine(state));
 }
 
 // The run's own notice as told to the origins, trimmed and without any runtime line, or null when nothing of the run's own is left.
-export function runOwnNotice(notice) {
-  return trailingStripped(notice, ORIGIN_EXCLUDED_LINE_PREFIXES).trim() || null;
+export function runOwnNotice(notice, state) {
+  return trailingStripped(notice, ORIGIN_EXCLUDED_LINE_PREFIXES, ownUnpinnedLine(state)).trim() || null;
 }
 
 const NO_CHANGE_HEADLINE = /^[^\p{L}]*resolved\b.*\bno code change\b/iu;
@@ -43,8 +49,8 @@ function withoutConfirmation(line) {
 }
 
 // The run's own notice for the origins of a no-change close: no headline repeating the resolution and no instruction to the operator, or null when nothing is left.
-export function noChangeConclusion(notice) {
-  const own = runOwnNotice(notice);
+export function noChangeConclusion(notice, state) {
+  const own = runOwnNotice(notice, state);
   if (own === null) return null;
   const lines = own.split("\n").filter((line) => !NO_CHANGE_HEADLINE.test(line.trim())).map(withoutConfirmation);
   const kept = lines.filter((line, index) => line !== "" || (index > 0 && lines[index - 1] !== ""));

@@ -176,35 +176,40 @@ test("a refused retry never reaches the run directory", async (t) => {
   assert.equal(getJob(id, env).status, "gate");
 });
 
-for (const oldArtifact of ["06-runtime.md", "05a-qa-analyst.md"]) {
-  test(`a retry without fresh of a run dir holding ${oldArtifact} is refused, and nothing is written or deleted`, async (t) => {
-    const env = makeQueue(t, `retry-pre-renumbering-${oldArtifact.slice(0, 3)}`);
-    const id = gatedJob(env);
-    const dir = writeRun(env, { projectId: ensureProject(env, "alpha"), slug: "fix-the-worker" });
-    writeFileSync(join(dir, oldArtifact), "old numbering\n");
-    const before = getJob(id, env);
-
-    await assert.rejects(
-      applyRetry({ id, note: "keep going", env }),
-      { name: "UserError", message: "run started before the renumbering; retry with `fresh`" },
-    );
-    assert.deepEqual(getJob(id, env), before, "a refused retry wrote to the job");
-    assert.equal(readFileSync(join(dir, oldArtifact), "utf8"), "old numbering\n");
-    assert.equal(readFileSync(join(dir, "01-triage.md"), "utf8"), "triage\n");
-  });
-
-  test(`a fresh retry of a run dir holding ${oldArtifact} is accepted and drops the dir`, async (t) => {
-    const env = makeQueue(t, `retry-pre-renumbering-fresh-${oldArtifact.slice(0, 3)}`);
-    const id = gatedJob(env);
-    const dir = writeRun(env, { projectId: ensureProject(env, "alpha"), slug: "fix-the-worker" });
-    writeFileSync(join(dir, oldArtifact), "old numbering\n");
-
-    const { job, runDir: discarded } = await applyRetry({ id, note: "start over", fresh: true, env });
-    assert.equal(job.status, "pending");
-    assert.equal(discarded.status, "removed");
-    assert.equal(existsSync(dir), false);
-  });
+// Materializes a run that recorded phases under a pipeline version no plugin ever declares.
+function writeOlderRun(env) {
+  const dir = writeRun(env, { projectId: ensureProject(env, "alpha"), slug: "fix-the-worker" });
+  const state = { pipeline: { name: "resolve", version: "0.0.0-older" }, phases: [{ phase: "triage", artifact: "01-triage.md", verdict: "ok", at: "2026-01-01T00:00:00Z" }] };
+  writeFileSync(join(dir, "state.json"), JSON.stringify(state));
+  return dir;
 }
+
+test("a retry without fresh of a run under another pipeline version is refused, and nothing is written or deleted", async (t) => {
+  const env = makeQueue(t, "retry-version-changed");
+  const id = gatedJob(env);
+  const dir = writeOlderRun(env);
+  const state = readFileSync(join(dir, "state.json"), "utf8");
+  const before = getJob(id, env);
+
+  await assert.rejects(
+    applyRetry({ id, note: "keep going", env }),
+    { name: "UserError", message: new RegExp("^this run started under resolve@0\\.0\\.0-older; retry with --fresh to start it over under @") },
+  );
+  assert.deepEqual(getJob(id, env), before, "a refused retry wrote to the job");
+  assert.equal(readFileSync(join(dir, "state.json"), "utf8"), state);
+  assert.equal(readFileSync(join(dir, "01-triage.md"), "utf8"), "triage\n");
+});
+
+test("a fresh retry of a run under another pipeline version is accepted and drops the dir", async (t) => {
+  const env = makeQueue(t, "retry-version-changed-fresh");
+  const id = gatedJob(env);
+  const dir = writeOlderRun(env);
+
+  const { job, runDir: discarded } = await applyRetry({ id, note: "start over", fresh: true, env });
+  assert.equal(job.status, "pending");
+  assert.equal(discarded.status, "removed");
+  assert.equal(existsSync(dir), false);
+});
 
 test("the note of the operator reaches the prompt of the child under the label of the gate", async (t) => {
   const env = makeQueue(t, "retry-note-prompt");

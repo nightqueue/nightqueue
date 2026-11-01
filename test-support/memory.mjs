@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { isId } from "../src/config/ids.mjs";
@@ -119,10 +119,17 @@ export function dropCheckout(env, name) {
   registry.moveProject(db, { id: project.id, path: null });
 }
 
-// Registers a temporary directory that looks like a git repository as a project of the home, in the org the test asks for.
+// Writes the three entries that make git accept a directory as an empty repository, with no process spawned for a fixture this common.
+function writeEmptyGitDir(path) {
+  mkdirSync(join(path, ".git", "objects"), { recursive: true });
+  mkdirSync(join(path, ".git", "refs"), { recursive: true });
+  writeFileSync(join(path, ".git", "HEAD"), "ref: refs/heads/main\n");
+}
+
+// Registers a temporary directory holding an empty git repository as a project of the home, in the org the test asks for.
 export function makeProject(t, env, name, { org } = {}) {
   const path = makeDir(t, `repo-${name}`);
-  mkdirSync(join(path, ".git"), { recursive: true });
+  writeEmptyGitDir(path);
   registerCheckout(env, { path, name, org });
   return path;
 }

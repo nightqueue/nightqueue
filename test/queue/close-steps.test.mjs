@@ -195,6 +195,29 @@ test("preflight refuses a pull request that is not on the job's branch, naming b
   assert.equal(row.notice_md, "A");
 });
 
+test("preflight refuses the plain published name of a rung's slug, naming the collision and the way out; a near-miss head gets the plain refusal", async () => {
+  const preflightOf = (head) => preflightStep({ ctx: ctxFor({}, "/work/alpha", { branch: "worktree-x-2", slug: "x" }), deps: fakeCloseDeps({ pr: openPr({ headRefName: head }) }).deps });
+
+  const collided = await preflightOf("fix/x");
+  assert.equal(collided.reason, "pr-not-the-job-branch");
+  assert.equal(
+    collided.note,
+    "PR #7 is on branch `fix/x`, but J-3 ran on `worktree-x-2`; it is not this job's pull request. `fix/x` is the published name of `worktree-x`; this run's `worktree-x-2` publishes as `fix/x-2`. Fix the job's pr_url before closing it, or cancel the job if that pull request carries its work",
+  );
+
+  const nearMiss = await preflightOf("fix/y");
+  assert.equal(nearMiss.reason, "pr-not-the-job-branch");
+  assert.match(nearMiss.note, /it is not this job's pull request\. Fix the job's pr_url before closing it$/);
+  assert.doesNotMatch(nearMiss.note, /published name|cancel the job/);
+});
+
+test("a pull request head differing from the run's branch only by case is attributed to the run", async () => {
+  const result = await preflightStep({ ctx: ctxFor({}, "/work/alpha", { branch: "fix/x", slug: "x" }), deps: fakeCloseDeps({ pr: openPr({ headRefName: "FIX/x" }) }).deps });
+
+  assert.notEqual(result.reason, "pr-not-the-job-branch", result.note);
+  assert.equal(result.status, "done", result.note);
+});
+
 test("an already merged pull request of another branch is refused at preflight, never settled onto the job", async (t) => {
   const home = closeHome(t, "close-steps-foreign-merged", { branch: "worktree-feat+queue-close" });
   const fake = fakeCloseDeps({ pr: mergedPr({ headRefName: "scratch/close-qa-20260921201325" }) });

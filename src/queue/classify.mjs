@@ -101,13 +101,13 @@ function paragraphMatches(paragraph, marker) {
   return marker instanceof RegExp ? marker.test(paragraph) : paragraph.startsWith(marker);
 }
 
-// A notice with every trailing paragraph one of the markers names stripped off, trimmed at its end.
-export function trailingStripped(notice, markers) {
+// A notice with every trailing paragraph one of the markers names, or that the predicate claims whole, stripped off, trimmed at its end.
+export function trailingStripped(notice, markers, isOwnParagraph = () => false) {
   let text = typeof notice === "string" ? notice.trimEnd() : "";
   for (;;) {
     const cut = text.lastIndexOf("\n\n");
     const tail = cut < 0 ? text : text.slice(cut + 2);
-    if (!markers.some((marker) => paragraphMatches(tail, marker))) return text;
+    if (!markers.some((marker) => paragraphMatches(tail, marker)) && !isOwnParagraph(tail)) return text;
     text = cut < 0 ? "" : text.slice(0, cut).trimEnd();
   }
 }
