@@ -163,6 +163,18 @@ test("a no_change outcome is recorded with the run's conclusion as its notice, a
   assert.equal(state.outcome.notice, "the cause is in the CDN config, not in this repo");
 });
 
+test("the outcome records the delivered files when given and keeps them through a later outcome with none", (t) => {
+  const env = makeHome(t, "run-state-outcome-files");
+  writeState(env, { schemaVersion: 1, project: "alpha", slug: "fix-the-worker", phases: [] });
+
+  assert.equal(recordOutcome({ ...RUN, status: "gate", notice: "stopped", env }).status, "written");
+  assert.equal("files" in readState(env).outcome, false);
+  assert.equal(recordOutcome({ ...RUN, status: "done", files: ["a.txt"], env }).status, "written");
+  assert.deepEqual(readState(env).outcome.files, ["a.txt"]);
+  assert.equal(recordOutcome({ ...RUN, status: "done", env }).status, "written");
+  assert.deepEqual(readState(env).outcome.files, ["a.txt"]);
+});
+
 test("the outcome keeps the pull request URL the runtime wrote: the agent never sends one", (t) => {
   const env = makeHome(t, "run-state-outcome-prurl");
   writeState(env, { schemaVersion: 1, project: "alpha", slug: "fix-the-worker", phases: [], outcome: { prUrl: "https://github.com/o/r/pull/7" } });

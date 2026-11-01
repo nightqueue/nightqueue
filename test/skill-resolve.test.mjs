@@ -237,8 +237,10 @@ test("a second INVALIDATED is recorded as a decision, and a further one is bound
   assert.ok(phase5.includes("| `INVALIDATED: …`, the first | relaunch the **architect** once (🔁, `note` = the lines), then Phase 4 with the revised plan |"), "Phase 5 lost the one architect relaunch on INVALIDATED");
   assert.ok(phase5.includes("| `INVALIDATED: …`, a second on the same assumption or any after two architect rounds | relaunch the architect to record it in `## Decisions taken`, then the `VERDICT:` row, ⚠️ open item |"), "a further INVALIDATED no longer ends in a recorded decision");
   assert.equal(RESUME.split("\n").filter((line) => line.startsWith("- ")).length, 3, "resume.md is no longer the three rules");
-  assert.ok(RESUME.includes("`RESTORED WIP:` work is the previous attempt's, uncommitted: keep it."), "resume.md no longer keeps a restored wip");
-  assert.ok(buildPrompt({ job: { prompt: "x" }, restoredWip: { short: "abc1234", subject: "wip(s): terminated at qa — why" } }).includes("RESTORED WIP: "), "the prompt no longer carries the RESTORED WIP line the skill reads");
+  assert.equal(RESUME.includes("RESTORED WIP"), false, "resume.md still reads a RESTORED WIP line nothing prints");
+  assert.equal(buildPrompt({ job: { prompt: "x" } }).includes("RESTORED WIP"), false, "the prompt still carries a RESTORED WIP line");
+  assert.ok(RESUME.includes("A `wip(<slug>)` commit on the branch is the previous attempt's"), "resume.md no longer tells the run to start on the kept wip commit");
+  assert.ok(RESUME.includes("never reset or rewrite it; `run publish` folds it into the delivery commit"), "resume.md no longer says the wip is folded on publish");
   const pluginDir = new URL("../plugin/", import.meta.url);
   const files = readdirSync(pluginDir, { recursive: true }).map(String).filter((name) => name.endsWith(".md"));
   assert.deepEqual(files.filter((name) => folded(readFileSync(new URL(name, pluginDir), "utf8")).includes("without a commit")), [], "a plugin text still says to terminate without a commit");

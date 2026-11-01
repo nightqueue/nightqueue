@@ -6,6 +6,24 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ## Unreleased
 
+### Changed
+
+- **Terminated work stays as a wip commit, and the delivery folds it.** A retry or a new
+  `start_branch` job now starts on the wip commit with a clean tree: the claim no longer resets
+  it, the attempt's end no longer moves the branch back, and the `RESTORED WIP:` prompt line is
+  gone. `run publish` and `run commit` fold the run's own wip commits into the single delivery
+  commit with `git reset --soft`; the wip ref keeps naming the old commit. A carried scratch,
+  `.claude/`, `tmp/` or lockfile-rule path is left out, reported on the new `FOLDED:` line and
+  kept on disk. `run pr` refuses a branch still carrying a wip commit, naming `run publish`. A
+  `wip(` commit that is not the run's own is now refused, including a human one that used to be
+  published, and so is any commit above an own wip. A failed fold puts the branch and the index
+  back on the wip, a fold killed before its commit finishes as a fold on the next call, and a
+  clean retry needs no hand-written list: `run check 04` names what the wip carries and an empty
+  list folds it. A job's `result.files` now comes from what was committed (`outcome.files`, then
+  `wip.files` while HEAD is that wip, else empty), never from `04-implementation.md`, so a failed
+  run with no wip records none. A `start_branch` job ending on the wip it inherited names it in
+  its notice.
+
 ### Added
 
 - **`nightqueue run publish --draft` delivers a run that reached its fix limit.** The pull request

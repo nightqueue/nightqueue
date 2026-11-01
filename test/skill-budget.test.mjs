@@ -18,7 +18,7 @@ const ALWAYS_LOADED_CEILING = 26110;
 const LAZY_CEILINGS = Object.freeze({
   "phase-8.md": 6978,
   "phase-9.md": 7807,
-  "resume.md": 1858,
+  "resume.md": 1771,
   "interactive-worktree.md": 2879,
   "qa-phase.md": 4879,
   "pr-template.md": 8866,

@@ -77,15 +77,12 @@ What a runtime has to provide, and what it can rely on:
     retry. A runtime-written termination lasts one attempt: a completed `run check 01` that
     proceeds lifts it (`recorded: termination cleared`), and so does a `queue retry` of a `gate`
     job. One written by hand (no `by`) is never lifted.
-  - `wip{status, phase, at, commit?, short?, branch?, files?, amended?, reason?, ref?, parent?,
-    restored?}`: `run_terminate` (in the same write as `termination`), the runner at the finish
-    of a job that ended `cancelled` by itself, and the runner at a claim that gave a wip back;
-    what the runtime did with the terminated run's work (see "A terminated run keeps its work"
-    below). `status` is `committed`, `clean`, `skipped` or `failed`. `ref` is the
-    `refs/nightqueue/wip/<slug>` ref naming `commit`, `parent` its parent. `restored: true`
-    means the claim gave the work back and the end of the attempt has not yet put the branch
-    back on `commit`. The runner drops it once HEAD left both the wip commit and its parent.
-    It never records a `commit` phase nor an `outcome`.
+  - `wip{status, phase, at, commit?, short?, branch?, files?, amended?, reason?, ref?, parent?}`:
+    `run_terminate` (in the same write as `termination`) and the runner at the finish of a job
+    that ended `cancelled` by itself; what the runtime did with the terminated run's work (see
+    "A terminated run keeps its work" below). `status` is `committed`, `clean`, `skipped` or
+    `failed`. `ref` is the `refs/nightqueue/wip/<slug>` ref naming `commit`, `parent` its parent,
+    `files` the paths the commit carries. It never records a `commit` phase nor an `outcome`.
   - `skips{<phase>:{by, reason?, at}}`: why a slot of the studio track did not run,
     for display only. Every run executes every phase, so the runtime writes no skip of
     its own; a `tier` entry (`by: "tier"`) an older runtime wrote is kept and shown as is.
@@ -97,10 +94,12 @@ What a runtime has to provide, and what it can rely on:
     telemetry only: it is written by `nightqueue run report` (or an older plugin's
     `pipeline_log`) from `state.json` after the run and is never a
     source of the live track.
-  - `outcome{status, at, notice?, prUrl?, draft?, draftFailures?, staysDraft?}`: `run_outcome` (`status`, and `notice` or, for a
+  - `outcome{status, at, notice?, prUrl?, files?, draft?, draftFailures?, staysDraft?}`: `run_outcome` (`status`, and `notice` or, for a
     gate, the notice it composes from `question`/`from_artifact`),
     `nightqueue run pr` (`status: "done"`) and the runner, which writes `prUrl` at
     finalize from what the session really published - it is never a parameter.
+    `files` is what HEAD changed when `run publish` or `run pr` pushed, in the same write as
+    `done`; the job's `result.files` reads it first, then `wip.files`, else none.
     `status: "no_change"` is the run's deliberate conclusion that no code change is
     needed (triage verdict `NO-CHANGE-NEEDED`) and is refused without a `notice`, the
     conclusion its origins are told when the job is closed.
@@ -675,38 +674,51 @@ The runtime never commits in an adopted worktree, on the default branch, on the 
 checkout's branch or on a detached HEAD. The finish rebuilds the notice's one
 `Terminated run: ` paragraph from `state.json`'s `wip` and the job's id: the wip's short hash
 and branch, `Retry: nightqueue queue retry J-<id>`, and
-`New job from it: start_branch: <branch>`. Any other ending whose HEAD is still the recorded
-wip commit (`failed`, an operator stop, a `run_outcome` gate, `done` without a PR) gets instead
+`New job from it: start_branch: <branch>`. Any other ending whose HEAD is a wip commit, the
+recorded one or one a wip ref anchors, as on a `start_branch` job with no record of its own
+(`failed`, an operator stop, a `run_outcome` gate, `done` without a PR) gets instead
 `Wip commit: the branch <branch> keeps the wip commit <short> of a terminated attempt (local,
 never pushed, not reviewed); changes made after it stay uncommitted in <worktree>.` and the
 same `New job from it:` line, with no `Retry:` line. Earlier copies of either paragraph are
 dropped.
 
-At every claim, a same-job retry or a new job queued with `start_branch` alike, the runner
-checks whether a `refs/nightqueue/wip/*` ref names HEAD. When one does and HEAD's
-subject starts with `wip(`, it gives the wip back to the worktree as uncommitted changes
-(`git reset --mixed <wip>^`, never `--hard`), keeps the ref, records `wip` with `ref`, `parent`
-and `restored: true` in the claiming run's own `state.json`, and adds a `RESTORED WIP:` line to
-the prompt. A commit titled `wip(` that no ref names is never reset; when HEAD moved past the
-wip, or HEAD is its parent while neither the record nor the worktree carries its changes
-(discarded by hand), it resets nothing and drops `wip`. The phases restart: a terminated run is
-never resumed. The runtime never creates a wip commit in an adopted worktree, which may hold the
-person's own uncommitted work, but it does restore or re-anchor a wip it made itself there,
-because that fires only when HEAD is exactly the ref-keyed wip commit (or its parent, on the same
-branch, with the ref live), so it can never touch a commit the person made, and the
-`start_branch` flow depends on it.
-At the end of every attempt that got the work back (every ending but a lost row), when HEAD is
-still the wip's parent on the same branch, the runner moves the branch back onto the existing
-wip commit (`git reset --mixed <wip>`): no commit is made and the attempt's later edits stay
-uncommitted on top. When the attempt committed on the parent, nothing is reset and `wip` is
-dropped. A `--fresh` retry drops the run and leaves the old branch at its wip commit.
+At every claim, a same-job retry or a new job queued with `start_branch` alike, the session
+starts on the branch as it is: the runner resets nothing, records nothing about the wip and adds
+nothing to the prompt. The phases restart: a terminated run is never resumed. The runtime never
+creates a wip commit in an adopted worktree, which may hold the person's own uncommitted work. A
+`--fresh` retry drops the run and leaves the old branch at its wip commit.
 
-`run publish` refuses, before it commits anything, a branch whose `<base>..HEAD` holds a commit
-a `refs/nightqueue/wip/*` ref names, with one line per commit:
-`REJECTED: the branch carries the runtime's wip commit <short> (<ref>), which is never pushed:
-stop and record it as an open item; the operator squashes it or retries the job so the claim
-gives it back uncommitted`. A human commit titled `wip(` is not refused. The refs are local:
-list them with `git for-each-ref refs/nightqueue/wip` and drop one with
+`run publish` and `run commit` read `<base>..HEAD` before anything changes. A commit is the run's
+own when its subject is `wip(<slug>): ...`, `refs/nightqueue/wip/<slug>` exists and reaches it,
+and the slug is the run's, or the one its `wip.ref` names (a retry that renamed the run), or any
+slug in a job whose row has `start_branch`. With no base ref there is nothing to read and
+`run commit` commits as usual. Each of these prints one `REJECTED:` line, and nothing is
+committed or pushed:
+
+- a `wip(` subject that is not own, and a commit a wip ref names that is not own:
+  `REJECTED: the branch carries the wip commit <short> (<ref or subject>), which is not this
+  run's own and is never pushed: stop and record it as an open item; the operator squashes it`;
+- any other commit above an own one: `REJECTED: the commit <short> (<subject>) sits above the wip
+  commit <short>, which is never pushed: stop and record it as an open item; the operator
+  squashes it`;
+- an own wip with no parent.
+
+Otherwise the own commits fold into the delivery commit: `git reset --soft <parent of the oldest
+own>`, the listed paths staged, the carried paths the worktree changed since staged as the
+worktree has them, then `git commit -F`. A carried path `run commit` would refuse (`.claude/`,
+`tmp/`, a scratch name, the run directory, a lockfile the paired-manifest rule refuses) is left
+out: unstaged, still on disk and reported in `FOLDED: <n> wip commits (<m> files); left out: <path>
+(<reason>)`. A manifest the wip committed counts as the pair of a lockfile listed now. Refused
+listed paths still refuse the whole call. An empty list folds what the wip carries, and refuses
+as nothing to commit only when every carried path is left out. If staging or the commit fails,
+the branch and the index go back on the wip with `git reset <head>`, the worktree untouched, and
+the error says so. A kill between the reset and the commit is read on the next call: when
+`ORIG_HEAD` holds only own commits above HEAD and the index only paths they carry, the fold
+finishes from there with the same left-out rule. The ref is never touched, so it keeps naming
+the old commit. `run pr` does not fold: it refuses a branch carrying an own wip with
+`REJECTED: the branch carries the runtime's wip commit <short>, which is never pushed: call
+`nightqueue run publish`, which folds it into the delivery commit`, plus the same refusals above.
+The refs are local: list them with `git for-each-ref refs/nightqueue/wip` and drop one with
 `git update-ref -d <ref>` once its work is delivered or abandoned.
 
 Retired fields (operator runs no longer exist). `queue_add` `run_dir`, and `run_set`

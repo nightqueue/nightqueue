@@ -14,4 +14,5 @@ A ``RESUME CANDIDATE (slug `<slug>`)`` block: this run continues one the runtime
 - **Never redo a completed phase:** skip every phase up to `Last completed phase:`, reading its
   artifact in `RUN_DIR`. A declared artifact missing or unreadable → ignore the block, start clean
   from Phase 0.
-- **Run `git status --short` first:** `RESTORED WIP:` work is the previous attempt's, uncommitted: keep it.
+- **Run `git status --short` first.** A `wip(<slug>)` commit on the branch is the previous attempt's
+  work: start on it, never reset or rewrite it; `run publish` folds it into the delivery commit.

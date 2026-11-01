@@ -72,9 +72,8 @@ before step 2 and after the pull request exists.
      reads `MISSING: evidence for QA section <method>`) mean the body failed the check of the
      template in effect (a heading missing or out of order, a nightqueue heading against a
      repository template, the `## QA` subsections or the `Not tested:` line, a bare `#<number>`, a
-     placeholder or a leftover `<...>` example) and nothing was pushed. Fix the body or the
-     evidence and call the command again; a `… wip commit` one: never rewrite history, open
-     item, no PR.
+     placeholder or a leftover `<...>` example) and nothing was pushed. Fix the body or evidence
+     and retry; a `… wip commit` one is not yours (yours folds): never rewrite history, open item, no PR.
    - `run publish` records the delivery itself.
    - If `gh` is not installed or could not open the pull request, the command says so with the
      branch already pushed: inform it; the pull request is opened by hand.
