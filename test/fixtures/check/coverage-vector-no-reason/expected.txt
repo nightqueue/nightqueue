@@ -1,5 +1,5 @@
 OK
-GATE: coverage-vector-no-reason — 1 · Status: maybe
-GATE: coverage-vector-no-reason — 2 · Reason: n/a
+OPEN: coverage-vector-no-reason — 1 · Status: maybe
+OPEN: coverage-vector-no-reason — 2 · Reason: n/a
 QA: lite
-recorded: none (GATE: coverage-vector-no-reason — 1 · Status: maybe)
+recorded: phase_done architecture OK

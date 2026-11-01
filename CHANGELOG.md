@@ -8,6 +8,15 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`nightqueue run publish --draft` delivers a run that reached its fix limit.** The pull request
+  opens as a draft, or an existing one is converted with `gh pr ready --undo`. The count comes
+  from the body's unfenced `Remaining failure: <what>` lines, and a `--draft` with none is refused
+  before anything is committed. The command prints `DRAFT: draft pull request — N failures remain`,
+  records `outcome.draft` and `outcome.draftFailures`, and `run report` names the draft in its
+  delivery note, its `Happy:` line and its open items. When gh refuses the draft, the run still
+  delivers a normal pull request, and the report reads `Happy: no` with the failures. A later publish
+  without the flag turns the run's own draft ready (`READY: <url>`), unless its body still lists a
+  failure, when it stays a draft with the count recorded; every other pull request is left alone.
 - **The operator uses the person's own MCP servers.** `nightqueue open` and `nightqueue queue
   session` now start the operator with `--setting-sources user,project,local`, so the servers
   the person configured (user, project and local scope, and their user-scope plugins) are
@@ -174,6 +183,28 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **A `/resolve` run pauses only at Phase 3, on a real question.** A job now runs unattended from
+  request to pull request unless the architect writes a filled `**Question:**` under
+  `## Requires user confirmation`, which it does only when the decision changes behaviour, data or
+  scope, the request does not settle it, and choosing wrong is costly to undo. Any other gap is the
+  architect's to decide and record in `## Decisions taken`. `run check 03` prints
+  `CONFIRM: requires-user-confirmation — <question>` only with a filled question, and
+  `CONFIRM: answered` when a job's operator note exists and the question's digest matches
+  `gateQuestionDigest`, recorded by any gate that shows the plan's question and cleared by any other.
+  The reader takes the label in its common shapes and reads a value as a question by its `?`; a `?`
+  it cannot place or a filled label with no `?` is a `MISSING:` with one relaunch, and `run report` reads an answered pause as happy. After code exists no phase terminates or
+  pauses: a finding is an `OPEN:` line or an open item, and the fix loop's limit opens a draft pull
+  request instead of cancelling the job.
+- **`run check 03` and `run check 05` no longer gate.** `coverage-vector-no-reason` and
+  `coverage-enumeration-no-method` are now `OPEN:` lines, the enumeration read from the bullets and
+  fenced commands under its label. `05` prints one `OPEN:` per filled `omitted:`, `divergences:` or
+  `unconfirmed decisions:` line, with no count to reconcile. `run report` lists the `OPEN:` lines of
+  `03` too.
+- **The triage reads a Brief's leading token, and has three verdicts.** `bug/error (security)` and
+  `fix(queue)` pass `brief-type-invalid` and `brief-commit-type-invalid`. The verdicts are `PROCEED`,
+  `NO-CHANGE-NEEDED` and `NOT-REPRODUCIBLE`; an ambiguity or a cheaper alternative is a
+  `## Request gaps` item. A `NEEDS-CLARIFICATION` or `PROPOSE-ALTERNATIVE` artifact still parses and
+  reads as `PROCEED`.
 - **The operator agent disallows `RemoteTrigger`.** Only a claude.ai login exposes it, and it
   reached the operator with no band decision. It is now in `disallowedTools` and in the probed
   built-in list of the plugin test.
@@ -370,6 +401,13 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Removed
 
+- **The gates that forced a pause or a relaunch by paperwork.** `run check` no longer answers
+  `coverage-not-covered-without-confirmation`, `usage-coverage-cond-1` to `-cond-4`,
+  `symptom-coverage-n-mismatch`, `symptom-coverage-omitted-empty`,
+  `symptom-coverage-method-generic`, `usage-coverage-nm-mismatch`,
+  `usage-coverage-divergences-empty` or `usage-coverage-held-on-pipeline`. The `Usage coverage:` and
+  `Symptom coverage:` lines of the QA report, the usage-coverage record and its pull request footer
+  line are gone with them. This replaces the earlier Unreleased entries that named those codes.
 - **The `triage` and `qa` operator agents**, with the qa lane of the operator guard and the
   `subagent-stop` hook that dropped the worktree `nightqueue:qa` announced. `nightqueue sandbox
   worktree` stays a CLI facility, swept by `nightqueue open` and `nightqueue doctor --fix`.

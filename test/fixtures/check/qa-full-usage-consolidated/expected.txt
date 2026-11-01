@@ -1,3 +1,4 @@
 OK
 VERDICT: APPROVED
+OPEN: divergences — src/status.mjs:22 is not in the plan
 recorded: phase_done qa APPROVED

@@ -10,8 +10,8 @@ import { addJob } from "../src/memory/jobs.mjs";
 import { ghPrUrlOfBranch } from "../src/host/gh.mjs";
 import { classifyJobResult } from "../src/queue/classify.mjs";
 import { provenEditedPrUrls } from "../src/queue/edit-proof.mjs";
-import { readRunState } from "../src/queue/resume.mjs";
-import { recordOutcome, recordRunFields } from "../src/queue/run-state.mjs";
+import { clearRunOutcome, readRunState } from "../src/queue/resume.mjs";
+import { recordOutcome, recordPrUrl, recordRunFields, recordTermination } from "../src/queue/run-state.mjs";
 import { codeChangePublishedEvent, resultEvent, systemInitEvent, toNdjson } from "../test-support/streams.mjs";
 import { initGitRepo } from "../test-support/git.mjs";
 import { FAKE_GH_PR_URL, isolatedHostVars } from "../test-support/host.mjs";
@@ -284,6 +284,304 @@ test("`run publish` never edits a pull request whose head branch is not the run'
   assert.match(errText, /no pull request with that head branch was found/);
   assert.equal(ghCalls(env).some((line) => JSON.parse(line)[1] === "edit"), false);
   assert.equal(readRunState({ projectId, slug: SLUG, env }).outcome, undefined);
+});
+
+// Writes the run's body with one `Remaining failure:` line per failure named.
+function writeDraftBody(dir, failures, body = BODY) {
+  writeFileSync(join(dir, "pr-body.md"), `${body}\n${failures.map((failure) => `Remaining failure: ${failure}`).join("\n")}\n`);
+}
+
+// The calls the fake gh received, parsed.
+function parsedGhCalls(env) {
+  return ghCalls(env).map((line) => JSON.parse(line));
+}
+
+// The call of one `gh pr <sub>`, or undefined when gh never received it.
+function prCall(env, sub) {
+  return parsedGhCalls(env).find((call) => call[0] === "pr" && call[1] === sub);
+}
+
+test("`run publish --draft` opens a draft, records its failures and the report says so", async (t) => {
+  const { env, id, dir, projectId } = makeRun(t, "publish-draft");
+  writeDraftBody(dir, ["`npm test` fails in slug.test.mjs", "the empty title still throws"]);
+
+  const { code, out, errText } = await runCli(env, id, publishArgs(dir, ["--draft"]));
+
+  assert.equal(code, 0, `${out.join("\n")}\n${errText}`);
+  assert.ok(prCall(env, "create").includes("--draft"), "gh was not asked for a draft");
+  assert.deepEqual(out.slice(3, 5), [`PR: ${FAKE_GH_PR_URL}`, "DRAFT: draft pull request — 2 failures remain"]);
+  const state = readRunState({ projectId, slug: SLUG, env });
+  assert.deepEqual([state.outcome.status, state.outcome.prUrl, state.outcome.draft, state.outcome.draftFailures], ["done", FAKE_GH_PR_URL, true, 2]);
+  assert.equal(state.phases.find((entry) => entry.phase === "commit").verdict, "Draft PR opened");
+  const report = await runCli(env, id, ["run", "report"]);
+  assert.ok(report.out.includes("Happy: no — draft pull request — 2 failures remain"), report.text);
+  assert.ok(report.out.includes("- draft pull request — 2 failures remain"), report.text);
+  assert.ok(report.out.some((line) => line.startsWith(`| 8 Commit/PR | 🚀 Commit/PR | ✅ DRAFT PR OPENED | draft pull request ${FAKE_GH_PR_URL} — 2 failures remain |`)), report.text);
+  const log = toNdjson([systemInitEvent(), resultEvent({ text: "draft opened" })]);
+  assert.equal(classifyJobResult({ log, exitCode: 0, state, runOutcome: "pr_opened" }).status, "done");
+});
+
+const WHICH_ONE_PLACEHOLDER = "REJECTED: the body still carries the placeholder `<which one>`: fill every section with this run's own facts";
+
+for (const [unfilled, bodyRefusals] of [["", []], [" none", []], [" n/a", []], [" -", []], [" <which one>", [WHICH_ONE_PLACEHOLDER]]]) {
+  test(`\`--draft\` whose only \`Remaining failure:\` line holds "${unfilled}" commits nothing and pushes nothing`, async (t) => {
+    const { env, id, worktree, dir } = makeRun(t, "publish-draft-no-failure");
+    writeFileSync(join(dir, "pr-body.md"), `${BODY}\nRemaining failure:${unfilled}\n`);
+    const before = commitCount(worktree);
+
+    const { code, out } = await runCli(env, id, publishArgs(dir, ["--draft"]));
+
+    assert.equal(code, 1);
+    assert.deepEqual(out, [
+      ...bodyRefusals,
+      "REJECTED: a draft pull request lists each failure on a Remaining failure: <what> line of its QA/verification section",
+      "nothing was committed or pushed: fix the problems above and call `nightqueue run publish` again",
+    ]);
+    assert.equal(commitCount(worktree), before);
+    assert.deepEqual(ghCalls(env), []);
+  });
+}
+
+for (const [unfilled, bodyRefusals] of [[" (none)", []], [" None.", []], [" ✗✗", []], [" <what>", ["REJECTED: the body still carries the placeholder `<what>`: fill every section with this run's own facts"]]]) {
+  test(`\`--draft\` counts no failure for "${unfilled}"`, async (t) => {
+    const { env, id, dir } = makeRun(t, "publish-draft-no-failure-spelling");
+    writeFileSync(join(dir, "pr-body.md"), `${BODY}\nRemaining failure:${unfilled}\n`);
+
+    const { code, out } = await runCli(env, id, publishArgs(dir, ["--draft"]));
+
+    assert.equal(code, 1);
+    assert.deepEqual(out.slice(0, -1), [...bodyRefusals, "REJECTED: a draft pull request lists each failure on a Remaining failure: <what> line of its QA/verification section"]);
+    assert.deepEqual(ghCalls(env), []);
+  });
+}
+
+test("every failure text that looks unfilled but names a failure counts as one", async (t) => {
+  const { env, id, dir, projectId } = makeRun(t, "publish-draft-looks-unfilled");
+  const named = ["[retry.test.mjs: 3 failing]", "<retry.test.mjs: 3 failing>", "TODO: flaky e2e on CI", "NA - runner offline", "nothing - the suite never starts", "none of the e2e tests start"];
+  writeDraftBody(dir, named);
+
+  const { code, out, errText } = await runCli(env, id, publishArgs(dir, ["--draft"]));
+
+  assert.equal(code, 0, `${out.join("\n")}\n${errText}`);
+  assert.ok(out.includes(`DRAFT: draft pull request — ${named.length} failures remain`), out.join("\n"));
+  assert.equal(readRunState({ projectId, slug: SLUG, env }).outcome.draftFailures, named.length);
+});
+
+for (const command of ["publish", "pr"]) {
+  test(`\`run ${command}\` without the flag leaves the run's own draft a draft while its body lists a failure`, async (t) => {
+    const { env, id, dir, projectId } = makeRun(t, `${command}-keeps-own-draft`);
+    writeDraftBody(dir, ["`npm test` fails", "the empty title still throws"]);
+    assert.equal((await runCli(env, id, publishArgs(dir, ["--draft"]))).code, 0);
+    const existing = { ...env, NIGHTQUEUE_FAKE_GH_PR_EXISTS: "1", NIGHTQUEUE_FAKE_GH_PR_LIST: EXISTING_PR_LIST };
+    const argv = command === "publish" ? publishArgs(dir) : ["run", "pr", "--body-file", join(dir, "pr-body.md"), "--title", "feat(text): add slugify"];
+
+    const { code, out, errText } = await runCli(existing, id, argv);
+
+    assert.equal(code, 0, `${out.join("\n")}\n${errText}`);
+    assert.equal(prCall(env, "ready"), undefined);
+    assert.equal(out.some((line) => line.startsWith("READY:")), false, out.join("\n"));
+    assert.ok(out.includes("DRAFT: draft pull request — 2 failures remain (stays a draft: the body still lists a Remaining failure: line)"), out.join("\n"));
+    const state = readRunState({ projectId, slug: SLUG, env });
+    assert.deepEqual([state.outcome.draft, state.outcome.draftFailures, state.outcome.staysDraft, state.draftPrUrl], [true, 2, undefined, FAKE_GH_PR_URL]);
+    const report = await runCli(env, id, ["run", "report"]);
+    assert.ok(report.out.includes("Happy: no — draft pull request — 2 failures remain"), report.text);
+  });
+}
+
+test("a first publish without the flag whose body lists a failure stays a normal pull request", async (t) => {
+  const { env, id, dir, projectId } = makeRun(t, "publish-first-plain-listed");
+  writeDraftBody(dir, ["`npm test` fails"]);
+
+  const { code, out, errText } = await runCli(env, id, publishArgs(dir));
+
+  assert.equal(code, 0, `${out.join("\n")}\n${errText}`);
+  assert.equal(prCall(env, "create").includes("--draft"), false);
+  assert.equal(out.some((line) => line.startsWith("DRAFT:")), false, out.join("\n"));
+  const state = readRunState({ projectId, slug: SLUG, env });
+  assert.deepEqual([state.outcome.draft, state.outcome.draftFailures], [undefined, undefined]);
+});
+
+test("a publish without the flag still leaves alone a pull request this run never drafted when its body lists a failure", async (t) => {
+  const { env, id, dir, projectId } = makeRun(t, "publish-plain-existing-listed");
+  writeDraftBody(dir, ["`npm test` fails"]);
+  const existing = { ...env, NIGHTQUEUE_FAKE_GH_PR_EXISTS: "1", NIGHTQUEUE_FAKE_GH_PR_LIST: EXISTING_PR_LIST };
+
+  const { code, out, errText } = await runCli(existing, id, publishArgs(dir));
+
+  assert.equal(code, 0, `${out.join("\n")}\n${errText}`);
+  assert.equal(prCall(env, "ready"), undefined);
+  assert.equal(out.some((line) => line.startsWith("DRAFT:")), false, out.join("\n"));
+  assert.equal(readRunState({ projectId, slug: SLUG, env }).outcome.draft, undefined);
+});
+
+test("`--draft` onto a branch whose pull request exists replaces its body and turns it back into a draft", async (t) => {
+  const { env, id, dir, projectId } = makeRun(t, "publish-draft-existing");
+  writeDraftBody(dir, ["`npm test` fails"]);
+  const existing = { ...env, NIGHTQUEUE_FAKE_GH_PR_EXISTS: "1", NIGHTQUEUE_FAKE_GH_PR_LIST: EXISTING_PR_LIST };
+
+  const { code, out, errText } = await runCli(existing, id, publishArgs(dir, ["--draft"]));
+
+  assert.equal(code, 0, `${out.join("\n")}\n${errText}`);
+  assert.ok(prCall(env, "edit"), "the existing body was not replaced");
+  assert.deepEqual(prCall(env, "ready"), ["pr", "ready", FAKE_GH_PR_URL, "--undo"]);
+  assert.ok(out.includes("DRAFT: draft pull request — 1 failure remains"), out.join("\n"));
+  assert.equal(readRunState({ projectId, slug: SLUG, env }).outcome.draftFailures, 1);
+});
+
+test("a fenced or commented `Remaining failure:` line counts for nothing", async (t) => {
+  const { env, id, dir, projectId } = makeRun(t, "publish-draft-fenced-count");
+  const commented = BODY.replace("## Cause", "<!--\nRemaining failure: a comment\n-->\n\n## Cause");
+  writeFileSync(join(dir, "pr-body.md"), `${commented}\nRemaining failure: a real one\n\n\`\`\`\nRemaining failure: an example\n\`\`\`\n`);
+
+  const { code, out, errText } = await runCli(env, id, publishArgs(dir, ["--draft"]));
+
+  assert.equal(code, 0, `${out.join("\n")}\n${errText}`);
+  assert.equal(readRunState({ projectId, slug: SLUG, env }).outcome.draftFailures, 1);
+});
+
+test("a pull request gh refuses to turn into a draft is delivered and recorded as no draft, with gh's reason", async (t) => {
+  const { env, id, dir, projectId } = makeRun(t, "publish-draft-undo-refused");
+  writeDraftBody(dir, ["`npm test` fails"]);
+  const refused = { ...env, NIGHTQUEUE_FAKE_GH_PR_EXISTS: "1", NIGHTQUEUE_FAKE_GH_PR_LIST: EXISTING_PR_LIST, NIGHTQUEUE_FAKE_GH_UNDO_REFUSED: "1" };
+
+  const { code, out, errText } = await runCli(refused, id, publishArgs(dir, ["--draft"]));
+
+  assert.equal(code, 0, `${out.join("\n")}\n${errText}`);
+  assert.match(errText, /could not turn .* into a draft: Draft pull requests are not supported/);
+  assert.equal(out.some((line) => line.startsWith("DRAFT:")), false, out.join("\n"));
+  const state = readRunState({ projectId, slug: SLUG, env });
+  assert.deepEqual([state.outcome.status, state.outcome.prUrl, state.outcome.draft, state.outcome.draftFailures], ["done", FAKE_GH_PR_URL, undefined, 1]);
+  assert.equal(state.phases.find((entry) => entry.phase === "commit").verdict, "PR opened");
+  const report = await runCli(env, id, ["run", "report"]);
+  assert.ok(report.out.includes("Happy: no — pull request — 1 failure remains (gh refused the draft)"), report.text);
+});
+
+test("a draft gh refuses opens a normal pull request, keeps the failures and reads not happy", async (t) => {
+  const { env, id, dir, projectId } = makeRun(t, "publish-draft-refused");
+  writeDraftBody(dir, ["`npm test` fails"]);
+
+  const { code, out, errText } = await runCli({ ...env, NIGHTQUEUE_FAKE_GH_DRAFT_REFUSED: "1" }, id, publishArgs(dir, ["--draft"]));
+
+  assert.equal(code, 0, `${out.join("\n")}\n${errText}`);
+  assert.match(errText, /could not turn .* into a draft: Draft pull requests are not supported/);
+  assert.equal(out.some((line) => line.startsWith("DRAFT:")), false, out.join("\n"));
+  const creates = parsedGhCalls(env).filter((call) => call[1] === "create");
+  assert.deepEqual(creates.map((call) => call.includes("--draft")), [true, false]);
+  const state = readRunState({ projectId, slug: SLUG, env });
+  assert.deepEqual([state.outcome.status, state.outcome.prUrl, state.outcome.draft, state.outcome.draftFailures], ["done", FAKE_GH_PR_URL, undefined, 1]);
+  assert.equal("draftPrUrl" in state, false);
+  const report = await runCli(env, id, ["run", "report"]);
+  assert.ok(report.out.includes("Happy: no — pull request — 1 failure remains (gh refused the draft)"), report.text);
+});
+
+test("a draft whose plain retry fails too fails with gh's reason, the branch pushed and recorded, and the run not recorded as done", async (t) => {
+  const { env, id, remote, dir, projectId } = makeRun(t, "publish-draft-both-refused");
+  writeDraftBody(dir, ["`npm test` fails"]);
+
+  const { code, errText } = await runCli({ ...env, NIGHTQUEUE_FAKE_GH_DRAFT_REFUSED: "1", NIGHTQUEUE_FAKE_GH_PR_URL: "" }, id, publishArgs(dir, ["--draft"]));
+
+  assert.equal(code, 1);
+  assert.match(errText, /is pushed, but gh could not open the pull request: /);
+  assert.deepEqual(parsedGhCalls(env).filter((call) => call[1] === "create").map((call) => call.includes("--draft")), [true, false]);
+  assert.ok(git(["-C", remote, "for-each-ref", "--format=%(refname:short)", "refs/heads"]).includes(`feat/${SLUG}`));
+  const state = readRunState({ projectId, slug: SLUG, env });
+  assert.equal(state.branch, `feat/${SLUG}`);
+  assert.equal(state.outcome, undefined);
+});
+
+test("a publish without the flag turns the run's own draft ready, drops the record and asks gh for no draft", async (t) => {
+  const { env, id, dir, projectId } = makeRun(t, "publish-draft-then-plain");
+  writeDraftBody(dir, ["`npm test` fails"]);
+  assert.equal((await runCli(env, id, publishArgs(dir, ["--draft"]))).code, 0);
+  assert.equal(readRunState({ projectId, slug: SLUG, env }).draftPrUrl, FAKE_GH_PR_URL);
+  clearRunOutcome({ projectId, slug: SLUG, env });
+  assert.equal(readRunState({ projectId, slug: SLUG, env }).draftPrUrl, FAKE_GH_PR_URL, "the next attempt lost the run's draft");
+  writeFileSync(join(dir, "pr-body.md"), BODY);
+  const existing = { ...env, NIGHTQUEUE_FAKE_GH_PR_EXISTS: "1", NIGHTQUEUE_FAKE_GH_PR_LIST: EXISTING_PR_LIST };
+
+  const { code, out, errText } = await runCli(existing, id, publishArgs(dir));
+
+  assert.equal(code, 0, `${out.join("\n")}\n${errText}`);
+  assert.equal(parsedGhCalls(env).filter((call) => call[1] === "create").at(-1).includes("--draft"), false);
+  assert.deepEqual(prCall(env, "ready"), ["pr", "ready", FAKE_GH_PR_URL]);
+  assert.ok(out.includes(`READY: ${FAKE_GH_PR_URL}`), out.join("\n"));
+  assert.equal(out.some((line) => line.startsWith("DRAFT:")), false, out.join("\n"));
+  const state = readRunState({ projectId, slug: SLUG, env });
+  assert.deepEqual([state.outcome.status, state.outcome.draft, state.outcome.draftFailures, state.outcome.staysDraft], ["done", undefined, undefined, undefined]);
+  assert.equal("draftPrUrl" in state, false);
+});
+
+test("a publish without the flag leaves alone an existing pull request this run never drafted", async (t) => {
+  const { env, id, dir } = makeRun(t, "publish-plain-existing");
+  const existing = { ...env, NIGHTQUEUE_FAKE_GH_PR_EXISTS: "1", NIGHTQUEUE_FAKE_GH_PR_LIST: EXISTING_PR_LIST };
+
+  const { code, out, errText } = await runCli(existing, id, publishArgs(dir));
+
+  assert.equal(code, 0, `${out.join("\n")}\n${errText}`);
+  assert.equal(prCall(env, "ready"), undefined);
+  assert.equal(out.some((line) => line.startsWith("READY:")), false, out.join("\n"));
+});
+
+test("a run's own draft gh refuses to turn ready stays recorded and is an open item, with no failure left", async (t) => {
+  const { env, id, dir, projectId } = makeRun(t, "publish-draft-ready-refused");
+  writeDraftBody(dir, ["`npm test` fails"]);
+  assert.equal((await runCli(env, id, publishArgs(dir, ["--draft"]))).code, 0);
+  writeFileSync(join(dir, "pr-body.md"), BODY);
+  const existing = { ...env, NIGHTQUEUE_FAKE_GH_PR_EXISTS: "1", NIGHTQUEUE_FAKE_GH_PR_LIST: EXISTING_PR_LIST, NIGHTQUEUE_FAKE_GH_READY_REFUSED: "1" };
+
+  const { code, out, errText } = await runCli(existing, id, publishArgs(dir));
+
+  assert.equal(code, 0, `${out.join("\n")}\n${errText}`);
+  assert.match(errText, /stays a draft: Resource not accessible/);
+  assert.equal(out.some((line) => line.startsWith("READY:")), false, out.join("\n"));
+  const state = readRunState({ projectId, slug: SLUG, env });
+  assert.deepEqual([state.outcome.staysDraft, state.outcome.draft, state.outcome.draftFailures, state.draftPrUrl], [true, undefined, undefined, FAKE_GH_PR_URL]);
+  const report = await runCli(env, id, ["run", "report"]);
+  assert.ok(report.out.includes(`- pull request ${FAKE_GH_PR_URL} stays a draft`), report.text);
+});
+
+test("`Remaining failure:` lines pass the body check of a repository template", async (t) => {
+  const { env, id, worktree, dir } = makeRun(t, "publish-draft-repo-template");
+  mkdirSync(join(worktree, ".github"), { recursive: true });
+  writeFileSync(join(worktree, ".github", "pull_request_template.md"), "## Summary\n\n## Testing\n");
+  writeDraftBody(dir, ["`npm test` fails"], "## Summary\n\nslug helper.\n\n## Testing\n\n`npm test` failed.\n");
+
+  const { code, out, errText } = await runCli(env, id, publishArgs(dir, ["--draft"]));
+
+  assert.equal(code, 0, `${out.join("\n")}\n${errText}`);
+  assert.ok(out.includes("DRAFT: draft pull request — 1 failure remains"), out.join("\n"));
+});
+
+test("a draft after a re-triage's terminal verdict still ends done and the report names the draft first", async (t) => {
+  const { env, id, dir, projectId } = makeRun(t, "publish-draft-terminated");
+  recordTermination({ projectId, slug: SLUG, phase: "triage", reason: "NOT-REPRODUCIBLE", by: "runtime", env });
+  writeDraftBody(dir, ["the symptom persists after the fix loop"]);
+
+  const { code, out, errText } = await runCli(env, id, publishArgs(dir, ["--draft"]));
+
+  assert.equal(code, 0, `${out.join("\n")}\n${errText}`);
+  const state = readRunState({ projectId, slug: SLUG, env });
+  const log = toNdjson([systemInitEvent(), resultEvent({ text: "draft opened" })]);
+  const outcome = classifyJobResult({ log, exitCode: 0, state, runOutcome: "pr_opened" });
+  assert.deepEqual([outcome.status, outcome.prUrl], ["done", FAKE_GH_PR_URL]);
+  const report = await runCli(env, id, ["run", "report"]);
+  assert.ok(report.out.includes("Happy: no — draft pull request — 1 failure remains"), report.text);
+});
+
+test("the draft record needs a positive failure count and any later outcome drops it", async (t) => {
+  const { env, projectId } = makeRun(t, "publish-draft-record");
+  const target = { projectId, slug: SLUG, env };
+
+  for (const failures of [0, -1, Number.NaN, "2", undefined]) {
+    assert.equal(recordOutcome({ ...target, status: "done", draft: true, failures }).status, "kept", String(failures));
+  }
+  assert.equal(readRunState(target).outcome, undefined);
+  assert.equal(recordOutcome({ ...target, status: "done", draft: true, failures: 3 }).status, "written");
+  recordPrUrl({ ...target, prUrl: FAKE_GH_PR_URL });
+  assert.deepEqual([readRunState(target).outcome.draft, readRunState(target).outcome.draftFailures], [true, 3], "recording the URL lost the draft");
+  recordOutcome({ ...target, status: "gate", notice: "why" });
+  const { outcome } = readRunState(target);
+  assert.deepEqual([outcome.status, outcome.draft, outcome.draftFailures], ["gate", undefined, undefined]);
 });
 
 test("the classifier ignores an edited event that no recorded pull request vouches for", () => {

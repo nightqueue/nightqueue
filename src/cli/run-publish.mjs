@@ -1,29 +1,40 @@
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { UserError } from "../config/errors.mjs";
-import { ghPrCreate, ghPrEditBody, ghPrUrlOfBranch } from "../host/gh.mjs";
+import { ghPrConvertToDraft, ghPrCreate, ghPrEditBody, ghPrMarkReady, ghPrUrlOfBranch } from "../host/gh.mjs";
 import { runGit } from "../host/git.mjs";
 import { commitTypeOf, publishedBranchName } from "../queue/branch-name.mjs";
 import { FILE_LIST, listedFiles } from "../queue/file-list.mjs";
+import { comparableQuestion, plainQuestion } from "../queue/gate-question.mjs";
 import { neverCommittedReason } from "../queue/never-committed.mjs";
 import { publishedBodyFile } from "../queue/pr-footer.mjs";
 import { readRunState } from "../queue/resume.mjs";
-import { coverageRecordLine } from "../queue/usage-coverage-record.mjs";
 import { WIP_REF_PREFIX } from "../queue/wip-commit.mjs";
-import { recordOutcome, recordPhaseDone, recordPrUrl, recordRunFields, RUNTIME_AUTHOR } from "../queue/run-state.mjs";
+import { draftLine, recordOutcome, recordPhaseDone, recordPrUrl, recordRunFields, RUNTIME_AUTHOR } from "../queue/run-state.mjs";
+import { unfencedLines, withoutHtmlComments } from "../queue/stream.mjs";
+import { PLACEHOLDER_WORDS } from "../queue/triage-brief.mjs";
 import { checkArgs, parseCommand } from "./args.mjs";
 import { commitMessageProblems, conventionFile, CONVENTIONAL_SUBJECT_RE, findCommitTemplate } from "./commit-template.mjs";
-import { bodyProblems } from "./pr-body.mjs";
+import { ANGLE_PLACEHOLDER, bodyProblems } from "./pr-body.mjs";
 import { lockfileRule } from "./lockfile-rule.mjs";
 import { findPrTemplate } from "./pr-template.mjs";
 import { failureLine, outputLines, projectCheckout, readRequiredFile, resolveRun, RUN_OPTIONS, worktreeOf } from "./run-context.mjs";
 import { scratchFiles } from "./scratch-files.mjs";
 
 export const PUBLISH_USAGE =
-  "nightqueue run publish --message-file <path> --body-file <path> [--files-from <path>] [--extra <pathspec>] [--title <text>] [--remove-worktree]";
+  "nightqueue run publish --message-file <path> --body-file <path> [--files-from <path>] [--extra <pathspec>] [--title <text>] [--draft] [--remove-worktree]";
 
 const BASE_REFS = ["refs/remotes/origin/HEAD", "origin/main", "origin/master", "main", "master"];
 
 const ALREADY_EXISTS = /already exists/i;
+
+// A body line naming one failure a draft pull request leaves open, its text captured.
+const REMAINING_FAILURE_LINE = /^Remaining failure:(.*)/;
+
+// What a `Remaining failure:` line holds, whole, when it names no failure.
+const NO_FAILURE_WORDS = [...PLACEHOLDER_WORDS, "none", "nothing"];
+
+// Said on the `DRAFT:` line of the run's own draft a publish did not turn ready.
+const KEPT_DRAFT_NOTE = " (stays a draft: the body still lists a Remaining failure: line)";
 
 // Said after every refusal, so `--extra` is read as what it is — a way to add files, never a way to force a refused one through.
 export const EXTRA_IS_NOT_AN_OVERRIDE =
@@ -240,31 +251,55 @@ function recordPublishedBranch({ run, branch, ctx }) {
 // Publishes the branch and opens the pull request, then records the run as done with the URL gh answered: the record is written
 // here, at the point of publication, so a run driven outside the queue runner (a resumed session, another program) ends up
 // with the same state.json as one the runner watched. A value the record refuses is reported, never fatal.
-function publishBranch({ run, cwd, branch, title, bodyFile, env }) {
+function publishBranch({ run, cwd, branch, title, bodyFile, failures, listedFailures, ownedDraft, env }) {
   const pushed = runGit({ args: ["push", "-u", "origin", branch], cwd, env });
   if (!pushed.ok) throw new UserError(`git could not push \`${branch}\`: ${failureLine(pushed)}`);
-  const url = openOrUpdatePr({ branch, title, bodyFile, cwd, env });
-  const recorded = recordOutcome({ projectId: run.projectId, slug: run.slug, status: "done", env });
-  const prRecorded = recordPrUrl({ projectId: run.projectId, slug: run.slug, prUrl: url, prTitle: title, env });
-  return { url, recorded, prRecorded };
+  const pr = openOrUpdatePr({ branch, title, bodyFile, draft: failures > 0, ownedDraft, listedFailures, cwd, env });
+  const remaining = pr.keptDraft ? listedFailures : failures;
+  const recorded = recordOutcome({ projectId: run.projectId, slug: run.slug, status: "done", draft: pr.draft, failures: remaining, draftPrUrl: pr.draftPrUrl, staysDraft: pr.staysDraft !== undefined, env });
+  const prRecorded = recordPrUrl({ projectId: run.projectId, slug: run.slug, prUrl: pr.url, prTitle: title, env });
+  return { ...pr, remaining, recorded, prRecorded };
 }
 
-// The URL of the pull request of the branch: the one gh opens, or the one the branch already has, whose body is then replaced.
-function openOrUpdatePr({ branch, title, bodyFile, cwd, env }) {
-  const created = ghPrCreate({ title, bodyFile, head: branch, cwd, env });
+// What became of an existing pull request the caller wants as a draft, with gh's reason when it refused.
+function convertedToDraft({ url, cwd, env }) {
+  const converted = ghPrConvertToDraft({ url, cwd, env });
+  return converted.ok ? { draft: true, draftPrUrl: url } : { draft: false, draftRefusal: failureLine(converted) };
+}
+
+// What became of an existing pull request published without the flag: only the draft this run itself opened is turned ready, never while its body lists a failure, with gh's reason when it refused.
+function readiedOwnDraft({ url, ownedDraft, listedFailures, cwd, env }) {
+  if (url !== ownedDraft) return { draft: false };
+  if (listedFailures > 0) return { draft: true, keptDraft: true, draftPrUrl: url };
+  const ready = ghPrMarkReady({ url, cwd, env });
+  return ready.ok ? { draft: false, readied: true, draftPrUrl: null } : { draft: false, staysDraft: failureLine(ready) };
+}
+
+// Asks gh to open the pull request; a draft refused for any reason but an existing pull request or a missing gh is asked once more as a normal one, keeping gh's reason.
+function createPr({ branch, title, bodyFile, draft, cwd, env }) {
+  const created = ghPrCreate({ title, bodyFile, head: branch, draft, cwd, env });
+  if (!draft || created.ok || created.missing || ALREADY_EXISTS.test(created.stderr)) return { created, draft };
+  return { created: ghPrCreate({ title, bodyFile, head: branch, draft: false, cwd, env }), draft: false, draftRefusal: failureLine(created) };
+}
+
+// The pull request of the branch and what it now is: the one gh opens, or the one the branch already has, whose body is then replaced.
+function openOrUpdatePr({ branch, title, bodyFile, draft, ownedDraft, listedFailures, cwd, env }) {
+  const { created, draft: openedDraft, draftRefusal } = createPr({ branch, title, bodyFile, draft, cwd, env });
   if (created.missing) throw new UserError(`\`${branch}\` is pushed, but the GitHub CLI is not installed: open the pull request by hand`);
-  if (created.ok) return created.url;
+  if (created.ok) return { url: created.url, draft: openedDraft, draftRefusal, draftPrUrl: openedDraft ? created.url : null };
   if (!ALREADY_EXISTS.test(created.stderr)) throw new UserError(`\`${branch}\` is pushed, but gh could not open the pull request: ${failureLine(created)}`);
   const existing = ghPrUrlOfBranch({ head: branch, cwd, env });
   if (!existing.url) throw new UserError(`\`${branch}\` is pushed and gh says its pull request exists, but no pull request with that head branch was found: ${failureLine(existing)}`);
   const edited = ghPrEditBody({ url: existing.url, bodyFile, cwd, env });
   if (!edited.ok) throw new UserError(`\`${branch}\` is pushed, but gh could not update its pull request ${existing.url}: ${failureLine(edited)}`);
-  return existing.url;
+  const { url } = existing;
+  return { url, ...(draft ? convertedToDraft({ url, cwd, env }) : readiedOwnDraft({ url, ownedDraft, listedFailures, cwd, env })) };
 }
 
 // Records the commit phase on the run once its pull request is open; a refused record is reported, never fatal.
-function recordCommitPhase(run, ctx) {
-  const recorded = recordPhaseDone({ projectId: run.projectId, slug: run.slug, phase: "commit", verdict: "PR opened", by: RUNTIME_AUTHOR, env: ctx.env });
+function recordCommitPhase(run, draft, ctx) {
+  const verdict = draft ? "Draft PR opened" : "PR opened";
+  const recorded = recordPhaseDone({ projectId: run.projectId, slug: run.slug, phase: "commit", verdict, by: RUNTIME_AUTHOR, env: ctx.env });
   if (recorded.status !== "written") ctx.err(`nightqueue: the commit phase was not recorded on the run: ${recorded.reason}`);
 }
 
@@ -275,19 +310,23 @@ function worktreeRemoval(run, path, env) {
 }
 
 // Renames the branch to its final name, pushes it, opens the pull request and prints what happened; the body is already checked.
-export async function openPullRequest({ run, cwd, bodyFile, body, title, removeWorktree, ctx }) {
+export async function openPullRequest({ run, cwd, bodyFile, body, title, removeWorktree, failures = 0, ctx }) {
   const state = readRunState({ projectId: run.projectId, slug: run.slug, env: ctx.env });
-  const published = publishedBodyFile({ bodyFile, runDir: run.runDir, jobId: run.jobId, origins: run.origins ?? [], coverageLine: coverageRecordLine(state) });
+  const published = publishedBodyFile({ bodyFile, runDir: run.runDir, jobId: run.jobId, origins: run.origins ?? [] });
   const current = currentBranch(cwd, ctx.env);
   const final = publishedBranchName(current, { type: state?.type, slug: run.slug, commitType: headCommitType(cwd, ctx.env) });
   const branch = renameBranch({ cwd, current, final, env: ctx.env });
   recordPublishedBranch({ run, branch, ctx });
-  const { url, recorded, prRecorded } = publishBranch({ run, cwd, branch, title: prTitle(title, body), bodyFile: published, env: ctx.env });
+  const { url, draft, keptDraft, remaining, draftRefusal, readied, staysDraft, recorded, prRecorded } = publishBranch({ run, cwd, branch, title: prTitle(title, body), bodyFile: published, failures, listedFailures: remainingFailures(body), ownedDraft: state?.draftPrUrl, env: ctx.env });
   ctx.out(`BRANCH: ${branch}${branch === current ? "" : ` (renamed from ${current})`}`);
   ctx.out(`PR: ${url ?? "opened"}`);
+  if (draft) ctx.out(`DRAFT: ${draftLine(remaining)}${keptDraft ? KEPT_DRAFT_NOTE : ""}`);
+  if (readied) ctx.out(`READY: ${url}`);
+  if (draftRefusal) ctx.err(`nightqueue: gh could not turn ${url} into a draft: ${draftRefusal}`);
+  if (staysDraft) ctx.err(`nightqueue: ${url} stays a draft: ${staysDraft}`);
   if (recorded.status !== "written") ctx.err(`nightqueue: the run was not recorded as done: ${recorded.reason}`);
   if (prRecorded.status !== "written") ctx.err(`nightqueue: the pull request was not recorded on the run: ${prRecorded.reason}`);
-  recordCommitPhase(run, ctx);
+  recordCommitPhase(run, draft, ctx);
   ctx.out(`WORKTREE: ${cwd}`);
   if (removeWorktree) ctx.out(worktreeRemoval(run, cwd, ctx.env));
   return 0;
@@ -328,6 +367,7 @@ function publishOptions(argv) {
     "files-from": { type: "string" },
     extra: { type: "string", multiple: true },
     title: { type: "string" },
+    draft: { type: "boolean" },
     "remove-worktree": { type: "boolean" },
   };
   const { values, positionals } = parseCommand(argv, { ...RUN_OPTIONS, ...options });
@@ -344,6 +384,28 @@ function publishTitle(given, body, messageFile) {
   return prTitle(subject, body);
 }
 
+// Whether a failure text holds only the template's hint or a word that stands for no failure; any other text with a word names one, however it opens or is wrapped.
+function holdsNoFailure(text) {
+  const plain = plainQuestion(text).replace(/^\((.*)\)$/, "$1").replace(/[.,;:!]+$/, "");
+  return NO_FAILURE_WORDS.includes(plain) || ANGLE_PLACEHOLDER.exec(plain)?.[0] === plain;
+}
+
+// Whether a body line names a failure, which a `Remaining failure:` line with no word or no failure does not.
+function namesFailure(line) {
+  const named = REMAINING_FAILURE_LINE.exec(line);
+  return named !== null && comparableQuestion(named[1]) !== "" && !holdsNoFailure(named[1]);
+}
+
+// How many failures the body names on its `Remaining failure:` lines.
+function remainingFailures(body) {
+  return unfencedLines(withoutHtmlComments(body)).filter(namesFailure).length;
+}
+
+// The refusal of a `--draft` whose body lists no failure, which is the only source of the count the draft reports.
+function draftProblemLines(isDraft, failures) {
+  return isDraft && failures === 0 ? ["REJECTED: a draft pull request lists each failure on a Remaining failure: <what> line of its QA/verification section"] : [];
+}
+
 // Runs `run publish`: checks the message and the body, commits the list once, refuses scratch files, then pushes and opens the pull request.
 export async function runPublish(argv, ctx) {
   const values = publishOptions(argv);
@@ -353,7 +415,9 @@ export async function runPublish(argv, ctx) {
   const bodyFile = resolve(values["body-file"]);
   const body = readRequiredFile(bodyFile, "--body-file");
   const title = publishTitle(values.title, body, messageFile);
-  const problems = [...messageProblemLines(cwd, messageFile, ctx.env), ...bodyProblemLines({ run, template: findPrTemplate(cwd), body })];
+  const isDraft = values.draft === true;
+  const failures = isDraft ? remainingFailures(body) : 0;
+  const problems = [...messageProblemLines(cwd, messageFile, ctx.env), ...bodyProblemLines({ run, template: findPrTemplate(cwd), body }), ...draftProblemLines(isDraft, failures)];
   if (problems.length > 0) return refuse(problems, ctx);
   const { listed } = listedFromArtifact(run, values["files-from"]);
   const { paths, refused } = stageable({ cwd, listed, extras: values.extra ?? [], env: ctx.env });
@@ -364,5 +428,5 @@ export async function runPublish(argv, ctx) {
   if (wips.length > 0) return refuse(wips, ctx);
   const committed = await commitOnce({ run, cwd, paths, messageFile, ctx });
   if (committed !== 0) return committed;
-  return await openPullRequest({ run, cwd, bodyFile, body, title, removeWorktree: values["remove-worktree"] === true, ctx });
+  return await openPullRequest({ run, cwd, bodyFile, body, title, removeWorktree: values["remove-worktree"] === true, failures, ctx });
 }

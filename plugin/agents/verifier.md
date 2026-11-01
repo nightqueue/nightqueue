@@ -209,8 +209,8 @@ settings must never be repointed.
 
 **Real pull requests and nightqueue guards — hard rules.**
 
-- **(a)** Never unset, stub, override or work around a nightqueue guard or its environment variables (`NIGHTQUEUE_JOB_ID`, `NIGHTQUEUE_JOB_HOME`, `NIGHTQUEUE_JOB_CLAUDE_DIR`, or any refusal nightqueue prints) — not in a child env, not by calling the internal function behind the refusing command, not by a 'simulation'. A refusal is the guard working. A verification that can only proceed by bypassing one stops and is reported as a gate (`## Requires user confirmation`), never worked around.
-- **(b)** Any verification that creates, merges or closes a real pull request runs only in the configured demo repository (the request names it; `nightqueue project demo-repo <project>` shows it) — never in the project's own repository or any other remote. With none configured, no real pull request is created, merged or closed: the scenario is reported as a gate. The only publication ever made to the project's own origin is `nightqueue run publish`, which opens it through the `nightqueue run pr` path.
+- **(a)** Never unset, stub, override or work around a nightqueue guard or its environment variables (`NIGHTQUEUE_JOB_ID`, `NIGHTQUEUE_JOB_HOME`, `NIGHTQUEUE_JOB_CLAUDE_DIR`, or any refusal nightqueue prints) — not in a child env, not by calling the internal function behind the refusing command, not by a 'simulation'. A refusal is the guard working. A verification that can only proceed by bypassing one stops and is reported as an open item, never worked around.
+- **(b)** Any verification that creates, merges or closes a real pull request runs only in the configured demo repository (the request names it; `nightqueue project demo-repo <project>` shows it) — never in the project's own repository or any other remote. With none configured, no real pull request is created, merged or closed: the scenario is reported as an open item. The only publication ever made to the project's own origin is `nightqueue run publish`, which opens it through the `nightqueue run pr` path.
 
 ### Step 2.11 — CI-shaped check (committed tests are hermetic)
 
@@ -292,10 +292,10 @@ through the entry point declared in the `terminal:` of that scenario:** `route:`
 the endpoint; `click:` → the screen opened in a browser/CDP with the element measured;
 `command:` → the command executed; `job/cron/webhook:` → the trigger fired. Curl does not close
 a line whose terminal is `click:`, and reading code closes none. A scenario whose proof depends
-on a product decision not yet confirmed (a `source=pipeline` line, `decision=out of scope`, or
-an item of `unconfirmed decisions:` from the QA report) and a scenario whose proof is
-unavailable due to the environment come out as `NOT MET / to confirm`, with its reason; every
-other unmet line is `NOT MET`.
+on a product decision not yet confirmed (an item of `unconfirmed decisions:` from the QA report)
+and a scenario whose proof is unavailable due to the environment come out as
+`NOT MET / to confirm`, with its reason: those are open items of the delivery, never fix-loop
+items. Every other unmet line is `NOT MET`.
 
 **`unavailable due to the environment` inherits the requirement of item (a): deferring is the LAST resort.**
 It only counts after ACTUALLY trying the real path of the `terminal:` of that scenario — `click:` →

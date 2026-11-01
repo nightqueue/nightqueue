@@ -181,6 +181,7 @@ test("the prompt asks for the pipeline, the slug line and the gate, and carries 
   assert.match(prompt, /^\/nightqueue:resolve fix the worker\n/);
   assert.match(prompt, /J-7/);
   assert.match(prompt, /QUEUE_SLUG: <slug>/);
+  assert.match(prompt, /^The only human stop is Phase 3, on a filled `## Requires user confirmation` question; everything else is routed or an open item\.$/m);
   assert.match(prompt, /OPERATOR ANSWER TO THE GATE: deliver without the migration/);
   assert.equal(buildPrompt({ job: JOB }).includes("OPERATOR ANSWER TO THE GATE"), false);
   assert.equal(buildPrompt({ job: JOB }).includes("RESUME CANDIDATE"), false);

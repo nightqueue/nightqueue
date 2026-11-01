@@ -96,13 +96,30 @@ What a runtime has to provide, and what it can rely on:
     telemetry only: it is written by `nightqueue run report` (or an older plugin's
     `pipeline_log`) from `state.json` after the run and is never a
     source of the live track.
-  - `outcome{status, at, notice?, prUrl?}`: `run_outcome` (`status`, and `notice` or, for a
+  - `outcome{status, at, notice?, prUrl?, draft?, draftFailures?, staysDraft?}`: `run_outcome` (`status`, and `notice` or, for a
     gate, the notice it composes from `question`/`from_artifact`),
     `nightqueue run pr` (`status: "done"`) and the runner, which writes `prUrl` at
     finalize from what the session really published - it is never a parameter.
     `status: "no_change"` is the run's deliberate conclusion that no code change is
     needed (triage verdict `NO-CHANGE-NEEDED`) and is refused without a `notice`, the
     conclusion its origins are told when the job is closed.
+    `draftFailures: <n>`: `nightqueue run publish --draft`, or a publish without the flag that leaves
+    the run's own draft a draft because its body still lists a failure, with `n` the
+    `Remaining failure:` lines of the body outside fences and HTML comments; `draft: true` joins it
+    only when the pull request really is a draft, so `draftFailures` alone means gh refused the
+    draft. `staysDraft: true`: a publish without the flag that gh would not let turn the run's own
+    draft ready. Any other outcome written later drops all three, and writing `prUrl` keeps them.
+  - `gateQuestionDigest`: `run_outcome` with `status: "gate"` whose composed or sent notice shows
+    the plan's filled question; any other gate clears it, and a `done` leaves it. It is the sha256
+    of the question's words: NFKC, format characters (`\p{Cf}`) removed, lowercased, and every run
+    of anything but letters, marks and digits collapsed to one space. It lives at the top level so it survives the outcome the
+    runner clears for the next attempt. `run check 03` reads it to print `CONFIRM: answered`, and
+    `run report` reads it so an answered pause never counts against Happy. It is not a `run_set`
+    field.
+  - `draftPrUrl`: `nightqueue run publish`, the URL of the draft this run opened or converted. It
+    lives at the top level for the same reason. It lets a later publish without the flag turn that
+    draft ready, and only that one. A plain create or a turned-ready draft drops it. It is not a
+    `run_set` field.
   - `prTemplate{source, path?, headings, at}`: `nightqueue run pr` (both the
     `--template` query and the publishing call), the template the body is checked
     against - `repo` with its path, or `nightqueue`.
@@ -754,7 +771,7 @@ fill is an error, never a half prompt. Its `model` is the model of the target's 
 `qa-analyst` and `qa-prover` prompts carry `Demo repository: {{DEMO_REPO}}` (the
 `_demo-repo.md` partial): the project's `verification.demoRepo` setting (`nightqueue project
 demo-repo`), or `none configured` without one or outside a project, in which case no real
-pull request is created, merged or closed and that scenario is reported as a gate; a store
+pull request is created, merged or closed and that scenario is reported as an open item; a store
 that cannot read the setting answers `none configured` with an `open_items` line.
 
 ### The skill's references
@@ -1010,30 +1027,49 @@ ended stays the runtime's call),
 `user`), the phase `status` (`ok`, `failed`, `skipped`). A value outside them comes back as an error message, never as a stack.
 
 **The artifact check answers the gates.** `nightqueue run check <NN>` reads the phase's
-artifact (and, where a rule needs them, `00-brief.md`, `01-triage.md`, `02-explore.md`,
-`03-plan.md` and `state.json`) and prints one fact per line, in this fixed order:
+artifact (and, where a rule needs them, `01-triage.md`, `03-plan.md`, `state.json` and the job's
+operator note) and prints one fact per line, in this fixed order:
 
 1. `OK` | `MISSING: <sections>` | `GENERATED` (`04`), unchanged. After `MISSING:` nothing
    else is printed but a `REPAIRED:` line: no gate is evaluated and nothing is recorded but the
    check memo. On a round artifact (`05`, `06`, `07`) whose open code fence the check closed, the
    `REPAIRED: …` line follows the first line, before `VERDICT:`; it never changes the memo nor
    completion. `01`
-   with `NEEDS-CLARIFICATION`, `NOT-REPRODUCIBLE` or `PROPOSE-ALTERNATIVE` also requires `## Open items` with an item
+   with `NOT-REPRODUCIBLE` also requires `## Open items` with an item
    (`MISSING: ## Open items`, or `## Open items (empty)` when it holds only blank lines or
    `None`), because the next step reads it.
 2. `VERDICT: <value>`: `01` the suffix of `## Verdict:` (`PROCEED`, `NO-CHANGE-NEEDED`,
-   `NOT-REPRODUCIBLE`, `NEEDS-CLARIFICATION`, `PROPOSE-ALTERNATIVE`); `05` and `05 --stage analyst` the first non-blank line of
+   `NOT-REPRODUCIBLE`; a retired `NEEDS-CLARIFICATION` or `PROPOSE-ALTERNATIVE` still parses and
+   reads as `PROCEED`, its Brief gates applied); `05` and `05 --stage analyst` the first non-blank line of
    `## Verdict` (`APPROVED`, `NEEDS FIX`, `NEEDS DISCUSSION`); `06` the suffix of
    `## Verification:` (`PASSED`, `PASSED-STATIC`, `FAILED`); `07` the first non-blank line of
    `## Runtime verdict` (`CONFIRMED`, `NOT-MET`, `SYMPTOM-PERSISTS`, `NEEDS-DEVICE`,
    `UNAVAILABLE`). A verdict outside the values is a `MISSING:` naming the expected line.
 3. `GATE: <code> — <evidence>`, one per firing item, the evidence one trimmed line of at most
    160 code points.
-4. `OPEN: <text>`: `05` `unconfirmed decisions — <value>` when the QA's value is not `none`;
+4. `OPEN: <text>`: `03` the coverage items below, `## Requires user confirmation has no filled
+   **Question:**` and `type mismatch — <evidence> — kept <bug/error|feature/refactor>` (`bug/error`
+   with `## Diagnosis` filled, else `feature/refactor`); `05` `<label> — <value>` per filled
+   `omitted:`, `divergences:` or `unconfirmed decisions:` line other than `none`;
    `07` `<scenario> — to confirm` per `NOT MET / to confirm` row. Never a gate.
 5. `TYPE-MISMATCH: <evidence> — triage: <bug/error|feature/refactor> (<## Diagnosis filled|## Diagnosis absent or empty>)` (`03`).
-6. `CONFIRM: requires-user-confirmation` (`03`, the plan has a `## Requires user confirmation`
-   heading).
+6. `CONFIRM:` (`03`, only with a filled question, the one human stop of a run):
+   `CONFIRM: requires-user-confirmation — <question>`, or `CONFIRM: answered` when the job has a
+   non-blank operator note and `state.gateQuestionDigest` is this question's digest, so re-typing
+   the same question (markup, quotes, punctuation) still reads as answered and one with other words
+   pauses again. The question is the block under the label of the confirmation section, at any
+   heading level, with HTML comments and fenced lines ignored. The label is `**Question:**`,
+   `**Question**:`, `**Question :**` or `__Question:__` anywhere in a line, `Question:` at a line's
+   start, a heading titled `Question` (a level-2 one stays in the section), or a table row
+   `| Question | text |` with a filled second cell (that cell alone; under a header row whose cell
+   has no `?`, the first cell of the row below). The block ends at the next bold label or heading.
+   One reader (`src/queue/gate-question.mjs`) serves the check, the pause and the report. A question
+   is a value with a `?` and at least one word; nothing else ever pauses a run. A label left unfilled
+   (empty, one single `<…>` or `[…]` hint, or a placeholder word, `none`, `no question` or `nothing`
+   that goes on to say nothing, such as `None needed`, `(none)`, `N/A - decided above`) is an `OPEN:`
+   line. Any other labelled value with no `?` is a `MISSING:`, and so is a section with a `?` and no
+   label, so the architect is relaunched once. A section with no label and no `?` asks nothing: an
+   `OPEN:` line.
 7. `QA: lite|full` (`03`, always printed on a complete plan): `full` when an unfenced line of
    the plan opens with `**Always-gate class:** yes`, or when `## Identified risks` holds two or
    more risk items carrying 🔴 (a list item `- `/`* `/`+ `/`<n>. `, or a table body row; fenced
@@ -1044,8 +1080,8 @@ artifact (and, where a rule needs them, `00-brief.md`, `01-triage.md`, `02-explo
    `## Break hypotheses` holds no item other than `None`, so the orchestrator goes straight to
    `run check 05`; `provers` otherwise.
 9. `INVALIDATED: <item>`, one per item of `## Invalidated assumptions` other than `None` (`05`).
-   It is a pause: `05` does not record `qa` and, when no `GATE:` fired, the memo line is the
-   first `INVALIDATED:` line, so the answer to the orchestrator's gate resumes at `qa`.
+   It sends the plan back to the architect, never to the operator: `05` does not record `qa`,
+   and the memo line is the first `INVALIDATED:` line.
 10. `DIFF-APPLIES: yes|no` (`07`, from `Diff applies plan:`; omitted on `n/a` or absent).
 11. `NEEDS-DEVICE` (`07`).
 12. `index: saved N files, M libs` | `index: not saved (<reason>)` (`02`).
@@ -1101,72 +1137,37 @@ codes, in output order per phase:
     on a terminated run);
   - only on `PROCEED`: `brief-field-empty` — `<field>`, for `Affected area`, `Context`,
     `Objective`, `Expected outcome` and `Commit type`, in that order, when the field is absent,
-    blank, `n/a` or wholly a `<…>`/`[…]` placeholder; `brief-type-invalid` — `<value>` when a
-    `**Type:**` is present but not `bug/error`/`feature/refactor` (an absent Type is no gate:
-    the `## Diagnosis` rule below applies); `brief-commit-type-invalid` — `<value>` when the
-    Commit type is not one of the accepted commit types.
+    blank, `n/a` or wholly a `<…>`/`[…]` placeholder; `brief-type-invalid` — `<value>` when the
+    leading token of a present `**Type:**` is not `bug/error`/`feature/refactor`, so `bug/error
+    (security)` passes (an absent Type is no gate: the `## Diagnosis` rule below applies);
+    `brief-commit-type-invalid` — `<value>` when the leading token of the Commit type is not one
+    of the accepted commit types, so `fix(queue)` passes. The leading token is the lower-cased run
+    of `[a-z/_-]` the plain value opens with.
 - `01` `symptom-proof-missing` — a `PROCEED` on a `bug/error` run whose `## Diagnosis` is
   absent, has no `Symptom proof:` line, or leaves it empty, `n/a` or a `<…>` placeholder.
-- `03`, `bug/error` only and only when the plan has no `**Type mismatch:**` line with evidence
-  (such a line prints `TYPE-MISMATCH` instead and skips these three); the plan must then also
-  carry `## Symptom coverage` (`MISSING: ## Symptom coverage`, or `(empty)` with no table row):
-  - `coverage-vector-no-reason` — a row whose Status is not `covered`/`not-covered`, or whose
-    Reason is empty, `-`, `n/a` or `not applicable`;
-  - `coverage-enumeration-no-method` — `**How I enumerated:**` absent from the section, or its
-    value names no re-runnable search;
-  - `coverage-not-covered-without-confirmation` — a `not-covered` row in a plan without
-    `## Requires user confirmation`.
-- `03`, any Type, only while the plan has no `## Requires user confirmation`:
-  - `usage-coverage-cond-1` — a `- ` line of `## Usage coverage` containing
-    `changed=yes · source=pipeline`;
-  - `usage-coverage-cond-2` — a `**Always-gate class:** yes` line in that section;
-  - `usage-coverage-cond-3` — a line of `02-explore.md` matching
-    `unimplemented intent: <param> · governs <axis>` whose axis is the first word of the plan's
-    `**Diff axis:**`, EXCEPT when `<param>` is the ticket's own deliverable: its code token
-    (the first backtick span, else the first code-shaped identifier: a path holding `/`,
-    dotted, camelCase or PascalCase with an inner capital, snake_case, or a `name()` call)
-    is found as a whole token, case-sensitive (not preceded by `[\w$.]`, not followed by
-    `[\w$]`), in the `## Validated brief` of `01-triage.md` or the `**Objective:**` line of
-    `00-brief.md`. A prose-only `<param>` never holds the exception: the gate fires and the
-    user answers it. Without `02-explore.md` it never fires;
-  - `usage-coverage-cond-4` — a line of `00-brief.md` or `01-triage.md` starting `- `, with
-    ` · ` fields, one of which is exactly `to confirm`.
-- `05`, read on the last round's `## Validated risks`; the symptom codes only for a
-  `bug/error` plan without a Type mismatch:
-  - `symptom-coverage-n-mismatch` — no `Symptom coverage: <N> · <method> · omitted: <value>`
-    line, or `N` is not the number of rows of the plan's `## Symptom coverage` table;
-  - `symptom-coverage-omitted-empty` — the `omitted:` field absent or empty;
-  - `symptom-coverage-method-generic` — the method names no re-runnable search, or reads
-    `reviewed|read|analyzed the plan`;
-  - the usage codes only when the plan has `## Usage coverage` or `**Always-gate class:** yes`:
-    `usage-coverage-nm-mismatch` — no `Usage coverage: <N> · <M> · divergences: … · unconfirmed decisions: …`
-    line, no `## Access map (QA)`, or `N` differs from the plan's `- ` scenario lines or `M`
-    from the access map's `- ` lines other than `partial:` and `unimplemented intent:`;
-    `usage-coverage-divergences-empty` — `divergences:` or `unconfirmed decisions:` absent or
-    empty; `usage-coverage-held-on-pipeline` — a risk line with a `HELD` verdict that names
-    `source=pipeline`, `What to avoid`, the scenario name of a plan scenario carrying
-    `source=pipeline`, or an item of the plan's `What to avoid` (the marker match is
-    case-insensitive and reads the whole line). A `HELD` verdict is the standalone, uppercase word
-    `HELD` (`UPHELD` never counts) set off from the prose: no word right before it (an item id
-    such as `R2` or `PM1` is not prose) or no word right after it, with spaces and emoji skipped.
-    Examples: `R2 HELD by reading:`, `item: HELD.`, `item (source=pipeline) HELD.`, `→ HELD (…)`,
-    `— 🟢 HELD`, `…, HELD as low impact.`. A `HELD` with a prose word on both sides (`is HELD by
-    the guard`, `was HELD in round 1`) is mid-prose and does not count. It never counts when
-    negated (`not`, `no`, `never`, `non-`, `un-` or `…n't` right before it), inside backticks or
-    double quotes, or on a line carrying the label `unconfirmed by the operator`. On a
-    consolidated round it reads only the `## Validated risks` of the
-    analyst's round (the first number its `source: runtime consolidation · rounds …` line lists),
-    never a prover's `H<n>: HELD` line; the other usage and symptom gates read the consolidated
-    round.
 - `07`, on the first table of the last round with a `Result` column:
   `runtime-not-met` — a row whose Result starts `NOT MET` without `to confirm`;
   `runtime-no-attempt` — a row whose Result is none of `MET`/`NOT MET…`, or whose Evidence is
   empty, `-`, `none` or `not run`.
 
+`03` and `05` have no gate code. A `bug/error` plan with no `**Type mismatch:**` line with
+evidence must still carry `## Symptom coverage` (`MISSING: ## Symptom coverage`, or `(empty)` with
+no table row), and two findings on it print as `OPEN:`, never as a gate:
+- `coverage-vector-no-reason` — a row whose Status is not `covered`/`not-covered`, or whose
+  Reason is empty, `-`, `n/a` or `not applicable`;
+- `coverage-enumeration-no-method` — `**How I enumerated:**` absent from the section, or its
+  block (from the label to the first table row or the next bold label, bullets and fenced
+  commands included) names no re-runnable search.
+
+A `not-covered` row, a `**Always-gate class:** yes` line (it still raises `QA:` to `full`) and an
+item the plan or triage leaves unconfirmed force no question. `05` reads the last round's
+`## Validated risks` only for its `OPEN:` lines; a report's old `Usage coverage:` or
+`Symptom coverage:` line opens nothing.
+
 The check then acts on what it found, and no effect ever changes the first line or the exit
 code. A check **completes** its phase when the first line is `OK` or `GENERATED`, no `GATE:`
 fired and the verdict does not loop back (`06` `FAILED`, `07` `NOT-MET` and
-`SYMPTOM-PERSISTS`); a pause (`CONFIRM`, `TYPE-MISMATCH`, `NEEDS-DEVICE`, `UNAVAILABLE`)
+`SYMPTOM-PERSISTS`); a `CONFIRM`, `TYPE-MISMATCH`, `NEEDS-DEVICE` or `UNAVAILABLE` line
 completes, except `INVALIDATED:` on `05`, which never does. On completion it records the phase (`recorded: phase_done <phase> <verdict>`, plus
 ` — reason: <reason>` on a re-run: the line the same check failed with, else
 `re-run after <check> <line>` of the newest failure, else `re-run`; ` (already)` when the same
@@ -1177,7 +1178,7 @@ gate: the Brief's valid `**Type:**` wins over a recorded one (`recorded: type <t
 `state.type` has none. On completion `01` also writes the triage's `## Brief` section
 verbatim into `<RUN_DIR>/00-brief.md` (`recorded: brief 00-brief.md`), records the
 `commitType` (`recorded: commit type <c>`), on a terminal verdict (`NOT-REPRODUCIBLE`,
-`NEEDS-CLARIFICATION`, `PROPOSE-ALTERNATIVE`, `NO-CHANGE-NEEDED`) the termination
+`NO-CHANGE-NEEDED`) the termination
 (`recorded: run_terminate triage <VERDICT>`, reason
 `<VERDICT>: <first item of ## Open items, else of ## Validated brief>`, `by: "runtime"`), and
 on a `PROCEED` lifts a triage termination the runtime wrote (`recorded: termination
@@ -1277,6 +1278,9 @@ a path, `question`/`from_artifact` with another status, or either one together w
 is refused, and nothing is recorded. The answer echoes the composed `notice`. The pipeline
 then ends its turn with one plain line: a job whose final text has no `## Notice` still ends
 at `gate` with the recorded notice, and a `## Notice` in the text still wins over the record.
+The shipped pipeline's one pause is Phase 3's, with `from_artifact.file` `03-plan.md`. A gate whose
+notice shows the plan's filled question, however it was sent, records `gateQuestionDigest` in the
+same locked write, and any other gate clears it.
 
 **A job is self-contained, and a finished job does not resume.** `queue_add` refuses, before
 anything is registered or queued, a prompt that conditions the work on another job or pull

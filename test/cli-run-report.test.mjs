@@ -7,6 +7,7 @@ import { reportRows } from "../src/cli/run-report.mjs";
 import { jobLogPath, logsDir, pendingWritesPath, runDir } from "../src/config/paths.mjs";
 import { openDb } from "../src/memory/db.mjs";
 import { addJob } from "../src/memory/jobs.mjs";
+import { questionDigest } from "../src/queue/gate-question.mjs";
 import { readRunState, saveRunState } from "../src/queue/resume.mjs";
 import { recordOutcome, recordPhaseDone, recordPrUrl, recordRunFields, recordTermination } from "../src/queue/run-state.mjs";
 import { ensureProject, makeHome, makeProject } from "../test-support/memory.mjs";
@@ -296,7 +297,7 @@ test("every failing gate of the fail-safe rule makes the run not happy", async (
       (target) => {
         recordPhases(target, COMPLEX_CLEAN);
         mkdirSync(runDir(target.projectId, SLUG, target.env), { recursive: true });
-        writeFileSync(join(runDir(target.projectId, SLUG, target.env), "03-plan.md"), "## Implementation plan\n\n## Requires user confirmation\n\nwhich one?\n");
+        writeFileSync(join(runDir(target.projectId, SLUG, target.env), "03-plan.md"), "## Implementation plan\n\n## Requires user confirmation\n\n**Question:** which one?\n");
       },
       /^Happy: no — the plan carries ## Requires user confirmation$/,
     ],
@@ -312,6 +313,50 @@ test("every failing gate of the fail-safe rule makes the run not happy", async (
     const lines = await report(env, id);
     assert.ok(lines.some((line) => expected.test(line)), `${name}:\n${lines.join("\n")}`);
   }
+});
+
+test("a plan's filled question counts against Happy only until the run records a pause on it", async (t) => {
+  const plan = "## Implementation plan\n\n## Requires user confirmation\n\n**Question:** which one?\n";
+  const happyLine = (lines) => lines.find((line) => line.startsWith("Happy:"));
+  const arrange = (name, lastSteps) => {
+    const made = makeRun(t, `report-question-${name}`);
+    recordPhases(made.run, COMPLEX_CLEAN);
+    mkdirSync(runDir(made.run.projectId, SLUG, made.env), { recursive: true });
+    writeFileSync(join(runDir(made.run.projectId, SLUG, made.env), "03-plan.md"), plan);
+    lastSteps(made.run);
+    return made;
+  };
+
+  const answered = arrange("answered", (target) => {
+    recordOutcome({ ...target, status: "gate", questionDigest: questionDigest("which one?") });
+    recordDelivery(target);
+  });
+  assert.equal(happyLine(await report(answered.env, answered.id)), "Happy: yes");
+
+  const unanswered = arrange("unanswered", (target) => recordOutcome({ ...target, status: "gate", questionDigest: questionDigest("which one?") }));
+  assert.equal(happyLine(await report(unanswered.env, unanswered.id)), "Happy: no — the run recorded no delivery (outcome gate)");
+
+  const staleQuestion = arrange("stale", (target) => {
+    recordOutcome({ ...target, status: "gate", questionDigest: questionDigest("another one?") });
+    recordDelivery(target);
+  });
+  assert.equal(happyLine(await report(staleQuestion.env, staleQuestion.id)), "Happy: no — the plan carries ## Requires user confirmation");
+});
+
+test("a pull request gh would not leave as a draft or turn ready keeps its open item", async (t) => {
+  const { env, id, run: target } = makeRun(t, "report-refused-draft");
+  recordPhases(target, COMPLEX_CLEAN);
+  recordOutcome({ ...target, status: "done", failures: 1 });
+  recordPrUrl({ ...target, prUrl: PR });
+  const refused = await report(env, id);
+  assert.ok(refused.includes("Happy: no — pull request — 1 failure remains (gh refused the draft)"), refused.join("\n"));
+  assert.ok(refused.includes("- pull request — 1 failure remains (gh refused the draft)"), refused.join("\n"));
+  assert.ok(refused.some((line) => line.includes(`pull request ${PR} — 1 failure remains (gh refused the draft)`)), refused.join("\n"));
+
+  recordOutcome({ ...target, status: "done", staysDraft: true });
+  const stays = await report(env, id);
+  assert.ok(stays.includes("Happy: yes"), stays.join("\n"));
+  assert.ok(stays.includes(`- pull request ${PR} stays a draft`), stays.join("\n"));
 });
 
 test("a PASSED run that recorded no runtime lane skips 7 as a static change", async (t) => {

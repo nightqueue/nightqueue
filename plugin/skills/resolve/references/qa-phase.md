@@ -30,7 +30,7 @@ verbatim — header `🛡️ QA-GUARDIAN · ANALYST · ...`. It writes its round
 
 **Stage A gate:** run `nightqueue run check 05 --stage analyst` (the Phase 0 artifact gate),
 which reads the analyst's round for the sections of the analyst request's `## Deliver` — on
-`MISSING`, relaunch the analyst (🔁) once with the check's lines as `note`; if it persists, terminate and inform the user. It
+`MISSING`, relaunch the analyst (🔁) once with the check's lines as `note`; if it persists, Phase 6, ⚠️ open item. It
 answers `QA-STAGE: provers|skip` and records the marker itself (`recorded: qa_stage_a <verdict>`)
 BEFORE stage B — never by writing a file: this is what makes a resume skip the analyst if the
 provers die halfway. On `QA-STAGE: skip` (zero runtime hypotheses), go straight to
@@ -60,6 +60,5 @@ The aggregate verdict counts proof: any merged round with a non-`None` `## Prove
 `NEEDS FIX`; else the provers' verdicts plus the coverage of the analyst's `H<n>` ids (any
 `NEEDS FIX` or `BROKE` line → `NEEDS FIX`, else any `NEEDS DISCUSSION`, unreadable verdict,
 `INCONCLUSIVE` line or id with no prover line → `NEEDS DISCUSSION`, else `APPROVED`); with no prover
-round, open hypotheses → `NEEDS DISCUSSION`, and no hypothesis → the analyst's verdict. A `GATE:` line relaunches the QA once,
-from the analyst; a persisting usage-coverage-only GATE pauses (SKILL.md Phase 5), never terminates; a second `INVALIDATED:` too. The check reads the
+round, open hypotheses → `NEEDS DISCUSSION`, and no hypothesis → the analyst's verdict. The check reads the
 last `## Round`, the one Phase 6 and Phase 9 re-read.

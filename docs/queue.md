@@ -556,7 +556,7 @@ is never sent to the origins. The kind is the row's own marker (`result.resoluti
 "no-change"`, written only from that record), never the missing pull request alone: a PR-less
 `done` written by a repair, a reclassify or a recovery without the record is still refused
 with `nothing to close: the job has no pull request`. The record is the
-only way in: a `NOT-REPRODUCIBLE`, `NEEDS-CLARIFICATION` or `PROPOSE-ALTERNATIVE` run, and a `no_commit` exit without
+only way in: a `NOT-REPRODUCIBLE` run, and a `no_commit` exit without
 it, still end `cancelled`; the same record on an exit that failed, timed out or was stopped
 still ends `failed` or `cancelled`, and one without a notice is `failed`.
 
