@@ -62,6 +62,10 @@ What the request asks decides the scope of the attack:
   hypothesis is written `H<n>: BROKE (PROVEN)` (PoC + the failure output) | `H<n>: HELD (REFUTED)`
   (evidence that the code holds) | `H<n>: INCONCLUSIVE` (what was missing) — NEVER `PROVEN`
   without the output of a real failure.
+- **(v) A triage of the diff** (the request says `Mode: TRIAGE`): classify what changed and
+  answer how much attack it deserves under the rule the request gives. No attack, no PoC, no
+  methodology skill, nothing but the round the request names. A `skip` is a recorded decision,
+  audited later by the reflector when a defect appears in the skipped area.
 
 Without a request that scopes you, generate the risk matrix yourself from the target — a PR
 (`gh pr diff <n>`), the current diff (`git diff`), a module or a folder — and RUN every PoC you

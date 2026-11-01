@@ -72,10 +72,12 @@ function noteOf(entry) {
     .join(" — ");
 }
 
-// The result and the note of one recorded execution; a commit entry exists only once the runtime committed, so it reads the delivery.
+// The result and the note of one recorded execution; a skip the QA mode decided reads its why, and a commit entry exists only once the runtime committed, so it reads the delivery.
 function resultOf(phase, entry, state) {
   const word = verdictWord(entry.verdict);
-  if (phase !== "commit") return { icon: verdictIcon(entry.verdict), word, note: noteOf(entry) };
+  if (phase === "qa" && word === "SKIPPED" && state.qaMode?.mode === "skip") return { icon: "⏭️", word: "", note: `no new risk: ${noteOf({ note: entry.note })}` };
+  const icon = verdictIcon(entry.verdict);
+  if (phase !== "commit") return { icon, word, note: noteOf(entry) };
   return { icon: "✅", word, note: deliveryNote(state) ?? (noteOf(entry) || "committed, no pull request recorded") };
 }
 

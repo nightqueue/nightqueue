@@ -124,22 +124,58 @@ test("the fast tracks are gone: no fast block, no tier scoping note, and the fix
   );
 });
 
-test("Phase 5 takes the QA mode from the `QA: lite|full` line of run check 03, and nothing else", () => {
-  const mode = passageAt("**Mode:** read the `QA: lite|full` line of the last `nightqueue run check 03` answer");
-  assert.match(mode, /`lite` → one qa-guardian with `qa-lite`/);
-  assert.match(mode, /`full` → Stage A analyst then\s+N provers/);
-  assert.match(mode, /Nothing else decides the mode\./);
-  assert.ok(passageAt("### Phase 5 —").includes("**Mode:**"), "the mode rule is not in Phase 5");
-  assert.match(SKILL, /`CONFIRM:`,\s+`QA:`,\s+`QA-STAGE:`,\s+`INVALIDATED:`/, "the check line list does not carry the QA line after CONFIRM");
-});
-
 // A text with its line breaks and indentation folded to single spaces.
 function folded(text) {
   return text.replace(/\s+/g, " ");
 }
 
+// The text of Phase 5 of the skill, on one line.
+function phase5Text() {
+  return folded(SKILL.slice(SKILL.indexOf("### Phase 5 —"), SKILL.indexOf("### Phase 6 —")));
+}
+
+test("Phase 5 takes the QA mode from the `QA-MODE:` line of run check 05 --stage triage, and nothing else", () => {
+  const phase5 = phase5Text();
+  assert.ok(phase5.includes("**Triage first:** 1 qa-guardian with `phase_prompt` `qa-triage`, then `nightqueue run check 05 --stage triage`."), "Phase 5 no longer starts with the triage");
+  assert.ok(phase5.includes("| `QA-MODE: skip — <why>` | recorded by the check; Phase 6, no attack lane |"), "a skip no longer goes to Phase 6 with no attack lane");
+  assert.ok(phase5.includes("| `QA-MODE: lite — <why>` | one qa-guardian with `qa-lite` |"), "lite lost its lane");
+  assert.ok(phase5.includes("| `QA-MODE: full — <why>` | Stage A analyst then N provers, then `run check 05` consolidates |"), "full lost its stages");
+  assert.ok(phase5.includes("| `MISSING` | relaunch once (`note` = the lines); still → `lite`, ⚠️ open item |"), "a persisting triage MISSING no longer falls to lite");
+  assert.ok(phase5.includes("The `QA-MODE:` line decides, and nothing else."), "something else may decide the mode");
+  assert.match(SKILL, /`CONFIRM:`,\s+`QA-MODE:`,\s+`QA-STAGE:`,\s+`INVALIDATED:`/, "the check line list does not carry the QA-MODE line after CONFIRM");
+  assert.ok(folded(QA_PHASE).includes("Its `QA-MODE:` line decides, and nothing else."), "qa-phase.md no longer reads the mode from the triage check");
+  assert.match(folded(QA_PHASE), /\*\*skip → no attack lane:\*\* the check recorded it; Phase 6, never `run check 05`\./, "qa-phase.md no longer routes a skip");
+});
+
+test("a skipped QA is told in the pull request: Phase 8 and the template place the `QA: skipped` line under the QA heading", () => {
+  const template = readFileSync(new URL("../plugin/skills/resolve/references/pr-template.md", import.meta.url), "utf8");
+  assert.ok(folded(PHASE_8).includes("A QA skip: `QA: skipped — <why>` (from `QA-MODE:` or `state.qaMode.reason`) right under its section's heading."), "Phase 8 no longer writes the skip line");
+  assert.ok(template.includes("A QA skip: one line `QA: skipped — <why>` right under the QA heading."), "the template no longer places the skip line");
+});
+
+test("no text of the QA phase reads a mode from the plan or from run check 03", () => {
+  for (const text of [SKILL, QA_PHASE]) assert.equal(text.includes("QA: lite|full"), false, "the old check 03 line survived");
+  assert.equal(`${SKILL}${QA_PHASE}`.includes("Always-gate class"), false, "the always-gate field still decides something in the QA texts");
+  assert.equal(phase5Text().includes("run check 03"), false, "Phase 5 still reads check 03");
+  assert.equal(/two or more/.test(QA_PHASE), false, "qa-phase.md still counts 🔴 risks");
+});
+
+test("a resume at Phase 5 re-runs the triage check and launches the lane only when it answers MISSING", () => {
+  const resumeRule = /On a resume at Phase 5 run the check first \(a pure read\); launch the lane only on its `MISSING`\./;
+  assert.match(phase5Text(), resumeRule, "SKILL.md may relaunch the triage on a resume");
+  assert.match(folded(QA_PHASE), resumeRule, "qa-phase.md may relaunch the triage on a resume");
+  assert.ok(phase5Text().includes("Stage B of a resume skips this."), "a resume at Stage B would run the triage");
+  assert.ok(folded(RESUME).includes("the whole of Phase 5, whose first step on a resume is `run check 05 --stage triage`"), "resume.md does not name the first step of Phase 5");
+});
+
+test("a QA skip leaves the verifier's launch and its gate unconditional", () => {
+  const phase6 = folded(SKILL.slice(SKILL.indexOf("### Phase 6 —"), SKILL.indexOf("### Phase 7 —")));
+  assert.ok(phase6.includes("Launch 1 verifier agent:"), "Phase 6 no longer launches the verifier");
+  assert.equal(/skip/i.test(phase6.slice(0, phase6.indexOf("**Gate and fix loop:**"))), false, "a skip now conditions the verifier's launch");
+});
+
 test("Phase 5 pauses nothing and terminates nothing: its findings are routed or open items", () => {
-  const phase5 = folded(SKILL.slice(SKILL.indexOf("### Phase 5 —"), SKILL.indexOf("### Phase 6 —")));
+  const phase5 = phase5Text();
   assert.ok(phase5.includes("| `MISSING` still (Stage A likewise) | Phase 6, ⚠️ open item |"), "a persisting QA MISSING no longer proceeds to Phase 6");
   assert.ok(phase5.includes("| `OPEN: …` | ⚠️ mandatory open item of Phase 9; the verdict is unchanged |"), "an OPEN line no longer becomes an open item");
   assert.equal(phase5.includes("`GATE:"), false, "Phase 5 still routes a gate check 05 no longer prints");

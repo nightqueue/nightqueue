@@ -3,17 +3,17 @@ import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { PIPELINE_TASK_TYPES } from "../memory/runs.mjs";
 import { derivedType, firstItem } from "../queue/check-contract.mjs";
-import { PHASE_ARTIFACTS, QA_ANALYST_STAGE } from "../queue/phase-artifacts.mjs";
+import { PHASE_ARTIFACTS, QA_ANALYST_STAGE, QA_STAGES } from "../queue/phase-artifacts.mjs";
 import { isSafeSegment, TERMINAL_VERDICT_LABELS } from "../queue/resume.mjs";
 import { adoptRunSlug, isProvisionalSlug } from "../queue/run-slug.mjs";
-import { clearTermination, recordCheck, recordRunFields, recordTermination, RUNTIME_AUTHOR } from "../queue/run-state.mjs";
+import { clearTermination, leavesStaleQaSkip, recordCheck, recordQaMode, recordRunFields, recordTermination, RUNTIME_AUTHOR } from "../queue/run-state.mjs";
 import { briefCommitType, briefSection, briefSlug, briefType } from "../queue/triage-brief.mjs";
 import { openStore } from "../store/open.mjs";
 import { saveIndexFromText } from "./index-save.mjs";
 import { worktreeOf } from "./run-context.mjs";
 
 // The effects `run check` chains after printing its contract lines: the index of 02; the Type, the Brief, the commit type,
-// the termination and the slug of 01; the QA stage A marker of the analyst stage; the phase record of a completed check and the check memo.
+// the termination and the slug of 01; the QA stage A marker of the analyst stage; the QA mode of the triage stage; the phase record of a completed check and the check memo.
 // None of them changes the first line.
 
 const TERMINATION_MAX = 200;
@@ -151,6 +151,24 @@ function qaStageALines({ run, result, ctx }) {
   return [written.status === "written" ? `recorded: qa_stage_a ${result.verdict}` : notRecorded(written)];
 }
 
+// The `recorded: qa_mode` line of a completed `check 05 --stage triage`: the decision on the run, left untouched when the same mode already stands with no stale skip beside it, however the reason is worded.
+function qaModeLines({ run, result, state, ctx }) {
+  const { mode, why } = result.qaMode;
+  if (state?.qaMode?.mode === mode && !leavesStaleQaSkip(state, mode)) return [`recorded: qa_mode ${mode} (already)`];
+  const written = recordQaMode({ projectId: run.projectId, slug: run.slug, mode, reason: why, env: ctx.env });
+  return [written.status === "written" ? `recorded: qa_mode ${mode}` : notRecorded(written)];
+}
+
+// The phase record a completed check writes: a QA triage's skip stands for the whole QA phase, any other check records its own phase, and a check of no phase records none.
+function phaseDoneOf(artifact, result) {
+  if (!result.completes) return null;
+  if (result.qaMode?.mode === "skip") {
+    const qa = PHASE_ARTIFACTS.get("05");
+    return { phase: qa.phase, artifact: qa.file, verdict: "SKIPPED", note: result.qaMode.why, reason: `QA skipped: ${result.qaMode.why}`, decision: true };
+  }
+  return artifact.phase ? { phase: artifact.phase, artifact: artifact.file, verdict: result.verdict ?? result.first } : null;
+}
+
 // The `recorded: phase_done` line from what the check record decided: appended (with its reason) or already recorded.
 function phaseDoneLine(done, written) {
   if (written.status !== "written" || written.phase === null) return notRecorded(written);
@@ -161,9 +179,9 @@ function phaseDoneLine(done, written) {
 
 // Writes the check memo and, for a completed check of a phase, the phase itself; answers the `recorded:` line of the phase.
 function memoAndPhaseLines({ run, check, stage, result, ctx }) {
-  const artifact = stage === "analyst" ? QA_ANALYST_STAGE : PHASE_ARTIFACTS.get(check);
+  const artifact = stage !== null ? QA_STAGES[stage] : PHASE_ARTIFACTS.get(check);
   const memo = { line: result.memoLine, ok: PASSING_LINES.has(result.memoLine), completed: result.completes, digest: digestOf(result.evaluated) };
-  const done = result.completes && artifact.phase ? { phase: artifact.phase, artifact: artifact.file, verdict: result.verdict ?? result.first } : null;
+  const done = phaseDoneOf(artifact, result);
   const memoKey = stage ? `${check}-${stage}` : check;
   const written = recordCheck({ projectId: run.projectId, slug: run.slug, check: memoKey, memo, done, env: ctx.env });
   if (done !== null) return [phaseDoneLine(done, written)];
@@ -181,8 +199,9 @@ export async function checkEffectLines({ run, check, stage = null, result, state
   const commitType = triageDone ? commitTypeLines(args) : [];
   const recorded = memoAndPhaseLines(args);
   const qaStageA = check === "05" && stage === "analyst" && result.completes ? qaStageALines(args) : [];
+  const qaMode = result.completes && result.qaMode !== null ? qaModeLines(args) : [];
   const termination = triageDone ? terminationLines(args) : [];
   const lifted = triageDone ? liftedTerminationLines(args) : [];
   const slug = triageDone ? await slugLines(args) : [];
-  return [...index, ...type, ...brief, ...commitType, ...recorded, ...qaStageA, ...termination, ...lifted, ...slug];
+  return [...index, ...type, ...brief, ...commitType, ...recorded, ...qaStageA, ...qaMode, ...termination, ...lifted, ...slug];
 }

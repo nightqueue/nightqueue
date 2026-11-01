@@ -26,6 +26,7 @@ export const PRE_RENUMBERING_REFUSAL = "run started before the renumbering; retr
 const SEGMENT_RE = /^[A-Za-z0-9][A-Za-z0-9._+-]{0,79}$/;
 // The one artifact a QA stage A marker may name: the analyst's round lives in the QA's own artifact.
 const QA_ARTIFACT = "05-qa.md";
+const QA_SKIPPED_VERDICT_RE = /(?:^|-)SKIPPED$/;
 
 // Tells whether a value coming from the database is safe as a single path segment.
 export function isSafeSegment(value) {
@@ -137,6 +138,22 @@ function phasesBeforeRerun(phases, reruns) {
   return phases.filter((entry) => RESUME_PHASE_ORDER.indexOf(entry?.phase) < firstTrap);
 }
 
+// Whether the QA is still owed: the last QA entry is a skip the recorded QA mode does not back, or a lite or full decision stands with no QA recorded since it.
+function owesQa(state) {
+  const decided = state.qaMode;
+  if (decided?.mode === "skip") return false;
+  const lastQa = state.phases.findLast((entry) => entry?.phase === "qa");
+  if (QA_SKIPPED_VERDICT_RE.test(normalizeVerdict(lastQa?.verdict))) return true;
+  return typeof decided?.at === "string" && lastPhaseAt(state.phases, "qa") < decided.at;
+}
+
+// The phases the resume may count once the QA is owed: every entry before the QA, unknown names kept so they still discard the state.
+function phasesBeforeOwedQa(phases, state) {
+  if (!owesQa(state)) return phases;
+  const qaIndex = RESUME_PHASE_ORDER.indexOf("qa");
+  return phases.filter((entry) => RESUME_PHASE_ORDER.indexOf(entry?.phase) < qaIndex);
+}
+
 // Parses the state handed to the decision, or returns the refusal of a state that cannot be read.
 function parseState(state) {
   if (state === null || state === undefined || state === "") return { refusal: stop("no-state") };
@@ -170,7 +187,7 @@ export function decideResume({ state, maxResumes = DEFAULT_MAX_RESUMES } = {}) {
   if (!Number.isInteger(resumeCount) || resumeCount < 0 || resumeCount >= cap) return stop("resume-cap");
 
   const reruns = operatorReruns(parsed);
-  const last = lastCompletedPhase(phasesBeforeRerun(parsed.phases, reruns));
+  const last = lastCompletedPhase(phasesBeforeOwedQa(phasesBeforeRerun(parsed.phases, reruns), parsed));
   if (!last) return stop("unknown-phase");
   if (last.index < 0 && reruns.length > 0) {
     const fromPhase = RESUME_PHASE_ORDER[firstRerunIndex(reruns)];

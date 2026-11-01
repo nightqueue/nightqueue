@@ -1,0 +1,1 @@
+MISSING: ## QA mode (skip with a logic line: test/does-not-exist.test.mjs is not a test file inside the worktree)

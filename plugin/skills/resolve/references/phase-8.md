@@ -46,7 +46,7 @@ before step 2 and after the pull request exists.
      `api-*.log`, `browser-*.png|.log`, `emulator-*.png|.log` (Phase 7); when the QA
      produced `05-qa.md`, you may add `automated-qa.md` with Write from its last round's PoC excerpt. A
      method with no evidence file has no row. Repository template: its own test section, in its own
-     format.
+     format. A QA skip: `QA: skipped — <why>` (from `QA-MODE:` or `state.qaMode.reason`) right under its section's heading.
    - **No bare `#<number>` in the title or body** — GitHub cross-references an unrelated
      issue/PR and notifies it. The only `#<number>` allowed is a real issue of this repository in the `Fixes`/`Closes` line.
    - **No job ref (`J-24`), run slug, `Refs` line or `Opened by nightqueue` line in the body**
@@ -56,7 +56,7 @@ before step 2 and after the pull request exists.
      of step 1) and run
      `nightqueue run publish --message-file <RUN_DIR>/commit-message.txt --body-file <RUN_DIR>/pr-body.md`,
      with one `--extra <pathspec>` per file outside the artifact's list. It checks the body BEFORE
-     anything is committed, stages exactly the list — never a blind `git add -A` — and commits it
+     anything is committed, stages exactly the list and commits it
      ONCE (a retry answers `COMMITTED: <sha> (already committed)`), renames the branch to its final
      name (a job's `worktree-<slug>` becomes `<commit type>/<slug>`, the type read from the commit
      subject; an interactive `worktree-<type>+<slug>` becomes `<type>/<slug>`), pushes it and opens

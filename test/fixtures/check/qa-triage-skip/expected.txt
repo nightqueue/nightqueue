@@ -1,0 +1,4 @@
+OK
+QA-MODE: skip — only documentation text changed, with no runtime effect.
+recorded: phase_done qa SKIPPED — reason: QA skipped: only documentation text changed, with no runtime effect.
+recorded: qa_mode skip

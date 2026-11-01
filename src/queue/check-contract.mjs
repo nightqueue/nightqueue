@@ -1,11 +1,11 @@
 import { PIPELINE_TASK_TYPES } from "../memory/runs.mjs";
-import { lastRound, nextRound, PHASE_ARTIFACTS, QA_ANALYST_STAGE, roundDefects } from "./phase-artifacts.mjs";
+import { lastRound, lastRoundWithSource, nextRound, PHASE_ARTIFACTS, QA_STAGES, QA_TRIAGE_STAGE, roundDefects } from "./phase-artifacts.mjs";
 import { gateQuestion, labelBlock, questionDigest, unreadableQuestion } from "./gate-question.mjs";
 import { backtickRunAt, codeSpanEnd, hasGateMarker, sectionOf, unfencedLines, withoutHtmlComments } from "./stream.mjs";
 import { briefGates, briefType } from "./triage-brief.mjs";
 
 // The contract of `nightqueue run check`: one fact per line, in this order, each with a stable prefix.
-// OK | MISSING: <sections> | GENERATED, then VERDICT:, GATE:, OPEN:, TYPE-MISMATCH:, CONFIRM:, QA:, QA-STAGE:, INVALIDATED:, DIFF-APPLIES:,
+// OK | MISSING: <sections> | GENERATED, then VERDICT:, GATE:, OPEN:, TYPE-MISMATCH:, CONFIRM:, QA-MODE:, QA-STAGE:, INVALIDATED:, DIFF-APPLIES:,
 // NEEDS-DEVICE, and last of all SCRIPT: with the device script verbatim. A MISSING first line prints nothing else.
 
 const BUG = "bug/error";
@@ -19,11 +19,17 @@ const BLANK_EVIDENCE = new Set(["", "-", "none", "not run"]);
 const CONFIRM_LINE = "CONFIRM: requires-user-confirmation";
 const CONFIRM_ANSWERED = "CONFIRM: answered";
 const UNREADABLE_QUESTION = "## Requires user confirmation (no **Question:** line with a ?: write the question with its ?, or drop the section when nothing is asked)";
-const ALWAYS_GATE_YES = "**Always-gate class:** yes";
-const HIGH_RISK = "🔴";
-const LIST_ITEM_RE = /^(?:[-*+]|\d+[.)])\s/;
-const RISK_ID_RE = /^(?:\*\*)?(?:\[R\d+\]|\(R\d+\))/;
-const SEVERITY_RE = /🔴|🟡|🟢/u;
+const QA_MODE_LINE_RE = /^(skip|lite|full)(?:\s+[—–-]|:)\s+(\S.*)$/;
+const QA_MODE_LABEL = "## QA mode: <skip|lite|full> — <one sentence> as the first line";
+const CLASSIFICATION_LINE_RE = /^([^:]+):(.*)$/;
+// A path under a test directory, or a file named as a test; a word that merely contains `test` or `spec` is neither.
+const TEST_PATH_RE = /(?<![\w./-])(?:[\w.-]+\/)*(?:(?:tests?|specs?|__tests__)\/[\w./-]*\.\w+|(?:test_[\w.-]*|[\w.-]*(?:[._-](?:tests?|specs?)|Tests?|Spec))\.\w+)/;
+const TEST_PATHS_RE = new RegExp(TEST_PATH_RE, "g");
+// The classification kinds a QA triage may answer only with `full`.
+const FULL_QA_KINDS = new Set(["data/migration", "route/endpoint", "auth/permission", "payment", "concurrency", "external-input parsing", "personal data"]);
+// The classification kinds that do not ask `full` by themselves; a label off both lists is read as a danger, never as harmless.
+const OTHER_QA_KINDS = ["copy/docs", "config", "test-only", "rename", "logic"];
+const QA_KINDS = new Set([...OTHER_QA_KINDS, ...FULL_QA_KINDS]);
 // The lines of a QA report that carry what stays open.
 const QA_OPEN_LABELS = ["omitted", "divergences", "unconfirmed decisions"];
 const NONE_VALUE_RE = /^none\.?$/i;
@@ -293,7 +299,7 @@ function planOpen(ctx, question) {
   ];
 }
 
-// The facts of the plan, none of which gates it: its open items, its Type mismatch, its pause for a filled question and its QA mode.
+// The facts of the plan, none of which gates it: its open items, its Type mismatch and its pause for a filled question.
 function planFacts(ctx) {
   const mismatch = typeMismatchOf(ctx.plan);
   const question = gateQuestion(ctx.plan);
@@ -303,58 +309,7 @@ function planFacts(ctx) {
     open: planOpen(ctx, question),
     typeMismatch: mismatch === null ? null : `${evidenceLine(mismatch)} — triage: ${triage}`,
     confirm: confirmLine(ctx, question),
-    qaMode: qaModeOf(ctx.plan),
   };
-}
-
-// Whether the plan declares the always-gate class: an unfenced line opening with `**Always-gate class:** yes`.
-function declaresAlwaysGate(plan) {
-  return unfencedLines(plan).some((line) => line.trim().startsWith(ALWAYS_GATE_YES));
-}
-
-// Whether a line opens a risk item: a top-level list item or a line starting with a risk id.
-function opensRiskItem(line) {
-  const indent = line.length - line.trimStart().length;
-  const trimmed = line.trim();
-  return indent < 2 && (LIST_ITEM_RE.test(trimmed) || RISK_ID_RE.test(trimmed));
-}
-
-// Whether a line continues the open item: an indented line, or a non-blank line right after the item's last line.
-function continuesRiskItem(line, previous) {
-  if (line.trim() === "") return false;
-  return /^\s{2,}/.test(line) || (previous !== undefined && previous.trim() !== "");
-}
-
-// The list-style risk items of the lines, each the text of its opener with its continuation and nested lines.
-function riskListItems(lines) {
-  const items = [];
-  let current = null;
-  lines.forEach((line, at) => {
-    if (line.trim().startsWith("|")) current = null;
-    else if (opensRiskItem(line)) items.push((current = [line]));
-    else if (current !== null && continuesRiskItem(line, lines[at - 1])) current.push(line);
-    else if (line.trim() !== "") current = null;
-  });
-  return items.map((item) => item.join("\n"));
-}
-
-// The severity of a risk item: the first 🔴/🟡/🟢 marker in its text, or null when it carries none.
-function severityOf(text) {
-  return text.match(SEVERITY_RE)?.[0] ?? null;
-}
-
-// The risk items of `## Identified risks` whose severity is 🔴: list items and table body rows, fenced code left out.
-function highRisks(plan) {
-  const lines = bodyLines(plan, "## Identified risks") ?? [];
-  const items = riskListItems(lines).filter((item) => severityOf(item) === HIGH_RISK);
-  const rows = tablesOf(lines).flatMap(({ rows: body }) => body.filter((cells) => severityOf(cells.join("\n")) === HIGH_RISK));
-  return [...items, ...rows];
-}
-
-// The QA mode a plan asks: `full` with an always-gate class or two or more 🔴 risks, else `lite`.
-export function qaModeOf(plan) {
-  const text = normalize(plan);
-  return declaresAlwaysGate(text) || highRisks(text).length >= 2 ? "full" : "lite";
 }
 
 // Every item of `## Invalidated assumptions` other than `None`.
@@ -364,12 +319,17 @@ function invalidatedItems(text) {
   return (bullets.length > 0 ? bullets : lines).map((line) => line.replace(/^[-*]\s+/, "").trim()).filter((item) => !/^none\b/i.test(plainValue(item)));
 }
 
+// Whether a field states something: filled, and other than `none`.
+function statesSomething(value) {
+  return isFilled(value) && !NONE_VALUE_RE.test(plainValue(value));
+}
+
 // One `<label> — <value>` per filled `omitted:`, `divergences:` or `unconfirmed decisions:` line of `## Validated risks` other than `none`.
 function qaOpenItems(text) {
   const risks = bodyLines(text, "## Validated risks") ?? [];
   return QA_OPEN_LABELS.flatMap((label) => {
     const value = fieldValue(risks, label);
-    return isFilled(value) && !NONE_VALUE_RE.test(plainValue(value)) ? [`${label} — ${value}`] : [];
+    return statesSomething(value) ? [`${label} — ${value}`] : [];
   });
 }
 
@@ -449,6 +409,7 @@ function missingParts(ctx) {
   const coverage = ctx.check === "03" ? [...coverageMissing(ctx), ...(unreadableQuestion(ctx.plan) ? [UNREADABLE_QUESTION] : [])] : [];
   if (absent.length + coverage.length > 0) return [...absent, ...coverage];
   if (text.trim() === "") return [`${artifact.file} (not written)`];
+  if (ctx.stage === "triage") return qaTriageGaps(text);
   const under = artifact.firstLineUnder;
   const firstLineGap = under && !under.pattern.test(firstLineUnder(text, under.heading) ?? "") ? [under.label] : [];
   const verdictGap = artifact.verdict && ctx.verdict === null ? [artifact.verdict.label] : [];
@@ -464,7 +425,7 @@ function contractLines(first, facts) {
     ...(facts.open ?? []).map((text) => `OPEN: ${flatLine(text)}`),
     ...(facts.typeMismatch ? [`TYPE-MISMATCH: ${facts.typeMismatch}`] : []),
     ...(facts.confirm ? [facts.confirm] : []),
-    ...(facts.qaMode ? [`QA: ${facts.qaMode}`] : []),
+    ...(facts.qaMode ? [`QA-MODE: ${facts.qaMode.mode} — ${facts.qaMode.why}`] : []),
     ...(facts.qaStage ? [`QA-STAGE: ${facts.qaStage}`] : []),
     ...(facts.invalidated ?? []).map((text) => `INVALIDATED: ${flatLine(text)}`),
     ...(facts.diffApplies ? [`DIFF-APPLIES: ${facts.diffApplies}`] : []),
@@ -496,6 +457,7 @@ function resultOf({ check, first, facts = {}, type = null, evaluated = "" }) {
     completes: passed && !(LOOP_BACK[check] ?? []).includes(verdict),
     memoLine: memoLineOf(check, lines, verdict),
     script: facts.script ?? [],
+    qaMode: facts.qaMode ?? null,
   };
 }
 
@@ -504,10 +466,10 @@ export function fileListResult(first, evaluated = "") {
   return resultOf({ check: "04", first, evaluated: normalize(evaluated) });
 }
 
-// The artifact spec a check evaluates: the phase's own, or the analyst stage of the QA; an unknown check or stage throws.
+// The artifact spec a check evaluates: the phase's own, or a stage of the QA; an unknown check or stage throws.
 function checkedArtifact(check, stage) {
-  if (stage !== null && !(stage === "analyst" && check === "05")) throw new Error(`unknown stage \`${stage}\` of check \`${check}\`; the only stage is \`05 --stage analyst\``);
-  const artifact = stage === "analyst" ? QA_ANALYST_STAGE : PHASE_ARTIFACTS.get(check);
+  if (stage !== null && !(Object.hasOwn(QA_STAGES, stage) && check === "05")) throw new Error(`unknown stage \`${stage}\` of check \`${check}\`; the stages are \`05 --stage ${Object.keys(QA_STAGES).join("|")}\``);
+  const artifact = stage !== null ? QA_STAGES[stage] : PHASE_ARTIFACTS.get(check);
   if (!artifact) throw new Error(`unknown check \`${check}\`; the contract covers: ${[...PHASE_ARTIFACTS.keys()].join(", ")}`);
   return artifact;
 }
@@ -548,24 +510,97 @@ function analystFacts(ctx) {
   return { verdict: ctx.verdict, qaStage: firstItem(ctx.text, "## Break hypotheses") === null ? "skip" : "provers" };
 }
 
+// The mode and the reason the first line of a triage's `## QA mode` states, or null when it states no accepted mode with a real reason.
+function statedQaMode(text) {
+  const first = (bodyLines(text, "## QA mode") ?? []).find((line) => line.trim() !== "");
+  const match = QA_MODE_LINE_RE.exec(plainValue(first));
+  return match !== null && isFilled(match[2]) ? { mode: match[1], why: match[2] } : null;
+}
+
+// The kinds of a triage's `## Diff classification` that list something, in lower case; a line with no `kind:` counts whole, so it reads as a kind off the list.
+function classifiedKinds(text) {
+  return (bodyLines(text, "## Diff classification") ?? []).flatMap((line) => {
+    const item = plainValue(line).replace(/^[-+]\s+/, "");
+    if (!statesSomething(item)) return [];
+    const match = CLASSIFICATION_LINE_RE.exec(item);
+    if (match === null) return [item.toLowerCase()];
+    return statesSomething(match[2]) ? [match[1].trim().toLowerCase()] : [];
+  });
+}
+
+// The triage's sections with no line at all under their heading.
+function emptyTriageSections(text) {
+  return QA_TRIAGE_STAGE.sections.filter((heading) => bodyLines(text, heading).every((line) => line.trim() === "")).map((heading) => `${heading} (empty)`);
+}
+
+// What the mode a triage states contradicts in its own round: a listed new risk, a kind that asks `full`, a kind off the list while not `full`, or a logic skip that names no test.
+function qaModeContradictions({ mode, why }, text) {
+  const kinds = classifiedKinds(text);
+  const fullKinds = kinds.filter((kind) => FULL_QA_KINDS.has(kind));
+  const unknownKinds = kinds.filter((kind) => !QA_KINDS.has(kind));
+  const skip = mode === "skip";
+  return [
+    ...(skip && firstItem(text, "## New risk") !== null ? ["## QA mode (skip with a listed ## New risk)"] : []),
+    ...(mode !== "full" && fullKinds.length > 0 ? [`## QA mode (${mode} with ${fullKinds.join(" and ")}: that kind answers full)`] : []),
+    ...(mode !== "full" && unknownKinds.length > 0 ? [`## Diff classification (${unknownKinds.join(" and ")} is off the list: write ${[...QA_KINDS].join(", ")}, or answer full)`] : []),
+    ...(skip && kinds.includes("logic") && !TEST_PATH_RE.test(why) ? ["## QA mode (skip with a logic line: the sentence must name the test's path)"] : []),
+  ];
+}
+
+// What makes a QA triage's round unreadable as a decision: an empty section, no accepted first line of `## QA mode`, or a mode its own round contradicts.
+function qaTriageGaps(text) {
+  const empty = emptyTriageSections(text);
+  if (empty.length > 0) return empty;
+  const stated = statedQaMode(text);
+  return stated === null ? [QA_MODE_LABEL] : qaModeContradictions(stated, text);
+}
+
+// Whether a path is under a test directory or a file named as a test.
+export function isTestPath(path) {
+  return TEST_PATH_RE.test(path);
+}
+
+// The test paths the logic skip of the last triage round cites, for the caller to hold against the worktree; empty for any other round.
+export function citedTestPaths(raw) {
+  const text = normalize(readRound(QA_TRIAGE_STAGE, raw).text);
+  const stated = statedQaMode(text);
+  if (stated?.mode !== "skip" || !classifiedKinds(text).includes("logic")) return [];
+  return [...new Set(stated.why.match(TEST_PATHS_RE) ?? [])];
+}
+
+// The facts of the QA triage: the mode it decided and why.
+function qaTriageFacts(ctx) {
+  return { qaMode: statedQaMode(ctx.text) };
+}
+
+const STAGE_FACTS = { analyst: analystFacts, triage: qaTriageFacts };
+
+// The round a gate reads and the numbers its defects are read for: the last round, or the last one of the source the stage names (none yields an empty text).
+function readRound(artifact, raw) {
+  if (!artifact.source) return { text: lastRound(raw), numbers: null };
+  const round = lastRoundWithSource(raw, artifact.source);
+  return round === null ? { text: "", numbers: [] } : { text: round.text, numbers: [round.number] };
+}
+
 // The run files a check may read besides its own artifact: the triage and the plan.
 export const CHECK_CONTEXT_FILES = Object.freeze(["01-triage.md", "03-plan.md"]);
 
-// Evaluates the artifact of one phase (or the analyst stage of check 05) against the check contract; `texts` maps each run file name to its content, `state` is the run's state.json, `operatorNote` the job's current answer.
+// Evaluates the artifact of one phase (or a stage of check 05) against the check contract; `texts` maps each run file name to its content, `state` is the run's state.json, `operatorNote` the job's current answer.
 export function evaluateCheck({ check, stage = null, texts = {}, state = null, gaps = [], operatorNote = null }) {
   const artifact = checkedArtifact(check, stage);
   const read = (file) => normalize(texts[file]);
   const raw = texts[artifact.file] ?? "";
-  const text = artifact.rounds ? normalize(lastRound(raw)) : read(artifact.file);
+  const round = artifact.rounds ? readRound(artifact, raw) : null;
+  const text = round === null ? read(artifact.file) : normalize(round.text);
   const triage = read("01-triage.md");
   const type = (check === "01" ? briefType(text) : null) ?? runType(state, triage);
-  const base = { check, artifact, text, triage, plan: read("03-plan.md"), type, state, operatorNote };
+  const base = { check, stage, artifact, text, triage, plan: read("03-plan.md"), type, state, operatorNote };
   const ctx = { ...base, verdict: artifact.verdict ? readVerdict(text, artifact.verdict) : null };
   const common = { check: stage === null ? check : `${check}-${stage}`, type: ctx.type, evaluated: text };
-  const defects = artifact.rounds ? [...new Set([...gaps, ...roundDefectParts(artifact.file, raw)])] : gaps;
+  const defects = artifact.rounds ? [...new Set([...gaps, ...roundDefectParts(artifact.file, raw, round.numbers)])] : gaps;
   if (defects.length > 0) return resultOf({ ...common, first: `MISSING: ${defects.join("; ")}` });
   const missing = missingParts(ctx);
   if (missing.length > 0) return resultOf({ ...common, first: `MISSING: ${missing.join(", ")}` });
-  const facts = stage === "analyst" ? analystFacts(ctx) : { verdict: ctx.verdict, ...(PHASE_FACTS[check]?.(ctx) ?? {}) };
+  const facts = stage !== null ? STAGE_FACTS[stage](ctx) : { verdict: ctx.verdict, ...(PHASE_FACTS[check]?.(ctx) ?? {}) };
   return resultOf({ ...common, first: "OK", facts });
 }
