@@ -8,7 +8,7 @@ import { buildPrompt } from "../../src/queue/spawn.mjs";
 import { isolatedHostVars } from "../../test-support/host.mjs";
 import { ensureProject, makeDir, makeHome, makeProject } from "../../test-support/memory.mjs";
 import { argValue, fakeCalls, useFakeClaude } from "../../test-support/queue-fake.mjs";
-import { doneStream } from "../../test-support/streams.mjs";
+import { doneStream, recordedDone } from "../../test-support/streams.mjs";
 import { fakeJobWorktree } from "../../test-support/job-worktree.mjs";
 
 const JOB = { id: 7, project: "alpha", prompt: "fix the worker" };
@@ -41,7 +41,7 @@ function makePrHome(t, name, { prCheck = false } = {}) {
   Object.assign(env, vars);
   if (prCheck) delete env.NIGHTQUEUE_NO_PR_CHECK;
   makeProject(t, env, "alpha");
-  const planPath = useFakeClaude(env, makeDir(t, `${name}-plan`), [{ stdout: doneStream(), exitCode: 0 }]);
+  const planPath = useFakeClaude(env, makeDir(t, `${name}-plan`), [{ stdout: doneStream(), runState: recordedDone(), exitCode: 0 }]);
   return { env, planPath, ghLog: vars.NIGHTQUEUE_FAKE_GH_LOG };
 }
 

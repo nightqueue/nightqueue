@@ -10,7 +10,8 @@ import { createServer } from "../../src/mcp/tools.mjs";
 import { dbPath, dbWalPath, homeDir, jobLogPath, logsDir } from "../../src/config/paths.mjs";
 import { openDb } from "../../src/memory/db.mjs";
 import { addJob, claimJobById, finishJob, getJob } from "../../src/memory/jobs.mjs";
-import { findLostJobs } from "../../src/queue/lost-rows.mjs";
+import { ABANDONED_COMMAND_PREFIX } from "../../src/queue/classify.mjs";
+import { deriveRecovered, findLostJobs, NO_OUTCOME_NOTICE } from "../../src/queue/lost-rows.mjs";
 import { writeRunnerRecord } from "../../src/queue/registry.mjs";
 import { recoverFromDisk } from "../../src/queue/repair.mjs";
 import { recordJobBlock } from "../../src/queue/run-state.mjs";
@@ -21,7 +22,7 @@ import { dropJobRows, jobRow } from "../../test-support/lost-rows.mjs";
 import { ensureProject, makeDir, makeHome, registerCheckout } from "../../test-support/memory.mjs";
 import { useFakeClaude } from "../../test-support/queue-fake.mjs";
 import { makeSickHome } from "../../test-support/sick-home.mjs";
-import { doneStream, gateStream, PR_URL } from "../../test-support/streams.mjs";
+import { doneStream, GATE_NOTICE, gateStream, PR_URL, recordedDone, recordedGate, resultEvent, systemInitEvent, toNdjson } from "../../test-support/streams.mjs";
 
 const CLI = fileURLToPath(new URL("../../bin/nightqueue.mjs", import.meta.url));
 const DONE_SLUG = "done-run";
@@ -52,12 +53,12 @@ async function seedLostJobs(t, name) {
   const env = { ...makeHome(t, name), ...ISOLATED_GIT_VARS };
   registerCheckout(env, { path: initGitRepo(makeDir(t, `${name}-repo`)), name: "alpha" });
   useFakeClaude(env, makeDir(t, `${name}-plan`), [
-    { stdout: doneStream({ slug: DONE_SLUG }), exitCode: 0 },
-    { stdout: gateStream({ slug: GATE_SLUG }), exitCode: 0 },
+    { stdout: doneStream({ slug: DONE_SLUG }), runState: recordedDone(), exitCode: 0 },
+    { stdout: gateStream({ slug: GATE_SLUG }), runState: recordedGate(), exitCode: 0 },
   ]);
   const projectId = ensureProject(env, "alpha");
   const doneId = addJob({ projectId, prompt: "fix the worker", slug: DONE_SLUG }, env).id;
-  const gateId = addJob({ projectId, prompt: "drop the column" }, env).id;
+  const gateId = addJob({ projectId, prompt: "drop the column", slug: GATE_SLUG }, env).id;
   assert.equal((await runOnce(env, doneId)).status, "done");
   assert.equal((await runOnce(env, gateId)).status, "gate");
   const before = { done: getJob(doneId, env), gate: getJob(gateId, env) };
@@ -130,7 +131,7 @@ test("queue repair --from-disk rebuilds both rows with the recovered marker", as
     { status: done.status, pr: done.pr_url, slug: done.slug, branch: done.branch, project: done.project_id },
     { status: "done", pr: PR_URL, slug: DONE_SLUG, branch: before.done.branch, project: projectId },
   );
-  assert.deepEqual({ status: gate.status, notice: gate.notice_md, slug: gate.slug }, { status: "gate", notice: before.gate.notice_md, slug: GATE_SLUG });
+  assert.deepEqual({ status: gate.status, notice: gate.notice_md, slug: gate.slug }, { status: "gate", notice: GATE_NOTICE, slug: GATE_SLUG });
   for (const row of [done, gate]) {
     assert.equal(resultOf(row).recovered.from, "disk");
     assert.ok(!Number.isNaN(Date.parse(resultOf(row).recovered.at)));
@@ -239,7 +240,7 @@ const RECOVERED_REFUSAL = (id) =>
 // The fields a refused retry must leave exactly as they were.
 function retryFields(env, id) {
   const row = jobRow(env, id);
-  return { status: row.status, attempts: row.attempts, maxAttempts: row.max_attempts, note: row.operator_note, prompt: row.prompt };
+  return { status: row.status, attempts: row.attempts, note: row.operator_note, prompt: row.prompt };
 }
 
 // Calls `queue_retry` on the real tool server, in process.
@@ -290,4 +291,32 @@ test("job logs with no run and no row alone leave lost jobs ok, named for readin
     detail: "no job on disk is missing from the table; and 1 job log with no run and no row (J-998), kept for reading only",
     hint: null,
   });
+});
+
+test("a lost job with no record whose run went on after a kill keeps its own notice and the abandoned-command line once", (t) => {
+  const env = makeHome(t, "lost-derive-abandoned");
+  mkdirSync(logsDir(env), { recursive: true });
+  const fixture = fileURLToPath(new URL("./fixtures/job-49/attempt1-abandoned-command-tail.jsonl", import.meta.url));
+  writeFileSync(jobLogPath(905, env), readFileSync(fixture, "utf8"));
+
+  const { noticeMd } = deriveRecovered({ jobId: 905, hasLog: true, state: {}, outcome: null, terminal: null }, env);
+
+  assert.equal(noticeMd.includes("the session ended with no exit code"), false, noticeMd);
+  assert.equal(noticeMd.split(ABANDONED_COMMAND_PREFIX).length, 2, noticeMd);
+  assert.ok(noticeMd.endsWith(`${ABANDONED_COMMAND_PREFIX}node --test test/queue/window-run.test.mjs 2>&1 | tail -150`), noticeMd);
+});
+
+test("a lost job with no record keeps its own fallback: the stream's notice and URL, the no-exit-code line, the kill notice, or the no-outcome notice", (t) => {
+  const env = makeHome(t, "lost-derive-no-record");
+  mkdirSync(logsDir(env), { recursive: true });
+  const entry = (jobId, log) => {
+    if (log !== null) writeFileSync(jobLogPath(jobId, env), log);
+    return { jobId, hasLog: log !== null, state: {}, outcome: null, terminal: null };
+  };
+  const killed = [JSON.stringify(systemInitEvent()), "Background tasks still running after 600s; terminating.", JSON.stringify({ type: "system", subtype: "task_updated", task_id: "task_kill", patch: { status: "killed" } }), doneStream({ notice: "the run's notice" })].join("\n");
+
+  assert.deepEqual(deriveRecovered(entry(901, doneStream({ notice: "the run's notice" })), env), { status: "failed", noticeMd: "the run's notice", prUrl: PR_URL });
+  assert.deepEqual(deriveRecovered(entry(902, toNdjson([systemInitEvent(), resultEvent({ text: "" })])), env), { status: "failed", noticeMd: "the session ended with no exit code", prUrl: null });
+  assert.match(deriveRecovered(entry(903, killed), env).noticeMd, /^runtime: the CLI killed the background task/);
+  assert.deepEqual(deriveRecovered(entry(904, null), env), { status: "failed", noticeMd: NO_OUTCOME_NOTICE, prUrl: null });
 });

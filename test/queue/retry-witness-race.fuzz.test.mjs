@@ -50,7 +50,7 @@ function lostFinish(env, options = {}) {
   return id;
 }
 
-test("a reconciliation landing between retryJob and clearRunTerminal must not revert a fresh retry to its previous outcome", async (t) => {
+test("a reconciliation landing on a retried row that still holds a stale witness must not revert it to its previous outcome", async (t) => {
   const env = makeQueue(t, "retry-witness-race");
   const id = lostFinish(env, { status: "failed", prUrl: null });
 
@@ -58,11 +58,9 @@ test("a reconciliation landing between retryJob and clearRunTerminal must not re
   assert.deepEqual((await reconcileFromWitness(env)).repaired, [id], "setup: the lost finish was not reconciled to failed first");
   assert.equal(getJob(id, env).status, "failed");
 
-  // `applyRetry` (src/queue/retry.mjs) calls exactly this sequence: `retryJob(id, {...}, env)` first, `clearRunTerminal(run)` only after.
-  // Reproduce the intermediate state a second OS process (`queue status`, MCP `queue_status`, or the top of a live `runCycle`)
-  // observes if it runs its own `reconcileFromWitness` in the wall-clock gap between those two calls: call the SAME public
-  // function `applyRetry` calls, in the SAME order, and stop short of the second call — this is the exact window, not a
-  // contrived internal ordering.
+  // `applyRetry` (src/queue/retry.mjs) drops the witness before it commits, so its own order no longer opens this window; a row
+  // retried by an older build, or by `retryJob` directly, still can. Reproduce that state: a row back at `pending` over a stale
+  // witness, as a second OS process (`queue status`, MCP `queue_status`, or the top of a live `runCycle`) would observe it.
   retryJob(id, { note: null, fresh: false }, env);
   assert.equal(getJob(id, env).status, "pending", "retryJob itself did not flip the row to pending");
   assert.notEqual(
@@ -71,7 +69,7 @@ test("a reconciliation landing between retryJob and clearRunTerminal must not re
     "setup: the witness of the previous attempt was already cleared before retryJob committed — the race window does not exist in this build",
   );
 
-  // A concurrent process's reconciliation lands here, in the gap, before `clearRunTerminal` ever runs.
+  // A concurrent process's reconciliation lands here, while the stale witness is still on the run.
   await reconcileFromWitness(env);
 
   assert.equal(

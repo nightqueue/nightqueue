@@ -48,10 +48,26 @@ test("queue_add refuses a run_dir and queues nothing; a null or blank one is ign
   assert.equal(jobCount(env), 2);
 });
 
-test("queue_add no longer lists run_dir in its schema", async (t) => {
+test("queue_add refuses a max_attempts and queues nothing; a null one is ignored", async (t) => {
+  const env = makeHome(t, "queue-add-retired-attempts");
+  makeProject(t, env, "alpha");
+  const client = await connectInProcess(t, env);
+
+  const refused = await client.callTool({ name: "queue_add", arguments: { project: "alpha", prompt: PROMPT, max_attempts: 2 } });
+  assert.equal(refused.isError, true, textOf(refused));
+  assert.match(textOf(refused), /`max_attempts` was removed: a job has no attempt budget/);
+  assert.equal(jobCount(env), 0);
+
+  const queued = await client.callTool({ name: "queue_add", arguments: { project: "alpha", prompt: PROMPT, max_attempts: null } });
+  assert.notEqual(queued.isError, true, textOf(queued));
+  assert.equal(jobCount(env), 1);
+});
+
+test("queue_add no longer lists run_dir or max_attempts in its schema", async (t) => {
   const env = makeHome(t, "queue-add-retired-schema");
   const client = await connectInProcess(t, env);
 
   const tool = (await client.listTools()).tools.find((entry) => entry.name === "queue_add");
   assert.equal(Object.hasOwn(tool.inputSchema.properties, "run_dir"), false);
+  assert.equal(Object.hasOwn(tool.inputSchema.properties, "max_attempts"), false);
 });

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { SILENT_STOP_NOTICE, STRAY_PR_PREFIX, backoffMs, classifyJobResult, isTransientFailure } from "../../src/queue/classify.mjs";
+import { GATE_WITHOUT_NOTICE, SILENT_STOP_NOTICE, backoffMs, classifyJobResult } from "../../src/queue/classify.mjs";
 import {
   assistantEvent,
   codeChangePublishedEvent,
@@ -13,7 +13,6 @@ import {
   resultEvent,
   systemInitEvent,
   toNdjson,
-  transientFailureStream,
 } from "../../test-support/streams.mjs";
 
 // The outcome of a clean run whose final result event carries the given text.
@@ -41,19 +40,25 @@ function killedStream({ resultText = "" } = {}) {
   ].join("\n");
 }
 
-test("a run that opened a pull request is done, with the URL and the notice extracted", () => {
-  const outcome = classifyJobResult({ log: doneStream({ notice: "the pull request is open" }), exitCode: 0 });
+test("a run that recorded its delivery is done, with the URL and the notice of the record", () => {
+  const outcome = classifyJobResult({ log: doneStream({ notice: "what the stream said" }), exitCode: 0, state: stateWith({ status: "done", prUrl: PR_URL, notice: "the pull request is open" }) });
   assert.equal(outcome.status, "done");
   assert.equal(outcome.prUrl, PR_URL);
   assert.equal(outcome.noticeMd, "the pull request is open");
 });
 
-test("the gate marker beats the pull request URL: a run waiting on a human is never done", () => {
-  assert.equal(classifyJobResult({ log: gateStream(), exitCode: 0 }).status, "gate");
-  const both = doneStream({ notice: `${GATE_MARKER}\n\nThe pull request is open and the checks are green.` });
-  const outcome = classifyJobResult({ log: both, exitCode: 0 });
+test("a recorded gate beats the pull request URL: a run waiting on a human is never done", () => {
+  const outcome = classifyJobResult({ log: doneStream(), exitCode: 0, state: stateWith({ status: "gate", prUrl: PR_URL, notice: "Decide between A and B." }) });
   assert.equal(outcome.status, "gate");
   assert.equal(outcome.prUrl, PR_URL, "the URL is still recorded on a gate");
+});
+
+test("a gate only exists when it was recorded: the heading in the stream or in the final text asks nothing", () => {
+  for (const log of [gateStream(), doneStream({ notice: `${GATE_MARKER}\n\nThe pull request is open.` }), toNdjson([systemInitEvent(), resultEvent({ text: `${GATE_MARKER}\n\nDecide.` })])]) {
+    const outcome = classifyJobResult({ log, exitCode: 0 });
+    assert.equal(outcome.status, "failed");
+    assert.equal(outcome.noticeMd, SILENT_STOP_NOTICE);
+  }
 });
 
 test("an exit code other than zero is a failure, whatever the stream said", () => {
@@ -73,139 +78,77 @@ test("a timeout is a failure that no retry may pick up, and a stop is a cancella
   );
 });
 
-test("a clean exit that delivered nothing and never asked for a decision is a failure that still says why", () => {
-  const outcome = classifyJobResult({ log: doneStream().replace(PR_URL, "no link here"), exitCode: 0 });
-  assert.equal(outcome.status, "failed");
-  assert.equal(outcome.prUrl, null);
-  assert.ok(outcome.noticeMd, "a failure without a reason is exactly the bug this classification exists to prevent");
-});
-
 test("a clean exit that said nothing at all is a failure with the fixed warning, never a silent gate", () => {
   const outcome = classifyJobResult({ log: "", exitCode: 0 });
   assert.equal(outcome.status, "failed");
   assert.equal(outcome.noticeMd, SILENT_STOP_NOTICE);
 });
 
-test("a run without a `## Notice` falls back to the whole final text of the orchestrator, capped at eight thousand code points", () => {
+test("the final text of the orchestrator is never the notice: a clean exit with no record says no outcome was recorded", () => {
   const outcome = classifyResultText("  I need you to decide between renaming the column or keeping both.  ");
-  assert.equal(outcome.status, "failed", "no gate marker and no recorded gate status: the run never asked for a decision");
-  assert.equal(outcome.noticeMd, "I need you to decide between renaming the column or keeping both.");
-
-  const long = classifyResultText("a".repeat(9000));
-  assert.equal(long.status, "failed");
-  assert.equal(Array.from(long.noticeMd).length, 8003, "the fallback notice was not capped");
-  assert.equal(long.noticeMd.endsWith("..."), true);
+  assert.equal(outcome.status, "failed", "no recorded outcome: the run never asked for a decision");
+  assert.equal(outcome.noticeMd, SILENT_STOP_NOTICE);
+  assert.equal(outcome.resultText, "  I need you to decide between renaming the column or keeping both.  ", "the text stays available to the caller");
 });
 
 test("a real failure never gets the warning of a silent stop, because that text claims a clean exit", () => {
   for (const ending of [{ exitCode: 1 }, { exitCode: 0, timedOut: true }, { exitCode: 0, idleTimedOut: true }]) {
     const outcome = classifyJobResult({ log: "", ...ending });
     assert.equal(outcome.status, "failed", JSON.stringify(ending));
-    assert.equal(outcome.noticeMd, null, JSON.stringify(ending));
+    assert.notEqual(outcome.noticeMd, SILENT_STOP_NOTICE, JSON.stringify(ending));
   }
 });
 
-test("a pull request URL cited only as a reference, with no PR actually opened, is never done", () => {
-  const outcome = classifyResultText(
-    "I could not finish the migration in the time I had. For reference, a similar fix was done in " +
-      "https://github.com/acme/api/pull/1 on another repo, but I did not open a pull request here.",
-  );
-  assert.equal(outcome.status, "failed", "no PR was opened and nothing asked for a decision, so the run is a failure");
-  assert.equal(outcome.prUrl, null);
+test("a pull request URL in any text, delivered or cited, never makes a pull request", () => {
+  const texts = [
+    `Done. Pull request: ${PR_URL}`,
+    "I could not finish the migration. For reference, a similar fix was done in https://github.com/acme/api/pull/1 on another repo.",
+    ["Here is the shape of the link you will get once the checks pass:", "```", "https://github.com/acme/api/pull/1", "```"].join("\n"),
+    "Failed to open pull request: https://github.com/acme/api/pull/12 returned 404 Not Found.",
+    "See https://github.com/other-org/other-repo/pull/999 for context.",
+  ];
+  for (const text of texts) {
+    const outcome = classifyResultText(text);
+    assert.equal(outcome.status, "failed", text);
+    assert.equal(outcome.prUrl, null, text);
+  }
+  const intermediate = classifyJobResult({ log: intermediateDeliveryStream(), exitCode: 0 });
+  assert.deepEqual([intermediate.status, intermediate.prUrl], ["failed", null], "a delivery line in an intermediate message is text too");
+  const stream = classifyJobResult({ log: streamOf(`Record: PR ${PR_URL}`, "Stopped."), exitCode: 0 });
+  assert.equal(stream.prUrl, null);
 });
 
-test("a pull request URL quoted inside a fenced code example is never treated as an opened PR", () => {
-  const outcome = classifyResultText(
-    ["Here is the shape of the link you will get once the checks pass:", "```", "https://github.com/acme/api/pull/1", "```", "I have not opened it yet."].join("\n"),
-  );
-  assert.equal(outcome.status, "failed", "the URL is a fenced example, not a real pull request that was opened");
-  assert.equal(outcome.prUrl, null);
-});
-
-test("a pull request URL appearing inside a failure message is never treated as an opened PR", () => {
-  const outcome = classifyResultText("Failed to open pull request: https://github.com/acme/api/pull/12 returned 404 Not Found.");
-  assert.equal(outcome.status, "failed", "the URL comes from an error message, not from a pull request that exists");
-  assert.equal(outcome.prUrl, null);
-});
-
-test("a foreign pull request URL cited by number, belonging to someone else's repo, is never treated as ours", () => {
-  const outcome = classifyResultText(
-    "This looks related to an already merged community fix, see https://github.com/other-org/other-repo/pull/999 " +
-      "for context. I have not made any change in this repository.",
-  );
-  assert.equal(outcome.status, "failed", "citing someone else's pull request is not the same as opening one in this run");
-  assert.equal(outcome.prUrl, null);
-});
-
-test("a pull request delivered in an intermediate message is the outcome, even when the final text mentions neither", () => {
-  const outcome = classifyJobResult({ log: intermediateDeliveryStream(), exitCode: 0 });
-  assert.equal(outcome.status, "done", "the run really opened a pull request and was recorded as a gate");
-  assert.equal(outcome.prUrl, PR_URL);
-  assert.ok(outcome.noticeMd.startsWith("The pull request is open"), outcome.noticeMd);
-});
-
-test("a URL mentioned only inside a markdown table cell is never a delivery, wherever the cell is", () => {
-  const outcome = classifyJobResult({ log: intermediateDeliveryStream({ delivered: false }), exitCode: 0 });
-  assert.equal(outcome.prUrl, null, "a table cell ends with a pipe: it mentions the URL, it does not deliver it");
-  assert.equal(outcome.status, "failed", "no PR delivered and nothing asked for a decision, so the run is a failure");
-});
-
-test("the whole-stream fallback keeps every rule of a delivery: a citation, a denial and a fence are still refused", () => {
-  const cited = classifyJobResult({ log: streamOf(`The ticket references ${PR_URL} for context.`, "I could not finish."), exitCode: 1 });
-  assert.equal(cited.status, "failed");
-  assert.equal(cited.prUrl, null);
-
-  const denied = classifyJobResult({ log: streamOf(`I could not open ${PR_URL}`, "Stopped."), exitCode: 0 });
-  assert.equal(denied.prUrl, null);
-
-  const fenced = classifyJobResult({ log: streamOf(["The link will look like:", "```", PR_URL, "```"].join("\n"), "Stopped."), exitCode: 0 });
-  assert.equal(fenced.prUrl, null);
-});
-
-test("the pull request the HOST published wins over every text: a contradicting final line never moves it", () => {
+test("the pull request the HOST published is the run's when nothing recorded one, and the text never moves it", () => {
   const cited = "https://github.com/acme/api/pull/1";
   const log = toNdjson([systemInitEvent(), codeChangePublishedEvent(), resultEvent({ text: `Done. Pull request: ${cited}` })]);
 
-  const outcome = classifyJobResult({ log, exitCode: 0 });
+  const outcome = classifyJobResult({ log, exitCode: 0, state: stateWith({ status: "done", notice: "open" }) });
   assert.equal(outcome.prUrl, PR_URL, "the URL the host published lost to what the agent wrote afterwards");
   assert.equal(outcome.status, "done");
 });
 
-test("an unbranded publication that contradicts the runtime record loses to it, and is flagged", () => {
-  const cited = "https://github.com/acme/api/pull/1";
-  const log = toNdjson([
-    systemInitEvent(),
-    codeChangePublishedEvent(),
-    resultEvent({ text: `I could not open the pull request. For reference, the old one is ${cited}` }),
-  ]);
+test("the runtime record outranks a publication, and the publication is no longer named in the notice", () => {
+  const recorded = "https://github.com/acme/api/pull/1";
+  const log = toNdjson([systemInitEvent(), codeChangePublishedEvent(), resultEvent({ text: "Finished." })]);
 
-  const outcome = classifyJobResult({ log, exitCode: 0, state: stateWith({ status: "done", prUrl: cited }) });
-  assert.equal(outcome.prUrl, cited, "a publication that names no branch outranked the runtime's own record");
+  const outcome = classifyJobResult({ log, exitCode: 0, state: stateWith({ status: "done", prUrl: recorded, notice: "open" }) });
+  assert.equal(outcome.prUrl, recorded);
   assert.equal(outcome.status, "done");
-  assert.ok(outcome.noticeMd.endsWith(`${STRAY_PR_PREFIX}${PR_URL}; recorded instead: ${cited}`), outcome.noticeMd);
+  assert.equal(outcome.noticeMd, "open");
 });
 
-test("a text that denies the delivery, with no published event, delivers no pull request at all", () => {
-  const outcome = classifyResultText(`Failed to open pull request: ${PR_URL} returned 404 Not Found.`);
-  assert.equal(outcome.prUrl, null, "a denial was read as a delivery");
-  assert.equal(outcome.status, "failed", "no PR delivered and nothing asked for a decision, so the run is a failure");
-});
-
-test("a published event whose url is not a pull request falls through to the next source of the chain", () => {
+test("a published event whose url is not a pull request is not a source", () => {
   const published = codeChangePublishedEvent({ url: "https://github.com/acme/api/issues/9" });
-  const recorded = classifyJobResult({
-    log: toNdjson([systemInitEvent(), published, resultEvent({ text: "Done, nothing else to say." })]),
-    exitCode: 0,
-    state: stateWith({ status: "done", prUrl: PR_URL }),
-  });
+  const log = toNdjson([systemInitEvent(), published, resultEvent({ text: `Done. Pull request: ${PR_URL}` })]);
+  const recorded = classifyJobResult({ log, exitCode: 0, state: stateWith({ status: "done", prUrl: PR_URL }) });
   assert.equal(recorded.prUrl, PR_URL, "the runtime's own record was skipped for a url it cannot read");
   assert.equal(recorded.status, "done");
 
-  const fromText = classifyJobResult({ log: toNdjson([systemInitEvent(), published, resultEvent({ text: `Done. Pull request: ${PR_URL}` })]), exitCode: 0 });
-  assert.equal(fromText.prUrl, PR_URL, "the text heuristic, the last source, was skipped");
+  const unrecorded = classifyJobResult({ log, exitCode: 0 });
+  assert.equal(unrecorded.prUrl, null);
 });
 
-test("the outcome the pipeline recorded in state.json wins over the stream, field by field", () => {
+test("the outcome the pipeline recorded in state.json alone decides, whatever the stream printed", () => {
   const silent = classifyJobResult({
     log: streamOf("Everything is committed.", "Done, nothing else to say."),
     exitCode: 0,
@@ -213,86 +156,41 @@ test("the outcome the pipeline recorded in state.json wins over the stream, fiel
   });
   assert.equal(silent.status, "done", "the record carries the URL the stream never printed");
   assert.equal(silent.prUrl, PR_URL);
+  assert.equal(silent.noticeMd, null, "the record carries no notice and the stream lends it none");
 
   const gated = classifyJobResult({
-    log: doneStream({ notice: `${GATE_MARKER}\n\nChoose between renaming the column or keeping both.` }),
+    log: doneStream({ notice: `${GATE_MARKER}\n\nThe stream explains the whole thing.` }),
     exitCode: 0,
     state: stateWith({ status: "gate", notice: "Choose between renaming the column or keeping both." }),
   });
-  assert.equal(gated.status, "gate", "a recorded gate is not undone by a URL in the stream");
-  assert.equal(
-    gated.noticeMd,
-    `${GATE_MARKER}\n\nChoose between renaming the column or keeping both.`,
-    "the `## Notice` of the run now outranks the summary the record carries",
-  );
-  assert.equal(gated.prUrl, PR_URL, "the URL is still recorded on a gate");
+  assert.equal(gated.status, "gate");
+  assert.equal(gated.noticeMd, "Choose between renaming the column or keeping both.", "the stream's `## Notice` is not a source of the notice");
 });
 
-test("the `## Notice` the run wrote beats the summary the pipeline recorded in state.json", () => {
-  const outcome = classifyJobResult({
-    log: doneStream({ notice: `${GATE_MARKER}\n\nThe stream explains the whole thing.` }),
-    exitCode: 0,
-    state: stateWith({ status: "gate", notice: "Short summary the pipeline wrote." }),
-  });
-  assert.equal(outcome.noticeMd, `${GATE_MARKER}\n\nThe stream explains the whole thing.`);
+test("a recorded gate with no notice is a failure that says so, even with a `## Notice` in the stream", () => {
+  for (const log of ["", doneStream({ notice: `${GATE_MARKER}\n\nOnly the stream said why.` })]) {
+    const outcome = classifyJobResult({ log, exitCode: 0, state: stateWith({ status: "gate" }) });
+    assert.equal(outcome.status, "failed");
+    assert.equal(outcome.noticeMd, GATE_WITHOUT_NOTICE);
+  }
 });
 
-test("a run that printed no `## Notice` keeps the summary recorded in state.json, never the whole final text", () => {
-  const outcome = classifyJobResult({
-    log: streamOf("Working on it.", "Stopped without a heading."),
-    exitCode: 0,
-    state: stateWith({ status: "gate", notice: `${GATE_MARKER}\n\nDecide between A and B.` }),
-  });
-  assert.equal(outcome.noticeMd, `${GATE_MARKER}\n\nDecide between A and B.`);
-  assert.notEqual(outcome.noticeMd, "Stopped without a heading.", "the whole final text is the last resort, never above the record");
-});
-
-test("a run whose `## Notice` is the only explanation anywhere is the notice itself", () => {
-  const outcome = classifyJobResult({
-    log: doneStream({ notice: `${GATE_MARKER}\n\nOnly the stream said why.` }),
-    exitCode: 0,
-    state: stateWith({ status: "gate" }),
-  });
-  assert.equal(outcome.noticeMd, `${GATE_MARKER}\n\nOnly the stream said why.`);
-});
-
-test("a clean stop with no explanation in the stream nor in state.json is still the fixed warning", () => {
-  const outcome = classifyJobResult({
-    log: toNdjson([systemInitEvent(), resultEvent({ text: "" })]),
-    exitCode: 0,
-    state: stateWith({ status: "gate" }),
-  });
-  assert.equal(outcome.status, "failed");
-  assert.equal(outcome.noticeMd, SILENT_STOP_NOTICE);
-});
-
-test("the notice changing source moves neither the status nor the pull request URL, which state.json still rules", () => {
-  const RECORDED_PR_URL = "https://github.com/acme/api/pull/7";
-  const outcome = classifyJobResult({
-    log: doneStream({ notice: `${GATE_MARKER}\n\nThe stream explains it whole.` }),
-    exitCode: 0,
-    state: stateWith({ status: "gate", prUrl: RECORDED_PR_URL, notice: "Short summary." }),
-  });
-  assert.equal(outcome.status, "gate");
-  assert.equal(outcome.prUrl, RECORDED_PR_URL, "the recorded URL still outranks the one the stream printed");
-  assert.equal(outcome.noticeMd, `${GATE_MARKER}\n\nThe stream explains it whole.`);
-});
-
-test("a record the runtime cannot believe changes nothing: the stream decides exactly as it does today", () => {
+test("a record the runtime cannot believe speaks for nothing: the run ended without recording an outcome", () => {
   const broken = [
     null,
     "done",
     [],
-    { status: "failed", prUrl: PR_URL },
+    { status: "failed", prUrl: "not a url" },
     { status: "merged" },
     { status: "done", prUrl: "https://example.com/not-a-pull-request" },
     { status: "done", prUrl: 42 },
     { notice: "   " },
   ];
   for (const outcome of broken) {
-    const classified = classifyJobResult({ log: intermediateDeliveryStream(), exitCode: 0, state: stateWith(outcome) });
-    assert.equal(classified.status, "done", JSON.stringify(outcome));
-    assert.equal(classified.prUrl, PR_URL, JSON.stringify(outcome));
+    const classified = classifyJobResult({ log: doneStream(), exitCode: 0, state: stateWith(outcome) });
+    assert.equal(classified.status, "failed", JSON.stringify(outcome));
+    assert.equal(classified.prUrl, null, JSON.stringify(outcome));
+    assert.equal(classified.noticeMd, SILENT_STOP_NOTICE, JSON.stringify(outcome));
   }
 });
 
@@ -302,12 +200,6 @@ test("the recorded outcome never beats how the process ended: a file turns no ki
   assert.equal(classifyJobResult({ log: "", exitCode: 0, timedOut: true, state: record }).status, "failed");
   assert.equal(classifyJobResult({ log: "", exitCode: 0, idleTimedOut: true, state: record }).status, "failed");
   assert.equal(classifyJobResult({ log: "", exitCode: -1, stopped: true, state: record }).status, "cancelled");
-});
-
-test("a recorded gate with no reason anywhere is still a failure with the fixed warning, never a silent gate", () => {
-  const outcome = classifyJobResult({ log: "", exitCode: 0, state: stateWith({ status: "gate" }) });
-  assert.equal(outcome.status, "failed");
-  assert.equal(outcome.noticeMd, SILENT_STOP_NOTICE);
 });
 
 test("a runtime kill is always a failure, whatever the notice, the recorded outcome or a pull request say", () => {
@@ -321,46 +213,11 @@ test("a runtime kill is always a failure, whatever the notice, the recorded outc
     state: stateWith({ status: "gate", notice: "Decide between A and B." }),
   });
   assert.equal(gated.status, "failed", "a recorded gate must not survive a runtime kill");
-  assert.equal(gated.noticeMd, 'runtime: the CLI killed the background task "task_kill" after its wait ceiling; the run did not finish');
+  assert.equal(gated.noticeMd, 'runtime: the CLI killed the background task "task_kill" after its wait ceiling; the run did not finish after recording a gate: Decide between A and B.');
 
-  const withPr = classifyJobResult({ log: killedStream({ resultText: `Done. Pull request: ${PR_URL}` }), exitCode: 0 });
+  const withPr = classifyJobResult({ log: killedStream({ resultText: "Finished." }), exitCode: 0, state: stateWith({ status: "done", prUrl: PR_URL }) });
   assert.equal(withPr.status, "failed", "a delivered pull request must not turn a killed run into done");
   assert.equal(withPr.prUrl, PR_URL, "the pull request is still reported even though the run is marked failed");
-});
-
-test("the tightened decideStatus: a clean exit with a final text but no gate marker and no recorded gate status is a failure, never a silent gate", () => {
-  const outcome = classifyResultText("Verifier running. Waiting for its verdict before the next phase.");
-  assert.equal(outcome.status, "failed");
-  assert.equal(outcome.noticeMd, "Verifier running. Waiting for its verdict before the next phase.");
-});
-
-test("the same final text with the `## Requires user confirmation` marker still stops at the gate", () => {
-  const outcome = classifyResultText(`${GATE_MARKER}\n\nVerifier running. Waiting for its verdict before the next phase.`);
-  assert.equal(outcome.status, "gate");
-});
-
-test("the same final text with a recorded gate status in state.json still stops at the gate", () => {
-  const outcome = classifyJobResult({
-    log: toNdjson([systemInitEvent(), resultEvent({ text: "Verifier running. Waiting for its verdict before the next phase." })]),
-    exitCode: 0,
-    state: stateWith({ status: "gate", notice: `${GATE_MARKER}\n\nRename the column or keep both.` }),
-  });
-  assert.equal(outcome.status, "gate");
-});
-
-test("only a transient provider failure is worth another attempt", () => {
-  assert.equal(isTransientFailure(transientFailureStream()), true);
-  assert.equal(isTransientFailure("API Error: 529 Overloaded"), true);
-  assert.equal(isTransientFailure("rate_limit_error"), true);
-  assert.equal(isTransientFailure("Error: connection error"), true);
-  assert.equal(isTransientFailure("read ECONNRESET"), true);
-  assert.equal(isTransientFailure("TypeError: fetch failed"), true);
-  assert.equal(isTransientFailure("getaddrinfo ENOTFOUND api.anthropic.com"), true);
-  assert.equal(isTransientFailure("Can't reach the API server"), true);
-  assert.equal(isTransientFailure(failureStream()), false);
-  assert.equal(isTransientFailure("HTTP 404 Not Found"), false);
-  assert.equal(isTransientFailure(""), false);
-  assert.equal(isTransientFailure(null), false);
 });
 
 test("the backoff grows by three and stops at one minute", () => {

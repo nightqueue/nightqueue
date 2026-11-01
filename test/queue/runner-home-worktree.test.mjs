@@ -13,7 +13,7 @@ import { recordRunFields } from "../../src/queue/run-state.mjs";
 import { releaseJobWorktree } from "../../src/queue/worktree.mjs";
 import { ensureProject, makeDir, makeHome, registerCheckout } from "../../test-support/memory.mjs";
 import { argValue, fakeCalls, useFakeClaude } from "../../test-support/queue-fake.mjs";
-import { doneStream, SESSION_ID, SLUG } from "../../test-support/streams.mjs";
+import { doneStream, SESSION_ID, SLUG, recordedDone } from "../../test-support/streams.mjs";
 import { addWorktree, git, gitVars, publishedCheckout, registeredWorktrees } from "../../test-support/worktrees.mjs";
 
 const PROMPT = "fix the worker";
@@ -57,7 +57,7 @@ function bindRun(env, id, { worktree, branch }) {
 }
 
 test("a job runs in its own worktree under the home: the checkout stays clean before, during and after, and nothing is written into its .git/info/exclude", async (t) => {
-  const run = makeHomeRun(t, "home-wt-run", [{ stdout: doneStream(), exitCode: 0, commitFile: "feature.txt" }]);
+  const run = makeHomeRun(t, "home-wt-run", [{ stdout: doneStream(), runState: recordedDone(), exitCode: 0, commitFile: "feature.txt" }]);
   addProbes(run.planPath, { probeStatusOf: run.checkout, probePath: join(runDir(run.projectId, SLUG, run.env), "state.json") });
   const excludeBefore = excludeOf(run.checkout);
   assert.equal(git(["-C", run.checkout, "status", "--porcelain"]), "");
@@ -80,7 +80,7 @@ test("a job runs in its own worktree under the home: the checkout stays clean be
 });
 
 test("a job whose state names a legacy `.claude/worktrees/` worktree runs in it, and without the session recorded in another directory", async (t) => {
-  const run = makeHomeRun(t, "home-wt-legacy", [{ stdout: doneStream(), exitCode: 0 }]);
+  const run = makeHomeRun(t, "home-wt-legacy", [{ stdout: doneStream(), runState: recordedDone(), exitCode: 0 }]);
   const legacy = addWorktree(run.checkout, "fix+legacy");
   bindRun(run.env, run.id, { worktree: legacy.path, branch: legacy.branch });
   enableResume(run.env);
@@ -95,7 +95,7 @@ test("a job whose state names a legacy `.claude/worktrees/` worktree runs in it,
 });
 
 test("another job of the project is not gated by the legacy worktree an open job still names", async (t) => {
-  const run = makeHomeRun(t, "home-wt-legacy-other", [{ stdout: doneStream(), exitCode: 0 }]);
+  const run = makeHomeRun(t, "home-wt-legacy-other", [{ stdout: doneStream(), runState: recordedDone(), exitCode: 0 }]);
   const legacy = addWorktree(run.checkout, "fix+legacy");
   const owner = addJob({ projectId: run.projectId, prompt: "the legacy job" }, run.env).id;
   openDb(run.env).prepare("UPDATE jobs SET slug = ? WHERE id = ?").run("legacy-run", owner);
@@ -107,7 +107,7 @@ test("another job of the project is not gated by the legacy worktree an open job
 });
 
 test("a job whose home worktree is reused keeps resuming its recorded session", async (t) => {
-  const run = makeHomeRun(t, "home-wt-resume", [{ stdout: doneStream(), exitCode: 0 }]);
+  const run = makeHomeRun(t, "home-wt-resume", [{ stdout: doneStream(), runState: recordedDone(), exitCode: 0 }]);
   const path = jobWorktreePath(run.projectId, SLUG, run.env);
   git(["-C", run.checkout, "worktree", "add", "-q", "--no-track", "-b", `worktree-${SLUG}`, path, "main"]);
   bindRun(run.env, run.id, { worktree: path, branch: `worktree-${SLUG}` });
@@ -121,7 +121,7 @@ test("a job whose home worktree is reused keeps resuming its recorded session", 
 });
 
 test("a job whose worktree cannot be placed gates with worktree-failed, the message in its result, and spawns nothing", async (t) => {
-  const run = makeHomeRun(t, "home-wt-gate", [{ stdout: doneStream(), exitCode: 0 }]);
+  const run = makeHomeRun(t, "home-wt-gate", [{ stdout: doneStream(), runState: recordedDone(), exitCode: 0 }]);
   openDb(run.env).prepare("UPDATE jobs SET slug = ? WHERE id = ?").run(SLUG, run.id);
   git(["-C", run.checkout, "branch", `worktree-${SLUG}`]);
 
@@ -135,7 +135,7 @@ test("a job whose worktree cannot be placed gates with worktree-failed, the mess
 });
 
 test("an interactive worktree in the checkout that no open job names gates the job as dirty-checkout, naming it, and spawns nothing", async (t) => {
-  const run = makeHomeRun(t, "home-wt-interactive", [{ stdout: doneStream(), exitCode: 0 }]);
+  const run = makeHomeRun(t, "home-wt-interactive", [{ stdout: doneStream(), runState: recordedDone(), exitCode: 0 }]);
   addWorktree(run.checkout, "fix+interactive");
 
   const cycle = await runCycle({ jobId: run.id, env: run.env });
@@ -161,7 +161,7 @@ async function occupySlot(run, { renameTo = null } = {}) {
 }
 
 test("a provisional slug another job renamed away from is not bound while its worktree lives: the job takes the next variant", async (t) => {
-  const run = makeHomeRun(t, "home-wt-slot-renamed", [{ stdout: doneStream({ slug: `${SLUG}-2` }), exitCode: 0 }]);
+  const run = makeHomeRun(t, "home-wt-slot-renamed", [{ stdout: doneStream({ slug: `${SLUG}-2` }), runState: recordedDone(), exitCode: 0 }]);
   const kept = await occupySlot(run, { renameTo: "login-page" });
 
   const cycle = await runCycle({ jobId: run.id, env: run.env });
@@ -174,7 +174,7 @@ test("a provisional slug another job renamed away from is not bound while its wo
 });
 
 test("after `retry --fresh` the rebound run never lands on the worktree its earlier run kept, and that worktree stays", async (t) => {
-  const run = makeHomeRun(t, "home-wt-slot-fresh", [{ stdout: doneStream({ slug: `${SLUG}-2` }), exitCode: 0 }]);
+  const run = makeHomeRun(t, "home-wt-slot-fresh", [{ stdout: doneStream({ slug: `${SLUG}-2` }), runState: recordedDone(), exitCode: 0 }]);
   openDb(run.env).prepare("UPDATE jobs SET slug = ? WHERE id = ?").run(SLUG, run.id);
   const first = await prepareJobWorktree({ job: { id: run.id, project_id: run.projectId, slug: SLUG }, checkout: run.checkout, baseBranch: "main", env: run.env });
   assert.equal(first.ok, true, first.message);
@@ -189,7 +189,7 @@ test("after `retry --fresh` the rebound run never lands on the worktree its earl
 });
 
 test("a slug whose `worktree-<slug>` branch alone is still alive is skipped at claim time", async (t) => {
-  const run = makeHomeRun(t, "home-wt-slot-branch", [{ stdout: doneStream({ slug: `${SLUG}-2` }), exitCode: 0 }]);
+  const run = makeHomeRun(t, "home-wt-slot-branch", [{ stdout: doneStream({ slug: `${SLUG}-2` }), runState: recordedDone(), exitCode: 0 }]);
   git(["-C", run.checkout, "branch", `worktree-${SLUG}`]);
 
   const cycle = await runCycle({ jobId: run.id, env: run.env });
@@ -200,7 +200,7 @@ test("a slug whose `worktree-<slug>` branch alone is still alive is skipped at c
 });
 
 test("a closed job whose recorded legacy worktree is gone releases nothing and never blocks, while a live clean one is removed", async (t) => {
-  const run = makeHomeRun(t, "home-wt-release", [{ stdout: doneStream(), exitCode: 0 }]);
+  const run = makeHomeRun(t, "home-wt-release", [{ stdout: doneStream(), runState: recordedDone(), exitCode: 0 }]);
   const stale = addWorktree(run.checkout, "fix+stale");
   bindRun(run.env, run.id, { worktree: stale.path, branch: stale.branch });
   rmSync(stale.path, { recursive: true, force: true });
@@ -218,7 +218,7 @@ test("a done job that started in a worktree the operator handed in keeps it, and
   const { checkout } = publishedCheckout(t, "home-wt-adopted");
   const env = { ...makeHome(t, "home-wt-adopted"), ...gitVars() };
   registerCheckout(env, { path: checkout, name: "alpha" });
-  const planPath = useFakeClaude(env, makeDir(t, "home-wt-adopted-plan"), [{ stdout: doneStream(), exitCode: 0 }]);
+  const planPath = useFakeClaude(env, makeDir(t, "home-wt-adopted-plan"), [{ stdout: doneStream(), runState: recordedDone(), exitCode: 0 }]);
   const adopted = join(makeDir(t, "home-wt-adopted-linked"), "wt");
   git(["-C", checkout, "worktree", "add", "-q", "-b", "feat/mine", adopted, "main"]);
   git(["-C", adopted, "push", "-q", "-u", "origin", "feat/mine"]);

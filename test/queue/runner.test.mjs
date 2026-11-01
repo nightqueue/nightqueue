@@ -17,7 +17,7 @@ import { reconcileFromWitness } from "../../src/queue/reconcile.mjs";
 import { openStore } from "../../src/store/open.mjs";
 import { dropCheckout, ensureProject, makeDir, makeHome, makeProject, projectIdOf } from "../../test-support/memory.mjs";
 import { argValue, fakeCalls, useFakeClaude } from "../../test-support/queue-fake.mjs";
-import { agentToolUseEvent, assistantEvent, codeChangePublishedEvent, doneStream, failureStream, GATE_NOTICE, gateStream, noticeText, PR_URL, rateLimitEvent, resultEvent, SESSION_ID, SLUG, slugEvent, slugTypeEvent, systemInitEvent, taskNotificationEvent, toNdjson, transientFailureStream } from "../../test-support/streams.mjs";
+import { agentToolUseEvent, assistantEvent, codeChangePublishedEvent, doneStream, failureStream, GATE_NOTICE, gateStream, noticeText, PR_URL, providerErrorResult, rateLimitEvent, resultEvent, SESSION_ID, SLUG, slugEvent, slugTypeEvent, systemInitEvent, taskNotificationEvent, toNdjson, transientFailureStream, recordedDone, recordedGate } from "../../test-support/streams.mjs";
 import { fakeJobWorktree } from "../../test-support/job-worktree.mjs";
 
 const PROMPT = "fix the worker";
@@ -64,8 +64,8 @@ function makeRunnerHome(t, name, attempts, { projects = ["alpha"] } = {}) {
 }
 
 // Enqueues one job of a test project.
-function enqueue(env, { project = "alpha", prompt = PROMPT, maxAttempts, timeoutS } = {}) {
-  return addJob({ projectId: ensureProject(env, project), prompt, maxAttempts, timeoutS }, env).id;
+function enqueue(env, { project = "alpha", prompt = PROMPT, timeoutS } = {}) {
+  return addJob({ projectId: ensureProject(env, project), prompt, timeoutS }, env).id;
 }
 
 // Runs one cycle over a single job with the git reads injected.
@@ -90,7 +90,7 @@ async function waitFor(check, label) {
 }
 
 test("a run that opens a pull request ends as done, with its facts, usage and pipeline run linked", async (t) => {
-  const { env } = makeRunnerHome(t, "runner-done", [{ stdout: doneStream({ notice: "the pull request is open" }), exitCode: 0 }]);
+  const { env } = makeRunnerHome(t, "runner-done", [{ stdout: doneStream({ notice: "the pull request is open" }), runState: recordedDone({ notice: "the pull request is open" }), exitCode: 0 }]);
   const id = enqueue(env);
   const logged = logPipelineRun({ projectId: projectIdOf(env, "alpha"), slug: SLUG, outcome: "pr_opened", phases: [] }, env);
 
@@ -144,7 +144,7 @@ test("a finished run persists what its orchestrator did: turns, reads outside th
     assistantEvent(noticeText("the pull request is open"), { messageId: "msg_notice", usage: { tokensIn: 5, cacheRead: 2000, cacheCreation: 300 } }),
     resultEvent({ text: `Done. Pull request: ${PR_URL}` }),
   ]);
-  useFakeClaude(env, makeDir(t, "runner-orchestrator-counts-plan"), [{ stdout, exitCode: 0 }]);
+  useFakeClaude(env, makeDir(t, "runner-orchestrator-counts-plan"), [{ stdout, runState: recordedDone({ notice: "the pull request is open" }), exitCode: 0 }]);
   const id = enqueue(env);
 
   const cycle = await runJobCycle(env, id);
@@ -173,7 +173,7 @@ test("a run whose stream shows a task backgrounded despite the disable flag gets
     assistantEvent(noticeText("the pull request is open"), { messageId: "msg_notice" }),
     resultEvent({ text: `Done. Pull request: ${PR_URL}` }),
   ]);
-  const { env } = makeRunnerHome(t, "runner-bg-escape", [{ stdout, exitCode: 0 }]);
+  const { env } = makeRunnerHome(t, "runner-bg-escape", [{ stdout, runState: recordedDone({ notice: "the pull request is open" }), exitCode: 0 }]);
   const id = enqueue(env);
 
   const originalWrite = process.stderr.write;
@@ -206,7 +206,7 @@ test("a run whose subagent stayed in the foreground (is_backgrounded: false) nev
     assistantEvent(noticeText("the pull request is open"), { messageId: "msg_notice" }),
     resultEvent({ text: `Done. Pull request: ${PR_URL}` }),
   ]);
-  const { env } = makeRunnerHome(t, "runner-bg-escape-off", [{ stdout, exitCode: 0 }]);
+  const { env } = makeRunnerHome(t, "runner-bg-escape-off", [{ stdout, runState: recordedDone({ notice: "the pull request is open" }), exitCode: 0 }]);
   const id = enqueue(env);
 
   const cycle = await runJobCycle(env, id);
@@ -215,18 +215,19 @@ test("a run whose subagent stayed in the foreground (is_backgrounded: false) nev
   assert.equal(getJob(id, env).notice_md, "the pull request is open");
 });
 
-test("the runner leaves the witness of the outcome next to the run, with its six keys, the tree it loaded from and the job it speaks for", async (t) => {
-  const { env } = makeRunnerHome(t, "runner-witness", [{ stdout: doneStream(), exitCode: 0 }]);
+test("the runner leaves the witness of the outcome next to the run, with its seven keys, the tree it loaded from, the job it speaks for and the claim that wrote it", async (t) => {
+  const { env } = makeRunnerHome(t, "runner-witness", [{ stdout: doneStream(), runState: recordedDone(), exitCode: 0 }]);
   const id = enqueue(env);
 
   await runJobCycle(env, id);
 
   const state = JSON.parse(readFileSync(join(runDir(ensureProject(env, "alpha"), SLUG, env), "state.json"), "utf8"));
-  assert.deepEqual(Object.keys(state.terminal), ["status", "prUrl", "finishedAt", "writtenBy", "pid", "jobId"]);
+  assert.deepEqual(Object.keys(state.terminal), ["status", "prUrl", "finishedAt", "writtenBy", "pid", "jobId", "claim"]);
   assert.deepEqual(
     { status: state.terminal.status, prUrl: state.terminal.prUrl, writtenBy: state.terminal.writtenBy, pid: state.terminal.pid, jobId: state.terminal.jobId },
     { status: "done", prUrl: PR_URL, writtenBy: packageRoot(), pid: process.pid, jobId: id },
   );
+  assert.equal(state.terminal.claim.attempt, 1);
   assert.equal(state.terminal.finishedAt, sqliteToIso(getJob(id, env).finished_at));
 });
 
@@ -237,7 +238,7 @@ test("the runtime records in the state of the run the pull request the host publ
     codeChangePublishedEvent(),
     resultEvent({ text: "Telemetry recorded. I did not manage to print the link." }),
   ]);
-  const { env } = makeRunnerHome(t, "runner-published-pr", [{ stdout: published, exitCode: 0 }]);
+  const { env } = makeRunnerHome(t, "runner-published-pr", [{ stdout: published, runState: { outcome: { status: "done" } }, exitCode: 0 }]);
   const id = enqueue(env);
 
   const cycle = await runJobCycle(env, id);
@@ -263,7 +264,7 @@ test("the durations and the models of the telemetry come from the stream, and th
     assistantEvent(noticeText(), { timestamp: at(65) }),
     resultEvent({ text: `Done. Pull request: ${PR_URL}` }),
   ]);
-  const { env } = makeRunnerHome(t, "runner-telemetry", [{ stdout: stream, exitCode: 0 }]);
+  const { env } = makeRunnerHome(t, "runner-telemetry", [{ stdout: stream, runState: recordedDone(), exitCode: 0 }]);
   const id = enqueue(env);
   const logged = logPipelineRun(
     {
@@ -305,7 +306,7 @@ test("the durations and the models of the telemetry come from the stream, and th
 });
 
 test("a run that stops at the gate ends as gate and keeps the notice for the operator", async (t) => {
-  const { env } = makeRunnerHome(t, "runner-gate", [{ stdout: gateStream(), exitCode: 0 }]);
+  const { env } = makeRunnerHome(t, "runner-gate", [{ stdout: gateStream(), runState: recordedGate(), exitCode: 0 }]);
   const id = enqueue(env);
 
   const cycle = await runJobCycle(env, id);
@@ -319,7 +320,7 @@ test("a run that stops at the gate ends as gate and keeps the notice for the ope
 
 test("a failure that no retry would fix ends the job at once, without a second attempt", async (t) => {
   const { env, planPath } = makeRunnerHome(t, "runner-failed", [{ stdout: failureStream(), exitCode: 1 }]);
-  const id = enqueue(env, { maxAttempts: 3 });
+  const id = enqueue(env);
 
   const cycle = await runJobCycle(env, id);
 
@@ -331,22 +332,22 @@ test("a failure that no retry would fix ends the job at once, without a second a
   assert.equal(fakeCalls(planPath).length, 1);
 });
 
-test("a transient failure is retried after a backoff that the test injects instead of sleeping", async (t) => {
+test("a transient failure is re-spawned after a backoff that the test injects instead of sleeping, spending no attempt", async (t) => {
   const { env, planPath } = makeRunnerHome(t, "runner-retry", [
     { stdout: transientFailureStream(), exitCode: 1 },
-    { stdout: doneStream(), exitCode: 0 },
+    { stdout: doneStream(), runState: recordedDone(), exitCode: 0 },
   ]);
-  const id = enqueue(env, { maxAttempts: 2 });
+  const id = enqueue(env);
   const slept = [];
 
   const cycle = await runJobCycle(env, id, { sleepImpl: async (ms) => slept.push(ms) });
 
-  assert.deepEqual(slept, [5000], "the runner did not back off exactly once between the two attempts");
+  assert.deepEqual(slept, [5000], "the runner did not back off exactly once between the two spawns");
   assert.equal(cycle.processed[0].status, "done");
   const row = getJob(id, env);
-  assert.deepEqual({ status: row.status, attempts: row.attempts }, { status: "done", attempts: 2 });
+  assert.deepEqual({ status: row.status, attempts: row.attempts }, { status: "done", attempts: 1 });
   assert.equal(fakeCalls(planPath).length, 2);
-  assert.equal(JSON.parse(row.result).attempts, 2);
+  assert.equal(JSON.parse(row.result).attempts, 1);
 });
 
 // The orchestrator's own turn, the shape the real CLI writes with an explicit `parent_tool_use_id: null`.
@@ -358,8 +359,8 @@ test("baseline_ctx is the FIRST attempt's own orchestrator usage, kept across a 
   const firstAttempt = toNdjson([
     systemInitEvent(),
     orchestratorTurn({ input_tokens: 100, cache_read_input_tokens: 20, cache_creation_input_tokens: 5 }),
-    assistantEvent("API Error: 429 Too Many Requests (overloaded_error)", { messageId: "msg_429" }),
-    resultEvent({ text: "API Error: 429 Too Many Requests", subtype: "error_during_execution" }),
+    assistantEvent("API Error: 429", { messageId: "msg_429" }),
+    providerErrorResult(),
   ]);
   const secondAttempt = toNdjson([
     systemInitEvent(),
@@ -370,15 +371,15 @@ test("baseline_ctx is the FIRST attempt's own orchestrator usage, kept across a 
   ]);
   const { env } = makeRunnerHome(t, "runner-baseline-ctx", [
     { stdout: firstAttempt, exitCode: 1 },
-    { stdout: secondAttempt, exitCode: 0 },
+    { stdout: secondAttempt, runState: recordedDone(), exitCode: 0 },
   ]);
-  const id = enqueue(env, { maxAttempts: 2 });
+  const id = enqueue(env);
 
   const cycle = await runJobCycle(env, id, { sleepImpl: async () => {} });
 
   assert.equal(cycle.processed[0].status, "done");
   const row = getJob(id, env);
-  assert.equal(row.attempts, 2);
+  assert.equal(row.attempts, 1);
   assert.equal(row.baseline_ctx, 125, "the first attempt's own usage (100 + 20 + 5) was not kept");
 });
 
@@ -387,10 +388,10 @@ test("a child that ends on a rate limit parks the job for the reset, keeps its a
   const limited = toNdjson([systemInitEvent({}), rateLimitEvent({ status: "rejected", resetsAt: resetsAtS })]);
   const { env, planPath } = makeRunnerHome(t, "runner-rate-limit", [
     { stdout: limited, exitCode: 1 },
-    { stdout: doneStream(), exitCode: 0 },
+    { stdout: doneStream(), runState: recordedDone(), exitCode: 0 },
   ]);
   writeRunnerRecord({ pid: process.pid, startedAt: new Date().toISOString(), mode: "once" }, env);
-  const id = enqueue(env, { maxAttempts: 2 });
+  const id = enqueue(env);
   const notBefore = new Date(resetsAtS * 1000).toISOString();
 
   const parkCycle = await runJobCycle(env, id);
@@ -416,25 +417,13 @@ test("a child that ends on a rate limit parks the job for the reset, keeps its a
   assert.equal(getJob(id, env).not_before, null, "the schedule of the limit outlived the run it scheduled");
 });
 
-test("a transient failure that exhausts the attempts of its own row stops there", async (t) => {
-  const { env, planPath } = makeRunnerHome(t, "runner-retry-cap", [{ stdout: transientFailureStream(), exitCode: 1 }]);
-  const id = enqueue(env, { maxAttempts: 1 });
-  const slept = [];
-
-  await runJobCycle(env, id, { sleepImpl: async (ms) => slept.push(ms) });
-
-  assert.deepEqual(slept, []);
-  assert.equal(getJob(id, env).status, "failed");
-  assert.equal(fakeCalls(planPath).length, 1);
-});
-
-test("the runner records the session of every attempt, so the last one wins across retries", async (t) => {
+test("the runner records the session of every spawn, so the last one wins across re-spawns", async (t) => {
   const { env, planPath } = makeRunnerHome(t, "runner-last-session", [
     { stdout: transientFailureStream({ sessionId: "sess-attempt-1" }), exitCode: 1 },
     { stdout: transientFailureStream({ sessionId: "sess-attempt-2" }), exitCode: 1 },
-    { stdout: doneStream({ sessionId: "sess-attempt-3" }), exitCode: 0 },
+    { stdout: doneStream({ sessionId: "sess-attempt-3" }), runState: recordedDone(), exitCode: 0 },
   ]);
-  const id = enqueue(env, { maxAttempts: 3 });
+  const id = enqueue(env);
   const slept = [];
 
   const cycle = await runJobCycle(env, id, { sleepImpl: async (ms) => slept.push(ms) });
@@ -444,8 +433,8 @@ test("the runner records the session of every attempt, so the last one wins acro
   const row = getJob(id, env);
   assert.deepEqual(
     { sessionId: row.session_id, lastSessionId: row.last_session_id, lastSessionAttempt: row.last_session_attempt },
-    { sessionId: "sess-attempt-1", lastSessionId: "sess-attempt-3", lastSessionAttempt: 3 },
-    "the first session stayed on `session_id` and the third attempt's session won `last_session_id`",
+    { sessionId: "sess-attempt-1", lastSessionId: "sess-attempt-3", lastSessionAttempt: 1 },
+    "the first session stayed on `session_id` and the third spawn's session won `last_session_id`, all in one attempt",
   );
 });
 
@@ -457,7 +446,7 @@ test("every preflight block stops the job at a gate without spending an attempt"
     ["claude-missing", { resolveBinImpl: () => ({ bin: null, via: "missing" }) }],
   ];
   for (const [code, deps] of cases) {
-    const { env, planPath } = makeRunnerHome(t, `runner-block-${code}`, [{ stdout: doneStream(), exitCode: 0 }]);
+    const { env, planPath } = makeRunnerHome(t, `runner-block-${code}`, [{ stdout: doneStream(), runState: recordedDone(), exitCode: 0 }]);
     const id = enqueue(env);
 
     const cycle = await runJobCycle(env, id, deps);
@@ -476,7 +465,7 @@ test("every preflight block stops the job at a gate without spending an attempt"
 });
 
 test("a job gated by the preflight is never claimed twice in the same cycle, and the cycle ends on an empty queue", async (t) => {
-  const { env } = makeRunnerHome(t, "runner-block-loop", [{ stdout: doneStream(), exitCode: 0 }]);
+  const { env } = makeRunnerHome(t, "runner-block-loop", [{ stdout: doneStream(), runState: recordedDone(), exitCode: 0 }]);
   const id = enqueue(env);
 
   const cycle = await runCycle({ env, deps: { worktreeImpl: fakeJobWorktree(), gitImpl: fakeGit({ status: " M file.mjs" }) } });
@@ -487,7 +476,7 @@ test("a job gated by the preflight is never claimed twice in the same cycle, and
 });
 
 test("an unknown project blocks the job with the code that names it", async (t) => {
-  const { env } = makeRunnerHome(t, "runner-block-project", [{ stdout: doneStream(), exitCode: 0 }]);
+  const { env } = makeRunnerHome(t, "runner-block-project", [{ stdout: doneStream(), runState: recordedDone(), exitCode: 0 }]);
   const id = enqueue(env);
   dropCheckout(env, "alpha");
 
@@ -499,7 +488,7 @@ test("an unknown project blocks the job with the code that names it", async (t) 
 
 test("the slug and the session id are stored while the run is still going, not at the end", async (t) => {
   const { env } = makeRunnerHome(t, "runner-facts", [
-    { stdout: toNdjson([systemInitEvent(), slugEvent()]), holdMs: 2500, tail: toNdjson([resultEvent({ text: `Pull request: ${PR_URL}` })]), exitCode: 0 },
+    { stdout: toNdjson([systemInitEvent(), slugEvent()]), holdMs: 2500, tail: toNdjson([resultEvent({ text: `Pull request: ${PR_URL}` })]), runState: recordedDone(), exitCode: 0 },
   ]);
   const id = enqueue(env);
 
@@ -516,7 +505,7 @@ test("the slug and the session id are stored while the run is still going, not a
 });
 
 test("the branch of the run comes from the state file the pipeline wrote", async (t) => {
-  const { env } = makeRunnerHome(t, "runner-branch", [{ stdout: doneStream(), exitCode: 0 }]);
+  const { env } = makeRunnerHome(t, "runner-branch", [{ stdout: doneStream(), runState: recordedDone(), exitCode: 0 }]);
   const id = enqueue(env);
   mkdirSync(runDir(ensureProject(env, "alpha"), SLUG, env), { recursive: true });
   writeFileSync(join(runDir(ensureProject(env, "alpha"), SLUG, env), "state.json"), JSON.stringify({ schemaVersion: 1, slug: SLUG, branch: "fix/the-worker", phases: [] }));
@@ -642,7 +631,7 @@ test("a shutdown signal stops the claiming and gives the running job back to the
 test("one cycle runs two jobs of DIFFERENT projects strictly one after the other, whatever the ceiling", async (t) => {
   for (const maxConcurrent of [null, 3]) {
     const name = `runner-one-job-${maxConcurrent ?? "default"}`;
-    const { env } = makeRunnerHome(t, name, [{ stdout: doneStream(), holdMs: 600, exitCode: 0 }], {
+    const { env } = makeRunnerHome(t, name, [{ stdout: doneStream({ slug: null }), runState: recordedDone(), holdMs: 600, exitCode: 0 }], {
       projects: ["alpha", "beta"],
     });
     if (maxConcurrent !== null) saveConfig({ ...loadConfig(env, { warn: () => {} }), queue: { maxConcurrent } }, env);
@@ -659,7 +648,7 @@ test("one cycle runs two jobs of DIFFERENT projects strictly one after the other
 });
 
 test("one cycle runs maintenance exactly once, and `--dry` never runs it", async (t) => {
-  const { env } = makeRunnerHome(t, "runner-maintenance", [{ stdout: doneStream(), exitCode: 0 }], {
+  const { env } = makeRunnerHome(t, "runner-maintenance", [{ stdout: doneStream({ slug: null }), runState: recordedDone(), exitCode: 0 }], {
     projects: ["alpha", "beta"],
   });
   enqueue(env, { prompt: "fix the worker" });
@@ -677,7 +666,7 @@ test("one cycle runs maintenance exactly once, and `--dry` never runs it", async
 });
 
 test("with a ceiling of one the same cycle runs the two jobs strictly one after the other", async (t) => {
-  const { env } = makeRunnerHome(t, "runner-cap", [{ stdout: doneStream(), holdMs: 400, exitCode: 0 }], {
+  const { env } = makeRunnerHome(t, "runner-cap", [{ stdout: doneStream({ slug: null }), runState: recordedDone(), holdMs: 400, exitCode: 0 }], {
     projects: ["alpha", "beta"],
   });
   const config = loadConfig(env, { warn: () => {} });
@@ -694,7 +683,7 @@ test("with a ceiling of one the same cycle runs the two jobs strictly one after 
 });
 
 test("--resume is only added when the operator turned it on and the job already has a session", async (t) => {
-  const { env, planPath } = makeRunnerHome(t, "runner-resume", [{ stdout: doneStream(), exitCode: 0 }]);
+  const { env, planPath } = makeRunnerHome(t, "runner-resume", [{ stdout: doneStream(), runState: recordedDone(), exitCode: 0 }]);
   const id = enqueue(env);
   openDb(env).prepare("UPDATE jobs SET session_id = ? WHERE id = ?").run(SESSION_ID, id);
 
@@ -731,7 +720,7 @@ test("an attempt spawned with --resume records no baseline_ctx, since its first 
 });
 
 test("a cycle that has nothing to claim reports why, and a dry cycle never writes", async (t) => {
-  const { env, planPath } = makeRunnerHome(t, "runner-dry", [{ stdout: doneStream(), exitCode: 0 }]);
+  const { env, planPath } = makeRunnerHome(t, "runner-dry", [{ stdout: doneStream(), runState: recordedDone(), exitCode: 0 }]);
   assert.equal((await runCycle({ env })).reason, "empty-queue");
 
   const id = enqueue(env);
@@ -806,7 +795,7 @@ test("the run is opened before the spawn, and the ONE declaration of the pipelin
 });
 
 test("the runtime creates the run directory before the spawn, so the session never runs mkdir itself", async (t) => {
-  const { env, planPath } = makeRunnerHome(t, "runner-run-dir", [{ stdout: doneStream(), exitCode: 0 }]);
+  const { env, planPath } = makeRunnerHome(t, "runner-run-dir", [{ stdout: doneStream(), runState: recordedDone(), exitCode: 0 }]);
   const id = enqueue(env);
   const provisional = runDir(ensureProject(env, "alpha"), SLUG, env);
   const plan = JSON.parse(readFileSync(planPath, "utf8"));
@@ -902,7 +891,7 @@ test("a slug another JOB holds is refused even when its run directory is gone, a
 });
 
 test("the watch loop repeats the cycle and hands each pass to the caller", async (t) => {
-  const { env } = makeRunnerHome(t, "runner-watch", [{ stdout: doneStream(), exitCode: 0 }]);
+  const { env } = makeRunnerHome(t, "runner-watch", [{ stdout: doneStream(), runState: recordedDone(), exitCode: 0 }]);
   const id = enqueue(env);
   const seen = [];
   const slept = [];
@@ -917,7 +906,7 @@ test("the watch loop repeats the cycle and hands each pass to the caller", async
 });
 
 test("the drain runs the job it can claim and stops by itself once the queue is empty, without sleeping", async (t) => {
-  const { env } = makeRunnerHome(t, "runner-drain", [{ stdout: doneStream(), exitCode: 0 }]);
+  const { env } = makeRunnerHome(t, "runner-drain", [{ stdout: doneStream(), runState: recordedDone(), exitCode: 0 }]);
   const id = enqueue(env);
   const seen = [];
   const slept = [];
@@ -929,6 +918,27 @@ test("the drain runs the job it can claim and stops by itself once the queue is 
   assert.ok(passes.length >= 1);
   assert.deepEqual(slept, [], "a drain that found the queue empty still went to sleep");
   assert.equal(DRAIN_INTERVAL_S, 15);
+});
+
+test("a drain whose first pass is raced keeps going and runs the job", async (t) => {
+  const { env } = makeRunnerHome(t, "runner-drain-raced", [{ stdout: doneStream(), runState: recordedDone(), exitCode: 0 }]);
+  const id = enqueue(env);
+  const db = openDb(env);
+  db.exec("CREATE TABLE claim_race (fired INTEGER NOT NULL)");
+  db.exec(`CREATE TRIGGER claim_race_once BEFORE UPDATE OF status ON jobs
+    WHEN NEW.status = 'running' AND OLD.id = ${id} AND (SELECT COUNT(*) FROM claim_race) = 0
+    BEGIN
+      INSERT INTO claim_race (fired) VALUES (1);
+      SELECT RAISE(IGNORE);
+    END`);
+  const seen = [];
+  const slept = [];
+
+  await runDrain({ env, onCycle: (pass) => seen.push(pass.reason), deps: { worktreeImpl: fakeJobWorktree(), gitImpl: fakeGit(), sleepImpl: async (ms) => slept.push(ms) } });
+
+  assert.equal(seen[0], "claim-raced", seen.join(","));
+  assert.deepEqual(slept, [DRAIN_INTERVAL_S * 1000]);
+  assert.equal(getJob(id, env).status, "done");
 });
 
 test("a drain held back by the concurrency cap waits and tries again instead of exiting", async (t) => {
@@ -948,7 +958,7 @@ test("a drain held back by the concurrency cap waits and tries again instead of 
 });
 
 test("a finish the database refused to commit still leaves the witness, is reported, and the reconciliation restores the row from it", async (t) => {
-  const { env } = makeRunnerHome(t, "runner-finish-refused", [{ stdout: doneStream(), exitCode: 0 }]);
+  const { env } = makeRunnerHome(t, "runner-finish-refused", [{ stdout: doneStream(), runState: recordedDone(), exitCode: 0 }]);
   const id = enqueue(env);
   const refused = () => {
     throw new Error("the nightqueue database is still locked by another process after 24 attempts");
@@ -970,7 +980,7 @@ test("a finish the database refused to commit still leaves the witness, is repor
 });
 
 test("a drain over [A blocked, B clean] gates A once, runs B in the same pass and exits without waiting; a retry of A then runs it", async (t) => {
-  const attempts = [1, 2].map(() => ({ stdout: doneStream(), exitCode: 0 }));
+  const attempts = [1, 2].map(() => ({ stdout: doneStream({ slug: null }), runState: recordedDone(), exitCode: 0 }));
   const { env } = makeRunnerHome(t, "runner-drain-blocked", attempts);
   const a = enqueue(env, { prompt: "fix the worker a" });
   const b = enqueue(env, { prompt: "fix the worker b" });
@@ -994,7 +1004,7 @@ test("a drain over [A blocked, B clean] gates A once, runs B in the same pass an
 });
 
 test("`--max` is a budget for the run: the drain stops after n jobs and leaves the rest pending", async (t) => {
-  const attempts = [1, 2, 3].map(() => ({ stdout: doneStream(), exitCode: 0 }));
+  const attempts = [1, 2, 3].map(() => ({ stdout: doneStream({ slug: null }), runState: recordedDone(), exitCode: 0 }));
   const { env } = makeRunnerHome(t, "runner-max-drain", attempts);
   const ids = [1, 2, 3].map((n) => enqueue(env, { prompt: `fix the worker ${n}` }));
   const seen = [];
@@ -1015,7 +1025,7 @@ test("`--max` is a budget for the run: the drain stops after n jobs and leaves t
 });
 
 test("a job the preflight gates spends no --max budget: the same pass still runs n jobs that reach the agent", async (t) => {
-  const attempts = [1, 2, 3].map(() => ({ stdout: doneStream(), exitCode: 0 }));
+  const attempts = [1, 2, 3].map(() => ({ stdout: doneStream({ slug: null }), runState: recordedDone(), exitCode: 0 }));
   const { env } = makeRunnerHome(t, "runner-max-released", attempts);
   const [a, b, c, d] = ["a", "b", "c", "d"].map((name) => enqueue(env, { prompt: `fix the worker ${name}` }));
   const seen = [];
@@ -1038,7 +1048,7 @@ test("a job the preflight gates spends no --max budget: the same pass still runs
 });
 
 test("a watcher with --max exits once its budget is spent", async (t) => {
-  const attempts = [1, 2].map(() => ({ stdout: doneStream(), exitCode: 0 }));
+  const attempts = [1, 2].map(() => ({ stdout: doneStream({ slug: null }), runState: recordedDone(), exitCode: 0 }));
   const { env } = makeRunnerHome(t, "runner-max-watch", attempts);
   enqueue(env, { prompt: "fix the worker" });
   enqueue(env, { prompt: "fix the parser" });

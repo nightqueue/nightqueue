@@ -114,7 +114,7 @@ it (`pr_opened`, `local_commit` or `no_commit`; `user` for a gate, none for a
 `NO-CHANGE-NEEDED` run, else the terminated or failed phase), and inside a job a run
 already recorded in this attempt is not recorded twice; outside a job, or in a job with no
 recorded attempt start, a run whose last record carries the same outcome and phase count is
-not recorded twice. `--json` prints `rows` (objects with `phase`, `step`, `agent`,
+not recorded twice. The telemetry row decides nothing about how the job ends. `--json` prints `rows` (objects with `phase`, `step`, `agent`,
 `launch`, `icon`, `word`, `note`, `durationS`), `happy`, `reason`, `durationS`, `openItems`
 and `recorded` (`recorded`, `already recorded`, `queued` when the database is unavailable,
 or `not recorded: <reason>`). A failed
@@ -529,7 +529,7 @@ nightqueue queue run --watch --from 22:00 --until 04:00   # watch only inside th
 nightqueue queue run --watch --until 04:00                # `--from` defaults to now
 
 nightqueue queue repair [--json]                      # replay the pending writes every run left while the database was unavailable
-nightqueue queue repair 42 [--json]                   # re-classify a gated or failed job from its own log
+nightqueue queue repair 42 [--json]                   # re-classify a gated or failed job from its run's records and process facts
 nightqueue queue repair --from-disk [42] [--json]     # recreate the jobs the table lost, from their runs on disk
 ```
 
@@ -551,8 +551,9 @@ with `…` counted in them. The slug no longer sits in the table; `queue status 
 `queue repair` has three forms. Bare, it replays every `pending-writes.jsonl` a run left while
 the database was unavailable (see [Runtime contract](runtime-contract.md)) and prints one
 `<project_id>/<slug>: applied <n>, filled <n>, superseded <n>, refused <n>` line per run
-directory, or `nothing pending`. With an id it re-classifies a gated or failed job from its own
-log, as described in [Queue](queue.md). With `--from-disk` it recreates every job `doctor --db`
+directory, or `nothing pending`. With an id it re-classifies a gated or failed job from the exit
+its row recorded, the `outcome` and `termination` of its run and the structured events of its log,
+as described in [Queue](queue.md). With `--from-disk` it recreates every job `doctor --db`
 lists under `lost jobs` - or only the one named - from its run on disk: status from the
 `terminal` witness, then the recorded `outcome`, then the last attempt of its log (a run that
 left none is `failed` with `recovered from disk: the run left no outcome`), the notice from the
@@ -572,6 +573,15 @@ job whose pull request gh reads as merged answers ``J-<n> is done and its pull r
 merged: a finished job does not resume; queue a new one``. When gh cannot answer, or
 `NIGHTQUEUE_NO_PR_CHECK=1` is set, the merge is not proven and a `done` job gets the store's
 usual ``cannot be retried from status `done` `` refusal.
+
+A job has no attempt budget. `queue add` no longer takes the option that set one (an unknown
+option is refused and nothing is queued), the `attempts` line of `queue status <id>` is the plain
+count, and `queue retry` widens nothing: it is how a `failed` job goes back, an orphan included,
+since the sweep ends every orphan `failed`. A retry without `--fresh` also consumes what the last
+attempt concluded, a `done` and a termination included, and keeps the pull request URL; a record
+it cannot consume refuses the retry with `retry again in a moment` and nothing written. A run
+directory another job stamped refuses it too, naming that job and `queue retry J-<n> --fresh`,
+which starts it over and deletes that directory (see [Queue](queue.md)).
 
 A session that could not reach the nightqueue MCP server - its `init` lists `nightqueue` as
 `failed`, or its first nightqueue tool call fails (`is_error`) with nothing but

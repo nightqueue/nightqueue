@@ -29,7 +29,7 @@ function jobsDomain(env, db) {
     gatePreflightJob: async (id, spec) => jobs.gatePreflightJob(id, spec, env),
     parkJob: async (id, spec) => jobs.parkJob(id, spec, env),
     renewLease: async (id, spec) => jobs.renewLease(id, spec, env),
-    countAttempt: async (id, spec) => jobs.countAttempt(id, spec, env),
+    noteRespawn: async (id, spec) => jobs.noteRespawn(id, spec, env),
     sweepOrphans: async (options) => jobs.sweepOrphans(env, options),
     persistRunFacts: async (id, facts) => jobs.persistRunFacts(id, facts, env),
     bindRunSlug: async (id, spec) => jobs.bindRunSlug(id, spec, env),
@@ -42,6 +42,7 @@ function jobsDomain(env, db) {
     cancelRunningJob: async (id, spec) => jobs.cancelRunningJob(id, spec, env),
     listCloseCandidates: async () => jobs.listCloseCandidates(env, db()),
     jobsWithPrNumber: async (number) => jobs.jobsWithPrNumber(number, env, db()),
+    retryRefusalOf: async (id, options) => jobs.retryRefusalOf(id, options, env),
     retryJob: async (id, options) => jobs.retryJob(id, options, env),
     getJob: async (id) => jobs.getJob(id, env, db()),
     jobSpawnRefs: async (id) => jobs.jobSpawnRefs(id, env, db()),
@@ -59,7 +60,7 @@ function jobsDomain(env, db) {
     existingJobIds: async (ids) => jobs.existingJobIds(ids, env, db()),
     recoverJob: async (spec) => jobs.recoverJob(spec, env),
     correctJobPrAttribution: async (id, spec) => jobs.correctJobPrAttribution(id, spec, env),
-    hasClaimablePending: async () => jobs.hasClaimablePending(env),
+    hasClaimablePending: async (spec) => jobs.hasClaimablePending(spec, env),
     peekNextJob: async () => jobs.peekNextJob(env),
     listWithSlug: async () => jobs.listJobsWithSlug(env, db()),
     listOpenJobs: async () => jobs.listOpenJobs(env, db()),
@@ -89,7 +90,6 @@ function runsDomain(env) {
     logPipelineRunOnce: async (run, options) => runs.logPipelineRunOnce(run, options, env),
     logPipelineRunUnlessSame: async (run) => runs.logPipelineRunUnlessSame(run, env),
     updateRunTelemetry: async (telemetry) => runs.updateRunTelemetry(telemetry, env),
-    latestRunOutcome: async (spec) => runs.latestRunOutcome(spec, env),
     runTimeline: async (spec) => runs.runTimeline(spec, env),
   };
 }

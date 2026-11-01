@@ -6,7 +6,7 @@ import { test } from "node:test";
 import { isId } from "../../src/config/ids.mjs";
 import { configPath, dbPath, homeDir, preV18BackupPath, preVersionBackupPath, runDir, runsIdMarkerPath } from "../../src/config/paths.mjs";
 import { closeDb, DB_USER_VERSION, openDb, openDbReadOnly, schemaVersionOn } from "../../src/memory/db.mjs";
-import { addJob, claimJobById, getJob, sweepOrphans } from "../../src/memory/jobs.mjs";
+import { addJob, claimJobById, getJob, retryJob, sweepOrphans } from "../../src/memory/jobs.mjs";
 import { saveLesson } from "../../src/memory/lessons.mjs";
 import { recentMemories } from "../../src/memory/memory.mjs";
 import { finishV18, migrateToV18 } from "../../src/memory/migration/v18.mjs";
@@ -103,7 +103,7 @@ test("a runner holding a live lease refuses the migration with one line and noth
   };
   const { env, fixture } = v17Home(t, "v18-live-lease", { seed: running("+1 hour") });
   assert.throws(() => migrateTestHome(env), (err) => LEASE_REFUSAL.test(err.message) && err.message.split("\n").length === 1);
-  assert.throws(() => openDb(env), (err) => err.code === "SCHEMA_OUTDATED" && /database at v17, this nightqueue expects v26: run `nightqueue update`/.test(err.message));
+  assert.throws(() => openDb(env), (err) => err.code === "SCHEMA_OUTDATED" && /database at v17, this nightqueue expects v27: run `nightqueue update`/.test(err.message));
   assert.equal(diskVersion(env), 17);
   assert.equal(existsSync(preV18BackupPath(env)), false, "a refused migration published a copy");
   assert.ok(readFileSync(dbPath(env)).equals(fixture), "a refused migration wrote to the database");
@@ -312,7 +312,7 @@ test("the runs move merges a name directory into an id directory entry by entry,
   assert.equal(readFileSync(join(byName, "taken", "state.json"), "utf8"), "by name\n");
 });
 
-test("a job whose runner died before the upgrade is reclaimed after the migration and resumes from runs/<project id>/<slug>", (t) => {
+test("a job whose runner died before the upgrade fails after the migration and a retry resumes it from runs/<project id>/<slug>", (t) => {
   const died = (db) => {
     db.prepare(
       "INSERT INTO jobs (project, prompt, status, slug, worker, lease_until, started_at, attempts, max_attempts) VALUES ('api', 'fix the worker', 'running', 'run-a', 'host:1', '2000-01-01 00:00:00', '2000-01-01 00:00:00', 1, 3)",
@@ -326,8 +326,10 @@ test("a job whose runner died before the upgrade is reclaimed after the migratio
   const apiId = registry.projectByName(db, "api").id;
   assert.equal(getJob(1, env).status, "running", "the migration changed the job of the dead runner");
   sweepOrphans(env);
+  assert.equal(getJob(1, env).status, "failed", "the sweep did not fail the job of the dead runner");
+  retryJob(1, {}, env);
   const job = claimJobById(1, { worker: "host:2", cap: 4 }, env);
-  assert.equal(job?.status, "running", "the job of the dead runner was not reclaimed");
+  assert.equal(job?.status, "running", "the retried job of the dead runner was not claimed");
   assert.equal(job.project_id, apiId);
 
   const recorded = ownRunState({ projectId: job.project_id, slug: job.slug, jobId: job.id, env });
@@ -377,6 +379,7 @@ function rowsOf(db, table) {
         reason: _reason,
         start_branch: _startBranch,
         start_worktree: _startWorktree,
+        max_attempts: _maxAttempts,
         ...row
       }) => ({ ...row }),
     );

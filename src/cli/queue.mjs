@@ -63,7 +63,7 @@ import { originsLabel } from "../integrations/origin.mjs";
 import { TIER_REMOVED_LINE } from "../mcp/tool-contract.mjs";
 
 export const USAGE = {
-  add: "nightqueue queue add [project] <prompt...> [--project <name>] [--run] [--foreground] [--priority <n>] [--max-attempts <n>] [--timeout <s>] [--yes] [--key <KEY>] [--title <text>] [--origin <kind>:<ref>]... [--branch <name> | --worktree <path>]",
+  add: "nightqueue queue add [project] <prompt...> [--project <name>] [--run] [--foreground] [--priority <n>] [--timeout <s>] [--yes] [--key <KEY>] [--title <text>] [--origin <kind>:<ref>]... [--branch <name> | --worktree <path>]",
   status: "nightqueue queue status [J-<id>|<id>|<PR URL>] [--limit <n>] [--json] [--follow [seconds]] [--until-idle] [--blocked]",
   run: "nightqueue queue run [--job <id> | --watch [seconds] [--from HH:MM] --until HH:MM] [--max <jobs>] [--stop] [--foreground] [--dry] [--json]",
   cancel: "nightqueue queue cancel <id> [--reason <text>] [--json]",
@@ -306,11 +306,10 @@ function originOption(values) {
   return (Array.isArray(values) ? values : [values]).map(originValue);
 }
 
-// The knobs of a `queue add` that reach the job: priority, attempts, timeout, the title and the origin.
+// The knobs of a `queue add` that reach the job: priority, timeout, the title and the origin.
 function addLimits(values) {
   return {
     priority: requireInt("--priority", values.priority),
-    maxAttempts: requireInt("--max-attempts", values["max-attempts"]),
     timeoutS: requireInt("--timeout", values.timeout),
     title: values.title,
     origin: originOption(values.origin),
@@ -359,7 +358,6 @@ const RUN_DIR_RETIRED =
 
 const ADD_OPTIONS = {
   priority: { type: "string" },
-  "max-attempts": { type: "string" },
   timeout: { type: "string" },
   run: { type: "boolean" },
   foreground: { type: "boolean" },
@@ -633,10 +631,9 @@ const DETAIL_BLOCK_KEYS = new Set(["notice_md", "run_notice", "close", "live", "
 
 const DURATION_KEYS = new Set(["active_s", "wall_s"]);
 
-// The text one detail field prints: the origins as `<kind> <ref>, ...`, the retry budget counter against its ceiling, a duration readable, any other value as it is.
-function detailValue(key, value, job) {
+// The text one detail field prints: the origins as `<kind> <ref>, ...`, a duration readable, any other value as it is.
+function detailValue(key, value) {
   if (key === "origin") return originsLabel(value);
-  if (key === "attempts") return `${value} / ${job.max_attempts ?? "?"} (budget counter: inner retries count)`;
   if (DURATION_KEYS.has(key) && Number.isFinite(value)) return `${formatDuration(value * 1000)} (${value} s)`;
   return value;
 }
@@ -650,7 +647,7 @@ function isEmptyOrigin(key, value) {
 function formatDetail(job) {
   const fields = Object.entries(job)
     .filter(([key, value]) => !DETAIL_BLOCK_KEYS.has(key) && value !== null && value !== undefined && !isEmptyOrigin(key, value))
-    .map(([key, value]) => `${key.padEnd(15)} ${detailValue(key, value, job)}`);
+    .map(([key, value]) => `${key.padEnd(15)} ${detailValue(key, value)}`);
   const at = fields.findIndex((line) => line.startsWith("status".padEnd(16)));
   const suggestion = closeSuggestion([job]);
   const extra = [
@@ -1383,7 +1380,7 @@ async function runRetry(argv, ctx) {
 // What a re-classification answers the operator: the outcome it corrected, or that there was nothing to correct.
 function repairLine(outcome) {
   if (!outcome.changed) return `${jobRef(outcome.id)} is still \`${outcome.from}\`; there is nothing to correct`;
-  if (outcome.noticeOnly) return `${jobRef(outcome.id)} is still \`${outcome.from}\`; its notice was re-read from the log. Read it with: nightqueue queue status ${jobRef(outcome.id)}`;
+  if (outcome.noticeOnly) return `${jobRef(outcome.id)} is still \`${outcome.from}\`; its notice was re-read from the run's record. Read it with: nightqueue queue status ${jobRef(outcome.id)}`;
   return `${jobRef(outcome.id)} re-classified from \`${outcome.from}\` to \`${outcome.to}\`${outcome.prUrl ? ` (${outcome.prUrl})` : ""}`;
 }
 

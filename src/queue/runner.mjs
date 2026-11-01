@@ -11,7 +11,7 @@ import { NO_CHANGE_RESOLUTION } from "../memory/jobs.mjs";
 import { sqliteToIso } from "../memory/schema.mjs";
 import { openStore, openStoreReadOnly } from "../store/open.mjs";
 import { acquire, bashTimeoutS, concurrencyCap, gate, inheritUserEnvironment, isPaused, leaseHeartbeatMs, release, renew, resumeSessionEnabled, stillOwned } from "./claim.mjs";
-import { backoffMs, classifyJobResult, isTerminalRuntimeKill, isTransientFailure, nightqueueMcpUnreachable } from "./classify.mjs";
+import { backoffMs, classifyJobResult, isRecordSettled, isTerminalRuntimeKill, nightqueueMcpUnreachable, transientFailureEvent, TRANSIENT_RESPAWNS } from "./classify.mjs";
 import { provenEditedPrUrls } from "./edit-proof.mjs";
 import { BLOCK_CODES, preflight } from "./preflight.mjs";
 import { createStoreOutage, OUTAGE_STOPPED, waitNextPass } from "./store-outage.mjs";
@@ -33,7 +33,7 @@ import { holdRunnerAwake } from "./keep-awake.mjs";
 import { killProcess, ownRunnerRecord } from "./registry.mjs";
 import { runMaintenance } from "./maintenance.mjs";
 import { appendPendingWrite, PENDING_KEYS, replayPendingWrites } from "./pending-writes.mjs";
-import { clearRunOutcome, decideResume, isRunPath, isSafeSegment, isStateObject, ownRunState, PRE_RENUMBERING_REFUSAL, preRenumberingArtifact, readRunState, resumeHandoff, writeRunTerminal } from "./resume.mjs";
+import { claimRunState, claimStamp, decideResume, foreignStampOf, isRunPath, isSafeSegment, isStateObject, PRE_RENUMBERING_REFUSAL, preRenumberingArtifact, readRunState, resumeHandoff, writeRunTerminal } from "./resume.mjs";
 import { adoptRunSlug, followRunSlug, slugRefusal } from "./run-slug.mjs";
 import { JOB_BLOCK_ALREADY_RECORDED, recordJobBlock, recordPrUrl, recordResume, recordRunFields, recordWip } from "./run-state.mjs";
 import { DISABLED_BACKGROUND_ESCAPE_LINE } from "./run-notice.mjs";
@@ -348,16 +348,42 @@ async function noteFiveHour(facts, info, env) {
   }
 }
 
-// Records the rate limit the stream reported and arms a pause when the event calls for one; a further pause always replaces a nearer one.
-async function captureRateLimit(job, facts, line, { env }) {
+// Queues one write to this runner's registration behind the ones this attempt already asked for, so they land in the order of the stream; the queue itself never rejects.
+function queueRegistryWrite(facts, write) {
+  facts.registryWrites = facts.registryWrites.then(write).catch(() => {});
+}
+
+// Removes from the registration the pause this attempt armed, comparing inside the lock so a newer pause of a concurrent job survives; a write that fails is said in the job log.
+async function clearHeldPause(job, pause, env) {
+  try {
+    await clearOwnPause(env, pause);
+  } catch (err) {
+    appendJobLog(job.id, `the rate limit pause could not be cleared, so a later claim may still wait until ${pause.pausedUntil}: ${err?.message ?? String(err)}`, env);
+  }
+}
+
+// Ends the pause this attempt holds, because the provider said the limit is over; an attempt that armed none has nothing to end.
+function releaseHeldPause(job, facts, env) {
+  const held = facts.pause;
+  if (!held) return;
+  facts.pause = null;
+  queueRegistryWrite(facts, () => clearHeldPause(job, held, env));
+}
+
+// Records the rate limit the stream reported, deciding in line order and writing behind: `allowed` ends the held pause, and an event that calls for a pause arms one, a further pause always replacing a nearer one.
+function captureRateLimit(job, facts, line, { env }) {
   const info = extractRateLimitFromEventLine(line);
   if (!info) return;
   facts.rateLimit = info;
-  await noteFiveHour(facts, info, env);
+  queueRegistryWrite(facts, () => noteFiveHour(facts, info, env));
+  if (info.status === "allowed") {
+    releaseHeldPause(job, facts, env);
+    return;
+  }
   const pause = pauseFromEvent(info);
   if (!pause || (facts.pause && facts.pause.pausedUntil >= pause.pausedUntil)) return;
   facts.pause = pause;
-  await armPause(job, pause, env);
+  queueRegistryWrite(facts, () => armPause(job, pause, env));
 }
 
 // Records the first session id of the job (never overwritten) and, whenever the stream reveals a session id different
@@ -369,7 +395,7 @@ async function captureSession(job, facts, line, attempt, ctx) {
   const isFirst = !facts.sessionId;
   facts.resumableSessionId ??= sessionId;
   facts.sessionInFlight = sessionId;
-  const session = { worker: job.worker, attempts: attempt, sessionId: isFirst ? sessionId : null, lastSessionId: sessionId, lastSessionAttempt: attempt };
+  const session = { worker: job.worker, attempts: attempt, sessionId: isFirst ? sessionId : null, lastSessionId: sessionId, previousSessionId: facts.lastSessionId, lastSessionAttempt: attempt };
   try {
     if (!(await sessionRecorded(job, facts, session, ctx))) return;
     if (isFirst) facts.sessionId = sessionId;
@@ -387,17 +413,17 @@ async function sessionRecorded(job, facts, session, { store, env }) {
     return true;
   } catch (err) {
     if (!isStoreOutage(err)) throw err;
-    const record = { kind: "session", key: PENDING_KEYS.session(job.id, session.attempts), payload: session };
+    const record = { kind: "session", key: PENDING_KEYS.session(job.id, session.attempts, session.lastSessionId), payload: session };
     return queueRecord(job, runSlugNow(job, facts, env), record, env) !== null;
   }
 }
 
 // Records the run facts that appear in the stream, writing one fact per line of the stream at most.
 async function captureFacts(job, facts, line, attempt, ctx) {
+  captureRateLimit(job, facts, line, ctx);
   await syncRunSlug(job, facts, ctx);
   await captureSlug(job, facts, line, ctx);
   await captureSlugOverride(job, facts, line, ctx);
-  await captureRateLimit(job, facts, line, ctx);
   await captureSession(job, facts, line, attempt, ctx);
 }
 
@@ -415,18 +441,25 @@ function noteOwnershipLost(job, env) {
   }
 }
 
-// Tells whether a failed attempt deserves another one: only a transient failure, never a timeout nor a kill that ended the run.
-// A kill that did not end the run (the run's own record settled it) never blocks a retry any differently than a run without one.
-function isRetryable(job, attempt, result, outcome, state) {
-  if (outcome.status !== "failed" || result.timedOut || result.idleTimedOut) return false;
-  if (isTerminalRuntimeKill(result.log, state)) return false;
-  return isTransientFailure(result.log) && attempt < job.max_attempts;
+// The provider failure that earns a failed spawn another one inside the same claim, or null: never past the re-spawn limit, after a timeout, after a kill that ended the run or over a run its record settled.
+function respawnEvent({ result, outcome, state, respawns }) {
+  if (respawns >= TRANSIENT_RESPAWNS || outcome.status !== "failed" || result.timedOut || result.idleTimedOut) return null;
+  if (isTerminalRuntimeKill(result.log, state) || isRecordSettled(state, outcome.prUrl)) return null;
+  return transientFailureEvent(result.log);
 }
 
-// The instant a job this rate limit ended must not be claimed again before, or null when the attempt did not end on a limit.
-// It is decided from the structured events of the stream alone, and BEFORE the generic transient retry, which would spend an attempt on a limit that is still on.
-function rateLimitExit(result, facts) {
+// Says the re-spawn in the job log, backs off and counts it on the claim's row without spending an attempt; the answer is the store's, whether the job is still this runner's.
+async function prepareRespawn(job, { respawn, attempt, event }, ctx) {
+  appendJobLog(job.id, `=== respawn ${respawn}/${TRANSIENT_RESPAWNS} of attempt ${attempt} (${event}) @ ${new Date().toISOString()} ===`, ctx.env);
+  await ctx.deps.sleepImpl(backoffMs(respawn));
+  return untilStoreAnswers(ctx, () => ctx.store.jobs.noteRespawn(job.id, { worker: job.worker }));
+}
+
+// The instant a job this rate limit ended must not be claimed again before, or null when the attempt did not end on a limit: only a LAST event that is `rejected` parks.
+// It is decided from the structured events of the stream alone, and BEFORE the transient re-spawn, which would start a session against a limit that is still on.
+export function rateLimitExit(result, facts) {
   if (result.exitCode === 0 || result.timedOut || result.idleTimedOut || result.stopped || result.spawnError) return null;
+  if (facts.rateLimit?.status !== "rejected") return null;
   const pause = facts.pause ?? pauseFromEvent(facts.rateLimit);
   return pause?.resetsAt ?? null;
 }
@@ -467,17 +500,7 @@ function attemptTotals(tally) {
   };
 }
 
-// The outcome this attempt's own pipeline run recorded, or null when it recorded none or it cannot be read.
-async function attemptRunOutcome(job, slug, { since, store }) {
-  if (!isSafeSegment(slug)) return null;
-  try {
-    return (await store.runs.latestRunOutcome({ projectId: job.project_id, slug, since })) ?? null;
-  } catch {
-    return null;
-  }
-}
-
-// Runs the attempts of a job, re-arming the lease before each one and backing off between retries.
+// Runs the one attempt of a claim, re-arming the lease before each spawn and backing off between the re-spawns of a transient failure.
 async function runAttempts(job, ctx) {
   const { env, deps } = ctx;
   const facts = {
@@ -492,21 +515,21 @@ async function runAttempts(job, ctx) {
     rateLimit: null,
     fiveHour: null,
     pause: null,
+    registryWrites: Promise.resolve(),
   };
   const pauseSignalImpl = deps.pauseSignalImpl ?? (() => ownPauseUntilMs(env) ?? pauseUntilMs(facts.pause));
   const resumeForced = resumeSessionEnabled(env) || wasRateLimitParked(job);
   const ownership = { lost: false };
   const tally = { usages: [], hostCommands: [], orchestrator: [], baselineCtx: null };
-  let attempt = job.attempts;
+  const attempt = job.attempts;
+  let respawns = 0;
   while (true) {
     const renewed = await untilStoreAnswers(ctx, () => renew(job, env));
     if (renewed === OUTAGE_STOPPED) return { lost: false, outageStopped: true, facts, attempt, ...attemptTotals(tally), outcome: null, result: null };
     if (!renewed) return { lost: true, facts, attempt, ...attemptTotals(tally), outcome: null, result: null };
     runSlugNow(job, facts, env);
-    if (isSafeSegment(facts.slug)) clearRunOutcome({ projectId: job.project_id, slug: facts.slug, env });
     const resumeSessionId = resumeForced ? facts.resumableSessionId : null;
     const baselines = resumeSessionId ? sessionBaselines(readJobLog(job.id, env)) : null;
-    const attemptStartedAt = new Date().toISOString();
     const result = await spawnClaude({
       prompt: ctx.promptFor(facts.slug),
       cwd: ctx.cwd,
@@ -516,6 +539,8 @@ async function runAttempts(job, ctx) {
       env,
       attempt,
       jobId: job.id,
+      worker: job.worker,
+      ordinal: job.claim_attempt,
       spawnImpl: deps.spawnImpl,
       onLine: (line) => captureLine(job, facts, line, attempt, ctx),
       stopSignalImpl: () => shouldStop(job, ctx, ownership),
@@ -527,6 +552,7 @@ async function runAttempts(job, ctx) {
       bashTimeoutS: deps.bashTimeoutS,
       inheritUserEnvironment: deps.inheritUserEnvironment,
     });
+    await facts.registryWrites;
     await syncRunSlug(job, facts, ctx, { askRow: true });
     tallyAttempt(tally, result.log, ctx, { resumed: Boolean(resumeSessionId), baselines });
     reportUnpricedResume(job.id, tally.usages.at(-1), env);
@@ -535,19 +561,16 @@ async function runAttempts(job, ctx) {
     if (nightqueueMcpUnreachable(result.log)) return { lost: false, blocked: mcpUnreachableBlock(), facts, attempt, ...totals, outcome: null, result };
     const notBefore = rateLimitExit(result, facts);
     if (notBefore) return { lost: false, parked: { notBefore }, facts, attempt, ...totals, outcome: null, result };
-    const planPath = isRunPath(job.project_id, facts.slug) ? join(runDir(job.project_id, facts.slug, env), "03-plan.md") : null;
-    const state = readRunState({ projectId: job.project_id, slug: facts.slug, env });
-    const runOutcome = await attemptRunOutcome(job, facts.slug, { since: attemptStartedAt, store: ctx.store });
+    const state = claimRunState({ projectId: job.project_id, slug: facts.slug, jobId: job.id, attempt, ordinal: job.claim_attempt, env });
     const provenEdits = await provenEditedPrUrls(result.log, { state, detailImpl: deps.prDetailImpl });
-    const outcome = classifyJobResult({ ...result, state, planPath, runOutcome, provenEdits });
-    if (!isRetryable(job, attempt, result, outcome, state)) {
-      return { lost: false, facts, attempt, ...totals, outcome, result };
-    }
-    await deps.sleepImpl(backoffMs(attempt));
-    const counted = await untilStoreAnswers(ctx, () => ctx.store.jobs.countAttempt(job.id, { worker: job.worker }));
-    if (counted === OUTAGE_STOPPED) return { lost: false, outageStopped: true, facts, attempt, ...totals, outcome, result };
-    if (!counted) return { lost: true, facts, attempt, ...totals, outcome, result };
-    attempt += 1;
+    const outcome = classifyJobResult({ ...result, state, provenEdits });
+    const event = respawnEvent({ result, outcome, state, respawns });
+    if (!event) return { lost: false, facts, attempt, ...totals, outcome, result };
+    respawns += 1;
+    const noted = await prepareRespawn(job, { respawn: respawns, attempt, event }, ctx);
+    if (noted === OUTAGE_STOPPED) return { lost: false, outageStopped: true, facts, attempt, ...totals, outcome, result };
+    if (!noted) return { lost: true, facts, attempt, ...totals, outcome, result };
+    facts.rateLimit = null;
   }
 }
 
@@ -587,7 +610,7 @@ async function witnessTarget(job, runSlug, store) {
 // Writes the witness of the outcome next to the run: the durable record the database is verified against.
 // The witness comes from the outcome the runner holds in memory, never from the row: when the finish itself
 // failed to commit, the row still says `running`, and the witness is exactly what the reconciliation needs then.
-async function writeWitness(job, { outcome, runSlug }, { store, env }) {
+async function writeWitness(job, { outcome, runSlug, session }, { store, env }) {
   try {
     const { row, slug } = await witnessTarget(job, runSlug, store);
     if (!slug) return;
@@ -606,6 +629,7 @@ async function writeWitness(job, { outcome, runSlug }, { store, env }) {
         writtenBy: packageRoot(),
         pid: process.pid,
         jobId: job.id,
+        claim: claimStamp({ attempt: job.attempts, session, ordinal: job.claim_attempt }),
       },
       env,
     });
@@ -676,8 +700,13 @@ function withDisabledBackgroundEscape(noticeMd, log) {
 function outcomeWithWorktree({ job, run, worktree, state, wipOnBranch, env }) {
   if (worktree && !worktree.removable) appendJobLog(job.id, keptWorktreeLine(worktree), env);
   const runNotice = runNoticeWithWip({ job, run, state, wipOnBranch, env });
-  const noticeMd = finishNotice({ runNotice, rowNotice: job.notice_md, worktree });
+  const noticeMd = finishNotice({ runNotice, rowNotice: rowNoticeToKeep(job, run), worktree });
   return { ...run.outcome, noticeMd: withDisabledBackgroundEscape(noticeMd, run.result.log) };
+}
+
+// The notice the row already holds, when the run may fall back on it: a delivered job never carries what an earlier attempt said.
+function rowNoticeToKeep(job, run) {
+  return run.outcome.status === "done" ? null : job.notice_md;
 }
 
 // The run's notice with the runtime's wip paragraph: the terminated form for a self-ended run, the kept form for any other ending whose branch sits on a wip.
@@ -690,7 +719,7 @@ function runNoticeWithWip({ job, run, state, wipOnBranch, env }) {
 // The run's notice (or the row's when the run wrote none) with one wip paragraph appended, the paragraph also written to the job log.
 function noticeWithParagraph({ job, run, line, env }) {
   const hasRunNotice = typeof run.outcome.noticeMd === "string" && run.outcome.noticeMd.trim() !== "";
-  const base = withoutKeptLine(hasRunNotice ? run.outcome.noticeMd : job.notice_md);
+  const base = withoutKeptLine(hasRunNotice ? run.outcome.noticeMd : rowNoticeToKeep(job, run));
   appendJobLog(job.id, line, env);
   return withWipLine(base, line);
 }
@@ -792,7 +821,7 @@ async function finalize(job, run, ctx) {
   // The witness is written when the row took the finish AND when the database refused the commit - the second case is exactly
   // what the reconciliation repairs from. A finish that returned false means the row is no longer ours (another worker owns
   // it): no witness then, or the reconciliation would close a job someone else is still running.
-  if (finish.written || finish.error) await writeWitness(job, { outcome, runSlug: run.facts.slug }, ctx);
+  if (finish.written || finish.error) await writeWitness(job, { outcome, runSlug: run.facts.slug, session: run.facts.lastSessionId ?? null }, ctx);
   if (finish.written) await store.checkpoint();
   if (finish.written) await replayOwnPendingWrites(job, run.facts.slug, ctx);
   if (finish.written && run.outcome.status === "done" && worktree?.removable) await dropRunWorktree(job, worktree, ctx);
@@ -1069,6 +1098,12 @@ function preRenumberingBlock(file) {
   return { ok: false, code: BLOCK_CODES.PRE_RENUMBERING_RUN, message: `${PRE_RENUMBERING_REFUSAL} (${file} is in the run directory)`, fresh: true };
 }
 
+// The block of a job whose run directory another job stamped: no attempt starts reading a state that does not speak for it, and only a fresh retry moves it.
+function foreignRunBlock(job, stampedBy) {
+  const message = `the run directory \`${job.slug}\` is stamped by ${jobRef(stampedBy)}; \`nightqueue queue retry ${jobRef(job.id)} --fresh\` starts it over and deletes that directory`;
+  return { ok: false, code: BLOCK_CODES.FOREIGN_RUN, message, fresh: true };
+}
+
 // Everything before the spawn - preflight, run slug, job block, worktree - each store step waiting out an outage; answers what the spawn needs, or the report that ends the job.
 async function prepareJob(claimed, ctx) {
   const { env, deps } = ctx;
@@ -1080,6 +1115,8 @@ async function prepareJob(claimed, ctx) {
   if (job === OUTAGE_STOPPED) return { report: stoppedInOutage(claimed, env) };
   const stale = preRenumberingArtifact({ projectId: job.project_id, slug: job.slug, env });
   if (stale !== null) return { report: await gateJob(job, preRenumberingBlock(stale), ctx) };
+  const stampedBy = foreignStampOf(readRunState({ projectId: job.project_id, slug: job.slug, env }), job.id);
+  if (stampedBy !== null) return { report: await gateJob(job, foreignRunBlock(job, stampedBy), ctx) };
   ensureRunDir(job, env);
   if ((await recordJob(job, ctx)) === OUTAGE_STOPPED) return { report: stoppedInOutage(job, env) };
   if ((await enrichOrigin(job, ctx)) === OUTAGE_STOPPED) return { report: stoppedInOutage(job, env) };
@@ -1141,7 +1178,7 @@ async function runHeldJob(claimed, ctx) {
   const ready = await prepareJob(claimed, ctx);
   if (ready.report) return ready.report;
   const { job, check, prepared, openPrs } = ready;
-  const state = ownRunState({ projectId: job.project_id, slug: job.slug, jobId: job.id, env });
+  const state = claimRunState({ projectId: job.project_id, slug: job.slug, jobId: job.id, attempt: job.attempts, ordinal: job.claim_attempt, env });
   const resume = decideResume({ state });
   const handoff = resumeHandoff({ job, resume, state, env });
   if (handoff) persistResume(job, resume.resumeCount, env);
@@ -1373,20 +1410,13 @@ async function claimLoop({ jobId, max, window, cap, ctx }) {
         break;
       }
     }
-    const claimed = await untilStoreAnswers(ctx, () => acquire({ jobId, cap, env }));
+    const claimed = await untilStoreAnswers(ctx, () => acquire({ jobId, cap, excludeIds: [...seen], env }));
     if (claimed === OUTAGE_STOPPED) {
       reason = "stopped";
       break;
     }
     if (!claimed.job) {
       reason = claimed.reason;
-      break;
-    }
-    if (seen.has(claimed.job.id)) {
-      await release(claimed.job, null, env);
-      await Promise.allSettled([...pool]);
-      // Only a job that ran and came back pending is claimed twice: a preflight block gates the job, which no claim takes.
-      reason = "already-tried";
       break;
     }
     seen.add(claimed.job.id);
@@ -1452,8 +1482,8 @@ export const DRAIN_INTERVAL_S = 15;
 
 // Reasons of a cycle after which a drain has nothing left to do: the queue is empty, paused, the cycle was told to stop, the --max budget is spent, or the tree it runs from is gone.
 const DRAIN_DONE_REASONS = new Set(["empty-queue", "paused", "already-tried", "runtime-gone", "max-reached"]);
-// Reasons the drain keeps waiting on: the pending job is held back by something another runner or the provider will clear.
-const DRAIN_WAIT_REASONS = new Set(["cap-reached", "rate-limited"]);
+// Reasons the drain keeps waiting on: the pending job is held back by something another runner or the provider will clear, or another runner raced it away between the claim and the refusal read.
+const DRAIN_WAIT_REASONS = new Set(["cap-reached", "rate-limited", "claim-raced"]);
 
 // Runs cycles until the queue has nothing pending or the --max budget is spent (a job the preflight gates spends none), waiting between passes while the pending jobs are held back by the concurrency cap or a rate limit - what "run the queue" means to an operator.
 export async function runDrain({ max = null, intervalS = DRAIN_INTERVAL_S, env = process.env, deps = {}, cycles = null, onCycle = () => {} } = {}) {

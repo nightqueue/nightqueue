@@ -7,7 +7,7 @@ import { loadConfig, saveConfig } from "../../src/config/store.mjs";
 import { getJob } from "../../src/memory/jobs.mjs";
 import { makeDir, makeHome } from "../../test-support/memory.mjs";
 import { fakeCalls, useFakeClaude } from "../../test-support/queue-fake.mjs";
-import { doneStream } from "../../test-support/streams.mjs";
+import { doneStream, recordedDone } from "../../test-support/streams.mjs";
 
 const CLI = fileURLToPath(new URL("../../bin/nightqueue.mjs", import.meta.url));
 
@@ -28,7 +28,7 @@ function makeGitProject(t, env, name) {
 function makeCliHome(t, name) {
   const env = makeHome(t, name);
   const repo = makeGitProject(t, env, "alpha");
-  const planPath = useFakeClaude(env, makeDir(t, `${name}-plan`), [{ stdout: doneStream(), exitCode: 0 }]);
+  const planPath = useFakeClaude(env, makeDir(t, `${name}-plan`), [{ stdout: doneStream(), runState: recordedDone(), exitCode: 0 }]);
   return { env, repo, planPath };
 }
 

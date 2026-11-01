@@ -99,7 +99,7 @@ the maintainer's demo checkout `~/Dev/nstest-demo` (remote
 pipeline and QA instructions (`plugin/skills/resolve/SKILL.md`, `plugin/agents/verifier.md`,
 `plugin/agents/qa-guardian.md`, `plugin/skills/qa-guardian/SKILL.md`) carry this as a hard
 rule, together with its twin: a nightqueue guard or its environment variables
-(`NIGHTQUEUE_JOB_ID`, `NIGHTQUEUE_JOB_HOME`, `NIGHTQUEUE_JOB_CLAUDE_DIR`) are never unset,
+(`NIGHTQUEUE_JOB_ID`, `NIGHTQUEUE_JOB_HOME`, `NIGHTQUEUE_JOB_CLAUDE_DIR`, `NIGHTQUEUE_JOB_CLAIM`) are never unset,
 stubbed or worked around - a verification that needs to is a gate for the operator.
 `test/plugin-home-isolation.test.mjs` keeps the four copies identical.
 

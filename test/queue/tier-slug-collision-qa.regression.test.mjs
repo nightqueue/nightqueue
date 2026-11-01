@@ -9,7 +9,7 @@ import { reconcileFromWitness } from "../../src/queue/reconcile.mjs";
 import { runCycle } from "../../src/queue/runner.mjs";
 import { ensureProject, makeDir, makeHome, makeProject } from "../../test-support/memory.mjs";
 import { useFakeClaude } from "../../test-support/queue-fake.mjs";
-import { doneStream, PR_URL } from "../../test-support/streams.mjs";
+import { doneStream, PR_URL, recordedDone, slugTypeEvent, toNdjson } from "../../test-support/streams.mjs";
 import { fakeJobWorktree } from "../../test-support/job-worktree.mjs";
 
 // The exact header an older operator's Step 8 stamped onto a job, verbatim; a legacy pending prompt may still carry it.
@@ -49,11 +49,11 @@ function runJobCycle(env, jobId) {
 }
 
 test("a second tiered job left running under a dead worker, after losing the same-name race, never inherits the first job's run, its witness or its pull request", async (t) => {
-  const env = makeRunnerHome(t, "tier-slug-collision-qa", [{ stdout: doneStream({ slug: "shared-run" }), exitCode: 0 }]);
+  const env = makeRunnerHome(t, "tier-slug-collision-qa", [{ stdout: toNdjson([slugTypeEvent("shared-run")]) + doneStream({ slug: "shared-run" }), runState: recordedDone(), exitCode: 0 }]);
   const a = queueTiered(env, "Rename the lease column of the jobs table");
   const b = queueTiered(env, "Drop the retired ship columns after the close migration");
 
-  // A runs for real, to completion, and names its own run "shared-run" mid-run (the QUEUE_SLUG line) - the runtime's own bind, not a manual write.
+  // A runs for real, to completion, and names its own run "shared-run" mid-run (the SLUG line) - the runtime's own bind, not a manual write.
   await runJobCycle(env, a);
   const rowA = getJob(a, env);
   assert.equal(rowA.slug, "shared-run", "setup: job A did not bind the run name it declared");

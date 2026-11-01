@@ -5,6 +5,7 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { queuePausedPath } from "../../src/config/paths.mjs";
 import { loadConfig, saveConfig } from "../../src/config/store.mjs";
+import { openDb } from "../../src/memory/db.mjs";
 import { addJob, claimJobById, countActiveJobs, getJob, releaseJob } from "../../src/memory/jobs.mjs";
 import { acquire, concurrencyCap, inheritUserEnvironment, isPaused, leaseHeartbeatMs, resumeSessionEnabled, workerId } from "../../src/queue/claim.mjs";
 import { openStore } from "../../src/store/open.mjs";
@@ -132,6 +133,16 @@ test("without a ceiling a claim that gets nothing is never explained as cap-reac
   assert.equal((await acquire({ cap: null, env })).job.id, second, "a claim with no ceiling stopped at the active job");
   assert.deepEqual(await acquire({ cap: null, env }), { job: null, reason: "empty-queue" });
   assert.deepEqual(await acquire({ jobId: first, cap: null, env }), { job: null, reason: "not-pending" });
+});
+
+test("without a ceiling or an exclusion a claim that loses its due job is claim-raced, and only an empty queue says empty-queue", async (t) => {
+  const env = makeQueue(t, "claim-no-ceiling-next-raced");
+  assert.deepEqual(await acquire({ cap: null, env }), { job: null, reason: "empty-queue" });
+  const id = enqueue(env);
+  openDb(env).exec(`CREATE TRIGGER claim_race_always BEFORE UPDATE OF status ON jobs WHEN NEW.status = 'running' AND OLD.id = ${id} BEGIN SELECT RAISE(IGNORE); END`);
+
+  assert.deepEqual(await acquire({ cap: null, env }), { job: null, reason: "claim-raced" });
+  assert.equal(getJob(id, env).status, "pending");
 });
 
 test("without a ceiling a job that another runner held and gave back before the reread is explained as claim-raced", async (t) => {

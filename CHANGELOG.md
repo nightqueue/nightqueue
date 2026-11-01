@@ -192,6 +192,47 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **The runner decides a run's ending only from its records and process facts.** Result text,
+  headings, gate-length heuristics, a log-wide regex and `pipeline_runs` rows no longer decide
+  anything. `nightqueue update` is required (schema v27 drops `jobs.max_attempts`, with a
+  `nightqueue.db.pre-v27` copy) and MCP clients must restart (tool contract 11). First match wins:
+
+  | # | Condition | Status | Notice |
+  |---|---|---|---|
+  | 1 | stopped by the operator | `cancelled` | `stopped by the operator` |
+  | 2 | total or idle timeout | `failed` | names the limit, plus what the attempt recorded |
+  | 3 | non-zero exit | `failed` | `the session exited with code N`, plus what the attempt recorded |
+  | 4 | `outcome.status: "done"` and a pull request | `done` | the record's notice |
+  | 5 | `outcome.status: "gate"` with a notice | `gate` | the record's notice |
+  | 6 | `outcome.status: "no_change"` with a notice | `done`, no pull request | the conclusion |
+  | 7 | a `termination` with a reason | `cancelled` | the reason |
+  | 8 | anything else | `failed` | starts `no outcome recorded:` |
+
+  So a run that calls `run_terminate` and never runs `run report` ends `cancelled`, and one that
+  prints `## Requires user confirmation` and never calls `run_outcome` ends `failed`. The pull
+  request is the recorded `prUrl`, else the host's publication; free text and the stray-PR line
+  are gone. `nightqueue run publish` records no notice, so a delivered job's `notice_md` can be
+  empty, never an earlier attempt's; `run_notice` still shows the stream's. An attempt's start no
+  longer erases the record: an earlier `prUrl` survives, and a retry without `--fresh` consumes
+  what the last attempt concluded (a `done` and a termination included, in one write under the run
+  lock, before the commit), so a retried job is `done` only if it records `done` again and a
+  retried terminated run resumes after its last completed phase. A record that cannot be consumed
+  refuses the retry with `retry again in a moment`. A `failed` attempt or a swept orphan quotes the
+  gate or termination it had recorded, as in `exited with code 1 after recording a gate: <question>`.
+  Each record now names the claim that wrote it (`claim: {attempt, session, ordinal}`), and a record of
+  another claim, one from before a rate-limit park included, is ignored, never deleted, with `ignored a record of attempt N` at the end of the
+  notice: a session of an earlier claim that writes late is told its attempt is over, and its record
+  goes to `ignoredRecords`; its `run check`, `run commit` and `run pr` are refused with nothing written. A run directory another job stamped refuses a plain retry and gates a
+  claim (`foreign-run`), naming that job and `--fresh`. The witness now takes the run lock.
+  A raced claim never ends a drain. Only a provider failure
+  in a structured stream event re-spawns, never over a run its own record settled, at most twice
+  inside the claim, with one job-log line each and no attempt spent. A non-zero exit parks only when the last rate-limit
+  event was `rejected`, and a later `allowed` clears the attempt's pause. A job that came back
+  `pending` is skipped for the rest of the cycle and the jobs behind it run. An orphan is never
+  requeued: it ends `failed` with a notice naming the attempt, worker and lease, so after a reboot
+  each running job needs `queue retry`. The attempt budget is gone: `queue add --max-attempts` and
+  `queue_add`'s `max_attempts` are refused, `queue retry` widens nothing and `queue status` prints
+  the plain count.
 - **The operator agent disallows `RemoteTrigger`.** Only a claude.ai login exposes it, and it
   reached the operator with no band decision. It is now in `disallowedTools` and in the probed
   built-in list of the plugin test.

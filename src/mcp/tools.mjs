@@ -16,7 +16,6 @@ import {
 } from "../config/projects.mjs";
 import { loadConfig, saveConfig } from "../config/store.mjs";
 import {
-  MAX_ATTEMPTS_RANGE,
   PRIORITY_RANGE,
   TIMEOUT_RANGE,
 } from "../memory/jobs.mjs";
@@ -184,7 +183,7 @@ async function jobRun(own, args, env) {
   if (named.length > 0) refuseNamedRun(named.map(([name, value]) => [name, value.trim()]), own);
   const run = await resolveJobRun(own, env);
   if (!isSafeSegment(run.slug)) refuseMissingRunSlug(own);
-  return { project: run.project, projectId: run.projectId, slug: run.slug };
+  return { project: run.project, projectId: run.projectId, slug: run.slug, claim: run.claim };
 }
 
 // The run an operator names from outside a job, where nothing else can tell which one it is.
@@ -1119,7 +1118,6 @@ function toolDefinitions(env, state) {
             "A short human title of the job: one sentence naming the outcome in product language (at most 120 characters, one line; blank means none). `queue_status` lists the job by it until its pull request exists.",
           ),
           priority: z.number().int().min(PRIORITY_RANGE.min).max(PRIORITY_RANGE.max).nullable().optional(),
-          max_attempts: z.number().int().min(MAX_ATTEMPTS_RANGE.min).max(MAX_ATTEMPTS_RANGE.max).nullable().optional(),
           timeout_s: z.number().int().min(TIMEOUT_RANGE.min).max(TIMEOUT_RANGE.max).nullable().optional(),
           origin: z
             .array(z.object({ kind: z.string(), ref: z.string() }))
@@ -1147,7 +1145,6 @@ function toolDefinitions(env, state) {
           projectId: project.id,
           prompt: args.prompt,
           priority: args.priority,
-          maxAttempts: args.max_attempts,
           timeoutS: args.timeout_s,
           origin: args.origin,
           title: args.title,
@@ -1240,7 +1237,7 @@ function toolDefinitions(env, state) {
           "a `running` job carries `live` (agent, lane intent, last action, partial tokens, `source: \"log-tail\"`), every other job `live: null`, and `sections` has a `live` entry; " +
           "a merged pull request on a `done` job is listed in `suggestions`, and closing it is `queue_close`. `closes` groups the closes in flight, failed and stalled. " +
           "`resolution` is `no-change` on a done or closed job resolved without a code change, else null. " +
-          "`tokens_*`, `cache_*`, `cost_usd` and the host/orchestrator counters are totals across every attempt; `attempts_log` lists one row per claim of the job (released, parked and lost ones included, `spawns` counts the runner's inner re-spawns inside that claim, `fresh: true` after a `--fresh` retry); `attempts` stays the retry budget counter, which inner re-spawns also increment; `active_s` is the sum of the rows' durations and `wall_s` the span from the first start.",
+          "`tokens_*`, `cache_*`, `cost_usd` and the host/orchestrator counters are totals across every attempt; `attempts_log` lists one row per claim of the job (released, parked and lost ones included, `spawns` counts the runner's inner re-spawns inside that claim, `fresh: true` after a `--fresh` retry); `attempts` counts the attempts of the job and inner re-spawns do not move it; `active_s` is the sum of the rows' durations and `wall_s` the span from the first start.",
         inputSchema: {
           job_id: jobRefInput.nullable().optional().describe("One job by its ref (`J-77`) or its plain id."),
           pr_url: optionalText.describe(
@@ -1396,7 +1393,7 @@ function toolDefinitions(env, state) {
       name: "run_terminate",
       config: {
         description:
-          "Records that the run stopped on purpose at a phase, with the reason; a run terminated this way is never resumed by a retry, which restarts its phases. " +
+          "Records that the run stopped on purpose at a phase, with the reason; a retry consumes the stop and resumes after the last completed phase, on the kept wip commit. A retry past the resume cap (one resume per run), of a run with no completed phase, of one whose last completed phase carries a terminal verdict, or of one already done does not resume: it starts from the ordinary prompt. " +
           "The runtime commits the worktree's changes on the job's branch as `wip(<slug>): terminated at <phase> — <reason>` (local, never pushed) and answers `wip` and the `notice` to report verbatim; a repeated call keeps the same wip commit; a retry starts on that commit. " +
           "Inside a job the run is resolved from the job's own row — passing `project` or `slug` there is refused; outside a job both are required.",
         inputSchema: { phase: z.enum(RESUME_PHASE_ORDER), reason: z.string(), project: optionalText, slug: optionalText },

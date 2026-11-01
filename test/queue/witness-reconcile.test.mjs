@@ -10,8 +10,9 @@ import { jobLogPath, runDir } from "../../src/config/paths.mjs";
 import { openDb, sqliteToIso } from "../../src/memory/db.mjs";
 import { addJob, claimJobById, getJob, sweepOrphans } from "../../src/memory/jobs.mjs";
 import { reconcileFromWitness } from "../../src/queue/reconcile.mjs";
-import { clearRunTerminal, readRunState, writeRunTerminal } from "../../src/queue/resume.mjs";
+import { readRunState, writeRunTerminal } from "../../src/queue/resume.mjs";
 import { applyRetry } from "../../src/queue/retry.mjs";
+import { consumeRunConclusion } from "../../src/queue/run-state.mjs";
 import { runCycle } from "../../src/queue/runner.mjs";
 import { ensureProject, makeHome, makeProject } from "../../test-support/memory.mjs";
 
@@ -114,19 +115,19 @@ test("the witness is merged into what the pipeline wrote, leaves no temporary fi
   assert.equal(unsafe.reason, "unsafe project or slug");
 });
 
-test("clearRunTerminal drops the witness and keeps the rest of the state, and creates nothing when there is no state", (t) => {
+test("consumeRunConclusion drops the witness and keeps the rest of the state, and creates nothing when there is no state", async (t) => {
   const env = makeQueue(t, "witness-clear");
   const dir = runDir(ensureProject(env, "alpha"), SLUG, env);
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, "state.json"), JSON.stringify({ schemaVersion: 1, slug: SLUG, phases: [] }));
   witness(env);
 
-  assert.equal(clearRunTerminal({ projectId: ensureProject(env, "alpha"), slug: SLUG, env }).status, "written");
+  assert.equal((await consumeRunConclusion({ projectId: ensureProject(env, "alpha"), slug: SLUG, env })).status, "written");
   const state = readRunState({ projectId: ensureProject(env, "alpha"), slug: SLUG, env });
   assert.equal(state.terminal, undefined, "the witness survived the clear");
   assert.equal(state.schemaVersion, 1, "clearing the witness threw away the state of the pipeline");
 
-  assert.equal(clearRunTerminal({ projectId: ensureProject(env, "alpha"), slug: "never-ran", env }).status, "absent");
+  assert.equal((await consumeRunConclusion({ projectId: ensureProject(env, "alpha"), slug: "never-ran", env })).status, "absent");
   assert.equal(existsSync(join(runDir(ensureProject(env, "alpha"), "never-ran", env), "state.json")), false, "the clear created a state.json");
 });
 
@@ -219,13 +220,26 @@ test("a retried job is never closed again by the witness of its previous attempt
   assert.equal(getJob(id, env).status, "pending");
 });
 
-test("a pending job the orphan sweep requeued is still repaired from its witness: only a retry voids it", async (t) => {
+test("a witness stamped with another attempt restores nothing, and one of the row's own attempt still does", async (t) => {
+  const env = makeQueue(t, "reconcile-stamped");
+  const id = runningJob(env);
+  expireLease(env, id);
+  const terminal = { status: "done", prUrl: PR_URL, finishedAt: FINISHED_AT, writtenBy: WRITTEN_BY, pid: 4242, jobId: id };
+  const projectId = ensureProject(env, "alpha");
+
+  writeRunTerminal({ projectId, slug: SLUG, terminal: { ...terminal, claim: { attempt: 7, session: null } }, env });
+  assert.deepEqual((await reconcileFromWitness(env)).repaired, [], "a witness of another claim closed this one");
+  assert.equal(getJob(id, env).status, "running");
+
+  writeRunTerminal({ projectId, slug: SLUG, terminal: { ...terminal, claim: { attempt: getJob(id, env).attempts, session: null } }, env });
+  assert.deepEqual((await reconcileFromWitness(env)).repaired, [id]);
+  assert.equal(getJob(id, env).status, "done");
+});
+
+test("a pending job an older sweep requeued is still repaired from its witness: only a retry voids it", async (t) => {
   const env = makeQueue(t, "reconcile-requeued");
   const id = lostFinish(env);
-  openDb(env).prepare("UPDATE jobs SET max_attempts = 3 WHERE id = ?").run(id);
-
-  assert.equal(sweepOrphans(env).requeued, 1, "setup: the sweep did not requeue the job whose runner died");
-  assert.equal(getJob(id, env).status, "pending");
+  openDb(env).prepare("UPDATE jobs SET status = 'pending', worker = NULL, lease_until = NULL, attempt_started_at = NULL WHERE id = ?").run(id);
 
   assert.deepEqual(
     (await reconcileFromWitness(env)).repaired,
@@ -234,6 +248,17 @@ test("a pending job the orphan sweep requeued is still repaired from its witness
   );
   assert.equal(getJob(id, env).status, "done");
   assert.equal(getJob(id, env).pr_url, PR_URL);
+});
+
+test("a lost finish the sweep reaches before the witness is read stays failed with the sweep's notice", async (t) => {
+  const env = makeQueue(t, "reconcile-swept");
+  const id = lostFinish(env);
+
+  assert.deepEqual(sweepOrphans(env), { failed: 1 });
+
+  assert.deepEqual((await reconcileFromWitness(env)).repaired, [], "a witness rewrote a job the sweep had failed");
+  assert.equal(getJob(id, env).status, "failed");
+  assert.ok(getJob(id, env).notice_md.startsWith("the runner died during attempt"), getJob(id, env).notice_md);
 });
 
 test("retry then `queue status` through the real CLI leaves the job pending, and a genuinely lost finish is repaired", (t) => {

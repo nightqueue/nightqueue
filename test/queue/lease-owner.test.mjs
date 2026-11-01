@@ -9,6 +9,7 @@ import { loadConfig, saveConfig } from "../../src/config/store.mjs";
 import { openDb } from "../../src/memory/db.mjs";
 import { addJob, claimJobById, countActiveJobs, getJob, sweepOrphans } from "../../src/memory/jobs.mjs";
 import { acquire, liveLocalWorker, localWorkerPid } from "../../src/queue/claim.mjs";
+import { applyRetry } from "../../src/queue/retry.mjs";
 import { cliEntrypoint } from "../../src/queue/spawn.mjs";
 import { initGitRepo } from "../../test-support/git.mjs";
 import { makeDir, makeHome, makeProject } from "../../test-support/memory.mjs";
@@ -128,7 +129,7 @@ test("a lease that expires while its owner is ALIVE never gives a second real ru
   const marker1 = join(makeDir(t, "lease-marker1"), "marker.json");
   const marker2 = join(makeDir(t, "lease-marker2"), "marker.json");
   const pidsToKill = killerOf(t);
-  const jobId = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker", maxAttempts: 5, timeoutS: TIMEOUT_S }, env).id;
+  const jobId = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker", timeoutS: TIMEOUT_S }, env).id;
 
   const process1 = runQueueCli(runnerEnv(env, bin, { holdMs: FIRST_HOLD_MS, marker: marker1 }), jobId);
   const child1 = await waitForFile(marker1, 8000, "the first real child to start");
@@ -155,14 +156,14 @@ test("a lease that expires while its owner is ALIVE never gives a second real ru
   assert.equal(getJob(jobId, env).worker, null, "the first runner did not close its own job");
 });
 
-test("the job of a runner that DIED is requeued after the grace and picked up by the next runner", async (t) => {
+test("the job of a runner that DIED fails after the grace, and only a retry hands it to the next runner", async (t) => {
   const env = makeHome(t, "lease-owner-dead");
   makeRealGitProject(t, env, "alpha");
   const bin = writeHoldingClaude(t);
   const marker1 = join(makeDir(t, "lease-dead-marker1"), "marker.json");
   const marker2 = join(makeDir(t, "lease-dead-marker2"), "marker.json");
   const pidsToKill = killerOf(t);
-  const jobId = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker", maxAttempts: 5, timeoutS: TIMEOUT_S }, env).id;
+  const jobId = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker", timeoutS: TIMEOUT_S }, env).id;
 
   const process1 = runQueueCli(runnerEnv(env, bin, { holdMs: FIRST_HOLD_MS, marker: marker1 }), jobId);
   const child1 = await waitForFile(marker1, 8000, "the first real child to start");
@@ -174,6 +175,15 @@ test("the job of a runner that DIED is requeued after the grace and picked up by
   process.kill(child1.pid, "SIGKILL");
   setLeaseAge(env, jobId, 120);
 
+  const refused = await runQueueCli(runnerEnv(env, bin, { holdMs: SECOND_HOLD_MS, marker: marker2 }), jobId);
+
+  assert.equal(existsSync(marker2), false, `the next runner started the orphan on its own: ${refused.stdout}`);
+  assert.match(refused.stdout, /^J-\d+ is failed, not pending - it will not be picked up$/m, `the next runner did not refuse: ${refused.stdout}`);
+  const swept = getJob(jobId, env);
+  assert.deepEqual({ status: swept.status, worker: swept.worker, attempts: swept.attempts }, { status: "failed", worker: null, attempts: 1 });
+  assert.match(swept.notice_md, /^the runner died during attempt 1 \(worker /);
+
+  await applyRetry({ id: jobId, env });
   const result2 = await runQueueCli(runnerEnv(env, bin, { holdMs: SECOND_HOLD_MS, marker: marker2 }), jobId);
 
   assert.equal(result2.code, 0, `the second runner failed: ${result2.stderr}`);
@@ -182,32 +192,32 @@ test("the job of a runner that DIED is requeued after the grace and picked up by
   assert.notEqual(child2.pid, child1.pid, "the second child reused the pid of the first one");
   const row = getJob(jobId, env);
   assert.equal(row.worker, null, "the second runner did not close the job it took over");
-  assert.equal(row.attempts, 2, "the requeue of the orphan did not preserve the attempt of the dead runner");
+  assert.equal(row.attempts, 2, "the retry of the orphan did not preserve the attempt of the dead runner");
   assert.notEqual(row.status, "pending", "the job of the dead runner was never taken over");
 });
 
-test("a live owner past the hard ceiling is recycled anyway: reclaiming never depends on a healthy process", (t) => {
+test("a live owner past the hard ceiling is failed anyway: sweeping never depends on a healthy process", (t) => {
   const env = makeHome(t, "lease-hard-ceiling");
   makeProject(t, env, "alpha");
-  const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker", maxAttempts: 3, timeoutS: TIMEOUT_S }, env).id;
+  const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker", timeoutS: TIMEOUT_S }, env).id;
   claimJobById(id, { worker: LIVE_WORKER, cap: CAP }, env);
   setLeaseAge(env, id, 120);
   setStartAge(env, id, HARD_CEILING_S + 60);
 
   assert.equal(liveLocalWorker(LIVE_WORKER), true, "the owner of the job is not alive, so the case proves nothing");
-  assert.deepEqual(sweepOrphans(env, { liveWorkerImpl: liveLocalWorker }), { failed: 0, requeued: 1 });
-  assert.equal(getJob(id, env).status, "pending");
+  assert.deepEqual(sweepOrphans(env, { liveWorkerImpl: liveLocalWorker }), { failed: 1 });
+  assert.equal(getJob(id, env).status, "failed");
 });
 
 test("a lease inside the grace window is left alone and keeps its slot busy", (t) => {
   const env = makeHome(t, "lease-grace");
   makeProject(t, env, "alpha");
-  const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker", maxAttempts: 3, timeoutS: TIMEOUT_S }, env).id;
+  const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker", timeoutS: TIMEOUT_S }, env).id;
   claimJobById(id, { worker: LIVE_WORKER, cap: CAP }, env);
   const second = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the parser" }, env).id;
   setLeaseAge(env, id, 30);
 
-  assert.deepEqual(sweepOrphans(env, { liveWorkerImpl: liveLocalWorker }), { failed: 0, requeued: 0 });
+  assert.deepEqual(sweepOrphans(env, { liveWorkerImpl: liveLocalWorker }), { failed: 0 });
   assert.equal(getJob(id, env).status, "running");
   assert.equal(countActiveJobs(env), 1, "a job inside the grace window stopped counting for the ceiling");
   assert.equal(claimJobById(second, { worker: "host:1", cap: 1 }, env), null, "a job inside the grace window stopped holding its slot against the ceiling");
@@ -218,16 +228,16 @@ test("an expired lease of a LIVE owner is protected, and a malformed worker neve
   const env = makeHome(t, "lease-protection");
   makeProject(t, env, "alpha");
   makeProject(t, env, "beta");
-  const mine = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker", maxAttempts: 3, timeoutS: TIMEOUT_S }, env).id;
-  const broken = addJob({ projectId: ensureProject(env, "beta"), prompt: "fix the parser", maxAttempts: 3, timeoutS: TIMEOUT_S }, env).id;
+  const mine = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker", timeoutS: TIMEOUT_S }, env).id;
+  const broken = addJob({ projectId: ensureProject(env, "beta"), prompt: "fix the parser", timeoutS: TIMEOUT_S }, env).id;
   claimJobById(mine, { worker: LIVE_WORKER, cap: CAP }, env);
   claimJobById(broken, { worker: "no-colon-at-all", cap: CAP }, env);
   setLeaseAge(env, mine, 120);
   setLeaseAge(env, broken, 120);
 
-  assert.deepEqual(sweepOrphans(env, { liveWorkerImpl: liveLocalWorker }), { failed: 0, requeued: 1 });
+  assert.deepEqual(sweepOrphans(env, { liveWorkerImpl: liveLocalWorker }), { failed: 1 });
   assert.equal(getJob(mine, env).status, "running", "the job of a runner that is still alive was taken away from it");
-  assert.equal(getJob(broken, env).status, "pending", "a malformed worker stopped the sweep from recycling its job");
+  assert.equal(getJob(broken, env).status, "failed", "a malformed worker stopped the sweep from failing its job");
 
   for (const worker of [null, undefined, "", ":", "host:", "host:abc", "host:-1", `${hostname()}:0`, "other-host:1"]) {
     assert.equal(liveLocalWorker(worker), false, `\`${String(worker)}\` was read as a live local worker`);

@@ -61,7 +61,7 @@ function typeLines({ run, result, state, ctx }) {
   const recorded = PIPELINE_TASK_TYPES.includes(state?.type) ? state.type : null;
   const type = briefType(result.evaluated) ?? (recorded === null ? derivedType(result.evaluated) : null);
   if (type === null || type === recorded) return [];
-  const written = recordRunFields({ projectId: run.projectId, slug: run.slug, fields: { type }, env: ctx.env });
+  const written = recordRunFields({ projectId: run.projectId, slug: run.slug, fields: { type }, claim: run.claim, env: ctx.env });
   if (written.status !== "written") return [notRecorded(written)];
   return [recorded === null ? `recorded: type ${type}` : `recorded: type ${type} (was ${recorded})`];
 }
@@ -82,7 +82,7 @@ function briefLines({ run, result }) {
 function commitTypeLines({ run, result, ctx }) {
   const commitType = briefCommitType(result.evaluated);
   if (commitType === null) return [];
-  const written = recordRunFields({ projectId: run.projectId, slug: run.slug, fields: { commitType }, env: ctx.env });
+  const written = recordRunFields({ projectId: run.projectId, slug: run.slug, fields: { commitType }, claim: run.claim, env: ctx.env });
   return [written.status === "written" ? `recorded: commit type ${commitType}` : notRecorded(written)];
 }
 
@@ -132,7 +132,7 @@ function terminationReason(result) {
 // The `recorded: run_terminate` line of a completed check 01 whose verdict closes the run on purpose.
 function terminationLines({ run, result, ctx }) {
   if (!TERMINAL_VERDICT_LABELS.includes(result.verdict)) return [];
-  const written = recordTermination({ projectId: run.projectId, slug: run.slug, phase: "triage", reason: terminationReason(result), by: RUNTIME_AUTHOR, env: ctx.env });
+  const written = recordTermination({ projectId: run.projectId, slug: run.slug, phase: "triage", reason: terminationReason(result), by: RUNTIME_AUTHOR, claim: run.claim, env: ctx.env });
   return [written.status === "written" ? `recorded: run_terminate triage ${result.verdict}` : notRecorded(written)];
 }
 
@@ -147,7 +147,7 @@ function liftedTerminationLines({ run, result, ctx }) {
 // The `recorded: qa_stage_a` line of a completed `check 05 --stage analyst`: the marker that lets a resume re-enter the QA at stage B.
 function qaStageALines({ run, result, ctx }) {
   const fields = { qaStageA: { artifact: QA_ANALYST_STAGE.file, verdict: result.verdict } };
-  const written = recordRunFields({ projectId: run.projectId, slug: run.slug, fields, env: ctx.env });
+  const written = recordRunFields({ projectId: run.projectId, slug: run.slug, fields, claim: run.claim, env: ctx.env });
   return [written.status === "written" ? `recorded: qa_stage_a ${result.verdict}` : notRecorded(written)];
 }
 
@@ -174,7 +174,7 @@ function memoAndPhaseLines({ run, check, stage, result, ctx }) {
   const memo = { line: result.memoLine, ok: PASSING_LINES.has(result.memoLine), completed: result.completes, digest: digestOf(result.evaluated) };
   const done = result.completes && artifact.phase ? { phase: artifact.phase, artifact: artifact.file, verdict: result.verdict ?? result.first } : null;
   const memoKey = stage ? `${check}-${stage}` : check;
-  const written = recordCheck({ projectId: run.projectId, slug: run.slug, check: memoKey, memo, done, env: ctx.env });
+  const written = recordCheck({ projectId: run.projectId, slug: run.slug, check: memoKey, memo, done, claim: run.claim, env: ctx.env });
   if (done !== null) return [phaseDoneLine(done, written)];
   if (written.status !== "written") ctx.err(`nightqueue: the check memo was not recorded on the run: ${written.reason}`);
   return result.completes || result.first.startsWith("MISSING") ? [] : [`recorded: none (${result.memoLine})`];

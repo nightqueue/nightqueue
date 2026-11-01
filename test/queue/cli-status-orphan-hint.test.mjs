@@ -8,7 +8,7 @@ import { openDb } from "../../src/memory/db.mjs";
 import { addJob, claimJobById, LEASE_GRACE_S } from "../../src/memory/jobs.mjs";
 import { makeDir, makeHome } from "../../test-support/memory.mjs";
 import { useFakeClaude } from "../../test-support/queue-fake.mjs";
-import { doneStream } from "../../test-support/streams.mjs";
+import { doneStream, recordedDone } from "../../test-support/streams.mjs";
 
 const CLI = fileURLToPath(new URL("../../bin/nightqueue.mjs", import.meta.url));
 
@@ -29,7 +29,7 @@ function makeGitProject(t, env, name) {
 function makeCliHome(t, name) {
   const env = makeHome(t, name);
   makeGitProject(t, env, "alpha");
-  useFakeClaude(env, makeDir(t, `${name}-plan`), [{ stdout: doneStream(), exitCode: 0 }]);
+  useFakeClaude(env, makeDir(t, `${name}-plan`), [{ stdout: doneStream(), runState: recordedDone(), exitCode: 0 }]);
   return env;
 }
 

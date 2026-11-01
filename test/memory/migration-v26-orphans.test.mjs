@@ -29,7 +29,7 @@ function buildV25Home(t, name, orphanSql) {
 // Asserts the home reached v26 with the decisions gone and the lesson kept.
 function assertMigrated(env) {
   const db = migrateTestHome(env);
-  assert.equal(db.prepare("PRAGMA user_version").get().user_version, 26);
+  assert.equal(db.prepare("PRAGMA user_version").get().user_version, 27);
   assert.equal(db.prepare("SELECT count(*) AS n FROM sqlite_master WHERE name LIKE 'decisions%'").get().n, 0);
   assert.equal(db.prepare("SELECT count(*) AS n FROM lessons").get().n, 1);
 }

@@ -9,7 +9,7 @@ import { runCycle } from "../../src/queue/runner.mjs";
 import { applyRetry } from "../../src/queue/retry.mjs";
 import { ensureProject, makeDir, makeHome, makeProject } from "../../test-support/memory.mjs";
 import { useFakeClaude } from "../../test-support/queue-fake.mjs";
-import { assistantEvent, noticeText, PR_URL, resultEvent, systemInitEvent, toNdjson } from "../../test-support/streams.mjs";
+import { assistantEvent, noticeText, PR_URL, resultEvent, systemInitEvent, toNdjson, recordedDone } from "../../test-support/streams.mjs";
 import { fakeJobWorktree } from "../../test-support/job-worktree.mjs";
 
 // A git double for the preflight: a clean checkout of the default branch.
@@ -39,7 +39,7 @@ function gatedJob(env, { slug = "fix-the-worker" } = {}) {
 test("a job whose own run dir survives --fresh as an unremovable symlink moves to -2 and says in its log which directory it skipped", async (t) => {
   const env = makeHome(t, "retry-fresh-self-collision");
   makeProject(t, env, "alpha");
-  useFakeClaude(env, makeDir(t, "retry-fresh-self-collision-plan"), [{ stdout: unnamedDoneStream(), exitCode: 0 }]);
+  useFakeClaude(env, makeDir(t, "retry-fresh-self-collision-plan"), [{ stdout: unnamedDoneStream(), runState: recordedDone(), exitCode: 0 }]);
 
   const id = gatedJob(env, { slug: "fix-the-worker" });
 

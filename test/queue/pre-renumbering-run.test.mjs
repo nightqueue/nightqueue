@@ -12,7 +12,7 @@ import { runCycle } from "../../src/queue/runner.mjs";
 import { fakeJobWorktree } from "../../test-support/job-worktree.mjs";
 import { ensureProject, makeDir, makeHome, makeProject } from "../../test-support/memory.mjs";
 import { argValue, fakeCalls, useFakeClaude } from "../../test-support/queue-fake.mjs";
-import { doneStream } from "../../test-support/streams.mjs";
+import { doneStream, recordedDone } from "../../test-support/streams.mjs";
 
 const SLUG = "fix-the-worker";
 const PHASES = ["triage", "explore", "architecture", "implementation"];
@@ -29,13 +29,13 @@ function cycle(env, id) {
   return runCycle({ jobId: id, env, deps: { worktreeImpl: fakeJobWorktree(), gitImpl: fakeGit } });
 }
 
-// The incident state: a job left `running` by a dead runner, whose resumable run directory holds the given artifacts.
-function incident(t, name, files) {
+// The incident state: a job whose resumable run directory holds the given artifacts, `pending` or left `running` by a dead runner.
+function incident(t, name, files, { orphaned = true } = {}) {
   const env = makeHome(t, name);
   makeProject(t, env, "alpha");
-  const planPath = useFakeClaude(env, makeDir(t, `${name}-plan`), [{ stdout: doneStream(), exitCode: 0 }]);
+  const planPath = useFakeClaude(env, makeDir(t, `${name}-plan`), [{ stdout: doneStream(), runState: recordedDone(), exitCode: 0 }]);
   const projectId = ensureProject(env, "alpha");
-  const id = addJob({ projectId, prompt: "fix the worker", maxAttempts: 3 }, env).id;
+  const id = addJob({ projectId, prompt: "fix the worker" }, env).id;
   const dir = runDir(projectId, SLUG, env);
   mkdirSync(dir, { recursive: true });
   const phases = PHASES.map((phase, at) => ({ phase, artifact: `0${at + 1}-${phase}.md`, verdict: "ok", at: `2026-01-0${at + 1}T00:00:00Z` }));
@@ -43,6 +43,7 @@ function incident(t, name, files) {
   for (const file of files) writeFileSync(join(dir, file), `## Round 1\n${file}\n`);
   const db = openDb(env);
   db.prepare("UPDATE jobs SET slug = ? WHERE id = ?").run(SLUG, id);
+  if (!orphaned) return { env, id, dir, planPath };
   assert.ok(claimJobById(id, { worker: "elsewhere:1", cap: null }, env), "the incident claim failed");
   db.prepare("UPDATE jobs SET lease_until = datetime('now', '-3600 seconds') WHERE id = ?").run(id);
   return { env, id, dir, planPath };
@@ -54,8 +55,8 @@ function snapshot(dir) {
 }
 
 for (const stale of ["06-runtime.md", "05a-qa-analyst.md"]) {
-  test(`a swept job whose run directory holds ${stale} is gated pre-renumbering-run without a spawn, and only a fresh retry starts it over`, async (t) => {
-    const { env, id, dir, planPath } = incident(t, `pre-renumbering-${stale.slice(0, 3)}`, [stale]);
+  test(`a pending job whose run directory holds ${stale} is gated pre-renumbering-run without a spawn, and only a fresh retry starts it over`, async (t) => {
+    const { env, id, dir, planPath } = incident(t, `pre-renumbering-${stale.slice(0, 3)}`, [stale], { orphaned: false });
     const before = snapshot(dir);
     const report = await cycle(env, id);
     assert.deepEqual(report.processed, [{ id, status: "gated", code: "pre-renumbering-run" }]);
@@ -77,8 +78,31 @@ for (const stale of ["06-runtime.md", "05a-qa-analyst.md"]) {
   });
 }
 
-test("a swept job whose run directory holds only the new artifacts resumes as before", async (t) => {
+test("a swept job whose run directory holds the old numbering fails without a spawn, and only a fresh retry starts it over", async (t) => {
+  const { env, id, dir, planPath } = incident(t, "pre-renumbering-swept", ["06-runtime.md"]);
+  const before = snapshot(dir);
+  const report = await cycle(env, id);
+  assert.deepEqual(report.processed, []);
+  const failed = getJob(id, env);
+  assert.equal(failed.status, "failed");
+  assert.match(failed.notice_md, /^the runner died during attempt 1 \(worker elsewhere:1, /);
+  assert.equal(fakeCalls(planPath).length, 0, "the runner spawned the job of a dead runner");
+  assert.deepEqual(snapshot(dir), before);
+
+  await assert.rejects(applyRetry({ id, env }), (error) => error.message === PRE_RENUMBERING_REFUSAL);
+  assert.deepEqual(getJob(id, env), failed);
+  const fresh = await applyRetry({ id, fresh: true, env });
+  assert.equal(fresh.job.status, "pending");
+  assert.equal(existsSync(dir), false);
+  await cycle(env, id);
+  assert.equal(fakeCalls(planPath).length, 1, "the fresh retry never reached the agent");
+});
+
+test("a swept job whose run directory holds only the new artifacts resumes once it is retried", async (t) => {
   const { env, id, planPath } = incident(t, "pre-renumbering-control", ["05-qa.md", "07-runtime.md"]);
+  await cycle(env, id);
+  assert.equal(fakeCalls(planPath).length, 0, "the runner spawned the job of a dead runner");
+  await applyRetry({ id, env });
   await cycle(env, id);
   assert.equal(fakeCalls(planPath).length, 1);
   assert.match(argValue(fakeCalls(planPath)[0].argv, "-p"), /Resume from phase: qa/);

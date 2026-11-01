@@ -90,11 +90,11 @@ export function toNdjson(events) {
   return `${events.map((event) => JSON.stringify(event)).join("\n")}\n`;
 }
 
-// A run that ends with a pull request: init, slug, notice and a result carrying the URL.
+// A run that ends with a pull request: init, slug (none with `slug: null`, so the job keeps the slug the runtime bound), notice and a result carrying the URL.
 export function doneStream({ slug = SLUG, sessionId = SESSION_ID, prUrl = PR_URL, notice = undefined, usage = {} } = {}) {
   return toNdjson([
     systemInitEvent({ sessionId }),
-    slugEvent(slug, { sessionId }),
+    ...(slug ? [slugEvent(slug, { sessionId })] : []),
     assistantEvent("Opening the pull request now.", { sessionId, messageId: "msg_work", usage: { tokensIn: 10, tokensOut: 5 } }),
     assistantEvent(noticeText(notice), { sessionId, messageId: "msg_notice" }),
     resultEvent({ text: `Done. Pull request: ${prUrl}`, sessionId, ...usage }),
@@ -141,6 +141,26 @@ export function gateStream({ slug = SLUG, sessionId = SESSION_ID, reason = GATE_
   ]);
 }
 
+// The `runState` of a fake attempt whose pipeline published its pull request: status and URL together, as `run publish` writes them.
+export function recordedDone({ prUrl = PR_URL, notice = "The pull request is open and the checks are green." } = {}) {
+  return { outcome: { status: "done", prUrl, notice } };
+}
+
+// The `runState` of a fake attempt whose pipeline stopped at the human gate through `run_outcome`.
+export function recordedGate({ notice = GATE_NOTICE } = {}) {
+  return { outcome: { status: "gate", notice } };
+}
+
+// The `runState` of a fake attempt whose pipeline concluded through `run_outcome` that no code change is needed.
+export function recordedNoChange({ notice = "The worker already does what the ticket asks." } = {}) {
+  return { outcome: { status: "no_change", notice } };
+}
+
+// The `runState` of a fake attempt whose pipeline stopped on purpose through `run_terminate`.
+export function recordedTermination({ phase = "qa", reason = "The ticket no longer applies.", by = "qa-guardian" } = {}) {
+  return { termination: { phase, reason, by, at: ATTEMPT_ISO } };
+}
+
 // A run that fails for a reason no retry would fix.
 export function failureStream({ sessionId = SESSION_ID, message = "TypeError: cannot read properties of undefined" } = {}) {
   return toNdjson([
@@ -150,12 +170,17 @@ export function failureStream({ sessionId = SESSION_ID, message = "TypeError: ca
   ]);
 }
 
-// A run that fails on a transient provider error, the only kind the runner retries.
-export function transientFailureStream({ sessionId = SESSION_ID } = {}) {
+// The `result` event of a session the provider failed, its status in the structured field the CLI writes.
+export function providerErrorResult({ sessionId = SESSION_ID, status = 429 } = {}) {
+  return { ...resultEvent({ text: `API Error: ${status}`, sessionId }), is_error: true, api_error_status: status };
+}
+
+// A run that fails on a transient provider error, the only kind the runner re-spawns.
+export function transientFailureStream({ sessionId = SESSION_ID, status = 429 } = {}) {
   return toNdjson([
     systemInitEvent({ sessionId }),
-    assistantEvent("API Error: 429 Too Many Requests (overloaded_error)", { sessionId, messageId: "msg_429" }),
-    resultEvent({ text: "API Error: 429 Too Many Requests", sessionId, subtype: "error_during_execution" }),
+    assistantEvent(`API Error: ${status}`, { sessionId, messageId: `msg_${status}` }),
+    providerErrorResult({ sessionId, status }),
   ]);
 }
 

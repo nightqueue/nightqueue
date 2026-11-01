@@ -31,7 +31,7 @@ function assertTwoAttempts(id, env) {
 test("gated, retried (no --fresh) and finished job keeps both attempts, summed totals and active time", async (t) => {
   const env = makeHome(t, "gated-retry");
   makeProject(t, env, "alpha");
-  const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker", maxAttempts: 3 }, env).id;
+  const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker" }, env).id;
   const claim = () => assert.ok(claimJobById(id, { worker: WORKER, cap: 4 }, env));
 
   claim();

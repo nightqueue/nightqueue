@@ -7,7 +7,7 @@ import { writeRunnerRecord } from "../../src/queue/registry.mjs";
 import { runCycle, runDrain } from "../../src/queue/runner.mjs";
 import { ensureProject, makeDir, makeHome, makeProject } from "../../test-support/memory.mjs";
 import { useFakeClaude } from "../../test-support/queue-fake.mjs";
-import { doneStream } from "../../test-support/streams.mjs";
+import { doneStream, recordedDone } from "../../test-support/streams.mjs";
 import { fakeJobWorktree } from "../../test-support/job-worktree.mjs";
 
 const WARNING = /^runtime directory (.+) is gone - this runner finishes the job it is running and exits; start a new runner with: nightqueue queue run$/m;
@@ -41,7 +41,7 @@ function captureStderr(t) {
 function makeRunnerHome(t, name, { projects = ["alpha"] } = {}) {
   const env = makeHome(t, name);
   for (const project of projects) makeProject(t, env, project);
-  useFakeClaude(env, makeDir(t, `${name}-plan`), [{ stdout: doneStream(), exitCode: 0 }]);
+  useFakeClaude(env, makeDir(t, `${name}-plan`), [{ stdout: doneStream(), runState: recordedDone(), exitCode: 0 }]);
   const runtimeDir = makeDir(t, `${name}-runtime`);
   ensureHome(env);
   writeRunnerRecord({ pid: process.pid, startedAt: new Date().toISOString(), mode: "drain", intervalS: null, logPath: null, runtimeDir }, env);

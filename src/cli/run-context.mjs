@@ -33,7 +33,7 @@ async function jobRun(own, values, env) {
   if (values.project !== undefined || values.slug !== undefined) refuseNamedRun(own);
   const run = await resolveJobRun(own, env);
   if (!isSafeSegment(run.slug)) refuseMissingSlug(own);
-  return { jobId: own, project: run.project, projectId: run.projectId, slug: run.slug, origins: run.origins ?? [], ...(run.startBranch ? { startBranch: run.startBranch } : {}) };
+  return { jobId: own, project: run.project, projectId: run.projectId, slug: run.slug, origins: run.origins ?? [], claim: run.claim, ...(run.startBranch ? { startBranch: run.startBranch } : {}) };
 }
 
 // The run an operator names from outside a job, where nothing else can tell which one it is.
@@ -60,6 +60,13 @@ export async function resolveRun(values, ctx) {
   const own = callerJobId(ctx.env);
   const run = own === null ? operatorRun(values, ctx.env) : await jobRun(own, values, ctx.env);
   return { ...run, runDir: runDir(run.projectId, run.slug, ctx.env) };
+}
+
+// The run a command with side effects acts on, refused before any of them when the caller's claim is over: nothing is written and the session is told to end.
+export async function resolveWritableRun(values, ctx) {
+  const run = await resolveRun(values, ctx);
+  if (run.claim?.over === true) throw new UserError(`attempt ${run.claim.attempt} of this job is over, so nothing was written; end this session`);
+  return run;
 }
 
 // Whether the pipeline has recorded anything into the run: a phase or an outcome, as opposed to the runtime's own job block alone.

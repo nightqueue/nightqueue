@@ -29,10 +29,6 @@ function composeText({ pr = false, gate = false, notice = null, body = "" } = {}
   return parts.join("\n\n");
 }
 
-// A regex that catches a surrogate half left without its pair, the signature of a UTF-16-unit cut.
-const LONE_HIGH_SURROGATE_RE = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])/;
-const LONE_LOW_SURROGATE_RE = /(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
-
 test("extractResultText keeps the documented distinction: '' means a result event with no text, null means no result event at all", () => {
   assert.equal(extractResultText(logWithResultEventButNoText()), "", "a result event without a string result must read back as ''");
   assert.equal(extractResultText(logWithNoResultEvent()), null, "no result event at all must read back as null");
@@ -80,12 +76,12 @@ test("a real crash never flips to gate or cancelled because of a PR link, a gate
   }
 });
 
-test("the exit-0 matrix: every combination of PR, gate marker and notice lands on the one status the operator expects", () => {
+test("the exit-0 matrix: no combination of PR, gate marker and notice in the text, with no record, is anything but the silent stop", () => {
   const cases = [
-    { text: composeText({ pr: true, gate: true }), expectedStatus: "gate", expectedPr: PR_URL },
-    { text: composeText({ pr: true }), expectedStatus: "done", expectedPr: PR_URL },
-    { text: composeText({ notice: "please pick a column name" }), expectedStatus: "failed", expectedPr: null, expectedNotice: "please pick a column name" },
-    { text: composeText({ body: "I need a human to decide something." }), expectedStatus: "failed", expectedPr: null, expectedNotice: "I need a human to decide something." },
+    { text: composeText({ pr: true, gate: true }), expectedStatus: "failed", expectedPr: null, expectedNotice: SILENT_STOP_NOTICE },
+    { text: composeText({ pr: true }), expectedStatus: "failed", expectedPr: null, expectedNotice: SILENT_STOP_NOTICE },
+    { text: composeText({ notice: "please pick a column name" }), expectedStatus: "failed", expectedPr: null, expectedNotice: SILENT_STOP_NOTICE },
+    { text: composeText({ body: "I need a human to decide something." }), expectedStatus: "failed", expectedPr: null, expectedNotice: SILENT_STOP_NOTICE },
     { text: "", expectedStatus: "failed", expectedPr: null, expectedNotice: SILENT_STOP_NOTICE },
     { text: "   \n\t  ", expectedStatus: "failed", expectedPr: null, expectedNotice: SILENT_STOP_NOTICE },
   ];
@@ -101,7 +97,7 @@ test("the exit-0 matrix: every combination of PR, gate marker and notice lands o
   assert.equal(missing.noticeMd, SILENT_STOP_NOTICE);
 });
 
-test("central invariant: no combination of ending flags, PR, gate marker or notice ever produces a gate with an empty or blank notice", () => {
+test("central invariant: no combination of ending flags, PR, gate marker or recorded notice ever produces a gate with an empty or blank notice", () => {
   const endings = [
     { exitCode: 0 },
     { exitCode: 1 },
@@ -124,10 +120,12 @@ test("central invariant: no combination of ending flags, PR, gate marker or noti
   let sawGate = false;
   for (const ending of endings) {
     for (const text of texts) {
-      const outcome = classifyJobResult({ log: logWithResultText(text), ...ending });
-      if (outcome.status === "gate") {
-        sawGate = true;
-        assert.ok(typeof outcome.noticeMd === "string" && outcome.noticeMd.trim().length > 0, `gate with blank notice for ending=${JSON.stringify(ending)} text=${JSON.stringify(text)}`);
+      for (const notice of [undefined, "", "   ", "a real reason"]) {
+        const outcome = classifyJobResult({ log: logWithResultText(text), ...ending, state: { outcome: { status: "gate", notice } } });
+        if (outcome.status === "gate") {
+          sawGate = true;
+          assert.ok(typeof outcome.noticeMd === "string" && outcome.noticeMd.trim().length > 0, `gate with blank notice for ending=${JSON.stringify(ending)} text=${JSON.stringify(text)}`);
+        }
       }
     }
     assert.equal(classifyJobResult({ log: logWithNoResultEvent(), ...ending }).status === "gate", false, "no result event at all must never reach gate");
@@ -135,17 +133,3 @@ test("central invariant: no combination of ending flags, PR, gate marker or noti
   assert.ok(sawGate, "the matrix must actually exercise at least one gate outcome, otherwise the invariant is vacuous");
 });
 
-test("the 8000 code-point cap on the fallback notice never splits a surrogate pair straddling the boundary", () => {
-  const emoji = "\u{1F600}"; // a single code point, two UTF-16 units
-  const text = `${"a".repeat(7999)}${emoji}${"a".repeat(200)}`;
-  const outcome = classifyJobResult({ log: logWithResultText(text), exitCode: 0 });
-  assert.equal(outcome.status, "failed", "no gate marker and no recorded gate status: a clean exit with nothing to deliver is a failure");
-
-  const naiveUtf16Cut = `${text.slice(0, 8000)}...`;
-  assert.ok(LONE_HIGH_SURROGATE_RE.test(naiveUtf16Cut) || LONE_LOW_SURROGATE_RE.test(naiveUtf16Cut), "the naive UTF-16-unit cut must actually break the pair, or this test proves nothing");
-
-  assert.equal(LONE_HIGH_SURROGATE_RE.test(outcome.noticeMd), false, "the real cap must never leave a lone high surrogate");
-  assert.equal(LONE_LOW_SURROGATE_RE.test(outcome.noticeMd), false, "the real cap must never leave a lone low surrogate");
-  assert.equal(Array.from(outcome.noticeMd).length, 8003, "8000 code points kept plus the three dots of the ellipsis");
-  assert.ok(outcome.noticeMd.includes(emoji), "the emoji sitting right at the boundary must survive whole");
-});

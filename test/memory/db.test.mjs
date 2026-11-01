@@ -80,7 +80,6 @@ const JOB_COLUMNS = [
   "priority",
   "status",
   "attempts",
-  "max_attempts",
   "timeout_s",
   "lease_until",
   "worker",
@@ -511,7 +510,7 @@ test("an open of an older read-only database names `nightqueue update`, the fix 
   t.after(() => chmodSync(dbPath(env), 0o644));
 
   assert.throws(() => openDb(env), (err) => {
-    assert.match(err.message, /database at v5, this nightqueue expects v26: run `nightqueue update`/);
+    assert.match(err.message, /database at v5, this nightqueue expects v27: run `nightqueue update`/);
     assert.doesNotMatch(err.message, /nightqueue doctor/);
     return true;
   });
@@ -600,8 +599,8 @@ test("the jobs table of the queue is created with its columns, defaults and clai
   assert.throws(() => db.prepare("INSERT INTO jobs (project_id, prompt) VALUES (?, ?)").run("0".repeat(26), "x"), /FOREIGN KEY/);
   const row = db.prepare("SELECT * FROM jobs").get();
   assert.deepEqual(
-    { status: row.status, priority: row.priority, attempts: row.attempts, max_attempts: row.max_attempts, timeout_s: row.timeout_s },
-    { status: "pending", priority: 5, attempts: 0, max_attempts: 1, timeout_s: 14400 },
+    { status: row.status, priority: row.priority, attempts: row.attempts, timeout_s: row.timeout_s },
+    { status: "pending", priority: 5, attempts: 0, timeout_s: 14400 },
   );
   assert.equal(row.worker, null);
   assert.match(row.created_at, /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/);

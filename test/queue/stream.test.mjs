@@ -21,7 +21,6 @@ import {
   extractUsage,
   fenceStep,
   hasGateMarker,
-  hasGateMarkerInStream,
   isControlLine,
   isSessionIdSafe,
   isSubagentEvent,
@@ -132,13 +131,6 @@ test("the gate marker only counts as a standalone heading outside a code fence",
   assert.equal(hasGateMarker("  12\t## Requires user confirmation"), false);
   assert.equal(hasGateMarker("## Requires user confirmation now"), false);
   assert.equal(hasGateMarker(buildPrompt({ job: { id: 1, prompt: "fix the worker" } })), false, "the prompt of the runner echoed as a gate");
-  assert.equal(hasGateMarkerInStream(gateStream()), true);
-  assert.equal(hasGateMarkerInStream(doneStream()), false);
-  assert.equal(
-    hasGateMarkerInStream(toNdjson([assistantEvent(GATE_MARKER, { parentToolUseId: "toolu_1" })])),
-    false,
-    "a subagent announced the gate",
-  );
 });
 
 test("a NESTED code fence never flips the reading of the rest of the text", () => {
@@ -161,7 +153,7 @@ test("the notice is the LAST `## Notice` section, and a fenced heading never ope
   assert.equal(extractNoticeFromStream(doneStream({ notice: undefined }).replace(/## Notice/g, "Notice")), null);
 });
 
-test("the gate block the skill prescribes opens a gate and carries the way to answer it", () => {
+test("the gate block the skill prescribes carries the way to answer it, and only the record opens the gate", () => {
   const block = [
     "## Notice",
     "",
@@ -178,8 +170,10 @@ test("the gate block the skill prescribes opens a gate and carries the way to an
   assert.equal(hasGateMarker(notice), true, "the `## Notice` body must itself carry the confirmation heading");
   assert.ok(notice.includes("nightqueue queue retry"), notice);
   assert.equal(notice.endsWith('--note "<your answer>"'), true, notice);
-  assert.equal(classifyJobResult({ log, exitCode: 0 }).status, "gate");
-  assert.equal(classifyJobResult({ log, exitCode: 0 }).noticeMd, notice);
+  const state = { outcome: { status: "gate", notice } };
+  assert.equal(classifyJobResult({ log, exitCode: 0, state }).status, "gate");
+  assert.equal(classifyJobResult({ log, exitCode: 0, state }).noticeMd, notice);
+  assert.equal(classifyJobResult({ log, exitCode: 0 }).status, "failed", "the printed block alone opens no gate");
 });
 
 test("the notice reported is the run's FINAL decision, not a Notice echoed by an earlier assistant message", () => {

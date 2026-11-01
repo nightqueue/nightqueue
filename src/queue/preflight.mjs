@@ -15,6 +15,7 @@ export const BLOCK_CODES = {
   WRONG_BRANCH: "wrong-branch",
   STORE_UNAVAILABLE: "store-unavailable",
   PRE_RENUMBERING_RUN: "pre-renumbering-run",
+  FOREIGN_RUN: "foreign-run",
 };
 
 const GIT_TIMEOUT_MS = 5000;

@@ -334,7 +334,7 @@ function renameBranch({ cwd, current, final, env }) {
 
 // Records on the run the branch the worktree now holds, before anything external can fail; a refused record is reported, never fatal.
 function recordPublishedBranch({ run, branch, ctx }) {
-  const recorded = recordRunFields({ projectId: run.projectId, slug: run.slug, fields: { branch }, env: ctx.env });
+  const recorded = recordRunFields({ projectId: run.projectId, slug: run.slug, fields: { branch }, claim: run.claim, env: ctx.env });
   if (recorded.status !== "written") ctx.err(`nightqueue: the published branch was not recorded on the run: ${recorded.reason}`);
 }
 
@@ -345,8 +345,8 @@ function publishBranch({ run, cwd, branch, title, bodyFile, files, env }) {
   const pushed = runGit({ args: ["push", "-u", "origin", branch], cwd, env });
   if (!pushed.ok) throw new UserError(`git could not push \`${branch}\`: ${failureLine(pushed)}`);
   const url = openOrUpdatePr({ branch, title, bodyFile, cwd, env });
-  const recorded = recordOutcome({ projectId: run.projectId, slug: run.slug, status: "done", ...(files ? { files } : {}), env });
-  const prRecorded = recordPrUrl({ projectId: run.projectId, slug: run.slug, prUrl: url, prTitle: title, env });
+  const recorded = recordOutcome({ projectId: run.projectId, slug: run.slug, status: "done", ...(files ? { files } : {}), claim: run.claim, env });
+  const prRecorded = recordPrUrl({ projectId: run.projectId, slug: run.slug, prUrl: url, prTitle: title, claim: run.claim, env });
   return { url, recorded, prRecorded };
 }
 
@@ -365,7 +365,7 @@ function openOrUpdatePr({ branch, title, bodyFile, cwd, env }) {
 
 // Records the commit phase on the run once its pull request is open; a refused record is reported, never fatal.
 function recordCommitPhase(run, ctx) {
-  const recorded = recordPhaseDone({ projectId: run.projectId, slug: run.slug, phase: "commit", verdict: "PR opened", by: RUNTIME_AUTHOR, env: ctx.env });
+  const recorded = recordPhaseDone({ projectId: run.projectId, slug: run.slug, phase: "commit", verdict: "PR opened", by: RUNTIME_AUTHOR, claim: run.claim, env: ctx.env });
   if (recorded.status !== "written") ctx.err(`nightqueue: the commit phase was not recorded on the run: ${recorded.reason}`);
 }
 
@@ -375,8 +375,19 @@ function worktreeRemoval(run, path, env) {
   return removed.ok ? `WORKTREE REMOVED: ${path}` : `WORKTREE KEPT: ${failureLine(removed)}`;
 }
 
+// Refuses a publication whose claim is over, before any side effect: its record is set aside and the session told to end; the exit code, or null when the claim still holds.
+function lateClaimExit(run, ctx) {
+  if (run.claim?.over !== true) return null;
+  const recorded = recordOutcome({ projectId: run.projectId, slug: run.slug, status: "done", claim: run.claim, env: ctx.env });
+  ctx.out(`REFUSED: ${recorded.reason}`);
+  ctx.out("nothing was committed or pushed, and no pull request was opened");
+  return 1;
+}
+
 // Renames the branch to its final name, pushes it, opens the pull request and prints what happened; the body is already checked.
 export async function openPullRequest({ run, cwd, bodyFile, body, title, removeWorktree, ctx }) {
+  const late = lateClaimExit(run, ctx);
+  if (late !== null) return late;
   const state = readRunState({ projectId: run.projectId, slug: run.slug, env: ctx.env });
   const published = publishedBodyFile({ bodyFile, runDir: run.runDir, jobId: run.jobId, origins: run.origins ?? [], coverageLine: coverageRecordLine(state) });
   const current = currentBranch(cwd, ctx.env);
@@ -453,6 +464,8 @@ export async function runPublish(argv, ctx) {
   const values = publishOptions(argv);
   const messageFile = requireMessageFile(values["message-file"], PUBLISH_USAGE);
   const run = await resolveRun(values, ctx);
+  const late = lateClaimExit(run, ctx);
+  if (late !== null) return late;
   const cwd = worktreeOf(run, ctx.env);
   const bodyFile = resolve(values["body-file"]);
   const body = readRequiredFile(bodyFile, "--body-file");

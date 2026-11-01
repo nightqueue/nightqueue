@@ -10,7 +10,7 @@ import { reclassifyFromLog } from "../../src/queue/repair.mjs";
 import { runCycle } from "../../src/queue/runner.mjs";
 import { ensureProject, makeDir, makeHome, makeProject } from "../../test-support/memory.mjs";
 import { useFakeClaude } from "../../test-support/queue-fake.mjs";
-import { assistantEvent, doneStream, gateStream, noticeText, PR_URL, resultEvent, systemInitEvent, toNdjson } from "../../test-support/streams.mjs";
+import { assistantEvent, doneStream, gateStream, noticeText, PR_URL, resultEvent, systemInitEvent, toNdjson, recordedDone, recordedGate } from "../../test-support/streams.mjs";
 import { fakeJobWorktree } from "../../test-support/job-worktree.mjs";
 
 const TIER_HEADER = "Tier: complex (set by the operator - the pipeline may only raise it, with evidence, never lower it)";
@@ -102,8 +102,8 @@ test("two tiered jobs whose briefs share their first six words get the base slug
 
 test("the repair of one tiered job never reads the state.json of another one, even when its pipeline names the same run", async (t) => {
   const env = makeRunnerHome(t, "tier-slug-repair", [
-    { stdout: doneStream({ slug: "shared-run" }), exitCode: 0 },
-    { stdout: gateStream({ slug: "shared-run" }), exitCode: 0 },
+    { stdout: doneStream({ slug: "shared-run" }), runState: recordedDone(), exitCode: 0 },
+    { stdout: gateStream({ slug: "shared-run" }), runState: recordedGate(), exitCode: 0 },
   ]);
   const a = queueTiered(env, "Rename the lease column of the jobs table");
   const b = queueTiered(env, "Drop the retired ship columns after the close migration");
@@ -164,7 +164,7 @@ test("a legacy gated job re-classified from its log ignores the witness another 
   await reclassifyFromLog({ id: b, env });
 
   const rowB = getJob(b, env);
-  assert.equal(rowB.status, "gate");
+  assert.equal(rowB.status, "failed", "a run another job stamped lends this job no record, and no text opens a gate");
   assert.equal(rowB.pr_url, null, "the re-classification took the pull request of the other job");
   assert.equal(readFileSync(join(runDir(ensureProject(env, "alpha"), shared, env), "state.json"), "utf8"), bytes);
 });

@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { runDir } from "../../src/config/paths.mjs";
-import { clearRunOutcome, decideResume, isSafeSegment, readRunState, RESUME_PHASE_ORDER, resumeHandoff } from "../../src/queue/resume.mjs";
+import { decideResume, isSafeSegment, readRunState, recordsOfClaim, RESUME_PHASE_ORDER, resumeHandoff } from "../../src/queue/resume.mjs";
 import { recordHeldWorktree, recordJobBlock } from "../../src/queue/run-state.mjs";
 import { buildPrompt } from "../../src/queue/spawn.mjs";
 import { FIXED_PROJECT_ID as ALPHA_ID, makeHome } from "../../test-support/memory.mjs";
@@ -142,29 +142,6 @@ test("every broken state has its own reason and none of them ever throws", () =>
   for (const decision of [decideResume({ state: null }), decideResume({ state: "{ not json" })]) {
     assert.deepEqual({ resume: decision.resume, fromPhase: decision.fromPhase, reuseWorktree: decision.reuseWorktree }, { resume: false, fromPhase: null, reuseWorktree: false });
   }
-});
-
-test("clearRunOutcome drops the record of the previous attempt and keeps everything else the run wrote", (t) => {
-  const env = makeHome(t, "resume-clear-outcome");
-  const terminal = { status: "gate", prUrl: null, finishedAt: "2026-09-14T00:00:00Z" };
-  writeState(env, {
-    projectId: ALPHA_ID,
-    slug: "fix-the-worker",
-    content: state({ outcome: { status: "done", prUrl: "https://github.com/acme/api/pull/42" }, terminal }),
-  });
-
-  assert.equal(clearRunOutcome({ projectId: ALPHA_ID, slug: "fix-the-worker", env }).status, "written");
-  const cleared = readRunState({ projectId: ALPHA_ID, slug: "fix-the-worker", env });
-  assert.equal(cleared.outcome, undefined, "the record of the previous attempt survived the clear");
-  assert.deepEqual(cleared.terminal, terminal, "clearing the record threw away the witness");
-  assert.equal(cleared.schemaVersion, 1);
-  assert.equal(cleared.phases.length, 2);
-  assert.equal(decideResume({ state: cleared }).fromPhase, "architecture", "the resume decision changed with the clear");
-
-  assert.equal(clearRunOutcome({ projectId: ALPHA_ID, slug: "fix-the-worker", env }).status, "absent", "a state with no record was rewritten");
-  assert.equal(clearRunOutcome({ projectId: ALPHA_ID, slug: "never-ran", env }).status, "absent");
-  assert.equal(existsSync(join(runDir(ALPHA_ID, "never-ran", env), "state.json")), false, "the clear created a state.json");
-  assert.equal(clearRunOutcome({ projectId: ALPHA_ID, slug: "../../escape", env }).status, "absent");
 });
 
 test("the handoff tells the agent where the run lives, what it kept and which phase comes next", (t) => {
@@ -308,6 +285,30 @@ test("a run with no operator origin takes exactly the decision it took before", 
     lastPhase: "architecture",
   });
   assert.equal(decideResume({ state: state({ phases, resumeCount: 1 }) }).reason, "resume-cap");
+});
+
+test("the claim's view drops a termination of another attempt, so the run resumes after its earlier phases; an unstamped or own one still closes it", () => {
+  const phases = ["triage", "explore"];
+  const stale = state({ phases, termination: { phase: "qa", reason: "Old.", claim: { attempt: 1, session: "s" } } });
+  const view = recordsOfClaim(stale, 2);
+  assert.equal(view.termination, undefined);
+  assert.deepEqual(view.ignoredAttempts, [1]);
+  assert.equal(view.phases.length, 2, "the phases of an earlier claim are what a retry resumes from");
+  assert.deepEqual([decideResume({ state: view }).reason, decideResume({ state: view }).fromPhase], ["resume", "architecture"]);
+
+  const own = recordsOfClaim(stale, 1);
+  assert.equal(decideResume({ state: own }).reason, "terminated-by-verdict");
+  assert.equal(own.ignoredAttempts, undefined);
+  const unstamped = recordsOfClaim(state({ phases, termination: { phase: "qa", reason: "Old." } }), 2);
+  assert.equal(decideResume({ state: unstamped }).reason, "terminated-by-verdict");
+});
+
+test("the claim's view leaves anything that is not a usable state or attempt as it came", () => {
+  for (const held of [null, undefined, "text", [1]]) assert.equal(recordsOfClaim(held, 2), held);
+  const stale = state({ termination: { phase: "qa", reason: "Old.", claim: { attempt: 1 } } });
+  assert.equal(recordsOfClaim(stale, undefined), stale);
+  const odd = state({ termination: "legacy text", terminal: { status: "done", claim: "not a stamp" }, ignoredRecords: "junk" });
+  assert.deepEqual(recordsOfClaim(odd, 2), odd);
 });
 
 test("a first attempt whose state.json holds only the job block and the worktree is not resumed, for the reason it had before the block", (t) => {

@@ -129,7 +129,7 @@ test("a `running` row whose lease expired never blocks the migration: it is name
   const env = v20Host(t, "schema-migrate-stale", runningJob("-1 hour"));
   const { ctx, err } = makeCtx(env);
   assert.equal((await migrateHomeSchema(ctx)).status, "migrated");
-  assert.deepEqual(err, ["warning: J-1 is `running` with an expired lease; the next runner recovers it"]);
+  assert.deepEqual(err, ["warning: J-1 is `running` with an expired lease; the next runner fails it with a notice - send it back with `nightqueue queue retry`"]);
 });
 
 test("an earlier backup is never overwritten: the migration writes a stamped copy beside it", async (t) => {
@@ -197,7 +197,7 @@ test("migrateSchemaStep runs `update --schema-only` from the installed runtime w
   const { env } = makeHostEnv(t, "schema-migrate-step");
   const calls = [];
   const answers = [
-    { status: 0, stdout: "database schema: v20 -> v21 (backup at /x)\n", stderr: "warning: J-3 is `running` with an expired lease; the next runner recovers it\n" },
+    { status: 0, stdout: "database schema: v20 -> v21 (backup at /x)\n", stderr: "warning: J-3 is `running` with an expired lease; the next runner fails it with a notice - send it back with `nightqueue queue retry`\n" },
     { status: 1, stdout: "", stderr: "nightqueue: the database must migrate from v20 to v21, but pid 9 still use it\n" },
   ];
   const out = [];
@@ -213,7 +213,7 @@ test("migrateSchemaStep runs `update --schema-only` from the installed runtime w
   assert.equal(calls[0].options.env[SCHEMA_PARENT_ENV], String(process.pid));
   assert.ok(out.includes("database schema: ok (v20 -> v21 (backup at /x))"), out.join("\n"));
   assert.ok(out.some((line) => line.startsWith("the database schema changed: restart every MCP client")), out.join("\n"));
-  assert.ok(err.includes("warning: J-3 is `running` with an expired lease; the next runner recovers it"), err.join("\n"));
+  assert.ok(err.includes("warning: J-3 is `running` with an expired lease; the next runner fails it with a notice - send it back with `nightqueue queue retry`"), err.join("\n"));
 
   const report = makeReport(ctx);
   assert.equal(migrateSchemaStep(ctx, report, { ready: true }), false);

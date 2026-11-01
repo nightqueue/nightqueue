@@ -1,18 +1,12 @@
-import { readFileSync } from "node:fs";
 import { NO_CHANGE_RESOLUTION, truncateByCodePoint } from "../memory/jobs.mjs";
+import { isStateObject } from "./resume.mjs";
 import { NO_CHANGE_OUTCOME, RUN_OUTCOME_STATUSES } from "./run-state.mjs";
 import {
-  confirmationSection,
-  extractNoticeFromStream,
-  extractPrUrlFromStream,
   extractResultText,
-  hasGateMarker,
-  hasGateMarkerInStream,
   isPrUrl,
   lastAttemptStream,
-  nestsAnotherSection,
+  lastProviderEvents,
   parseEventLine,
-  prUrlRepo,
   publishedDelivery,
   runtimeKillFromStream,
 } from "./stream.mjs";
@@ -20,47 +14,100 @@ import {
 const BACKOFF_BASE_MS = 5000;
 const BACKOFF_FACTOR = 3;
 const BACKOFF_CAP_MS = 60000;
-const NOTICE_FALLBACK_LIMIT = 8000;
-const GATE_NOTICE_MARGIN_CP = 200;
+const TRANSIENT_STATUS_CODES = new Set([429, 500, 502, 503, 529]);
+const TRANSIENT_ERROR_RE = /^API Error: (429|500|502|503|529)\b/;
 const KILLED_BASH_COMMAND_LIMIT = 120;
 const ABANDONED_COMMAND_LIMIT = 120;
 const RUN_IN_BACKGROUND_HINT =
   "background Bash is kept in the foreground from this version; if you see this, the hook did not run";
 const AUTO_BACKGROUNDED_HINT = "the Bash tool had moved this foreground command to the background after its own timeout";
 
-export const SILENT_STOP_NOTICE = "Pipeline stopped without a PR and without explanation (exit 0). See the log.";
+export const TRANSIENT_RESPAWNS = 2;
+export const SILENT_STOP_NOTICE ="no outcome recorded: the session ended (exit 0) without recording an outcome. See the log.";
+export const GATE_WITHOUT_NOTICE = "the run stopped at a gate but recorded no notice carrying the question. See the log.";
 export const NOTHING_TO_CLOSE_LINE = "nothing to close: the run produced no pull request";
 export const NO_CHANGE_NEXT_STEP_LINE = "Next step: close the job so where it came from is told it was resolved without a code change.";
+export const IGNORED_RECORD_PREFIX = "ignored a record of attempt ";
+export const IGNORED_RECORD_LINE = /^ignored a record of attempt \d+$/;
 
-// The run outcomes of an attempt that committed something, which a "no change needed" conclusion can never be.
-const COMMITTED_RUN_OUTCOMES = ["pr_opened", "local_commit"];
-
-// Explicit precedence of the outcome: a stop wins over a timeout, a timeout is never a retryable failure, and a clean exit only
-// waits at the gate when the run itself asked for a decision (the `gate` boolean) AND said why (a `reason`) — either missing is a failure;
-// a clean exit that recorded `no_change` with its conclusion and committed nothing ends `done` with no pull request,
-// and one whose own telemetry recorded that it committed nothing, without that record, leaves nothing to close.
-function decideStatus({ exitCode, timedOut, idleTimedOut, stopped, prUrl, gate, noChange, reason, runOutcome }) {
-  if (stopped) return "cancelled";
-  if (timedOut || idleTimedOut) return "failed";
-  if (exitCode !== 0) return "failed";
-  if (prUrl && !gate) return "done";
-  if (gate && reason) return "gate";
-  if (noChange && reason && !COMMITTED_RUN_OUTCOMES.includes(runOutcome)) return "done";
-  return !gate && !noChange && runOutcome === "no_commit" ? "cancelled" : "failed";
+// The ending the process facts alone decide, whatever the run recorded, or null when the process ended cleanly.
+function processEnding({ exitCode, timedOut, idleTimedOut, stopped }) {
+  if (stopped) return { status: "cancelled", noticeMd: "stopped by the operator" };
+  if (timedOut) return { status: "failed", noticeMd: "the run hit its time limit" };
+  if (idleTimedOut) return { status: "failed", noticeMd: "the run went idle past its limit" };
+  if (exitCode === 0) return null;
+  return { status: "failed", noticeMd: Number.isInteger(exitCode) ? `the session exited with code ${exitCode}` : "the session ended with no exit code" };
 }
 
-// The notice of a run that committed nothing: its own reason, when it gave one, followed by the nothing-to-close line.
-function nothingToCloseNotice(reason) {
-  return reason ? `${reason}\n\n${NOTHING_TO_CLOSE_LINE}` : NOTHING_TO_CLOSE_LINE;
+// The ending of a clean exit, read only from what the run recorded: its outcome, then its termination, else a failure that says nothing was recorded.
+function recordedEnding(record, state, prUrl) {
+  if (record?.status === "done" && prUrl) return { status: "done", noticeMd: record.notice };
+  if (record?.status === "gate" && record.notice) return { status: "gate", noticeMd: record.notice };
+  if (record?.status === NO_CHANGE_OUTCOME && record.notice) {
+    return { status: "done", prUrl: null, noticeMd: noChangeNotice(record.notice), resolution: NO_CHANGE_RESOLUTION };
+  }
+  const reason = terminationReason(state);
+  if (reason) return { status: "cancelled", noticeMd: prUrl ? reason : `${reason}\n\n${NOTHING_TO_CLOSE_LINE}` };
+  return { status: "failed", noticeMd: record?.status === "gate" ? GATE_WITHOUT_NOTICE : SILENT_STOP_NOTICE };
 }
 
-// A notice with every trailing paragraph that starts with one of the prefixes stripped off, trimmed at its end.
-export function trailingStripped(notice, prefixes) {
+// Tells whether the run's own records already settled how it ended, by the same rows that decide a clean exit: a settled run never starts another session.
+export function isRecordSettled(state, prUrl) {
+  return recordedEnding(pipelineOutcome(state), state, prUrl).status !== "failed";
+}
+
+// The reason of the termination the run recorded, or null when it recorded none that says why.
+function terminationReason(state) {
+  const termination = isStateObject(state?.termination) ? state.termination : null;
+  return typeof termination?.reason === "string" && termination.reason.trim() ? termination.reason.trim() : null;
+}
+
+// What the run recorded before it failed, in words a notice can carry, or null.
+export function recordedConclusion(state) {
+  const record = pipelineOutcome(state);
+  if (record?.status === "gate" && record.notice) return `a gate: ${record.notice}`;
+  const reason = terminationReason(state);
+  return reason ? `a termination: ${reason}` : null;
+}
+
+// The notice of a failed ending, quoting what the same attempt had recorded so the question never stays only in state.json.
+function failedNotice(noticeMd, state) {
+  const conclusion = recordedConclusion(state);
+  return conclusion ? `${noticeMd} after recording ${conclusion}` : noticeMd;
+}
+
+// One line per attempt whose record the view ignored, each with its own runtime prefix.
+function ignoredRecordLines(state) {
+  const attempts = Array.isArray(state?.ignoredAttempts) ? state.ignoredAttempts : [];
+  return attempts.map((attempt) => `${IGNORED_RECORD_PREFIX}${attempt}`);
+}
+
+// The notice ending on what the claim ignored, so a record of another claim is never silently dropped; an empty notice leaves the lines on their own.
+function withIgnoredRecords(noticeMd, state) {
+  const lines = ignoredRecordLines(state);
+  if (lines.length === 0) return noticeMd;
+  return [...(noticeMd ? [noticeMd] : []), ...lines].join("\n\n");
+}
+
+// What an orphan's notice ends on, read from the claim the sweep is failing: what it had recorded and what it ignored, or null.
+export function orphanNoticeTail(state) {
+  const conclusion = recordedConclusion(state);
+  const paragraphs = [...(conclusion ? [`it had recorded ${conclusion}`] : []), ...ignoredRecordLines(state)];
+  return paragraphs.length > 0 ? paragraphs.join("\n\n") : null;
+}
+
+// Tells whether a paragraph is the one a marker names: a text it starts with, or a pattern of its exact shape.
+function paragraphMatches(paragraph, marker) {
+  return marker instanceof RegExp ? marker.test(paragraph) : paragraph.startsWith(marker);
+}
+
+// A notice with every trailing paragraph one of the markers names stripped off, trimmed at its end.
+export function trailingStripped(notice, markers) {
   let text = typeof notice === "string" ? notice.trimEnd() : "";
   for (;;) {
     const cut = text.lastIndexOf("\n\n");
     const tail = cut < 0 ? text : text.slice(cut + 2);
-    if (!prefixes.some((prefix) => tail.startsWith(prefix))) return text;
+    if (!markers.some((marker) => paragraphMatches(tail, marker))) return text;
     text = cut < 0 ? "" : text.slice(0, cut).trimEnd();
   }
 }
@@ -69,44 +116,6 @@ export function trailingStripped(notice, prefixes) {
 export function noChangeNotice(reason) {
   const text = trailingStripped(reason, [NO_CHANGE_NEXT_STEP_LINE]);
   return text ? `${text}\n\n${NO_CHANGE_NEXT_STEP_LINE}` : NO_CHANGE_NEXT_STEP_LINE;
-}
-
-// Why the run stopped: state.json is the machine record of the outcome and the `## Notice` is the explanation for the operator — the pipeline had been summarizing the second inside the first, so the notice the run wrote wins, the summary the pipeline recorded is the fallback, and the whole final text is the last resort.
-function gateReason(log, resultText, recorded) {
-  const notice = extractNoticeFromStream(log);
-  if (notice) return { text: notice, source: "stream" };
-  if (recorded) return { text: recorded, source: "record" };
-  const text = String(resultText ?? "").trim();
-  return { text: text ? truncateByCodePoint(text, NOTICE_FALLBACK_LIMIT) : null, source: "result" };
-}
-
-// Tells whether the process ended cleanly, the only case where a missing reason is a silent stop instead of a real failure.
-function endedCleanly({ exitCode, timedOut, idleTimedOut, stopped }) {
-  return exitCode === 0 && !timedOut && !idleTimedOut && !stopped;
-}
-
-// The fixed notice of a gate whose own notice does not carry the question it is supposed to ask.
-export function brokenGateNotice(planPath) {
-  return `the run stopped at a gate but its notice does not carry the question - see ${planPath ?? "an unknown plan path"}`;
-}
-
-// The plan's own `## Requires user confirmation` section, or null when the plan is missing or unreadable.
-function readPlanConfirmation(planPath) {
-  if (!planPath) return null;
-  try {
-    return confirmationSection(readFileSync(planPath, "utf8"));
-  } catch {
-    return null;
-  }
-}
-
-// Tells whether a gate's notice fails to carry its question: no confirmation heading, or (unless it nests another artifact's section) far shorter than the plan's own section.
-function isBrokenGateNotice(reason, planPath, { nested = false } = {}) {
-  if (!hasGateMarker(String(reason ?? ""))) return true;
-  if (nested) return false;
-  const planSection = readPlanConfirmation(planPath);
-  if (!planSection) return false;
-  return Array.from(String(reason)).length < Array.from(planSection).length - GATE_NOTICE_MARGIN_CP;
 }
 
 // The `outcome` the pipeline recorded in state.json, field by field; anything outside the contract simply does not participate.
@@ -155,85 +164,49 @@ function withAbandonedCommand(noticeMd, description) {
   return noticeMd ? `${noticeMd}\n\n${line}` : line;
 }
 
-// The prefix of the line naming a pull request published during the run that was not recorded as its delivery.
+// The notice with the abandoned-command line of the log's kill appended, or as it is when the log shows no kill.
+export function noticeWithAbandonedCommand(noticeMd, log) {
+  const kill = runtimeKillFromStream(log);
+  return kill ? withAbandonedCommand(noticeMd, kill.description) : noticeMd;
+}
+
+// The prefix of the line that named a pull request not recorded as the run's delivery; it is no longer written, and rows finished before that still carry it.
 export const STRAY_PR_PREFIX = "⚠️ another pull request was published during this run and was NOT recorded as its delivery: ";
 
-// The line naming a dropped publication, its branch when the host named one, and what was recorded instead.
-function strayPrLine(stray, prUrl) {
-  const branch = stray.branch ? ` on branch \`${stray.branch}\`` : "";
-  const instead = prUrl ? `; recorded instead: ${prUrl}` : "; no pull request of this run's own branch was found";
-  return `${STRAY_PR_PREFIX}${stray.url}${branch}${instead}`;
-}
-
-// Appends the stray pull request line to a notice, never replacing it; no stray leaves the notice as it was.
-function withStrayPr(noticeMd, stray, prUrl) {
-  if (!stray) return noticeMd;
-  const line = strayPrLine(stray, prUrl);
-  return noticeMd ? `${noticeMd}\n\n${line}` : line;
-}
-
-// The pull request of the run: its own branch's publication, the runtime's record, then the text - never a publication proven to be another branch's.
+// The pull request of the run: the runtime's record, then the host's publication on the run's own branch.
 function resolvePrUrl(log, { state, record, provenEdits }) {
-  const reported = record?.prUrl ?? extractPrUrlFromStream(log);
-  const delivery = publishedDelivery(log, {
-    repo: prUrlRepo(reported),
-    branch: state?.branch ?? null,
-    hints: { type: state?.type, slug: state?.slug },
-    recorded: record?.prUrl ?? null,
-    provenEdits,
-  });
-  const fallback = reported === delivery.stray?.url ? null : reported;
-  return { prUrl: delivery.url ?? fallback, stray: delivery.stray };
+  if (record?.prUrl) return record.prUrl;
+  const hints = { type: state?.type, slug: state?.slug };
+  return publishedDelivery(log, { branch: state?.branch ?? null, hints, provenEdits }).url;
 }
 
-// Classifies the run's own ending, exactly as if a runtime kill never happened: the gate, the pull request and the notice rules.
-function classifyEnding({ record, state, resultText, log, ending, prUrl, planPath, runOutcome }) {
-  const gate = record?.status ? record.status === "gate" : hasGateMarker(resultText) || hasGateMarkerInStream(log);
-  const noChange = record?.status === NO_CHANGE_OUTCOME && state?.termination?.phase === "triage";
-  const { text: reason, source } = gateReason(log, resultText, record?.notice ?? null);
-  const status = decideStatus({ ...ending, prUrl, gate, noChange, reason, runOutcome });
-  const nested = source === "record" && nestsAnotherSection(reason);
-  if (status === "gate" && isBrokenGateNotice(reason, planPath, { nested })) {
-    return { status: "failed", noticeMd: brokenGateNotice(planPath) };
-  }
-  if (status === "cancelled" && !ending.stopped) return { status, noticeMd: nothingToCloseNotice(reason) };
-  if (status === "done" && noChange && !prUrl) return { status, noticeMd: noChangeNotice(reason), resolution: NO_CHANGE_RESOLUTION };
-  const silentStop = status === "failed" && !reason && endedCleanly(ending);
-  return { status, noticeMd: silentStop ? SILENT_STOP_NOTICE : reason };
-}
-
-// Classifies one attempt of a job from what the pipeline recorded, its stream, how the process ended, the run's plan and the outcome its own telemetry recorded.
-export function classifyJobResult({ log, exitCode, timedOut = false, idleTimedOut = false, stopped = false, state = null, planPath = null, runOutcome = null, provenEdits = [] } = {}) {
+// Classifies one attempt of a job only from the run's records and how its process ended; the stream speaks only through its structured events.
+export function classifyJobResult({ log, exitCode, timedOut = false, idleTimedOut = false, stopped = false, state = null, provenEdits = [] } = {}) {
   const resultText = extractResultText(log) ?? "";
   const record = pipelineOutcome(state);
-  const { prUrl, stray } = resolvePrUrl(log, { state, record, provenEdits });
+  const prUrl = resolvePrUrl(log, { state, record, provenEdits });
   const kill = runtimeKillFromStream(log);
-  if (kill && isTerminalKill(kill, record)) {
-    return { status: "failed", prUrl, noticeMd: withStrayPr(runtimeKillNotice(kill), stray, prUrl), resultText };
-  }
-  const ending = { exitCode, timedOut, idleTimedOut, stopped };
-  const base = classifyEnding({ record, state, resultText, log, ending, prUrl, planPath, runOutcome });
-  const noticeMd = kill ? withAbandonedCommand(base.noticeMd, kill.description) : base.noticeMd;
-  return { ...base, prUrl, noticeMd: withStrayPr(noticeMd, stray, prUrl), resultText };
+  if (kill && isTerminalKill(kill, record)) return { status: "failed", prUrl, noticeMd: withIgnoredRecords(failedNotice(runtimeKillNotice(kill), state), state), resultText };
+  const ending = processEnding({ exitCode, timedOut, idleTimedOut, stopped }) ?? recordedEnding(record, state, prUrl);
+  const quoted = ending.status === "failed" ? failedNotice(ending.noticeMd, state) : ending.noticeMd;
+  const noticeMd = kill ? withAbandonedCommand(quoted, kill.description) : quoted;
+  return { prUrl, ...ending, noticeMd: withIgnoredRecords(noticeMd, state), resultText };
 }
 
-// Tells whether the failure was a transient network or provider overload, the only kind worth an automatic retry.
-export function isTransientFailure(log) {
-  const text = String(log ?? "");
-  const httpCode =
-    /\b(?:HTTP|status|error)\b\W{0,2}(?:429|500|502|503|529)\b/i.test(text) ||
-    /\b(?:429|500|502|503|529)\b\s+(?:Too Many Requests|Bad Gateway|Service Unavailable|Overloaded)/i.test(text);
-  return (
-    httpCode ||
-    /overloaded/i.test(text) ||
-    /rate[_-]?limit/i.test(text) ||
-    /connection error/i.test(text) ||
-    /\bECONNRESET\b/.test(text) ||
-    /\bETIMEDOUT\b/.test(text) ||
-    /fetch failed/i.test(text) ||
-    /\bENOTFOUND\b/.test(text) ||
-    /can't reach the API server/i.test(text)
-  );
+// The provider failure a `result` event reports in its structured fields, as a short description, or null; its text is never read.
+function providerFailureOfResult(result) {
+  if (result?.is_error === true && TRANSIENT_STATUS_CODES.has(result.api_error_status)) return `result api_error_status ${result.api_error_status}`;
+  if (result?.subtype !== "error_during_execution" || !Array.isArray(result.errors)) return null;
+  const match = result.errors.map((error) => (typeof error === "string" ? TRANSIENT_ERROR_RE.exec(error) : null)).find(Boolean);
+  return match ? `result error ${match[1]}` : null;
+}
+
+// What the structured events of the last spawn say about a transient provider failure, as a short description, or null when they say nothing.
+export function transientFailureEvent(log) {
+  const { result, rateLimit } = lastProviderEvents(lastAttemptStream(String(log ?? "")));
+  const failure = providerFailureOfResult(result);
+  if (failure) return failure;
+  return rateLimit?.status === "rejected" ? "rate_limit_event rejected" : null;
 }
 
 const NIGHTQUEUE_MCP_SERVER = "nightqueue";
@@ -289,8 +262,8 @@ export function nightqueueMcpUnreachable(log) {
   }
 }
 
-// Exponential backoff of the given attempt: 5s, 15s, 45s, capped at 60s.
-export function backoffMs(attempt) {
-  const spent = Number.isInteger(attempt) && attempt > 0 ? attempt : 1;
+// Exponential backoff of the given re-spawn: 5s, 15s, 45s, capped at 60s.
+export function backoffMs(respawn) {
+  const spent = Number.isInteger(respawn) && respawn > 0 ? respawn : 1;
   return Math.min(BACKOFF_BASE_MS * BACKOFF_FACTOR ** (spent - 1), BACKOFF_CAP_MS);
 }

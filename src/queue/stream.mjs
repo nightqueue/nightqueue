@@ -328,6 +328,18 @@ export function extractRateLimitFromEventLine(rawLine) {
   };
 }
 
+// The orchestrator's last `result` event and the last rate limit of a stream, the only events that can say the provider failed a session; each is null when absent.
+export function lastProviderEvents(log) {
+  const found = { result: null, rateLimit: null };
+  for (const line of String(log ?? "").split("\n")) {
+    const event = parseEventLine(line);
+    if (!event || isSubagentEvent(event)) continue;
+    if (event.type === "result") found.result = event;
+    if (event.type === "rate_limit_event") found.rateLimit = extractRateLimitFromEventLine(line) ?? found.rateLimit;
+  }
+  return found;
+}
+
 // Final text of the run: the last `result` event with a string; "" when a result event carried none, null when there was none.
 export function extractResultText(log) {
   let text = null;
@@ -345,15 +357,6 @@ export function extractResultText(log) {
 // Tells whether a text stops at the gate: a standalone heading outside any code fence, never an inline mention.
 export function hasGateMarker(text) {
   return linesWithFenceState(text).some((entry) => isMarkerCandidate(entry) && GATE_HEADING_RE.test(entry.line));
-}
-
-// Tells whether the ORCHESTRATOR announced the gate anywhere in the stream.
-export function hasGateMarkerInStream(log) {
-  for (const line of String(log ?? "").split("\n")) {
-    const text = orchestratorTextFromLine(line);
-    if (text && hasGateMarker(text)) return true;
-  }
-  return false;
 }
 
 // Records a tool_use block's `run_in_background` input against its id, the only place the stream says whether a Bash call chose the background itself.

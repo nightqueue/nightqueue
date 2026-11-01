@@ -17,7 +17,7 @@ import { APPEND_USAGE, appendedText, runAppend } from "./run-append.mjs";
 import { saveIndexFromText } from "./index-save.mjs";
 import { realPath } from "./paths.mjs";
 import { findPrTemplate } from "./pr-template.mjs";
-import { durationCell, phaseRows, readJobLog, readRequiredFile, requireRunState, resolveRun, RUN_OPTIONS, worktreeOf } from "./run-context.mjs";
+import { durationCell, phaseRows, readJobLog, readRequiredFile, requireRunState, resolveRun, resolveWritableRun, RUN_OPTIONS, worktreeOf } from "./run-context.mjs";
 import {
   bodyProblemLines,
   branchWips,
@@ -233,7 +233,7 @@ async function runCheck(argv, ctx) {
     throw new UserError(`unknown phase \`${positionals[0]}\`; the artifact gate covers: ${[...PHASE_ARTIFACTS.keys()].join(", ")}`);
   }
   const stage = checkStage(check, values.stage);
-  const run = await resolveRun(values, ctx);
+  const run = await resolveWritableRun(values, ctx);
   const state = readRunState({ projectId: run.projectId, slug: run.slug, env: ctx.env });
   const prompt = check === "03" ? await jobPromptText(run, ctx.env) : null;
   const result = checkArtifact({ run, check, stage, state, prompt, ctx });
@@ -253,7 +253,7 @@ async function runCommit(argv, ctx) {
   const { values, positionals } = parseCommand(argv, { ...RUN_OPTIONS, ...options });
   checkArgs(positionals, { max: 0, usage: USAGE.commit });
   const messageFile = requireMessageFile(values["message-file"], USAGE.commit);
-  const run = await resolveRun(values, ctx);
+  const run = await resolveWritableRun(values, ctx);
   const cwd = worktreeOf(run, ctx.env);
   const { artifact, listed } = listedFromArtifact(run, values["files-from"]);
   const wips = branchWips(cwd, run, ctx.env);
@@ -290,7 +290,7 @@ async function runPr(argv, ctx) {
   const { values, positionals } = parseCommand(argv, { ...RUN_OPTIONS, ...options });
   checkArgs(positionals, { max: 0, usage: USAGE.pr });
   checkPrMode(values);
-  const run = await resolveRun(values, ctx);
+  const run = await resolveWritableRun(values, ctx);
   const cwd = worktreeOf(run, ctx.env);
   const template = announceTemplate(run, cwd, ctx);
   if (values.template === true) return 0;

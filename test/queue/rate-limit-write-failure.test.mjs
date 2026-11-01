@@ -9,7 +9,7 @@ import { runCycle } from "../../src/queue/runner.mjs";
 import { extractRateLimitFromEventLine } from "../../src/queue/stream.mjs";
 import { ensureProject, makeDir, makeHome, makeProject } from "../../test-support/memory.mjs";
 import { useFakeClaude } from "../../test-support/queue-fake.mjs";
-import { doneStream, PR_URL, rateLimitEvent, systemInitEvent, toNdjson } from "../../test-support/streams.mjs";
+import { doneStream, PR_URL, rateLimitEvent, systemInitEvent, toNdjson, recordedDone } from "../../test-support/streams.mjs";
 import { fakeJobWorktree } from "../../test-support/job-worktree.mjs";
 
 // A git double for the preflight: a clean checkout of the default branch.
@@ -29,7 +29,7 @@ test("a registry write that fails leaves the child's own protection reading no p
   const env = makeHome(t, "rate-limit-write-failure");
   makeProject(t, env, "alpha");
   const event = rateLimitEvent({ status: "rejected", rateLimitType: "five_hour", fiveHour: 0.99 });
-  useFakeClaude(env, makeDir(t, "rate-limit-write-failure-plan"), [{ stdout: toNdjson([systemInitEvent({}), event]), holdMs: silenceMs, tail: doneStream(), exitCode: 0 }]);
+  useFakeClaude(env, makeDir(t, "rate-limit-write-failure-plan"), [{ stdout: toNdjson([systemInitEvent({}), event]), holdMs: silenceMs, tail: doneStream(), runState: recordedDone(), exitCode: 0 }]);
   writeRunnerRecord({ pid: process.pid, startedAt: new Date().toISOString(), mode: "drain" }, env);
 
   const pause = rejectionPause(event);

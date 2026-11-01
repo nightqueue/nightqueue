@@ -13,7 +13,7 @@ import { fakeJobWorktree } from "../../test-support/job-worktree.mjs";
 import { makeDir, makeHome, makeProject, projectIdOf } from "../../test-support/memory.mjs";
 import { orgOfProject, setIntegrations } from "../../test-support/origin-provider.mjs";
 import { useFakeClaude } from "../../test-support/queue-fake.mjs";
-import { doneStream } from "../../test-support/streams.mjs";
+import { doneStream, recordedDone } from "../../test-support/streams.mjs";
 
 const LINEAR_API = "https://api.linear.app/graphql";
 const SENTRY_API = "https://sentry.io/api/0/organizations/acme";
@@ -86,7 +86,7 @@ function originFilesOf(env, projectId) {
 
 // Queues a job on Linear DLW-99 and runs one cycle with the fake fetch, answering the job id.
 async function runLinearJob(t, home, fetch) {
-  useFakeClaude(home.env, makeDir(t, "linked-plan"), [{ stdout: doneStream(), exitCode: 0 }]);
+  useFakeClaude(home.env, makeDir(t, "linked-plan"), [{ stdout: doneStream({ slug: null }), runState: recordedDone(), exitCode: 0 }]);
   const { id } = addJob({ projectId: home.projectId, prompt: "fix the crash", origin: [{ kind: "linear", ref: "DLW-99" }] }, home.env);
   const gitImpl = ({ args }) => `${{ status: "", "rev-parse": "main", "symbolic-ref": "origin/main" }[args[0]]}\n`;
   const cycle = await runCycle({ jobId: id, env: home.env, deps: { worktreeImpl: fakeJobWorktree(), gitImpl, fetch: fetch.impl } });

@@ -22,7 +22,7 @@ import {
   trackerProvider,
 } from "../../test-support/origin-provider.mjs";
 import { useFakeClaude } from "../../test-support/queue-fake.mjs";
-import { doneStream } from "../../test-support/streams.mjs";
+import { doneStream, recordedDone } from "../../test-support/streams.mjs";
 
 const ORIGIN = { kind: "tracker", ref: "4507" };
 
@@ -137,7 +137,7 @@ test("the runner logs one origin line at claim, writes the origin file into the 
     const projectId = projectIdOf(env, "alpha");
     setIntegrations(env, projectId, { tracker: {} });
     bindTrackerConnection(env, projectId);
-    useFakeClaude(env, makeDir(t, `enrich-runner-${label}-plan`), [{ stdout: doneStream(), exitCode: 0 }]);
+    useFakeClaude(env, makeDir(t, `enrich-runner-${label}-plan`), [{ stdout: doneStream({ slug: null }), runState: recordedDone(), exitCode: 0 }]);
     await withProviders(originProviders(), async () => {
       const { id } = addJob({ projectId, prompt: `fix ${TRACKER_URL}` }, env);
       const gitImpl = ({ args }) => `${{ status: "", "rev-parse": "main", "symbolic-ref": "origin/main" }[args[0]]}\n`;
@@ -156,7 +156,7 @@ test("the runner logs one origin line at claim, writes the origin file into the 
 test("a job without an origin gets no origin line", async (t) => {
   const env = makeHome(t, "enrich-runner-plain");
   makeProject(t, env, "alpha");
-  useFakeClaude(env, makeDir(t, "enrich-runner-plain-plan"), [{ stdout: doneStream(), exitCode: 0 }]);
+  useFakeClaude(env, makeDir(t, "enrich-runner-plain-plan"), [{ stdout: doneStream(), runState: recordedDone(), exitCode: 0 }]);
   const { id } = addJob({ projectId: projectIdOf(env, "alpha"), prompt: "fix the worker" }, env);
   const gitImpl = ({ args }) => `${{ status: "", "rev-parse": "main", "symbolic-ref": "origin/main" }[args[0]]}\n`;
   await runCycle({ jobId: id, env, deps: { worktreeImpl: fakeJobWorktree(), gitImpl } });

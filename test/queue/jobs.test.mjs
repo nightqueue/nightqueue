@@ -16,7 +16,7 @@ import {
   closeRefusal,
   claimJobById,
   claimNextJob,
-  countAttempt,
+  noteRespawn,
   countActiveJobs,
   countActiveJobsByProject,
   countBlockedGates,
@@ -53,8 +53,8 @@ function makeQueue(t, name) {
 }
 
 // Enqueues a job with the fields the test cares about.
-function enqueue(env, { project = "alpha", prompt = "fix the worker", priority, maxAttempts, timeoutS } = {}) {
-  return addJob({ projectId: ensureProject(env, project), prompt, priority, maxAttempts, timeoutS }, env).id;
+function enqueue(env, { project = "alpha", prompt = "fix the worker", priority, timeoutS } = {}) {
+  return addJob({ projectId: ensureProject(env, project), prompt, priority, timeoutS }, env).id;
 }
 
 // Moves the lease of a job past the reclaim grace, which is how a runner that died looks from the outside.
@@ -71,10 +71,9 @@ test("addJob refuses an empty prompt and every value outside the accepted ranges
   assert.equal(countsByStatus(env).pending, 0, "a refused project still wrote a job row");
   assert.throws(() => enqueue(env, { priority: 0 }), /invalid `priority`/);
   assert.throws(() => enqueue(env, { priority: 10 }), /invalid `priority`/);
-  assert.throws(() => enqueue(env, { maxAttempts: 99 }), /invalid `max_attempts`/);
   assert.throws(() => enqueue(env, { timeoutS: 30 }), /invalid `timeout_s`/);
   const job = addJob({ projectId: ensureProject(env, "alpha"), prompt: "  fix the worker  " }, env);
-  assert.deepEqual({ ...job, id: undefined }, { id: undefined, projectId: ensureProject(env, "alpha"), project: "alpha", priority: 5, maxAttempts: 1, timeoutS: 14400, origin: [], startBranch: null, startWorktree: null });
+  assert.deepEqual({ ...job, id: undefined }, { id: undefined, projectId: ensureProject(env, "alpha"), project: "alpha", priority: 5, timeoutS: 14400, origin: [], startBranch: null, startWorktree: null });
   assert.equal(getJob(job.id, env).prompt, "fix the worker");
 });
 
@@ -196,7 +195,7 @@ test("a job parked on a rate limit keeps its attempt and leaves the claimable sc
   );
   assert.equal(jobView(parked).not_before, `${later.replace(/\.\d+Z$/, "")}Z`, "the job view says nothing about when the job is due");
   assert.equal(claimNextJob({ worker: WORKER, cap: CAP }, env), null, "a parked job was claimed before its reset");
-  assert.equal(hasClaimablePending(env), false, "a parked job counted as waiting to be claimed");
+  assert.equal(hasClaimablePending({}, env), false, "a parked job counted as waiting to be claimed");
   assert.equal(peekNextJob(env), null, "`queue run --dry` promised a job no claim can take");
 
   const due = enqueue(env, { project: "beta" });
@@ -236,9 +235,9 @@ test("the lease renewal is the ownership check: it fails for a worker that no lo
   assert.equal(renewLease(id, { worker: OTHER_WORKER }, env), false);
   assert.equal(renewLease(id, { worker: WORKER }, env), true);
   assert.equal(countActiveJobs(env), 1, "the renewal did not bring the job back under a live lease");
-  assert.equal(countAttempt(id, { worker: OTHER_WORKER }, env), false);
-  assert.equal(countAttempt(id, { worker: WORKER }, env), true);
-  assert.equal(getJob(id, env).attempts, 2);
+  assert.equal(noteRespawn(id, { worker: OTHER_WORKER }, env), false);
+  assert.equal(noteRespawn(id, { worker: WORKER }, env), true);
+  assert.equal(getJob(id, env).attempts, 1, "a re-spawn spent an attempt");
 });
 
 test("the run facts are written once each and never by a worker that lost the job", (t) => {
@@ -539,7 +538,6 @@ test("retry takes a gated job back to pending, keeping what makes the pipeline r
   assert.equal(job.branch, "fix/it");
   assert.equal(job.session_id, SESSION_ID);
   assert.equal(job.attempts, 1, "the retry rewrote the history of attempts");
-  assert.equal(job.max_attempts, 2, "the retry did not widen the allowance");
   assert.equal(job.worker, null);
   assert.equal(job.lease_until, null);
   assert.ok(job.started_at, "the retry forgot the first start of the job");
@@ -599,16 +597,6 @@ test("--fresh gives up the slug, the branch and the session, so the next run sta
   assert.equal(job.session_id, null);
   const row = openDb(env).prepare("SELECT last_session_id, last_session_attempt FROM jobs WHERE id = ?").get(id);
   assert.deepEqual({ ...row }, { last_session_id: null, last_session_attempt: null }, "--fresh kept the session of a previous attempt");
-});
-
-test("the allowance of attempts grows by one per retry and stops at the ceiling the queue accepts", (t) => {
-  const env = makeQueue(t, "jobs-retry-allowance");
-  const id = enqueue(env, { maxAttempts: 9 });
-  openDb(env).prepare("UPDATE jobs SET status = 'failed' WHERE id = ?").run(id);
-
-  assert.equal(retryJob(id, {}, env).max_attempts, 10);
-  openDb(env).prepare("UPDATE jobs SET status = 'failed' WHERE id = ?").run(id);
-  assert.equal(retryJob(id, {}, env).max_attempts, 10, "the retry pushed the allowance past the accepted range");
 });
 
 test("a retry without a note clears the reason of a cancel instead of passing it off as an answer to the gate", (t) => {
@@ -771,17 +759,16 @@ test("a preflight gate gives the attempt back, keeps the block in result and not
   assert.equal(claimNextJob({ worker: WORKER, cap: CAP }, env), null, "a claim took a gated job");
 });
 
-test("a preflight gate is retried without a note, keeps its allowance, and an agent gate still needs one", (t) => {
+test("a preflight gate is retried without a note, and an agent gate still needs one", (t) => {
   const env = makeQueue(t, "jobs-retry-preflight-gate");
   const id = enqueue(env);
   claimJobById(id, { worker: WORKER, cap: CAP }, env);
   gatePreflightJob(id, { worker: WORKER, ...DIRTY_BLOCK }, env);
-  const before = getJob(id, env);
 
   const job = retryJob(id, {}, env);
   assert.deepEqual(
-    { status: job.status, blockedCode: job.blocked_code, maxAttempts: job.max_attempts, note: job.operator_note },
-    { status: "pending", blockedCode: null, maxAttempts: before.max_attempts, note: null },
+    { status: job.status, blockedCode: job.blocked_code, note: job.operator_note },
+    { status: "pending", blockedCode: null, note: null },
   );
 
   const agentGate = enqueue(env);

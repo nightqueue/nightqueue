@@ -5,7 +5,7 @@ import { phaseAttemptsTitle, phaseCaption, trackCounts } from "../../lib/track";
 import type { AttemptRow, Job, JobDetail, JobStatus, Timeline, TimelinePhase } from "../../lib/types";
 import { ActionIcon, StatusIcon } from "../StatusIcon";
 import { CardTitle } from "./Card";
-import { BUDGET_COUNTER_TOOLTIP } from "./JobHeader";
+import { ATTEMPT_COUNT_TOOLTIP } from "./JobHeader";
 import { TotalsStrip } from "./TotalsStrip";
 
 type PhaseState = TimelinePhase["state"];
@@ -152,7 +152,7 @@ function TrackHeader({ job, timeline }: { job: JobDetail; timeline: Timeline | n
       <span className="ml-auto inline-flex flex-wrap items-center gap-2">
         {known && <OutcomeChip phases={running} status={job.status} />}
         {skipped > 0 && <Chip className="border-line text-dim">{`${skipped} skipped`}</Chip>}
-        <Chip title={BUDGET_COUNTER_TOOLTIP}>{`attempt ${job.attempts} of ${job.max_attempts}`}</Chip>
+        <Chip title={ATTEMPT_COUNT_TOOLTIP}>{`attempt ${job.attempts}`}</Chip>
       </span>
     </div>
   );

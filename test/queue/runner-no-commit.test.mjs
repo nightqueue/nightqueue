@@ -9,7 +9,7 @@ import { jobDetailView } from "../../src/queue/view.mjs";
 import { withReadOnlyStore } from "../../src/store/open.mjs";
 import { ensureProject, makeDir, makeHome, makeProject, projectIdOf } from "../../test-support/memory.mjs";
 import { useFakeClaude } from "../../test-support/queue-fake.mjs";
-import { noticeText, resultEvent, SLUG, slugEvent, systemInitEvent, toNdjson } from "../../test-support/streams.mjs";
+import { noticeText, recordedTermination, resultEvent, SLUG, slugEvent, systemInitEvent, toNdjson } from "../../test-support/streams.mjs";
 import { fakeJobWorktree } from "../../test-support/job-worktree.mjs";
 
 const REASON = "The bug is already fixed on main; there was nothing to change.";
@@ -22,23 +22,22 @@ function fakeGit() {
 }
 
 // A home with project `alpha`, the fake `claude` replaying the given attempts, and one job of it.
-function noPrHome(t, name, attempts = [{ stdout: NO_PR, exitCode: 0 }], { maxAttempts } = {}) {
+function noPrHome(t, name, attempts = [{ stdout: NO_PR, exitCode: 0 }]) {
   const env = makeHome(t, name);
   makeProject(t, env, "alpha");
   useFakeClaude(env, makeDir(t, `${name}-plan`), attempts);
-  const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker", maxAttempts }, env).id;
+  const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker" }, env).id;
   return { env, id };
 }
 
-// Records a pipeline run of the job's slug with the given outcome, dated the given SQLite offset from now.
-function recordRun(env, outcome, offset) {
+// Records a pipeline run of the job's slug with the given outcome, dated later than the attempt.
+function recordRun(env, outcome) {
   const { runId } = logPipelineRun({ projectId: projectIdOf(env, "alpha"), slug: SLUG, outcome, phases: [] }, env);
-  openDb(env).prepare(`UPDATE pipeline_runs SET created_at = datetime('now', ?) WHERE id = ?`).run(offset, runId);
+  openDb(env).prepare("UPDATE pipeline_runs SET created_at = datetime('now', '+1 hour') WHERE id = ?").run(runId);
 }
 
-test("a clean run with no pull request whose own telemetry says no_commit ends cancelled with the run's reason and the nothing-to-close line", async (t) => {
-  const { env, id } = noPrHome(t, "runner-no-commit");
-  recordRun(env, "no_commit", "+1 hour");
+test("a clean run with no pull request that recorded its termination ends cancelled with the reason and the nothing-to-close line", async (t) => {
+  const { env, id } = noPrHome(t, "runner-no-commit", [{ stdout: NO_PR, runState: recordedTermination({ reason: REASON }), exitCode: 0 }]);
 
   const cycle = await runCycle({ jobId: id, env, deps: { worktreeImpl: fakeJobWorktree(), gitImpl: fakeGit() } });
 
@@ -51,25 +50,20 @@ test("a clean run with no pull request whose own telemetry says no_commit ends c
   assert.equal(jobView(row).status, "cancelled");
 });
 
-test("only a no_commit row of THIS attempt cancels: an older one, local_commit and no row at all stay failed", async (t) => {
-  const cases = [
-    ["older", (env) => recordRun(env, "no_commit", "-1 hour")],
-    ["local-commit", (env) => recordRun(env, "local_commit", "+1 hour")],
-    ["no-row", () => {}],
-  ];
-  for (const [label, seed] of cases) {
-    const { env, id } = noPrHome(t, `runner-no-commit-${label}`);
-    seed(env);
+test("telemetry never cancels: a no_commit or local_commit row with no termination stays failed", async (t) => {
+  for (const outcome of ["no_commit", "local_commit"]) {
+    const { env, id } = noPrHome(t, `runner-no-commit-${outcome}`);
+    recordRun(env, outcome);
     const cycle = await runCycle({ jobId: id, env, deps: { worktreeImpl: fakeJobWorktree(), gitImpl: fakeGit() } });
-    assert.equal(cycle.processed[0].status, "failed", label);
-    assert.equal(String(getJob(id, env).notice_md).includes(NOTHING_TO_CLOSE_LINE), false, `${label}: the nothing-to-close line was written`);
+    assert.equal(cycle.processed[0].status, "failed", outcome);
+    assert.equal(String(getJob(id, env).notice_md).includes(NOTHING_TO_CLOSE_LINE), false, `${outcome}: the nothing-to-close line was written`);
   }
 });
 
-test("a no_commit run is never retried, even when its log carries a transient error", async (t) => {
+test("a terminated run is never retried, even when its log carries a transient error", async (t) => {
   const overloaded = toNdjson([systemInitEvent(), slugEvent(SLUG), resultEvent({ text: noticeText(`${REASON} The API was overloaded once.`) })]);
-  const { env, id } = noPrHome(t, "runner-no-commit-transient", [{ stdout: overloaded, exitCode: 0 }, { stdout: overloaded, exitCode: 0 }], { maxAttempts: 2 });
-  recordRun(env, "no_commit", "+1 hour");
+  const attempt = { stdout: overloaded, runState: recordedTermination({ reason: REASON }), exitCode: 0 };
+  const { env, id } = noPrHome(t, "runner-no-commit-transient", [attempt, attempt]);
 
   const cycle = await runCycle({ jobId: id, env, deps: { worktreeImpl: fakeJobWorktree(), gitImpl: fakeGit(), sleepImpl: async () => {} } });
 

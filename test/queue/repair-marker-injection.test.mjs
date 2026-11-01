@@ -5,13 +5,15 @@ import { jobLogPath, logsDir } from "../../src/config/paths.mjs";
 import { openDb } from "../../src/memory/db.mjs";
 import { addJob, claimJobById, finishJob } from "../../src/memory/jobs.mjs";
 import { reclassifyFromLog } from "../../src/queue/repair.mjs";
+import { recordOutcome } from "../../src/queue/run-state.mjs";
 import { ensureProject, makeHome, makeProject } from "../../test-support/memory.mjs";
-import { intermediateDeliveryStream, PR_URL } from "../../test-support/streams.mjs";
+import { codeChangePublishedEvent, PR_URL, resultEvent, systemInitEvent, toNdjson } from "../../test-support/streams.mjs";
 
 const WORKER = "host:1000";
 const CAP = 4;
 const SLUG = "fix-the-worker";
 const NOTICE = "The pull request is open and the checks are green.";
+const DELIVERY = toNdjson([systemInitEvent(), codeChangePublishedEvent(), resultEvent({ text: "" })]);
 const CLEAN_ENDING = { status: "gate", prUrl: null, exitCode: 0, timedOut: false, idleTimedOut: false, attempts: 1 };
 
 // A home with one registered project and the queue table ready.
@@ -28,7 +30,7 @@ function writeJobLog(env, id, log) {
 }
 
 // A job that ended `gate`, no pull request on the row, with a real delivery on disk in its log.
-function finishedJob(env, { status = "gate", result = CLEAN_ENDING, log = intermediateDeliveryStream(), slug = SLUG } = {}) {
+function finishedJob(env, { status = "gate", result = CLEAN_ENDING, log = DELIVERY, slug = SLUG } = {}) {
   const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker" }, env).id;
   claimJobById(id, { worker: WORKER, cap: CAP }, env);
   openDb(env).prepare("UPDATE jobs SET slug = ? WHERE id = ?").run(slug, id);
@@ -40,8 +42,9 @@ function finishedJob(env, { status = "gate", result = CLEAN_ENDING, log = interm
 test("an incidental raw line shaped like an attempt marker, landing after a real delivery, never makes repair discard that delivery", async (t) => {
   const env = makeQueue(t, "repair-marker-injection");
   // Only ONE real attempt boundary; the second "marker" below is stderr/noise incidentally shaped like one, appended AFTER the delivery already happened.
-  const log = `${intermediateDeliveryStream()}=== attempt 2 @ 2026-09-14T22:00:00.000Z ===\n`;
+  const log = `${DELIVERY}=== attempt 2 @ 2026-09-14T22:00:00.000Z ===\n`;
   const id = finishedJob(env, { log });
+  recordOutcome({ projectId: ensureProject(env, "alpha"), slug: SLUG, status: "done", env });
 
   const outcome = await reclassifyFromLog({ id, env });
 

@@ -54,9 +54,9 @@ async function refuseBusyHome(ctx, from) {
   return activity;
 }
 
-// Warns about the `running` rows whose lease expired: a dead runner left them, and the first runner after the migration recovers them.
+// Warns about the `running` rows whose lease expired: a dead runner left them, and the first runner after the migration fails them with a notice.
 function warnStaleRunning(ctx, activity) {
-  for (const id of activity.staleRunning) ctx.err(`warning: ${jobRef(id)} is \`running\` with an expired lease; the next runner recovers it`);
+  for (const id of activity.staleRunning) ctx.err(`warning: ${jobRef(id)} is \`running\` with an expired lease; the next runner fails it with a notice - send it back with \`nightqueue queue retry\``);
 }
 
 // Where the copy taken before this migration goes: `nightqueue.db.pre-v<N>`, or a stamped name beside it so an earlier copy is never overwritten.

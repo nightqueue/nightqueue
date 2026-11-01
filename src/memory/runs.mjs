@@ -252,18 +252,6 @@ export function updateRunTelemetry({ projectId, slug, durationS, phases = [] }, 
   return { ...written, projectId: owner };
 }
 
-// The outcome of the latest run recorded for a project id and slug at or after an instant, or null when no run was recorded since then.
-export function latestRunOutcome({ projectId, slug, since } = {}, env = process.env, db = openDb(env)) {
-  const owner = projectIdOrNull(projectId);
-  const cleanSlug = optionalText(slug);
-  const from = isoToSqlite(since);
-  if (!owner || !cleanSlug || !from) throw new UserError("latestRunOutcome needs a project id, a slug and a valid `since` instant");
-  const row = db
-    .prepare("SELECT outcome FROM pipeline_runs WHERE project_id = ? AND slug = ? AND datetime(created_at) >= datetime(?) ORDER BY id DESC LIMIT 1")
-    .get(owner, cleanSlug, from);
-  return row?.outcome ?? null;
-}
-
 // An optional `since` instant in the database's format: absent answers null, an invalid one is refused.
 function optionalSince(since) {
   if (since === undefined || since === null) return null;

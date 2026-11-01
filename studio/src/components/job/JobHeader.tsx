@@ -69,7 +69,7 @@ function StatusPill({ status, closeState, closing, noChange, label }: { status: 
   );
 }
 
-export const BUDGET_COUNTER_TOOLTIP = "budget counter: inner retries count";
+export const ATTEMPT_COUNT_TOOLTIP = "attempts of this job: inner re-spawns do not count";
 
 // A static caption chip of the header (priority, attempt), with an optional tooltip.
 function HeaderChip({ children, title }: { children: string; title?: string }) {
@@ -221,7 +221,7 @@ export function JobHeader({ job, statusLabel, closeState, actions, onCancel }: J
         <div className="flex flex-wrap items-center gap-2.5">
           <StatusPill status={job.status} closeState={closeState} closing={actions.close.closing} noChange={job.resolution === "no-change"} label={statusLabel} />
           <HeaderChip>{`p${job.priority}`}</HeaderChip>
-          <HeaderChip title={BUDGET_COUNTER_TOOLTIP}>{`attempt ${job.attempts} / ${job.max_attempts}`}</HeaderChip>
+          <HeaderChip title={ATTEMPT_COUNT_TOOLTIP}>{`attempt ${job.attempts}`}</HeaderChip>
         </div>
         <OriginLine job={job} />
         <ClosingBadge close={actions.close} />

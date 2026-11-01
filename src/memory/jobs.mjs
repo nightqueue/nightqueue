@@ -22,7 +22,6 @@ import { jobTitle, storableTitle } from "../queue/job-title.mjs";
 
 export const JOB_STATUSES = ["pending", "running", "done", "gate", "failed", "cancelled", "closed"];
 export const PRIORITY_RANGE = { min: 1, max: 9, fallback: 5 };
-export const MAX_ATTEMPTS_RANGE = { min: 1, max: 10, fallback: 1 };
 export const TIMEOUT_RANGE = { min: 60, max: 86400, fallback: 14400 };
 export const LEASE_SLACK_S = 600;
 export { ACTIVE_JOB_PREDICATE, LEASE_GRACE_S };
@@ -43,7 +42,6 @@ const JOB_VIEW_COLUMNS = [
   "status",
   "priority",
   "attempts",
-  "max_attempts",
   "timeout_s",
   "session_id",
   "slug",
@@ -213,7 +211,7 @@ function optionalRunSlug(value) {
 }
 
 const INSERT_JOB =
-  "INSERT INTO jobs (project_id, prompt, priority, max_attempts, timeout_s, slug, operator_note, origin, title, start_branch, start_worktree) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+  "INSERT INTO jobs (project_id, prompt, priority, timeout_s, slug, operator_note, origin, title, start_branch, start_worktree) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
 
 // Requires the id of the project a job is queued for; a name never reaches the jobs table.
 function requireProjectId(projectId) {
@@ -247,7 +245,7 @@ function insertJob(db, values) {
 
 // Inserts a job bound to a run in the same transaction that proves no open job is bound to it already.
 function insertRunJob(db, { values, project }, env) {
-  const slug = values[5];
+  const slug = values[4];
   return inTransaction(db, () => {
     const bound = openJobForRun(db, { projectId: project.id, slug });
     if (bound) throw new UserError(`${jobRef(bound.id)} already runs from ${runDir(project.id, slug, env)}`);
@@ -256,14 +254,13 @@ function insertRunJob(db, { values, project }, env) {
 }
 
 // Enqueues a job for a project id, validating every range before the write; a run slug is refused while an open job is bound to it.
-export function addJob({ projectId, prompt, priority, maxAttempts, timeoutS, slug, operatorNote, origin, title, startBranch, startWorktree } = {}, env = process.env) {
+export function addJob({ projectId, prompt, priority, timeoutS, slug, operatorNote, origin, title, startBranch, startWorktree } = {}, env = process.env) {
   const origins = resolveOrigins({ origin, prompt });
   const start = startPoint({ startBranch, startWorktree });
   const values = [
     requireProjectId(projectId),
     requireText("prompt", prompt),
     optionalRangedInt("priority", priority, PRIORITY_RANGE),
-    optionalRangedInt("max_attempts", maxAttempts, MAX_ATTEMPTS_RANGE),
     optionalRangedInt("timeout_s", timeoutS, TIMEOUT_RANGE),
     optionalRunSlug(slug),
     optionalNote(operatorNote),
@@ -274,14 +271,13 @@ export function addJob({ projectId, prompt, priority, maxAttempts, timeoutS, slu
   ];
   const db = openDb(env);
   const project = requireJobProject(db, values[0]);
-  const inserted = values[5] === null ? insertJob(db, values) : insertRunJob(db, { values, project }, env);
+  const inserted = values[4] === null ? insertJob(db, values) : insertRunJob(db, { values, project }, env);
   return {
     id: Number(inserted.lastInsertRowid),
     projectId: project.id,
     project: project.name,
     priority: values[2],
-    maxAttempts: values[3],
-    timeoutS: values[4],
+    timeoutS: values[3],
     origin: origins,
     startBranch: start.startBranch,
     startWorktree: start.startWorktree,
@@ -322,25 +318,29 @@ const CLAIM_ASSIGNMENT = `SET status = 'running',
             blocked_code = NULL`;
 // A job parked by a rate limit is pending but not claimable yet: it comes back into scope by itself at the instant the limit resets.
 const DUE_NOW = `(candidate.not_before IS NULL OR datetime(candidate.not_before) <= datetime('now'))`;
-const CANDIDATE_QUERY = `SELECT candidate.id FROM jobs AS candidate
-              WHERE candidate.status = 'pending' AND ${DUE_NOW}
-              ORDER BY candidate.priority ASC, candidate.created_at ASC, candidate.id ASC
-              LIMIT 1`;
 const CAP_CONDITION = `(SELECT COUNT(*) FROM jobs AS slot WHERE ${ACTIVE_JOB_PREDICATE}) < ?`;
 
-// Claims the highest priority pending job: the whole decision lives in the WHERE, bounded only by the ceiling when one is set.
-export function claimNextJob({ worker, cap } = {}, env = process.env) {
+// The query of the next claimable job, leaving out the given ids.
+function candidateQuery(excludeIds = []) {
+  return `SELECT candidate.id FROM jobs AS candidate
+              WHERE candidate.status = 'pending' AND ${DUE_NOW}${excludeIdsClause(excludeIds)}
+              ORDER BY candidate.priority ASC, candidate.created_at ASC, candidate.id ASC
+              LIMIT 1`;
+}
+
+// Claims the highest priority pending job outside `excludeIds`: the whole decision lives in the WHERE, bounded only by the ceiling when one is set.
+export function claimNextJob({ worker, cap, excludeIds = [] } = {}, env = process.env) {
   const ceiling = capClause(cap);
   const db = openDb(env);
   const statement = db.prepare(
     `UPDATE jobs
         ${CLAIM_ASSIGNMENT}
-      WHERE id = (${CANDIDATE_QUERY})
+      WHERE id = (${candidateQuery(excludeIds)})
         AND status = 'pending'
         ${ceiling.sql}
       RETURNING *`,
   );
-  const values = [requireText("worker", worker), ...ceiling.values];
+  const values = [requireText("worker", worker), ...excludeIds, ...ceiling.values];
   return withProjectFacts(db, claimWithAttempt(db, () => statement.get(...values)));
 }
 
@@ -482,11 +482,11 @@ export function renewLease(id, { worker } = {}, env = process.env) {
   return changed.changes === 1;
 }
 
-// Spends one attempt of a job this worker still owns, at the start of every retry of the loop, counting the re-spawn on the claim's attempt row.
-export function countAttempt(id, { worker } = {}, env = process.env) {
+// Counts one re-spawn on the claim's attempt row of a job this worker still owns and re-arms its lease, spending no attempt.
+export function noteRespawn(id, { worker } = {}, env = process.env) {
   const db = openDb(env);
   const statement = db.prepare(
-    `UPDATE jobs SET attempts = attempts + 1, lease_until = ${LEASE_EXPRESSION}
+    `UPDATE jobs SET lease_until = ${LEASE_EXPRESSION}
       WHERE id = ? AND status = 'running' AND worker = ?`,
   );
   const values = [requireId(id), requireText("worker", worker)];
@@ -497,7 +497,7 @@ export function countAttempt(id, { worker } = {}, env = process.env) {
   });
 }
 
-// Liveness seam of the sweep by default: without an implementation nothing is protected from recycling.
+// Liveness seam of the sweep by default: without an implementation nothing is protected from being failed.
 function neverLive() {
   return false;
 }
@@ -508,6 +508,16 @@ function isLiveWorker(liveWorkerImpl, worker) {
     return liveWorkerImpl(worker) === true;
   } catch {
     return false;
+  }
+}
+
+// Applies the notice-tail seam to one orphan; an implementation that throws or answers oddly adds nothing and never blocks the sweep.
+function orphanTail(orphanTailImpl, row) {
+  try {
+    const tail = orphanTailImpl(row);
+    return typeof tail === "string" && tail ? tail : null;
+  } catch {
+    return null;
   }
 }
 
@@ -526,15 +536,24 @@ function closeOrphanAttempts(exclude) {
     WHERE finished_at IS NULL AND job_id IN (SELECT id FROM jobs WHERE ${ORPHAN_PREDICATE}${exclude})`;
 }
 
-// Requeues every job whose runner died, failing the ones that already spent their own max_attempts.
-export function sweepOrphans(env = process.env, { liveWorkerImpl = neverLive } = {}) {
+// The column that gives a job row the ordinal of its last claim, the one a reader of its run compares a record's stamp with.
+const LAST_CLAIM_ORDINAL = "(SELECT MAX(attempt) FROM job_attempts WHERE job_id = jobs.id) AS claim_attempt";
+
+// The notice of an orphan, read from its row before the sweep clears it.
+const ORPHAN_NOTICE_EXPRESSION = `'the runner died during attempt ' || attempts || ' (worker ' || COALESCE(worker, 'unknown') || ', lease until ' || COALESCE(lease_until, 'never') || '); nothing was requeued - send it back with nightqueue queue retry'`;
+
+// Fails every job whose runner died, with a notice naming the attempt, the worker and the lease and ending on what the seam says of its run; only the operator sends one back.
+export function sweepOrphans(env = process.env, { liveWorkerImpl = neverLive, orphanTailImpl = () => null } = {}) {
   const db = openDb(env);
   const protectable = db.prepare(
     `SELECT id, worker FROM jobs WHERE ${ORPHAN_PREDICATE} AND attempt_started_at IS NOT NULL AND ${HARD_CEILING_OPEN}`,
   );
+  const quote = db.prepare("UPDATE jobs SET notice_md = notice_md || ? WHERE id = ?");
   return inTransaction(db, () => {
     const guarded = protectable.all().filter((row) => isLiveWorker(liveWorkerImpl, row.worker)).map((row) => row.id);
     const exclude = excludeIdsClause(guarded);
+    const orphans = db.prepare(`SELECT id, project_id, slug, attempts, ${LAST_CLAIM_ORDINAL} FROM jobs WHERE ${ORPHAN_PREDICATE}${exclude}`).all(...guarded);
+    db.prepare(closeOrphanAttempts(exclude)).run(...guarded);
     const fail = db.prepare(
       `UPDATE jobs
           SET status = 'failed',
@@ -542,15 +561,16 @@ export function sweepOrphans(env = process.env, { liveWorkerImpl = neverLive } =
               worker = NULL,
               lease_until = NULL,
               attempt_started_at = NULL,
-              result = '{"orphaned":true}'
-        WHERE ${ORPHAN_PREDICATE} AND attempts >= max_attempts${exclude}`,
-    );
-    const requeue = db.prepare(
-      `UPDATE jobs SET status = 'pending', worker = NULL, lease_until = NULL, attempt_started_at = NULL
+              result = '{"orphaned":true}',
+              notice_md = ${ORPHAN_NOTICE_EXPRESSION}
         WHERE ${ORPHAN_PREDICATE}${exclude}`,
     );
-    db.prepare(closeOrphanAttempts(exclude)).run(...guarded);
-    return { failed: fail.run(...guarded).changes, requeued: requeue.run(...guarded).changes };
+    const failed = fail.run(...guarded).changes;
+    for (const row of orphans) {
+      const tail = orphanTail(orphanTailImpl, row);
+      if (tail !== null) quote.run(`\n\n${tail}`, row.id);
+    }
+    return { failed };
   });
 }
 
@@ -728,7 +748,7 @@ function finishedAttemptEnd(status, result) {
   return { outcome, exitReason: Number.isInteger(run.exitCode) ? `exit:${run.exitCode}` : null };
 }
 
-// Closes a job with its outcome, closes its attempt row and adds the attempt's measures to the totals, and links the pipeline run, in one transaction; false means the job was lost.
+// Closes a job with its outcome (a delivery writes only its own notice, every other status keeps the row's when it has none), closes its attempt row and adds the attempt's measures to the totals, and links the pipeline run, in one transaction; false means the job was lost.
 export function finishJob(id, { worker, status, result, prUrl, prTitle, noticeMd, usage, hostCommands, baselineCtx, orchestrator } = {}, env = process.env) {
   const db = openDb(env);
   const statement = db.prepare(
@@ -742,34 +762,39 @@ export function finishJob(id, { worker, status, result, prUrl, prTitle, noticeMd
             result = COALESCE(?, result),
             pr_url = COALESCE(?, pr_url),
             pr_title = COALESCE(?, pr_title),
-            notice_md = COALESCE(?, notice_md),
+            notice_md = CASE WHEN ? = 'done' THEN ? ELSE COALESCE(?, notice_md) END,
             baseline_ctx = COALESCE(?, baseline_ctx)
       WHERE id = ? AND status = 'running' AND worker = ?
       RETURNING project_id, slug, status, pr_url, finished_at`,
   );
+  const finalStatus = requireWritableStatus(status);
+  const notice = optionalText(noticeMd);
+  const jobId = requireId(id);
   const values = [
-    requireWritableStatus(status),
+    finalStatus,
     toJsonText(result),
     optionalText(prUrl),
     storableTitle(prTitle),
-    optionalText(noticeMd),
+    finalStatus,
+    notice,
+    notice,
     optionalNumber(baselineCtx),
-    requireId(id),
+    jobId,
     requireText("worker", worker),
   ];
-  const attemptEnd = finishedAttemptEnd(values[0], result);
+  const attemptEnd = finishedAttemptEnd(finalStatus, result);
   const written = withFullSync(db, () =>
     inTransaction(db, () => {
       const row = statement.get(...values);
       if (!row) return null;
       linkRun(db, id, row.project_id, row.slug);
-      const attempt = closeOpenAttempt(db, values[6], attemptEnd);
-      settleMeasures(db, values[6], attempt, { usage, hostCommands, orchestrator });
+      const attempt = closeOpenAttempt(db, jobId, attemptEnd);
+      settleMeasures(db, jobId, attempt, { usage, hostCommands, orchestrator });
       return row;
     }),
   );
   if (!written) return false;
-  ensureDurable(requireId(id), { ...written, worker, attemptEnd }, FINISH_WITNESS, env);
+  ensureDurable(jobId, { ...written, worker, attemptEnd }, FINISH_WITNESS, env);
   return true;
 }
 
@@ -794,8 +819,8 @@ function requireAttempt(field, value) {
   throw new UserError(`job field \`${field}\` must be a non-negative integer, got \`${String(value)}\``);
 }
 
-// Fills the session facts of the attempt that announced them, only while the same claim still runs the row and never over a later attempt's session; false when it landed nowhere.
-export function fillSessionFacts(id, { worker, attempts, sessionId, lastSessionId, lastSessionAttempt } = {}, env = process.env) {
+// Fills the session facts of the attempt that announced them, only while the same claim still runs the row, never over a later attempt's session nor over one of its own attempt other than the session it followed; a superseded entry still gives the first session a row of its own attempt lacks; false when it landed nowhere.
+export function fillSessionFacts(id, { worker, attempts, sessionId, lastSessionId, previousSessionId, lastSessionAttempt } = {}, env = process.env) {
   const attempt = requireAttempt("lastSessionAttempt", lastSessionAttempt);
   const db = openDb(env);
   const statement = db.prepare(
@@ -804,7 +829,7 @@ export function fillSessionFacts(id, { worker, attempts, sessionId, lastSessionI
             last_session_id = ?,
             last_session_attempt = ?
       WHERE id = ? AND status = 'running' AND worker = ? AND attempts = ?
-        AND (last_session_attempt IS NULL OR last_session_attempt <= ?)`,
+        AND (last_session_attempt IS NULL OR last_session_attempt < ? OR (last_session_attempt = ? AND last_session_id IS ?))`,
   );
   const values = [
     optionalText(sessionId),
@@ -814,11 +839,16 @@ export function fillSessionFacts(id, { worker, attempts, sessionId, lastSessionI
     requireText("worker", worker),
     requireAttempt("attempts", attempts),
     attempt,
+    attempt,
+    optionalText(previousSessionId),
   ];
+  const firstSession = db.prepare("UPDATE jobs SET session_id = ? WHERE id = ? AND attempts = ? AND session_id IS NULL AND last_session_attempt = ?");
   return inTransaction(db, () => {
-    if (statement.run(...values).changes !== 1) return false;
-    noteAttemptSession(db, { jobId: values[3], worker: values[4], sessionId: values[1] });
-    return true;
+    if (statement.run(...values).changes === 1) {
+      noteAttemptSession(db, { jobId: values[3], worker: values[4], sessionId: values[1] });
+      return true;
+    }
+    return values[0] !== null && firstSession.run(values[0], values[3], values[5], attempt).changes === 1;
   });
 }
 
@@ -916,6 +946,21 @@ function refuseRecoveredRetry(id, env) {
   if (getJob(id, env)?.prompt === RECOVERED_PROMPT) throw new UserError(recoveredPromptRefusal(id));
 }
 
+// Tells whether a row can go back to the queue: the same predicate as the WHERE of `retryJob`, which keeps the decision.
+function isRetryable(row, answer) {
+  if (row?.status === "failed" || row?.status === "cancelled") return true;
+  return row?.status === "gate" && (answer !== null || row.blocked_code !== null);
+}
+
+// The refusal `retryJob` would throw for this job and note, or null when it would go back to the queue; it writes nothing.
+export function retryRefusalOf(id, { note } = {}, env = process.env) {
+  const jobId = requireId(id);
+  const row = getJob(jobId, env);
+  if (row?.prompt === RECOVERED_PROMPT) return recoveredPromptRefusal(jobId);
+  const answer = optionalText(note);
+  return isRetryable(row, answer) ? null : retryRefusal(jobId, row, { note: answer });
+}
+
 // Columns a `--fresh` retry gives up, so the next run starts from phase 0 with a worktree of its own.
 const RETRY_FRESH_COLUMNS =
   ", slug = NULL, branch = NULL, session_id = NULL, last_session_id = NULL, last_session_attempt = NULL, next_attempt_fresh = 1";
@@ -931,8 +976,6 @@ export function retryJob(id, { note, fresh } = {}, env = process.env) {
             lease_until = NULL,
             finished_at = NULL,
             not_before = NULL,
-            max_attempts = CASE WHEN status = 'gate' AND blocked_code IS NOT NULL THEN max_attempts
-                                ELSE min(max_attempts + 1, ${MAX_ATTEMPTS_RANGE.max}) END,
             blocked_code = NULL,
             operator_note = COALESCE(?, CASE WHEN status = 'gate' AND blocked_code IS NOT NULL THEN operator_note END)${fresh === true ? RETRY_FRESH_COLUMNS : ""}
       WHERE id = ? AND (status IN ('failed', 'cancelled') OR (status = 'gate' AND (? IS NOT NULL OR blocked_code IS NOT NULL)))
@@ -1300,7 +1343,7 @@ export function jobsWithPrNumber(number, env = process.env, db = openDb(env)) {
 
 // Unfinished jobs that already have a run directory; a job with no slug never ran, so no witness can speak for it.
 export function listJobsWithSlug(env = process.env, db = openDb(env)) {
-  const rows = db.prepare("SELECT id, project_id, slug FROM jobs WHERE status IN ('running', 'pending') AND slug IS NOT NULL").all();
+  const rows = db.prepare(`SELECT id, project_id, slug, attempts, ${LAST_CLAIM_ORDINAL} FROM jobs WHERE status IN ('running', 'pending') AND slug IS NOT NULL`).all();
   return registry.attachNames(db, rows);
 }
 
@@ -1541,9 +1584,9 @@ export function correctJobPrAttribution(id, { fromUrl, toUrl, fromLine, toLine }
   return withWriteRetry(() => statement.run(...values)).changes === 1;
 }
 
-// Tells whether some pending job is waiting to be claimed, which is what tells an empty queue from a full ceiling.
-export function hasClaimablePending(env = process.env) {
-  return Boolean(openDb(env).prepare(`${CANDIDATE_QUERY}`).get());
+// Tells whether some pending job outside `excludeIds` is waiting to be claimed, which is what tells an empty queue from a full ceiling or a raced claim.
+export function hasClaimablePending({ excludeIds = [] } = {}, env = process.env) {
+  return Boolean(openDb(env).prepare(candidateQuery(excludeIds)).get(...excludeIds));
 }
 
 // Returns the job the next claim would pick, for the read-only report of `queue run --dry`.
