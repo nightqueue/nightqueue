@@ -23,19 +23,20 @@
  * @property {(id: number, spec: {worker: string, code: string, message: string, noticeMd: string}) => Promise<boolean>} gatePreflightJob stops a claimed job at a gate on a preflight block, giving the attempt back and keeping `blocked_code` as the mark of a retry that needs no note
  * @property {(id: number, spec: object) => Promise<boolean>} parkJob back to pending, due only at the instant a rate limit resets
  * @property {(id: number, spec: object) => Promise<boolean>} renewLease
- * @property {(id: number, spec: object) => Promise<boolean>} countAttempt
- * @property {(options?: object) => Promise<{failed: number, requeued: number}>} sweepOrphans
+ * @property {(id: number, spec: object) => Promise<boolean>} noteRespawn
+ * @property {(options?: object) => Promise<{failed: number}>} sweepOrphans
  * @property {(id: number, facts: object) => Promise<boolean>} persistRunFacts
  * @property {(id: number, spec: {worker: string, candidates: string[]}) => Promise<{status: "bound"|"taken"|"lost", slug?: string, heldBy?: number}>} bindRunSlug claims the first run slug no other job of the project holds
  * @property {(jobId: number, ref: object) => Promise<number>} linkPipelineRun
  * @property {(id: number, outcome: object) => Promise<boolean>} finishJob
  * @property {(id: number, spec: {status: string, noticeMd?: string|null, prUrl?: string|null}) => Promise<boolean>} fillFinishGaps fills the notice and the pull request a row already at `status` is missing, never moving its status; the replay of a queued finish the row already took by another path
- * @property {(id: number, spec: {worker: string, attempts: number, sessionId?: string|null, lastSessionId: string, lastSessionAttempt: number}) => Promise<boolean>} fillSessionFacts fills the session facts of one attempt while the same claim still runs the row, never rewinding a later attempt's session; the replay of a queued `session` record
+ * @property {(id: number, spec: {worker: string, attempts: number, sessionId?: string|null, lastSessionId: string, previousSessionId?: string|null, lastSessionAttempt: number}) => Promise<boolean>} fillSessionFacts fills the session facts of one attempt while the same claim still runs the row, never rewinding a later attempt's session nor a session of its own attempt other than the one it followed; the replay of a queued `session` record
  * @property {(id: number, spec: {attempt: number, usage?: object|null, hostCommands?: object|null, orchestrator?: object|null}) => Promise<boolean>} recordAttemptMeasures stores the measures of one attempt another writer already closed and adds them to the job's totals, once; the late write of a cancelled, swept or outage-stopped attempt
  * @property {(id: number, options?: object) => Promise<object>} cancelJob
  * @property {(id: number, spec: {worker: string, reason?: string}) => Promise<object|null>} cancelRunningJob cancels a running job only while that worker still owns it; null when the row moved on
  * @property {() => Promise<object[]>} listCloseCandidates done jobs that carry a pull request url, the candidates `queue close --merged` may confirm and close
  * @property {(number: number) => Promise<{id: number, pr_url: string}[]>} jobsWithPrNumber the jobs whose pull request URL carries `/pull/<number>`; the caller compares the whole URL
+ * @property {(id: number, options?: {note?: string}) => Promise<string|null>} retryRefusalOf the refusal `retryJob` would throw for this job and note, or null when it would go back to the queue; writes nothing
  * @property {(id: number, options?: object) => Promise<object>} retryJob
  * @property {(id: number) => Promise<object|null>} getJob
  * @property {(id: number) => Promise<{projectKey: string|null}>} jobSpawnRefs the facts the runtime records in a run's job block before the spawn
@@ -53,7 +54,7 @@
  * @property {(ids: number[]) => Promise<number[]>} existingJobIds the ids of the list that have a row, read-only
  * @property {(spec: object) => Promise<"recovered"|"exists"|"project-missing">} recoverJob recreates a lost row from its run on disk with a `result.recovered` marker
  * @property {(id: number, spec: object) => Promise<boolean>} correctJobPrAttribution moves a job's pull request URL and swaps its one notice line in a single compare-and-swap; false means refused, nothing written
- * @property {() => Promise<boolean>} hasClaimablePending
+ * @property {(spec?: {excludeIds?: number[]}) => Promise<boolean>} hasClaimablePending
  * @property {() => Promise<object|null>} peekNextJob
  * @property {() => Promise<object[]>} listWithSlug unfinished jobs that already have a run directory
  * @property {() => Promise<object[]>} listOpenJobs every job that is not closed and already named its run, the owners of the worktrees `nightqueue doctor` reports
@@ -80,7 +81,6 @@
  * @property {(run: object) => Promise<object>} logPipelineRun
  * @property {(run: object, options: {since: string}) => Promise<object>} logPipelineRunOnce the replay of a queued run: writes it unless a run of the same project and slug was recorded since `since`, then answers `{skipped: true}`
  * @property {(run: object) => Promise<object>} logPipelineRunUnlessSame writes the run unless the latest run of the same project and slug records the same outcome and phases; answers `{skipped: true}`
- * @property {(spec: object) => Promise<string|null>} latestRunOutcome the outcome of the latest run recorded for a project and slug at or after an instant, or null when there is none
  * @property {(spec: {projectId: string|null, slug: string, since?: string|null}) => Promise<{seq: number, phase: string, model: string|null, status: string, retry: boolean, reason: string|null}[]>} runTimeline the phases of the latest run of a project and slug (at or after `since` when given), in order, read-only; no run answers an empty list
  * @property {(telemetry: object) => Promise<object>} updateRunTelemetry fills the durations and the models the RUNTIME measured in the stream over the row the agent recorded: the measured value wins, the agent's survives only where there is none, and a run the agent never recorded is never inserted
  */
@@ -211,7 +211,7 @@ export const STORE_CONTRACT = Object.freeze({
     "gatePreflightJob",
     "parkJob",
     "renewLease",
-    "countAttempt",
+    "noteRespawn",
     "sweepOrphans",
     "persistRunFacts",
     "bindRunSlug",
@@ -224,6 +224,7 @@ export const STORE_CONTRACT = Object.freeze({
     "cancelRunningJob",
     "listCloseCandidates",
     "jobsWithPrNumber",
+    "retryRefusalOf",
     "retryJob",
     "getJob",
     "jobSpawnRefs",
@@ -262,7 +263,7 @@ export const STORE_CONTRACT = Object.freeze({
     "listCloses",
     "lastLogResults",
   ],
-  runs: ["logPipelineRun", "logPipelineRunOnce", "logPipelineRunUnlessSame", "updateRunTelemetry", "latestRunOutcome", "runTimeline"],
+  runs: ["logPipelineRun", "logPipelineRunOnce", "logPipelineRunUnlessSame", "updateRunTelemetry", "runTimeline"],
   lessons: [
     "saveLesson",
     "getLesson",

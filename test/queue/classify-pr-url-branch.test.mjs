@@ -1,10 +1,7 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
 import { test } from "node:test";
-import { STRAY_PR_PREFIX, classifyJobResult } from "../../src/queue/classify.mjs";
-import { codeChangePublishedEvent, GATE_NOTICE, gateStream, resultEvent, systemInitEvent, toNdjson } from "../../test-support/streams.mjs";
+import { classifyJobResult } from "../../src/queue/classify.mjs";
+import { codeChangePublishedEvent, resultEvent, systemInitEvent, toNdjson } from "../../test-support/streams.mjs";
 
 const REPO = "nightqueue/nightqueue";
 const QA_PR = "https://github.com/nightqueue/nightqueue/pull/71";
@@ -30,34 +27,33 @@ function runState({ branch = RUN_BRANCH, prUrl = OWN_PR, recorded = true } = {})
   return { ...base, outcome: prUrl ? { status: "done", prUrl } : { status: "done" } };
 }
 
-// The flag line the notice must end with.
-function strayLine({ url = QA_PR, branch = QA_BRANCH, recorded = OWN_PR } = {}) {
-  const on = branch ? ` on branch \`${branch}\`` : "";
-  const instead = recorded ? `; recorded instead: ${recorded}` : "; no pull request of this run's own branch was found";
-  return `${STRAY_PR_PREFIX}${url}${on}${instead}`;
-}
-
 test("job 57: a QA publication on another branch of the same repository never replaces the run's own recorded pull request", () => {
   const outcome = classifyJobResult({ log: logWith(qaPublication()), exitCode: 0, state: runState() });
 
   assert.equal(outcome.prUrl, OWN_PR, "the QA scratch pull request was recorded as the job's delivery");
   assert.equal(outcome.status, "done");
-  assert.ok(outcome.noticeMd.endsWith(strayLine()), outcome.noticeMd);
+  assert.equal(outcome.noticeMd, null, "the stray pull request line is no longer written");
 });
 
-test("a publication naming no branch still loses to the runtime record, and is flagged", () => {
+test("a publication naming no branch still loses to the runtime record", () => {
   const outcome = classifyJobResult({ log: logWith(qaPublication({ branch: null })), exitCode: 0, state: runState() });
 
   assert.equal(outcome.prUrl, OWN_PR);
-  assert.ok(outcome.noticeMd.endsWith(strayLine({ branch: null })), outcome.noticeMd);
 });
 
-test("a publication on the run's own branch, under its published name, still wins over the record without a flag", () => {
+test("a publication on the run's own branch, under its published name, still loses to the record: the record leads", () => {
   const published = "https://github.com/nightqueue/nightqueue/pull/73";
   const outcome = classifyJobResult({ log: logWith(qaPublication({ branch: "feat/queue-close", url: published })), exitCode: 0, state: runState() });
 
-  assert.equal(outcome.prUrl, published, "the host's word about the run's own delivery lost to the record");
-  assert.equal(outcome.noticeMd.includes(STRAY_PR_PREFIX), false, outcome.noticeMd);
+  assert.equal(outcome.prUrl, OWN_PR);
+});
+
+test("a publication on the run's own branch is the pull request when nothing recorded one", () => {
+  const published = "https://github.com/nightqueue/nightqueue/pull/73";
+  const outcome = classifyJobResult({ log: logWith(qaPublication({ branch: "feat/queue-close", url: published })), exitCode: 0, state: runState({ prUrl: null }) });
+
+  assert.equal(outcome.prUrl, published);
+  assert.equal(outcome.status, "done");
 });
 
 test("a publication equal to the record leaves the notice as it was", () => {
@@ -68,19 +64,18 @@ test("a publication equal to the record leaves the notice as it was", () => {
   assert.equal(published.noticeMd, plain.noticeMd);
 });
 
-test("a foreign-branch publication with no record is never the run's pull request, and is flagged", () => {
+test("a foreign-branch publication with no record is never the run's pull request", () => {
   const outcome = classifyJobResult({ log: logWith(qaPublication()), exitCode: 0, state: runState({ prUrl: null }) });
 
   assert.equal(outcome.prUrl, null, "a pull request of another branch was recorded for lack of a better one");
   assert.equal(outcome.status, "failed");
-  assert.ok(outcome.noticeMd.endsWith(strayLine({ recorded: null })), outcome.noticeMd);
 });
 
 test("a foreign-branch publication the final text also cites is still not the run's pull request", () => {
   const log = toNdjson([systemInitEvent(), qaPublication(), resultEvent({ text: `Done. Pull request: ${QA_PR}` })]);
   const outcome = classifyJobResult({ log, exitCode: 0, state: runState({ prUrl: null }) });
 
-  assert.equal(outcome.prUrl, null, "the text heuristic brought back the pull request of another branch");
+  assert.equal(outcome.prUrl, null, "the text brought back the pull request of another branch");
 });
 
 test("a publication naming no branch, with no record, is still the run's pull request (older hosts)", () => {
@@ -88,22 +83,13 @@ test("a publication naming no branch, with no record, is still the run's pull re
 
   assert.equal(outcome.prUrl, QA_PR);
   assert.equal(outcome.status, "done");
-  assert.equal(outcome.noticeMd.includes(STRAY_PR_PREFIX), false, outcome.noticeMd);
 });
 
-test("a gate run with a stray publication stays a gate, keeps its question and carries the flag", () => {
-  const dir = mkdtempSync(join(tmpdir(), "ns-qa-branch-"));
-  try {
-    const planPath = join(dir, "03-plan.md");
-    writeFileSync(planPath, `# Plan\n\n${GATE_NOTICE}\n`);
-    const [init, ...rest] = gateStream().trimEnd().split("\n");
-    const log = [init, JSON.stringify(qaPublication()), ...rest].join("\n");
-    const outcome = classifyJobResult({ log, exitCode: 0, state: runState({ recorded: false }), planPath });
+test("a recorded gate with a stray publication stays a gate and keeps its question whole", () => {
+  const state = { ...runState({ recorded: false }), outcome: { status: "gate", notice: "Decide between A and B." } };
+  const outcome = classifyJobResult({ log: logWith(qaPublication()), exitCode: 0, state });
 
-    assert.equal(outcome.status, "gate");
-    assert.ok(outcome.noticeMd.startsWith(GATE_NOTICE), outcome.noticeMd);
-    assert.ok(outcome.noticeMd.endsWith(strayLine({ recorded: null })), outcome.noticeMd);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
+  assert.equal(outcome.status, "gate");
+  assert.equal(outcome.noticeMd, "Decide between A and B.");
+  assert.equal(outcome.prUrl, null);
 });

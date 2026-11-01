@@ -908,7 +908,7 @@ async function checkQueueJobs(ctx) {
     const { orphanJobs, errors } = await store.health();
     if (errors.orphanJobs !== null) return check("queue jobs", "warn", errors.orphanJobs, QUEUE_JOBS_MIGRATE_HINT);
     return orphanJobs > 0
-      ? check("queue jobs", "warn", `${orphanJobs} orphaned`, "run `nightqueue queue run` to recycle them, or `nightqueue queue cancel <id>`")
+      ? check("queue jobs", "warn", `${orphanJobs} orphaned`, "the next `nightqueue queue run` fails them with a notice; send one back with `nightqueue queue retry <id>`, or `nightqueue queue cancel <id>`")
       : check("queue jobs", "ok", "no orphan");
   } catch (err) {
     return check("queue jobs", "warn", err?.message ?? String(err), QUEUE_JOBS_MIGRATE_HINT);

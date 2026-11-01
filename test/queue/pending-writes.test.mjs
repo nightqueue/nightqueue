@@ -12,7 +12,7 @@ import { StoreUnavailableError } from "../../src/config/errors.mjs";
 import { dbPath, pendingWritesPath, runDir } from "../../src/config/paths.mjs";
 import { createServer } from "../../src/mcp/tools.mjs";
 import { closeDb, openDb, openDbReadOnly } from "../../src/memory/db.mjs";
-import { addJob, claimJobById, countAttempt, finishJob, getJob, persistRunFacts } from "../../src/memory/jobs.mjs";
+import { addJob, claimJobById, finishJob, getJob, persistRunFacts, retryJob } from "../../src/memory/jobs.mjs";
 import { claimBlocker } from "../../src/queue/claim.mjs";
 import { appendPendingWrite, PENDING_KEYS, replayAllPendingWrites, replayPendingWrites } from "../../src/queue/pending-writes.mjs";
 import { readRunState } from "../../src/queue/resume.mjs";
@@ -23,7 +23,7 @@ import { fakeJobWorktree } from "../../test-support/job-worktree.mjs";
 import { ensureProject, makeDir, makeHome, makeProject } from "../../test-support/memory.mjs";
 import { useFakeClaude } from "../../test-support/queue-fake.mjs";
 import { makeSickHome } from "../../test-support/sick-home.mjs";
-import { gateStream, SLUG } from "../../test-support/streams.mjs";
+import { gateStream, SLUG, recordedGate } from "../../test-support/streams.mjs";
 
 const CLI = fileURLToPath(new URL("../../bin/nightqueue.mjs", import.meta.url));
 const APPENDER = fileURLToPath(new URL("../../test-support/pending-write-appender.mjs", import.meta.url));
@@ -134,7 +134,7 @@ function spawnNode(env, argv) {
 test("(b) fixture (iii) during a run: pipeline_log answers queued, the gate finish is queued with the witness, and one replay after restore writes the gate exactly once", async (t) => {
   const env = makeHome(t, "pending-run-sick");
   makeProject(t, env, "alpha");
-  useFakeClaude(env, makeDir(t, "pending-run-sick-plan"), [{ stdout: gateStream(), exitCode: 0 }]);
+  useFakeClaude(env, makeDir(t, "pending-run-sick-plan"), [{ stdout: gateStream(), runState: recordedGate(), exitCode: 0 }]);
   const projectId = ensureProject(env, "alpha");
   const id = addJob({ projectId, prompt: "fix the worker", slug: SLUG }, env).id;
   const client = await connectInProcess(t, { ...env, NIGHTQUEUE_JOB_ID: String(id) });
@@ -350,9 +350,9 @@ test("`run index-save` inside a job on fixture (iii) queues the save, exits 0, a
 });
 
 // Queues the session facts of the claimed job's attempt `attempts`, announced as `sessionId`.
-function queueSession(home, { attempts, sessionId = "sess-queued-1" }) {
-  const payload = { worker: WORKER, attempts, sessionId, lastSessionId: sessionId, lastSessionAttempt: attempts };
-  return queue(home, { key: PENDING_KEYS.session(home.id, attempts), kind: "session", jobId: home.id, payload });
+function queueSession(home, { attempts, sessionId = "sess-queued-1", previousSessionId = null }) {
+  const payload = { worker: WORKER, attempts, sessionId, lastSessionId: sessionId, previousSessionId, lastSessionAttempt: attempts };
+  return queue(home, { key: PENDING_KEYS.session(home.id, attempts, sessionId), kind: "session", jobId: home.id, payload });
 }
 
 // The session columns of a job, read on a fresh connection.
@@ -369,7 +369,7 @@ test("a queued session fills the row of the same claim, and is superseded once t
   const home = claimedJobHome(t, "pending-session-attempt");
   const attempts = getJob(home.id, home.env).attempts;
   queueSession(home, { attempts });
-  countAttempt(home.id, { worker: WORKER }, home.env);
+  openDb(home.env).prepare("UPDATE jobs SET attempts = attempts + 1 WHERE id = ?").run(home.id);
 
   const replayed = await replayPendingWrites({ ...home, store: openStore(home.env) });
 
@@ -394,6 +394,87 @@ test("a queued session never rewinds the session a later attempt already recorde
 
   assert.equal(replayed.superseded, 1);
   assert.deepEqual(sessionRow(home.env, home.id), before);
+});
+
+test("two spawns of one attempt queued in an outage land in order, and the same session queued twice is one entry", async (t) => {
+  const home = claimedJobHome(t, "pending-session-both-queued");
+  const attempts = getJob(home.id, home.env).attempts;
+  queueSession(home, { attempts, sessionId: "sess-spawn-1" });
+  queueSession(home, { attempts, sessionId: "sess-spawn-1" });
+  queueSession(home, { attempts, sessionId: "sess-spawn-2", previousSessionId: "sess-spawn-1" });
+
+  const replayed = await replayPendingWrites({ ...home, store: openStore(home.env) });
+
+  assert.equal(replayed.applied, 2);
+  assert.deepEqual(sessionRow(home.env, home.id), { session_id: "sess-spawn-1", last_session_id: "sess-spawn-2", last_session_attempt: attempts });
+});
+
+test("a queued spawn's session never overwrites a later spawn of its attempt, and lands over the session it followed", async (t) => {
+  const stale = claimedJobHome(t, "pending-session-stale");
+  const attempts = getJob(stale.id, stale.env).attempts;
+  queueSession(stale, { attempts, sessionId: "sess-spawn-1" });
+  persistRunFacts(stale.id, { worker: WORKER, sessionId: "sess-first", lastSessionId: "sess-spawn-2", lastSessionAttempt: attempts }, stale.env);
+  assert.equal((await replayPendingWrites({ ...stale, store: openStore(stale.env) })).superseded, 1);
+  assert.deepEqual(sessionRow(stale.env, stale.id), { session_id: "sess-first", last_session_id: "sess-spawn-2", last_session_attempt: attempts }, "a row with its first session was touched");
+
+  const following = claimedJobHome(t, "pending-session-following");
+  persistRunFacts(following.id, { worker: WORKER, sessionId: "sess-spawn-1", lastSessionId: "sess-spawn-1", lastSessionAttempt: attempts }, following.env);
+  queueSession(following, { attempts, sessionId: "sess-spawn-2", previousSessionId: "sess-spawn-1" });
+  assert.equal((await replayPendingWrites({ ...following, store: openStore(following.env) })).applied, 1);
+  assert.equal(sessionRow(following.env, following.id).last_session_id, "sess-spawn-2");
+});
+
+test("an entry an older build queued, with no previous session, lands on an empty row or an older attempt and never over its own attempt", async (t) => {
+  const older = claimedJobHome(t, "pending-session-old-entry");
+  const attempts = getJob(older.id, older.env).attempts;
+  persistRunFacts(older.id, { worker: WORKER, lastSessionId: "sess-earlier", lastSessionAttempt: attempts - 1 }, older.env);
+  queue(older, { key: `session:${older.id}:${attempts}`, kind: "session", jobId: older.id, payload: { worker: WORKER, attempts, sessionId: "sess-old", lastSessionId: "sess-old", lastSessionAttempt: attempts } });
+  assert.equal((await replayPendingWrites({ ...older, store: openStore(older.env) })).applied, 1);
+  assert.equal(sessionRow(older.env, older.id).last_session_id, "sess-old");
+
+  const same = claimedJobHome(t, "pending-session-old-entry-same");
+  persistRunFacts(same.id, { worker: WORKER, sessionId: "sess-first", lastSessionId: "sess-own", lastSessionAttempt: attempts }, same.env);
+  queue(same, { key: `session:${same.id}:${attempts}`, kind: "session", jobId: same.id, payload: { worker: WORKER, attempts, sessionId: "sess-old", lastSessionId: "sess-old", lastSessionAttempt: attempts } });
+  assert.equal((await replayPendingWrites({ ...same, store: openStore(same.env) })).superseded, 1);
+  assert.equal(sessionRow(same.env, same.id).last_session_id, "sess-own");
+});
+
+test("a superseded entry still gives a first session the row lacks, with the row running or already finished, and never moves the last session", async (t) => {
+  for (const finished of [false, true]) {
+    const home = claimedJobHome(t, `pending-session-first-${finished}`);
+    const attempts = getJob(home.id, home.env).attempts;
+    queueSession(home, { attempts, sessionId: "sess-spawn-1" });
+    persistRunFacts(home.id, { worker: WORKER, sessionId: null, lastSessionId: "sess-spawn-2", lastSessionAttempt: attempts }, home.env);
+    if (finished) openDb(home.env).prepare("UPDATE jobs SET status = 'done', worker = NULL, finished_at = datetime('now') WHERE id = ?").run(home.id);
+
+    assert.equal((await replayPendingWrites({ ...home, store: openStore(home.env) })).applied, 1);
+
+    assert.deepEqual(sessionRow(home.env, home.id), { session_id: "sess-spawn-1", last_session_id: "sess-spawn-2", last_session_attempt: attempts }, `finished: ${finished}`);
+    assert.equal(openDb(home.env).prepare("SELECT session_id FROM job_attempts WHERE job_id = ?").get(home.id).session_id, "sess-spawn-2", "the attempt row stopped naming its last session");
+  }
+});
+
+test("a superseded entry with no session, or from before a fresh retry or a later claim, fills nothing", async (t) => {
+  const noSession = claimedJobHome(t, "pending-session-first-none");
+  const attempts = getJob(noSession.id, noSession.env).attempts;
+  persistRunFacts(noSession.id, { worker: WORKER, lastSessionId: "sess-spawn-2", lastSessionAttempt: attempts }, noSession.env);
+  queue(noSession, { key: `session:${noSession.id}:${attempts}:sess-x`, kind: "session", jobId: noSession.id, payload: { worker: WORKER, attempts, sessionId: null, lastSessionId: "sess-x", lastSessionAttempt: attempts } });
+  assert.equal((await replayPendingWrites({ ...noSession, store: openStore(noSession.env) })).superseded, 1);
+  assert.equal(sessionRow(noSession.env, noSession.id).session_id, null);
+
+  const fresh = claimedJobHome(t, "pending-session-first-fresh");
+  queueSession(fresh, { attempts, sessionId: "sess-discarded" });
+  openDb(fresh.env).prepare("UPDATE jobs SET status = 'failed', worker = NULL, finished_at = datetime('now') WHERE id = ?").run(fresh.id);
+  retryJob(fresh.id, { fresh: true }, fresh.env);
+  claimJobById(fresh.id, { worker: WORKER, cap: null }, fresh.env);
+  await replayPendingWrites({ ...fresh, store: openStore(fresh.env) });
+  assert.equal(sessionRow(fresh.env, fresh.id).session_id, null, "a discarded run's session was filled");
+
+  const later = claimedJobHome(t, "pending-session-first-later");
+  queueSession(later, { attempts, sessionId: "sess-stale" });
+  openDb(later.env).prepare("UPDATE jobs SET attempts = attempts + 1, last_session_attempt = ? WHERE id = ?").run(attempts, later.id);
+  await replayPendingWrites({ ...later, store: openStore(later.env) });
+  assert.equal(sessionRow(later.env, later.id).session_id, null, "a later claim's row was filled by a stale entry");
 });
 
 test("`queue run <id>` replays a dead owner's queued finish before its preview sweeps the orphans: the job ends done with its pull request", async (t) => {

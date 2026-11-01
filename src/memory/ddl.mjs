@@ -189,7 +189,6 @@ export function jobsDdl(name) {
   priority INTEGER NOT NULL DEFAULT 5,
   status TEXT NOT NULL DEFAULT 'pending',
   attempts INTEGER NOT NULL DEFAULT 0,
-  max_attempts INTEGER NOT NULL DEFAULT 1,
   timeout_s INTEGER NOT NULL DEFAULT 14400,
   lease_until TEXT,
   worker TEXT,

@@ -1,4 +1,4 @@
-import { ABANDONED_COMMAND_PREFIX, NO_CHANGE_NEXT_STEP_LINE, NOTHING_TO_CLOSE_LINE, STRAY_PR_PREFIX, trailingStripped } from "./classify.mjs";
+import { ABANDONED_COMMAND_PREFIX, IGNORED_RECORD_LINE, NO_CHANGE_NEXT_STEP_LINE, NOTHING_TO_CLOSE_LINE, STRAY_PR_PREFIX, trailingStripped } from "./classify.mjs";
 import { CLOSED_PREFIX, POST_CLOSE_PREFIX } from "./close-view.mjs";
 import { WIP_KEPT_PREFIX, WIP_PREFIX } from "./wip-commit.mjs";
 import { KEPT_PREFIX } from "./worktree.mjs";
@@ -18,6 +18,7 @@ const RUNTIME_APPENDED_LINE_PREFIXES = [
   POST_CLOSE_PREFIX,
   NOTHING_TO_CLOSE_LINE,
   NO_CHANGE_NEXT_STEP_LINE,
+  IGNORED_RECORD_LINE,
 ];
 
 // The runtime lines never told to the origins, which also exclude the line naming another pull request.

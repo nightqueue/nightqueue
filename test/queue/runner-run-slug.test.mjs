@@ -15,7 +15,7 @@ import { fakeJobWorktree } from "../../test-support/job-worktree.mjs";
 import { ensureProject, makeDir, makeHome, makeProject } from "../../test-support/memory.mjs";
 import { fakeCalls, useFakeClaude } from "../../test-support/queue-fake.mjs";
 import { makeSickHome } from "../../test-support/sick-home.mjs";
-import { assistantEvent, doneStream, noticeText, resultEvent, slugTypeEvent, systemInitEvent, toNdjson, transientFailureStream } from "../../test-support/streams.mjs";
+import { assistantEvent, doneStream, noticeText, recordedDone, resultEvent, slugTypeEvent, systemInitEvent, toNdjson, transientFailureStream } from "../../test-support/streams.mjs";
 
 const SESSION_SCRIPT = fileURLToPath(new URL("../../test-support/check-wait-session.mjs", import.meta.url));
 const NEW_SLUG = "triaged-worker";
@@ -68,9 +68,9 @@ test("the retry attempt after an in-session rename is prompted with the NEW run 
   writeFileSync(join(signal, "go"), "1");
   const planPath = useFakeClaude(env, makeDir(t, "retry-rundir-plan"), [
     { exec, stdout: transientFailureStream(), exitCode: 1 },
-    { exec, stdout: doneStream({ slug: NEW_SLUG }), exitCode: 0 },
+    { exec, stdout: doneStream({ slug: NEW_SLUG }), runState: recordedDone(), exitCode: 0 },
   ]);
-  const id = addJob({ projectId, prompt: "fix the worker", maxAttempts: 2 }, env).id;
+  const id = addJob({ projectId, prompt: "fix the worker" }, env).id;
   const provisional = provisionalSlug(getJob(id, env));
 
   await runCycle({ jobId: id, env, deps: { worktreeImpl: fakeJobWorktree(), gitImpl: fakeGit(), sleepImpl: async () => {} } });
@@ -90,9 +90,9 @@ test("a run the check never renamed prompts its retry with exactly the first att
   writeFileSync(join(signal, "go"), "1");
   const planPath = useFakeClaude(env, makeDir(t, "retry-same-plan"), [
     { exec, stdout: transientFailureStream(), exitCode: 1 },
-    { exec, stdout: doneStream(), exitCode: 0 },
+    { exec, stdout: doneStream(), runState: recordedDone(), exitCode: 0 },
   ]);
-  const id = addJob({ projectId, prompt: "fix the worker", maxAttempts: 2 }, env).id;
+  const id = addJob({ projectId, prompt: "fix the worker" }, env).id;
 
   await runCycle({ jobId: id, env, deps: { worktreeImpl: fakeJobWorktree(), gitImpl: fakeGit(), sleepImpl: async () => {} } });
 

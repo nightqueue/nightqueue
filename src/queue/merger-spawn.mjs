@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { join, resolve } from "node:path";
+import { JOB_CLAIM_ENV } from "../config/job-home.mjs";
 import { logsDir } from "../config/paths.mjs";
 import { MERGER_DIR_ENV, MERGER_FILES_ENV } from "../hooks/merger-guard.mjs";
 import { mergerSettings } from "../host/settings.mjs";
@@ -41,6 +42,7 @@ export function mergerArgs({ prompt, env = process.env }) {
 export function mergerEnv({ env = process.env, dir, files }) {
   const own = { ...env, [MERGER_DIR_ENV]: dir, [MERGER_FILES_ENV]: JSON.stringify(files.map((file) => resolve(dir, file))) };
   delete own.NIGHTQUEUE_JOB_ID;
+  delete own[JOB_CLAIM_ENV];
   delete own[CLOSE_WORKER_ENV];
   return own;
 }

@@ -1,14 +1,26 @@
 import { UserError } from "../config/errors.mjs";
-import { withLockSync } from "../config/lock.mjs";
+import { withLockSync, withPathLock } from "../config/lock.mjs";
 import { runDir } from "../config/paths.mjs";
+import { truncateByCodePoint } from "../memory/jobs.mjs";
 import { jobRef } from "../memory/refs.mjs";
 import { PIPELINE_TASK_TYPES } from "../memory/runs.mjs";
 import { COMMIT_TYPES } from "./branch-name.mjs";
-import { isRunPath, isStateObject, readRunState, RESUME_PHASE_ORDER, RESUME_SCHEMA_VERSION, saveRunState } from "./resume.mjs";
+import {
+  claimStamp,
+  foreignStampOf,
+  isRunPath,
+  isStateObject,
+  outcomeHostFacts,
+  readRunState,
+  RESUME_PHASE_ORDER,
+  RESUME_SCHEMA_VERSION,
+  RUN_LOCK,
+  saveRunState,
+  stampedAttempt,
+  stampOrder,
+  underRunLock,
+} from "./resume.mjs";
 import { isPrUrl } from "./stream.mjs";
-
-// The lock of one run's state.json: a holder only ever keeps it for a single read and write, so a lock this old can only have been left behind by a dead process.
-const RUN_LOCK = { timeoutMs: 5000, staleAfterMs: 15000 };
 
 // The only outcomes the pipeline may record in `state.json` (a delivery, a gate, or a deliberate conclusion that no code change is needed); how the process ended stays the runtime's call.
 export const RUN_OUTCOME_STATUSES = ["done", "gate", "no_change"];
@@ -52,6 +64,13 @@ export const SKIP_AGENTS = ["orchestrator", "triager", "explore", "architect", "
 // The author of the phase entries the runtime writes itself (`run check`, `run publish`).
 export const RUNTIME_AUTHOR = "runtime";
 
+// How many records one attempt keeps in `ignoredRecords`, and the longest late record kept whole: a session that outlived its claim cannot grow `state.json`.
+const LATE_RECORDS_PER_ATTEMPT = 5;
+const LATE_RECORD_TEXT_LIMIT = 4096;
+
+// The answer of a consumption that found nothing to consume, with the same shape as a write.
+const NOTHING_CONSUMED = { status: "absent", path: null, reason: null };
+
 // Refusal to record, always with the same shape as a write.
 function kept(reason) {
   return { status: "kept", path: null, reason };
@@ -81,16 +100,6 @@ function withFixedFields(state, { projectId, slug }) {
   return { ...held, schemaVersion: RESUME_SCHEMA_VERSION, projectId, slug, resumeCount };
 }
 
-// Runs a write of one run's state.json under the lock of that run, so its read and its write are ONE critical section even across processes; a lock nobody releases refuses the write instead of losing another writer's.
-function underRunLock({ projectId, slug, env, write }) {
-  if (!isRunPath(projectId, slug)) return kept("unsafe project or slug");
-  try {
-    return withLockSync(`${runDir(projectId, slug, env)}.lock`, write, RUN_LOCK);
-  } catch (err) {
-    return kept(`the state of the run could not be locked: ${String(err?.message ?? err).split("\n")[0]}`);
-  }
-}
-
 // Runs an action on one run's files under the same lock as its state.json; never call a `record*` inside it, the lock is not re-entrant.
 export function withRunLock({ projectId, slug, env = process.env }, action) {
   if (!isRunPath(projectId, slug)) throw new UserError(`unsafe project or slug: \`${projectId}\`/\`${slug}\``);
@@ -107,8 +116,57 @@ function withoutRuntimeKeys(change) {
   return Object.fromEntries(Object.entries(isStateObject(change) ? change : {}).filter(([name]) => runtimeOnlyKey(name) === null));
 }
 
-// Writes one change into the state.json of a run: the runtime stamps the time, and an `updatedAt` written by an agent is overwritten, never trusted.
-function record({ projectId, slug, env, change }) {
+// The record with the stamp of the claim that wrote it, never whether that claim was over; a writer with no claim stamps nothing.
+function withStamp(entry, claim) {
+  return isStateObject(claim) ? { ...entry, claim: claimStamp(claim) } : entry;
+}
+
+// The records a run set aside, as a list.
+function ignoredEntries(state) {
+  return Array.isArray(state.ignoredRecords) ? state.ignoredRecords : [];
+}
+
+// Tells whether the slot holds a record of a later claim than the writer's; only `outcome` and `termination` are slots.
+function newerClaimHolds(slot, claim) {
+  return isStateObject(claim) && stampOrder(slot, claim) > 0;
+}
+
+// Tells whether the slot holds a record of an earlier claim than the writer's, which the new record replaces.
+function isDisplacedBy(slot, claim) {
+  return isStateObject(claim) && stampOrder(slot, claim) < 0;
+}
+
+// The change that moves a displaced slot's record to the ignored ones, or nothing when the slot holds none.
+function displacedSlot(state, kind, claim, at) {
+  if (!isDisplacedBy(state[kind], claim)) return {};
+  const { claim: heldClaim, ...heldRecord } = state[kind];
+  return { ignoredRecords: [...ignoredEntries(state), { kind, at, claim: heldClaim, record: heldRecord }] };
+}
+
+// A late record as `ignoredRecords` keeps it: whole up to the text limit, past it the start of its JSON.
+function boundedLateRecord(record) {
+  const text = JSON.stringify(record);
+  return text.length <= LATE_RECORD_TEXT_LIMIT ? record : { truncated: truncateByCodePoint(text, LATE_RECORD_TEXT_LIMIT) };
+}
+
+// The ignored entries after one late write: kept up to its attempt's cap, then only counted on that attempt's last entry; nothing already held is evicted, so a looping session cannot grow the file or hide an attempt.
+function entriesWithLate(entries, entry) {
+  const ofAttempt = entries.filter((held) => stampedAttempt(held) === entry.claim.attempt);
+  if (ofAttempt.length < LATE_RECORDS_PER_ATTEMPT) return [...entries, { ...entry, record: boundedLateRecord(entry.record) }];
+  const last = ofAttempt.at(-1);
+  return entries.map((held) => (held === last ? { ...held, notKept: (held.notKept ?? 0) + 1 } : held));
+}
+
+// Sets a late write aside, touching no slot and no phase, and answers the refusal that tells its writer the claim is over.
+function setLateRecordAside({ projectId, slug, env, state, claim, late, at }) {
+  const ignoredRecords = entriesWithLate(ignoredEntries(state), { kind: late.kind, at, claim, record: late.record });
+  const saved = saveRunState({ projectId, slug, env, state: { ...state, ignoredRecords, updatedAt: at } });
+  const refusal = `attempt ${claim.attempt} of this job is over, so this record is ignored; end this session`;
+  return kept(saved.status === "written" ? refusal : `${refusal} (it could not be kept either: ${saved.reason})`);
+}
+
+// Writes one change into the state.json of a run: the runtime stamps the time, an `updatedAt` written by an agent is overwritten, never trusted, and a `late` record of a claim that is over is set aside instead.
+function record({ projectId, slug, env, change, claim = null, late = null }) {
   return underRunLock({
     projectId,
     slug,
@@ -116,6 +174,9 @@ function record({ projectId, slug, env, change }) {
     write: () => {
       const at = new Date().toISOString();
       const state = withFixedFields(readRunState({ projectId, slug, env }), { projectId, slug });
+      if (late !== null && (claim?.over === true || newerClaimHolds(state[late.kind], claim))) {
+        return setLateRecordAside({ projectId, slug, env, state, claim, late, at });
+      }
       return saveRunState({ projectId, slug, env, state: { ...state, ...withoutRuntimeKeys(change(state, at)), updatedAt: at } });
     },
   });
@@ -142,20 +203,22 @@ function repeatedRuntimeEntry(phases, { phase, artifact, by, reason }) {
 }
 
 // The phases after one phase record: a repeat of the runtime's own entry merges into it, anything else is appended.
-function phasesWithRecord(phases, { phase, artifact, verdict, note, reason, by }, at) {
+function phasesWithRecord(phases, { phase, artifact, verdict, note, reason, by, claim }, at) {
   const repeated = repeatedRuntimeEntry(phases, { phase, artifact, by, reason });
   if (repeated >= 0) return phases.map((entry, index) => (index === repeated ? withText(entry, { verdict, note }) : entry));
-  return [...phases, withText({ phase, at }, { artifact, verdict, note, reason, by })];
+  return [...phases, withStamp(withText({ phase, at }, { artifact, verdict, note, reason, by }), claim)];
 }
 
 // Records a phase the pipeline completed; the list is append-only, so a phase recorded twice never erases the first record.
-export function recordPhaseDone({ projectId, slug, phase, artifact, verdict, note, reason, by, env = process.env } = {}) {
+export function recordPhaseDone({ projectId, slug, phase, artifact, verdict, note, reason, by, claim = null, env = process.env } = {}) {
   if (!RESUME_PHASE_ORDER.includes(phase)) return refuseEnum("phase", phase, RESUME_PHASE_ORDER);
   return record({
     projectId,
     slug,
     env,
-    change: (state, at) => ({ phases: phasesWithRecord(phaseEntries(state), { phase, artifact, verdict, note, reason, by }, at) }),
+    claim,
+    late: { kind: "phase", record: withText({ phase }, { artifact, verdict, note, reason, by }) },
+    change: (state, at) => ({ phases: phasesWithRecord(phaseEntries(state), { phase, artifact, verdict, note, reason, by, claim }, at) }),
   });
 }
 
@@ -180,19 +243,19 @@ function reRunReason({ previous, phases, phase, lastFailure }) {
 }
 
 // The phases after a completed check, and what was decided: `already` when the runtime recorded this same artifact last, else `appended` with its reason.
-function phasesAfterCheck({ state, check, memo, done, at }) {
+function phasesAfterCheck({ state, check, memo, done, claim, at }) {
   const phases = phaseEntries(state);
   const checks = checkMemos(state);
   const previous = checks[check];
   const same = isStateObject(previous) && previous.completed === true && previous.digest === memo.digest;
   if (same && lastEntryOf(phases, done.phase)?.by === RUNTIME_AUTHOR) return { phases, decided: { status: "already", reason: null } };
   const reason = reRunReason({ previous, phases, phase: done.phase, lastFailure: checks.lastFailure });
-  const entry = withText({ phase: done.phase, at }, { artifact: done.artifact, verdict: done.verdict, reason, by: RUNTIME_AUTHOR });
+  const entry = withStamp(withText({ phase: done.phase, at }, { artifact: done.artifact, verdict: done.verdict, reason, by: RUNTIME_AUTHOR }), claim);
   return { phases: [...phases, entry], decided: { status: "appended", reason } };
 }
 
 // Records the answer of one `run check` and, when it completed a phase, the phase itself, in one write so the reason reads the memo it replaces.
-export function recordCheck({ projectId, slug, check, memo, done = null, env = process.env } = {}) {
+export function recordCheck({ projectId, slug, check, memo, done = null, claim = null, env = process.env } = {}) {
   if (trimmedText(check) === null || !isStateObject(memo)) return kept("a check record needs its check and its memo");
   if (done !== null && !RESUME_PHASE_ORDER.includes(done?.phase)) return refuseEnum("phase", done?.phase, RESUME_PHASE_ORDER);
   let decided = null;
@@ -200,10 +263,12 @@ export function recordCheck({ projectId, slug, check, memo, done = null, env = p
     projectId,
     slug,
     env,
+    claim,
+    late: { kind: "check", record: { check, memo, done } },
     change: (state, at) => {
       const checks = memosWithCheck(checkMemos(state), check, memo, at);
       if (done === null) return { checks };
-      const after = phasesAfterCheck({ state, check, memo, done, at });
+      const after = phasesAfterCheck({ state, check, memo, done, claim, at });
       decided = after.decided;
       return { checks, phases: after.phases };
     },
@@ -211,17 +276,21 @@ export function recordCheck({ projectId, slug, check, memo, done = null, env = p
   return { ...written, phase: written.status === "written" ? decided : null };
 }
 
-// Records that the run stopped on purpose at a phase, which is what keeps a retry from resuming it.
-export function recordTermination({ projectId, slug, phase, reason, by, wip = null, env = process.env } = {}) {
+// Records that the run stopped on purpose at a phase; a retry consumes the stop, and whether the run resumes is `decideResume`'s call.
+export function recordTermination({ projectId, slug, phase, reason, by, wip = null, claim = null, env = process.env } = {}) {
   const refused = terminationRefusal(phase, reason);
   if (refused) return refused;
+  const stop = withText({ phase, reason: trimmedText(reason) }, { by });
   return record({
     projectId,
     slug,
     env,
-    change: (_state, at) => ({
-      termination: withText({ phase, reason: trimmedText(reason), at }, { by }),
+    claim,
+    late: { kind: "termination", record: isStateObject(wip) ? { ...stop, wip } : stop },
+    change: (state, at) => ({
+      termination: withStamp(withText({ phase, reason: trimmedText(reason), at }, { by }), claim),
       ...(isStateObject(wip) ? { wip: { ...wip, at } } : {}),
+      ...displacedSlot(state, "termination", claim, at),
     }),
   });
 }
@@ -260,8 +329,16 @@ export function clearTermination({ projectId, slug, phase = null, onlyBy = RUNTI
   });
 }
 
+// What an outcome write starts from: the host facts alone over a displaced record, so an old notice never merges into the new one, else the record as held without its old stamp.
+function outcomeToKeep(state, claim) {
+  if (!isStateObject(state.outcome)) return {};
+  if (isDisplacedBy(state.outcome, claim)) return outcomeHostFacts(state.outcome);
+  const { claim: _stamp, ...held } = state.outcome;
+  return held;
+}
+
 // Records how the run ended, with the files it delivered when known; the pull request URL is the runtime's to write, so an outcome already carrying one keeps it.
-export function recordOutcome({ projectId, slug, status, notice, files, env = process.env } = {}) {
+export function recordOutcome({ projectId, slug, status, notice, files, claim = null, env = process.env } = {}) {
   if (!RUN_OUTCOME_STATUSES.includes(status)) return refuseEnum("status", status, RUN_OUTCOME_STATUSES);
   if (status === NO_CHANGE_OUTCOME && trimmedText(notice) === null) {
     return kept("a no_change outcome needs the run's conclusion as its notice: it is what the origins are told on close");
@@ -270,20 +347,76 @@ export function recordOutcome({ projectId, slug, status, notice, files, env = pr
     projectId,
     slug,
     env,
+    claim,
+    late: { kind: "outcome", record: withText({ status }, { notice }) },
     change: (state, at) => ({
-      outcome: withText({ ...(isStateObject(state.outcome) ? state.outcome : {}), status, at, ...(Array.isArray(files) ? { files } : {}) }, { notice }),
+      outcome: withStamp(withText({ ...outcomeToKeep(state, claim), status, at, ...(Array.isArray(files) ? { files } : {}) }, { notice }), claim),
+      ...displacedSlot(state, "outcome", claim, at),
     }),
   });
 }
 
-// Records the pull request of the run and, when known, its title; both are the runtime's and the agent never sends them as a parameter.
-export function recordPrUrl({ projectId, slug, prUrl, prTitle, env = process.env } = {}) {
+// Tells whether a retry of this claim consumes the record: a stamp of an earlier claim belongs to one already over, and it stays on disk.
+function isConsumable(record, claim) {
+  return !Number.isInteger(claim.attempt) || stampOrder(record, claim) >= 0;
+}
+
+// Tells whether the state holds what the last claim concluded: a recorded status or notice, a termination, or the terminal witness; a published pull request alone is a fact about the host.
+function holdsAttemptConclusion(state, claim) {
+  if (!isStateObject(state)) return false;
+  const outcome = isStateObject(state.outcome) ? state.outcome : {};
+  const holdsOutcome = (outcome.status !== undefined || outcome.notice !== undefined) && isConsumable(outcome, claim);
+  const holdsSlot = (slot) => slot !== undefined && isConsumable(slot, claim);
+  return holdsOutcome || holdsSlot(state.termination) || holdsSlot(state.terminal);
+}
+
+// The state without what the last claim concluded: the facts of its publication, its phases, its work and every older claim's record stay.
+function withoutAttemptConclusion(state, claim) {
+  const { termination, terminal, ...rest } = state;
+  if (termination !== undefined && !isConsumable(termination, claim)) rest.termination = termination;
+  if (terminal !== undefined && !isConsumable(terminal, claim)) rest.terminal = terminal;
+  if (isStateObject(state.outcome) && isConsumable(state.outcome, claim)) rest.outcome = outcomeHostFacts(state.outcome);
+  return rest;
+}
+
+// Consumes, in one write under the run lock, what the last claim concluded, only while `stillCurrent` holds; a run another job stamped answers `foreign` with that job, so nothing speaks for the next attempt and nothing a later claim recorded is erased.
+export async function consumeRunConclusion({ projectId, slug, jobId, attempt = null, ordinal = null, env = process.env, stillCurrent = async () => true } = {}) {
+  const claim = { attempt, ordinal };
+  const first = readRunState({ projectId, slug, env });
+  if (foreignStampOf(first, jobId) === null && !holdsAttemptConclusion(first, claim)) return NOTHING_CONSUMED;
+  try {
+    return await withPathLock(`${runDir(projectId, slug, env)}.lock`, async () => {
+      if (!(await stillCurrent())) return { status: "moved", path: null, reason: null };
+      const state = readRunState({ projectId, slug, env });
+      const stampedBy = foreignStampOf(state, jobId);
+      if (stampedBy !== null) return { status: "foreign", path: null, reason: null, stampedBy };
+      if (!holdsAttemptConclusion(state, claim)) return NOTHING_CONSUMED;
+      return saveRunState({ projectId, slug, env, state: { ...withoutAttemptConclusion(state, claim), updatedAt: new Date().toISOString() } });
+    }, RUN_LOCK);
+  } catch (err) {
+    return kept(String(err?.message ?? err).split("\n")[0]);
+  }
+}
+
+// What a pull request record starts from: with no claim the outcome as held, stamp included, else what an outcome of that claim would keep.
+function outcomeUnderPrUrl(state, claim) {
+  if (isStateObject(claim)) return outcomeToKeep(state, claim);
+  return isStateObject(state.outcome) ? state.outcome : {};
+}
+
+// Records the pull request of the run and, when known, its title, for the claim that published it; both are the runtime's and the agent never sends them as a parameter.
+export function recordPrUrl({ projectId, slug, prUrl, prTitle, claim = null, env = process.env } = {}) {
   if (!isPrUrl(prUrl)) return kept(`\`${String(prUrl)}\` is not a pull request URL`);
   return record({
     projectId,
     slug,
     env,
-    change: (state, at) => ({ outcome: withText({ ...(isStateObject(state.outcome) ? state.outcome : {}), prUrl, at }, { prTitle }) }),
+    claim,
+    late: { kind: "outcome", record: withText({ prUrl }, { prTitle }) },
+    change: (state, at) => ({
+      outcome: withStamp(withText({ ...outcomeUnderPrUrl(state, claim), prUrl, at }, { prTitle }), claim),
+      ...displacedSlot(state, "outcome", claim, at),
+    }),
   });
 }
 
@@ -334,13 +467,13 @@ function runFieldsRecord(fields, at) {
 
 
 // Records the fields of the run a phase discovered: its type, where its code lives and the QA stage it already paid for.
-export function recordRunFields({ projectId, slug, fields, env = process.env } = {}) {
+export function recordRunFields({ projectId, slug, fields, claim = null, env = process.env } = {}) {
   const changes = isStateObject(fields) ? fields : {};
   const entries = Object.entries(changes);
   if (entries.length === 0) return kept(`no field to record; accepted: ${Object.keys(RUN_FIELDS).join(", ")}`);
   const refused = entries.map(invalidRunField).find(Boolean);
   if (refused) return refused;
-  return record({ projectId, slug, env, change: (_state, at) => runFieldsRecord(changes, at) });
+  return record({ projectId, slug, env, claim, late: { kind: "fields", record: changes }, change: (_state, at) => runFieldsRecord(changes, at) });
 }
 
 // Refusal of a skip `run_skip` cannot record, or null when its phase, author and reason are the ones state.json keeps.
@@ -359,15 +492,23 @@ function saveSkip({ projectId, slug, phase, skip, env }) {
   return saveRunState({ projectId, slug, env, state: { ...state, skips, updatedAt: skip.at } });
 }
 
+// Sets aside the skip of a claim that is over, in the same list as every other late record.
+function setLateSkipAside({ projectId, slug, phase, skip, claim, env }) {
+  const state = withFixedFields(readRunState({ projectId, slug, env }), { projectId, slug });
+  const { at, ...fields } = skip;
+  return setLateRecordAside({ projectId, slug, env, state, claim, late: { kind: "skip", record: { phase, ...fields } }, at });
+}
+
 // Records that an agent skips a later phase, for display only: routing and resume never read it.
-export function recordSkip({ projectId, slug, phase, by, reason, env = process.env } = {}) {
+export function recordSkip({ projectId, slug, phase, by, reason, claim = null, env = process.env } = {}) {
   const refused = invalidSkip({ phase, by, reason });
   if (refused) return refused;
+  const skip = { by, reason: trimmedText(reason), at: new Date().toISOString() };
   return underRunLock({
     projectId,
     slug,
     env,
-    write: () => saveSkip({ projectId, slug, phase, skip: { by, reason: trimmedText(reason), at: new Date().toISOString() }, env }),
+    write: () => (claim?.over === true ? setLateSkipAside({ projectId, slug, phase, skip, claim, env }) : saveSkip({ projectId, slug, phase, skip, env })),
   });
 }
 

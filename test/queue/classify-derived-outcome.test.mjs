@@ -21,7 +21,7 @@ function noticeStream(body) {
 // Classifies one clean attempt with the outcome `run report` derives from the same state.json.
 function classifyDerived({ log, state }) {
   const runOutcome = derivedOutcome(state);
-  return { runOutcome, gateStop: derivedGateStop(state, runOutcome), result: classifyJobResult({ log, exitCode: 0, state, runOutcome }) };
+  return { runOutcome, gateStop: derivedGateStop(state, runOutcome), result: classifyJobResult({ log, exitCode: 0, state }) };
 }
 
 test("a NOT-REPRODUCIBLE run terminated at triage derives no_commit and still ends cancelled with nothing to close", () => {
@@ -32,7 +32,7 @@ test("a NOT-REPRODUCIBLE run terminated at triage derives no_commit and still en
   const { runOutcome, gateStop, result } = classifyDerived({ log: noticeStream(NOT_REPRODUCIBLE), state });
   assert.deepEqual([runOutcome, gateStop], ["no_commit", "triage"]);
   assert.equal(result.status, "cancelled");
-  assert.equal(result.noticeMd, `${NOT_REPRODUCIBLE}\n\n${NOTHING_TO_CLOSE_LINE}`);
+  assert.equal(result.noticeMd, `NOT-REPRODUCIBLE\n\n${NOTHING_TO_CLOSE_LINE}`, "the termination's reason is the notice, never the stream's");
 });
 
 test("a NO-CHANGE-NEEDED run derives no_commit and still ends done with no pull request", () => {

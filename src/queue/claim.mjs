@@ -5,8 +5,10 @@ import { queuePausedPath } from "../config/paths.mjs";
 import { BASH_TIMEOUT_DEFAULT, LEASE_HEARTBEAT_DEFAULT_S } from "../config/schema.mjs";
 import { loadConfig } from "../config/store.mjs";
 import { openStore } from "../store/open.mjs";
+import { orphanNoticeTail } from "./classify.mjs";
 import { replayAllPendingWrites } from "./pending-writes.mjs";
 import { liveRunnersReport } from "./registry.mjs";
+import { claimRunState, rowClaimOrdinal } from "./resume.mjs";
 import { jobRef } from "../memory/refs.mjs";
 
 // Identity of this runner process, the value the ownership predicate of every write compares against.
@@ -72,33 +74,40 @@ export function liveLocalWorker(worker) {
   }
 }
 
+// Explains why a next-job claim under a free ceiling got nothing: a job nobody left out means a raced claim (or, with a ceiling and none left out, the ceiling held it back), and only a job left out is one this cycle already tried.
+async function nextClaimRefusal(store, { cap, excludeIds }) {
+  if (await store.jobs.hasClaimablePending({ excludeIds })) return cap !== null && !excludeIds.length ? "cap-reached" : "claim-raced";
+  return excludeIds.length && (await store.jobs.hasClaimablePending()) ? "already-tried" : "empty-queue";
+}
+
 // Explains why nothing was claimed; it reads the database only to phrase the reason, never to decide.
-async function refusalReason({ jobId, cap, env }) {
+async function refusalReason({ jobId, cap, excludeIds, env }) {
   const store = openStore(env);
   if (cap !== null && (await store.jobs.countActiveJobs()) >= cap) return "cap-reached";
-  if (jobId === null) return cap !== null && (await store.jobs.hasClaimablePending()) ? "cap-reached" : "empty-queue";
+  if (jobId === null) return await nextClaimRefusal(store, { cap, excludeIds });
   const job = await store.jobs.getJob(jobId);
   if (!job) return "unknown-job";
   if (job.status !== "pending") return "not-pending";
   return cap !== null ? "cap-reached" : "claim-raced";
 }
 
-// Sweeps the orphans only after replaying what runs queued while the database was unavailable, so a queued finish lands before its dead owner's row is reclaimed; the only sweep of the queue.
+// Sweeps the orphans only after replaying what runs queued while the database was unavailable, so a queued finish lands before its dead owner's row is failed; the only sweep of the queue.
 async function replayThenSweep(store, env) {
   const replayed = await replayAllPendingWrites({ env, store });
   if (replayed.error) throw replayed.error;
-  await store.jobs.sweepOrphans({ liveWorkerImpl: liveLocalWorker });
+  const orphanTailImpl = (row) => orphanNoticeTail(claimRunState({ projectId: row.project_id, slug: row.slug, jobId: row.id, attempt: row.attempts, ordinal: rowClaimOrdinal(row), env }));
+  await store.jobs.sweepOrphans({ liveWorkerImpl: liveLocalWorker, orphanTailImpl });
 }
 
-// Takes ownership of one job: replays the records runs queued while the database was unavailable, sweeps the orphans, then claims atomically inside the database.
-export async function acquire({ jobId = null, cap, env = process.env } = {}) {
+// Takes ownership of one job, never one of `excludeIds` when no job is named: replays the records runs queued while the database was unavailable, sweeps the orphans, then claims atomically inside the database.
+export async function acquire({ jobId = null, cap, excludeIds = [], env = process.env } = {}) {
   const store = openStore(env);
   await replayThenSweep(store, env);
   if (jobId === null && isPaused(env)) return { job: null, reason: "paused" };
   const worker = workerId();
-  const job = jobId === null ? await store.jobs.claimNextJob({ worker, cap }) : await store.jobs.claimJobById(jobId, { worker, cap });
+  const job = jobId === null ? await store.jobs.claimNextJob({ worker, cap, excludeIds }) : await store.jobs.claimJobById(jobId, { worker, cap });
   if (job) return { job, reason: "claimed" };
-  return { job: null, reason: await refusalReason({ jobId, cap, env }) };
+  return { job: null, reason: await refusalReason({ jobId, cap, excludeIds, env }) };
 }
 
 // Gives a claimed job back to the queue without spending the attempt, recording why it came back and what its spawns measured; null `blockedCode` clears a stale one.
@@ -146,7 +155,7 @@ async function capBlocker({ jobId, env }) {
 }
 
 // The reason a start of this shape would claim nothing, with the facts its message needs.
-// The queued records are replayed and the orphans swept first, exactly as `acquire` does: a job whose dead owner is about to be reclaimed is claimable, not `not-pending`.
+// The queued records are replayed and the orphans swept first, exactly as `acquire` does: a job whose dead owner was just swept reads `failed`, so it is `not-pending`.
 async function previewRefusal({ jobId, env }) {
   if (jobId === null) return isPaused(env) ? { reason: "paused", jobId } : await capBlocker({ jobId, env });
   const store = openStore(env);

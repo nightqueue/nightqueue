@@ -8,7 +8,7 @@ import {
   addJob,
   cancelRunningJob,
   claimJobById,
-  countAttempt,
+  noteRespawn,
   finishJob,
   gatePreflightJob,
   getJob,
@@ -130,7 +130,7 @@ test("a gated, retried and finished job keeps one attempt row per claim, and the
 
 test("active_s sums the attempts' durations and wall_s spans the first start to the last end; the CLI prints both and labels the two counts", async (t) => {
   const env = makeQueue(t, "attempts-durations");
-  const id = enqueue(env, { maxAttempts: 3 });
+  const id = enqueue(env);
   claim(env, id);
   releaseJob(id, { worker: WORKER, result: { interrupted: true } }, env);
   claim(env, id);
@@ -146,7 +146,7 @@ test("active_s sums the attempts' durations and wall_s spans the first start to 
   assert.match(table.find((line) => line.startsWith(`J-${id} `)) ?? "", /\b15m00s\b/, "DURATION is not the active time");
   const detail = await statusLines(env, [`J-${id}`]);
   assert.ok(detail.includes("attempts_log    2 attempts"), detail.join("\n"));
-  assert.ok(detail.includes("attempts        1 / 3 (budget counter: inner retries count)"), detail.join("\n"));
+  assert.ok(detail.includes("attempts        1"), detail.join("\n"));
   assert.ok(detail.includes("active_s        15m00s (900 s)"), detail.join("\n"));
   assert.ok(detail.includes("wall_s          1h05m (3900 s)"), detail.join("\n"));
   assert.ok(detail.some((line) => /^ {2}#1 {2}2026-10-06T10:00:00Z {2}10m00s {2}released \(interrupted\)/.test(line)), detail.join("\n"));
@@ -154,7 +154,7 @@ test("active_s sums the attempts' durations and wall_s spans the first start to 
 
 test("a running attempt counts up to the read in active_s and wall_s, and only the closed rows carry a duration", (t) => {
   const env = makeQueue(t, "attempts-running");
-  const id = enqueue(env, { maxAttempts: 2 });
+  const id = enqueue(env);
   claim(env, id);
   releaseJob(id, { worker: WORKER }, env);
   claim(env, id);
@@ -171,16 +171,16 @@ test("a running attempt counts up to the read in active_s and wall_s, and only t
 
 test("inner re-spawns are counted on the claim's one row, and a re-spawn after the row closed counts nothing", (t) => {
   const env = makeQueue(t, "attempts-spawns");
-  const id = enqueue(env, { maxAttempts: 3 });
+  const id = enqueue(env);
   claim(env, id);
-  assert.equal(countAttempt(id, { worker: WORKER }, env), true);
-  assert.equal(countAttempt(id, { worker: WORKER }, env), true);
-  assert.equal(getJob(id, env).attempts, 3, "the budget counter did not move with the re-spawns");
+  assert.equal(noteRespawn(id, { worker: WORKER }, env), true);
+  assert.equal(noteRespawn(id, { worker: WORKER }, env), true);
+  assert.equal(getJob(id, env).attempts, 1, "a re-spawn spent an attempt");
   assert.deepEqual(attemptsOf(env, id).map((row) => row.spawns), [3]);
 
   assert.ok(cancelRunningJob(id, { worker: WORKER, reason: "stop" }, env));
   assert.equal(strayOpenRows(env), 0);
-  assert.equal(countAttempt(id, { worker: WORKER }, env), false);
+  assert.equal(noteRespawn(id, { worker: WORKER }, env), false);
   assert.deepEqual(attemptsOf(env, id), [{ attempt: 1, outcome: "cancelled", exit: "stop", spawns: 3, out: null, fresh: false }]);
   assert.equal(jobView(getJob(id, env)).attempts_log.length, 1);
 });
@@ -201,7 +201,7 @@ test("the late measures of a cancelled attempt land once, however many times the
 
 test("a park and an interrupted release keep the claim as `released`, and a --fresh retry marks only the next row", (t) => {
   const env = makeQueue(t, "attempts-released-fresh");
-  const id = enqueue(env, { maxAttempts: 2 });
+  const id = enqueue(env);
   claim(env, id);
   parkJob(id, { worker: WORKER, notBefore: new Date(Date.now() - 1000).toISOString(), usage: { tokensOut: 11 } }, env);
   claim(env, id);
@@ -225,13 +225,13 @@ test("a park and an interrupted release keep the claim as `released`, and a --fr
 
 test("the sweep closes a dead runner's attempt as lost at its last lease renewal and keeps the job's first start", (t) => {
   const env = makeQueue(t, "attempts-sweep");
-  const id = enqueue(env, { maxAttempts: 2, timeoutS: 60 });
+  const id = enqueue(env, { timeoutS: 60 });
   claim(env, id);
   const db = openDb(env);
   db.prepare("UPDATE job_attempts SET started_at = datetime('now', '-1000 seconds') WHERE job_id = ?").run(id);
   db.prepare("UPDATE jobs SET lease_until = datetime('now', '-800 seconds', '+660 seconds') WHERE id = ?").run(id);
 
-  assert.deepEqual(sweepOrphans(env), { failed: 0, requeued: 1 });
+  assert.deepEqual(sweepOrphans(env), { failed: 1 });
   assert.equal(strayOpenRows(env), 0);
   const view = viewOf(env, id);
   assert.deepEqual(attemptsOf(env, id).map(({ outcome, exit }) => ({ outcome, exit })), [{ outcome: "lost", exit: "orphaned" }]);
@@ -241,14 +241,14 @@ test("the sweep closes a dead runner's attempt as lost at its last lease renewal
 
 test("a retried job is protected by the ceiling of its current attempt, not by the age of its first start", (t) => {
   const env = makeQueue(t, "attempts-ceiling");
-  const id = enqueue(env, { maxAttempts: 2, timeoutS: 60 });
+  const id = enqueue(env, { timeoutS: 60 });
   claim(env, id);
   releaseJob(id, { worker: WORKER }, env);
   openDb(env).prepare("UPDATE jobs SET started_at = datetime('now', '-100000 seconds') WHERE id = ?").run(id);
   claim(env, id);
   openDb(env).prepare("UPDATE jobs SET lease_until = datetime('now', '-120 seconds') WHERE id = ?").run(id);
 
-  assert.deepEqual(sweepOrphans(env, { liveWorkerImpl: () => true }), { failed: 0, requeued: 0 });
+  assert.deepEqual(sweepOrphans(env, { liveWorkerImpl: () => true }), { failed: 0 });
   assert.equal(getJob(id, env).status, "running");
 });
 
@@ -293,9 +293,9 @@ test("a row read without its attempts (a cancel's or a retry's answer) carries n
 
 test("the queue view and the detail view of queue_status both carry attempts_log with spawns, active_s and wall_s", async (t) => {
   const env = makeQueue(t, "attempts-queue-status");
-  const id = enqueue(env, { maxAttempts: 3 });
+  const id = enqueue(env);
   claim(env, id);
-  countAttempt(id, { worker: WORKER }, env);
+  noteRespawn(id, { worker: WORKER }, env);
   finishJob(id, { worker: WORKER, status: "done", result: { status: "done" }, usage: { tokensOut: 3 } }, env);
   const store = openStore(env);
   const listed = (await queueView(store, { env })).jobs.find((job) => job.id === id);
@@ -303,6 +303,6 @@ test("the queue view and the detail view of queue_status both carry attempts_log
   for (const job of [listed, single]) {
     assert.deepEqual(job.attempts_log.map((row) => [row.attempt, row.spawns, row.outcome, row.tokens_out]), [[1, 2, "done", 3]]);
     assert.ok(Number.isInteger(job.active_s) && Number.isInteger(job.wall_s));
-    assert.equal(job.attempts, 2, "the budget counter is not the history count");
+    assert.equal(job.attempts, 1, "a re-spawn spent an attempt");
   }
 });

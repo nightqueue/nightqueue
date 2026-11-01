@@ -11,7 +11,7 @@ import { runCycle } from "../../src/queue/runner.mjs";
 import { recordRunFields } from "../../src/queue/run-state.mjs";
 import { makeDir, makeHome } from "../../test-support/memory.mjs";
 import { useFakeClaude } from "../../test-support/queue-fake.mjs";
-import { codeChangePublishedEvent, doneStream, GATE_NOTICE, gateStream, PR_URL, resultEvent, SLUG, slugEvent, systemInitEvent, toNdjson } from "../../test-support/streams.mjs";
+import { codeChangePublishedEvent, doneStream, GATE_NOTICE, gateStream, PR_URL, recordedDone, recordedGate, resultEvent, SLUG, slugEvent, systemInitEvent, toNdjson } from "../../test-support/streams.mjs";
 import { addWorktree, gitVars, localBranches, makeDirty, publishedCheckout, registeredWorktrees } from "../../test-support/worktrees.mjs";
 
 // A git double for the preflight: a clean checkout of the default branch; the worktree calls of the runner use the real git.
@@ -21,13 +21,13 @@ function preflightGit({ args }) {
 }
 
 // A home whose project is a real published checkout, one job bound to the run of a real worktree, and the fake `claude` playing `stdout`.
-function makeWorktreeRun(t, name, { stdout, dirty = false, rowNotice = null }) {
+function makeWorktreeRun(t, name, { stdout, runState, dirty = false, rowNotice = null }) {
   const { checkout } = publishedCheckout(t, name);
   const worktree = addWorktree(checkout, `feat+${name}`);
   if (dirty) makeDirty(worktree.path);
   const env = { ...makeHome(t, name), ...gitVars() };
   registerCheckout(env, { path: checkout, name: "alpha" });
-  useFakeClaude(env, makeDir(t, `${name}-plan`), [{ stdout, exitCode: 0 }]);
+  useFakeClaude(env, makeDir(t, `${name}-plan`), [{ stdout, runState, exitCode: 0 }]);
   const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker" }, env).id;
   openDb(env).prepare("UPDATE jobs SET slug = ?, notice_md = ? WHERE id = ?").run(SLUG, rowNotice, id);
   recordRunFields({ projectId: ensureProject(env, "alpha"), slug: SLUG, fields: { worktree: worktree.path }, env });
@@ -40,7 +40,7 @@ function runJob(env, id) {
 }
 
 test("(a) a done run with a clean, pushed worktree removes it, keeps the branch and names nothing", async (t) => {
-  const run = makeWorktreeRun(t, "rw-done-clean", { stdout: doneStream({ notice: "the pull request is open" }) });
+  const run = makeWorktreeRun(t, "rw-done-clean", { stdout: doneStream({ notice: "the pull request is open" }), runState: recordedDone({ notice: "the pull request is open" }) });
 
   const cycle = await runJob(run.env, run.id);
 
@@ -54,7 +54,7 @@ test("(a) a done run with a clean, pushed worktree removes it, keeps the branch 
 });
 
 test("(b) a done run with a dirty worktree keeps it and names it in the notice and the job log", async (t) => {
-  const run = makeWorktreeRun(t, "rw-done-dirty", { stdout: doneStream({ notice: "the pull request is open" }), dirty: true });
+  const run = makeWorktreeRun(t, "rw-done-dirty", { stdout: doneStream({ notice: "the pull request is open" }), runState: recordedDone({ notice: "the pull request is open" }), dirty: true });
 
   await runJob(run.env, run.id);
 
@@ -67,7 +67,7 @@ test("(b) a done run with a dirty worktree keeps it and names it in the notice a
 });
 
 test("(c) a gate run with a clean, pushed worktree keeps it for the resume and names nothing", async (t) => {
-  const run = makeWorktreeRun(t, "rw-gate-clean", { stdout: gateStream() });
+  const run = makeWorktreeRun(t, "rw-gate-clean", { stdout: gateStream(), runState: recordedGate() });
 
   await runJob(run.env, run.id);
 
@@ -78,19 +78,19 @@ test("(c) a gate run with a clean, pushed worktree keeps it for the resume and n
   assert.equal(row.notice_md.includes("Worktree kept:"), false);
 });
 
-test("(d) a run with no notice of its own appends the kept line to the notice the row already held", async (t) => {
+test("(d) a delivered run with no notice of its own carries the kept line alone, never what the row held from an earlier attempt", async (t) => {
   const stdout = toNdjson([systemInitEvent(), slugEvent(), codeChangePublishedEvent(), resultEvent({ text: "" })]);
-  const run = makeWorktreeRun(t, "rw-row-notice", { stdout, dirty: true, rowNotice: "earlier notice" });
+  const run = makeWorktreeRun(t, "rw-row-notice", { stdout, runState: { outcome: { status: "done" } }, dirty: true, rowNotice: "earlier notice" });
 
   const cycle = await runJob(run.env, run.id);
 
   assert.deepEqual(cycle.processed, [{ id: run.id, status: "done", prUrl: PR_URL, attempts: 1 }]);
-  assert.equal(getJob(run.id, run.env).notice_md, `earlier notice\n\nWorktree kept: ${run.path} - it has uncommitted changes.`);
+  assert.equal(getJob(run.id, run.env).notice_md, `Worktree kept: ${run.path} - it has uncommitted changes.`);
   assert.equal(existsSync(run.path), true);
 });
 
 test("(e) a kept worktree names the untracked QA scratch files in the kept line and deletes none", async (t) => {
-  const run = makeWorktreeRun(t, "rw-scratch", { stdout: doneStream({ notice: "the pull request is open" }), dirty: true });
+  const run = makeWorktreeRun(t, "rw-scratch", { stdout: doneStream({ notice: "the pull request is open" }), runState: recordedDone({ notice: "the pull request is open" }), dirty: true });
   mkdirSync(join(run.path, "test"));
   writeFileSync(join(run.path, "test/foo.poc.test.mjs"), "// scratch\n");
   writeFileSync(join(run.path, "SHIP-QA-SCRATCH.md"), "scratch\n");

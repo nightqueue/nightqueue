@@ -16,7 +16,7 @@ import { initGitRepo } from "../../test-support/git.mjs";
 import { isolatedHostVars } from "../../test-support/host.mjs";
 import { makeDir, makeHome, projectPathOf, seedClosedJob } from "../../test-support/memory.mjs";
 import { useFakeClaude } from "../../test-support/queue-fake.mjs";
-import { assistantEvent, doneStream, GATE_MARKER, GATE_NOTICE, gateStream, PR_URL, SLUG } from "../../test-support/streams.mjs";
+import { assistantEvent, doneStream, GATE_MARKER, GATE_NOTICE, gateStream, PR_URL, SLUG, recordedDone, recordedGate } from "../../test-support/streams.mjs";
 
 const CLI = fileURLToPath(new URL("../../bin/nightqueue.mjs", import.meta.url));
 
@@ -44,7 +44,7 @@ function pauseRegion(resetsAt) {
 }
 
 // A home with a registered git project and the fake `claude` the runner will spawn.
-function makeCliHome(t, name, attempts = [{ stdout: doneStream(), exitCode: 0 }]) {
+function makeCliHome(t, name, attempts = [{ stdout: doneStream(), runState: recordedDone(), exitCode: 0 }]) {
   const env = makeHome(t, name);
   makeGitProject(t, env, "alpha");
   useFakeClaude(env, makeDir(t, `${name}-plan`), attempts);
@@ -181,7 +181,7 @@ test("queue add --run --foreground runs the job here and answers with its outcom
 });
 
 test("queue add --run --foreground exits 1 on any outcome other than done, and when the job never started", (t) => {
-  const env = makeCliHome(t, "cli-add-run-gate", [{ stdout: gateStream(), exitCode: 0 }]);
+  const env = makeCliHome(t, "cli-add-run-gate", [{ stdout: gateStream(), runState: recordedGate(), exitCode: 0 }]);
   const gated = runCli(env, ["queue", "add", "alpha", "fix the worker", "--run", "--foreground"]);
   assert.equal(gated.status, 1, gated.stdout);
   assert.match(gated.stdout, /J-1 gate/);
@@ -373,6 +373,20 @@ test("queue close takes one id and refuses every job that is not done, and --for
   assert.deepEqual(getJob(noPr, env), noPrBefore, "the refused forced close wrote to the job with no pull request");
   assert.match(runCli(env, ["queue", "close"]).stderr, /missing argument; usage: nightqueue queue close <id>/);
   assert.match(runCli(env, ["queue", "close", String(pending), String(noPr)]).stderr, /unexpected argument/);
+});
+
+test("`queue add --max-attempts` is refused and queues nothing; `queue status` shows the attempts as a plain count", (t) => {
+  const env = makeCliHome(t, "cli-add-max-attempts");
+  const repo = projectPath(env);
+
+  const refused = runCli(env, ["queue", "add", "--max-attempts", "2", "fix the worker"], { cwd: repo });
+  assert.equal(refused.status, 1, refused.stdout);
+  assert.match(refused.stderr, /--max-attempts/);
+  assert.equal(getJob(1, env), null, "a refused `--max-attempts` still queued a job");
+
+  runCli(env, ["queue", "add", "fix the parser"], { cwd: repo });
+  assert.equal("max_attempts" in JSON.parse(runCli(env, ["queue", "status", "1", "--json"]).stdout).job, false);
+  assert.match(runCli(env, ["queue", "status", "1"]).stdout, /^attempts {8}0$/m);
 });
 
 test("`queue add --tier` is refused with the line naming its removal and queues nothing; `queue status` shows no tier", (t) => {
@@ -758,7 +772,7 @@ test("queue cancel takes a pending job and refuses one that is running under a l
 });
 
 test("queue cancel closes a gated job and the status still shows it with its note", (t) => {
-  const env = makeCliHome(t, "cli-cancel-gate", [{ stdout: gateStream(), exitCode: 0 }]);
+  const env = makeCliHome(t, "cli-cancel-gate", [{ stdout: gateStream(), runState: recordedGate(), exitCode: 0 }]);
   const gated = runCli(env, ["queue", "add", "alpha", "fix the worker", "--run", "--foreground"]);
   assert.equal(gated.status, 1, gated.stdout);
   assert.equal(getJob(1, env).status, "gate");
@@ -781,7 +795,7 @@ test("queue cancel closes a gated job and the status still shows it with its not
 });
 
 test("queue status of a gated job spells the reason out and says how to answer it", (t) => {
-  const env = makeCliHome(t, "cli-status-notice", [{ stdout: gateStream(), exitCode: 0 }]);
+  const env = makeCliHome(t, "cli-status-notice", [{ stdout: gateStream(), runState: recordedGate(), exitCode: 0 }]);
   assert.equal(runCli(env, ["queue", "add", "alpha", "fix the worker", "--run", "--foreground"]).status, 1);
   assert.equal(getJob(1, env).status, "gate");
 
@@ -801,7 +815,7 @@ test("queue status of a gated job spells the reason out and says how to answer i
 });
 
 test("queue status of one job also shows the run's own notice, whole, whenever it differs from the row's", (t) => {
-  const env = makeCliHome(t, "cli-status-run-notice", [{ stdout: doneStream({ notice: "the run's real notice, kept whole" }), exitCode: 0 }]);
+  const env = makeCliHome(t, "cli-status-run-notice", [{ stdout: doneStream({ notice: "the run's real notice, kept whole" }), runState: recordedDone({ notice: "the run's real notice, kept whole" }), exitCode: 0 }]);
   assert.equal(runCli(env, ["queue", "add", "alpha", "fix the worker", "--run", "--foreground"]).status, 0);
   assert.equal(getJob(1, env).status, "done");
 
@@ -822,7 +836,7 @@ test("queue status of one job also shows the run's own notice, whole, whenever i
 });
 
 test("queue retry refuses a gated job without --note, printing why the job is waiting", (t) => {
-  const env = makeCliHome(t, "cli-retry-refusal", [{ stdout: gateStream(), exitCode: 0 }]);
+  const env = makeCliHome(t, "cli-retry-refusal", [{ stdout: gateStream(), runState: recordedGate(), exitCode: 0 }]);
   assert.equal(runCli(env, ["queue", "add", "alpha", "fix the worker", "--run", "--foreground"]).status, 1);
 
   const refused = runCli(env, ["queue", "retry", "1"]);
@@ -833,7 +847,7 @@ test("queue retry refuses a gated job without --note, printing why the job is wa
 });
 
 test("queue retry answers the gate, sends the job back to the queue and keeps what makes it resume", (t) => {
-  const env = makeCliHome(t, "cli-retry-gate", [{ stdout: gateStream(), exitCode: 0 }]);
+  const env = makeCliHome(t, "cli-retry-gate", [{ stdout: gateStream(), runState: recordedGate(), exitCode: 0 }]);
   assert.equal(runCli(env, ["queue", "add", "alpha", "fix the worker", "--run", "--foreground"]).status, 1);
   const gated = getJob(1, env);
 
@@ -871,7 +885,7 @@ test("queue retry says who will pick the job up: a drain, a once runner of anoth
 });
 
 test("queue retry --fresh starts from phase 0 and drops the run directory of the previous attempt", (t) => {
-  const env = makeCliHome(t, "cli-retry-fresh", [{ stdout: gateStream(), exitCode: 0 }]);
+  const env = makeCliHome(t, "cli-retry-fresh", [{ stdout: gateStream(), runState: recordedGate(), exitCode: 0 }]);
   assert.equal(runCli(env, ["queue", "add", "alpha", "fix the worker", "--run", "--foreground"]).status, 1);
   const dir = runDir(ensureProject(env, "alpha"), getJob(1, env).slug, env);
   mkdirSync(dir, { recursive: true });
@@ -886,8 +900,8 @@ test("queue retry --fresh starts from phase 0 and drops the run directory of the
 
 test("queue retry --run --foreground takes the job through the runner in this process", (t) => {
   const env = makeCliHome(t, "cli-retry-run", [
-    { stdout: gateStream(), exitCode: 0 },
-    { stdout: doneStream(), exitCode: 0 },
+    { stdout: gateStream(), runState: recordedGate(), exitCode: 0 },
+    { stdout: doneStream(), runState: recordedDone(), exitCode: 0 },
   ]);
   assert.equal(runCli(env, ["queue", "add", "alpha", "fix the worker", "--run", "--foreground"]).status, 1);
 

@@ -156,13 +156,14 @@ test("the answer to a gate lifts the runtime's termination of that attempt, and 
   assert.equal(state.terminal, undefined);
 });
 
-test("a retry of a cancelled job keeps its termination, so the next attempt starts fresh as today", async (t) => {
-  const env = makeQueue(t, "retry-keeps-termination");
+test("a retry of a cancelled job consumes its termination, whoever wrote it: a retry is the operator's answer", async (t) => {
+  const env = makeQueue(t, "retry-consumes-termination");
   const id = gatedJob(env);
   openDb(env).prepare("UPDATE jobs SET status = 'cancelled' WHERE id = ?").run(id);
   const run = stoppedRun(env);
+  recordTermination({ ...run, phase: "qa", reason: "The ticket no longer applies.", by: "qa-guardian" });
   await applyRetry({ id, note: "again", env });
-  assert.equal(readRunState(run).termination.by, RUNTIME_AUTHOR);
+  assert.equal(readRunState(run).termination, undefined);
 });
 
 test("a refused retry never reaches the run directory", async (t) => {

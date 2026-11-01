@@ -1,8 +1,12 @@
 import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { isId } from "../config/ids.mjs";
+import { withLockSync } from "../config/lock.mjs";
 import { runDir, runsDir } from "../config/paths.mjs";
 import { writeFileAtomic } from "../config/store.mjs";
+
+// The lock of one run's state.json: a holder only ever keeps it for a single read and write, so a lock this old can only have been left behind by a dead process.
+export const RUN_LOCK = { timeoutMs: 5000, staleAfterMs: 15000 };
 
 // Canonical phase order written by the plugin into state.json; "next phase" derives from the highest one completed.
 export const RESUME_PHASE_ORDER = [
@@ -242,16 +246,93 @@ export function readRunState({ projectId, slug, env = process.env } = {}) {
   }
 }
 
+// The id of the other job whose terminal witness stamps this state, or null when no other job does.
+export function foreignStampOf(state, jobId) {
+  const stamp = isStateObject(state) && isStateObject(state.terminal) ? state.terminal.jobId : undefined;
+  return Number.isInteger(stamp) && stamp !== Number(jobId) ? stamp : null;
+}
+
 // Reads the state.json of a job's run, or null when its terminal witness was stamped by another job and so never speaks for this one.
 export function ownRunState({ projectId, slug, jobId, env = process.env } = {}) {
   const state = readRunState({ projectId, slug, env });
-  const stamp = isStateObject(state) && isStateObject(state.terminal) ? state.terminal.jobId : undefined;
-  return Number.isInteger(stamp) && stamp !== Number(jobId) ? null : state;
+  return foreignStampOf(state, jobId) === null ? state : null;
 }
 
 // Tells whether a parsed state.json is an object the witness can be merged into.
 export function isStateObject(state) {
   return Boolean(state) && typeof state === "object" && !Array.isArray(state);
+}
+
+// The attempt a record's stamp names, or null for a record with no stamp, which reads as current.
+export function stampedAttempt(record) {
+  const attempt = isStateObject(record) && isStateObject(record.claim) ? record.claim.attempt : null;
+  return Number.isInteger(attempt) ? attempt : null;
+}
+
+// The ordinal of the claim a record's stamp names, or null for a stamp older than the ordinal.
+function stampedOrdinal(record) {
+  const ordinal = isStateObject(record) && isStateObject(record.claim) ? record.claim.ordinal : null;
+  return Number.isInteger(ordinal) ? ordinal : null;
+}
+
+// The stamp of a claim on a record: its attempt, its session and, when known, its ordinal.
+export function claimStamp({ attempt, session = null, ordinal = null }) {
+  return { attempt, session, ...(Number.isInteger(ordinal) ? { ordinal } : {}) };
+}
+
+// The ordinal of a row's current claim: the one the claim answered, else its last attempt row, else null.
+export function rowClaimOrdinal(row) {
+  if (Number.isInteger(row?.claim_attempt)) return row.claim_attempt;
+  const last = Array.isArray(row?.attempt_rows) ? row.attempt_rows.at(-1)?.attempt : null;
+  return Number.isInteger(last) ? last : null;
+}
+
+// Where a record's stamp stands against a claim: below zero for an earlier claim, above for a later one, zero for this one or no stamp; the ordinal decides when both hold one, else the attempt.
+export function stampOrder(record, { attempt, ordinal = null }) {
+  const stamped = stampedAttempt(record);
+  if (stamped === null) return 0;
+  const own = stampedOrdinal(record);
+  return own !== null && Number.isInteger(ordinal) ? own - ordinal : stamped - attempt;
+}
+
+// An outcome reduced to the facts of its publication: what the host holds stays, whichever claim wrote the rest.
+export function outcomeHostFacts(outcome) {
+  const { status: _status, notice: _notice, claim: _claim, ...facts } = outcome;
+  return facts;
+}
+
+// The attempts named by the records a run already set aside as late or displaced.
+function ignoredRecordAttempts(state) {
+  const entries = Array.isArray(state.ignoredRecords) ? state.ignoredRecords : [];
+  return entries.map(stampedAttempt).filter((attempt) => attempt !== null);
+}
+
+// The state as one claim reads it: a record stamped by another claim does not speak, and `ignoredAttempts` says which attempts were ignored; nothing is written.
+export function recordsOfClaim(state, attempt, ordinal = null) {
+  if (!isStateObject(state) || !Number.isInteger(attempt)) return state;
+  const isStale = (record) => stampOrder(record, { attempt, ordinal }) !== 0;
+  const { termination, terminal, ...view } = state;
+  if (termination !== undefined && !isStale(termination)) view.termination = termination;
+  if (terminal !== undefined && !isStale(terminal)) view.terminal = terminal;
+  if (isStale(state.outcome)) view.outcome = outcomeHostFacts(state.outcome);
+  const stale = [state.outcome, termination, terminal].filter(isStale).map(stampedAttempt);
+  const ignored = [...new Set([...stale, ...ignoredRecordAttempts(state)])].sort((a, b) => a - b);
+  return ignored.length > 0 ? { ...view, ignoredAttempts: ignored } : view;
+}
+
+// Reads the state.json of a job's run as its current claim reads it, or null when another job stamped it.
+export function claimRunState({ projectId, slug, jobId, attempt, ordinal = null, env = process.env } = {}) {
+  return recordsOfClaim(ownRunState({ projectId, slug, jobId, env }), attempt, ordinal);
+}
+
+// Runs a write of one run's state.json under the lock of that run, so its read and its write are ONE critical section even across processes; a lock nobody releases refuses the write instead of losing another writer's.
+export function underRunLock({ projectId, slug, env, write }) {
+  if (!isRunPath(projectId, slug)) return { status: "kept", path: null, reason: "unsafe project or slug" };
+  try {
+    return withLockSync(`${runDir(projectId, slug, env)}.lock`, write, RUN_LOCK);
+  } catch (err) {
+    return { status: "kept", path: null, reason: `the state of the run could not be locked: ${String(err?.message ?? err).split("\n")[0]}` };
+  }
 }
 
 // Writes the state.json of a run atomically, creating its directory; an unsafe project or slug writes nothing.
@@ -271,24 +352,15 @@ export function saveRunState({ projectId, slug, env, state }) {
 
 // Writes the terminal section of a run: the witness of the outcome, durable and independent of the database.
 export function writeRunTerminal({ projectId, slug, terminal, env = process.env } = {}) {
-  const state = readRunState({ projectId, slug, env });
-  return saveRunState({ projectId, slug, env, state: { ...(isStateObject(state) ? state : {}), terminal } });
-}
-
-// Drops the terminal section of a run, so the witness of the previous attempt never speaks for the next one.
-export function clearRunTerminal({ projectId, slug, env = process.env } = {}) {
-  const state = readRunState({ projectId, slug, env });
-  if (!isStateObject(state) || state.terminal === undefined) return { status: "absent", path: null, reason: null };
-  const { terminal, ...rest } = state;
-  return saveRunState({ projectId, slug, env, state: rest });
-}
-
-// Drops the outcome the pipeline recorded, so the record of the previous attempt never speaks for the next one.
-export function clearRunOutcome({ projectId, slug, env = process.env } = {}) {
-  const state = readRunState({ projectId, slug, env });
-  if (!isStateObject(state) || state.outcome === undefined) return { status: "absent", path: null, reason: null };
-  const { outcome, ...rest } = state;
-  return saveRunState({ projectId, slug, env, state: rest });
+  return underRunLock({
+    projectId,
+    slug,
+    env,
+    write: () => {
+      const state = readRunState({ projectId, slug, env });
+      return saveRunState({ projectId, slug, env, state: { ...(isStateObject(state) ? state : {}), terminal } });
+    },
+  });
 }
 
 // Moves the run directory of a project onto another slug, which is how the pipeline renames the run the runtime opened for it.

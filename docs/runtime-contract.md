@@ -61,7 +61,20 @@ What a runtime has to provide, and what it can rely on:
     rewritten and never read to find the run.
   - `updatedAt` and the `at` of every record: the runtime's UTC clock, one stamp per
     write.
-  - `phases[{phase, at, artifact?, verdict?, note?, reason?, by?}]`: `nightqueue run check` on
+  - `claim{attempt, session, ordinal?}` on `outcome`, `termination`, `terminal` and each `phases[]` entry:
+    the claim whose process wrote it, read from `NIGHTQUEUE_JOB_CLAIM` (`<attempt>:<worker>#<ordinal>`,
+    the ordinal being the claim's `job_attempts` row, which the runner pins on the session and on
+    its MCP server, and which a merger never gets) and from the row. Readers compare `ordinal` when
+    the stamp and the reader both hold one, else `attempt`; `phases[]` is read whole, and a record
+    with no stamp reads as current. See "A record speaks only for the claim that wrote it" in
+    [Queue](queue.md).
+  - `ignoredRecords[{kind, at, claim, record, notKept?}]`: what a claim that was over tried to
+    write and what a newer claim displaced, `kind` being `outcome`, `termination`, `phase`, `check`,
+    `fields` or `skip`, and `claim.over: true` on a late write. A late `record` longer than 4 KB
+    is `{truncated}`, the start of its JSON; an attempt keeps at most five entries, and
+    `notKept` on its last one counts the late writes past them. It is never consumed, and never
+    read but to name the attempts in the notice.
+  - `phases[{phase, at, artifact?, verdict?, note?, reason?, by?, claim?}]`: `nightqueue run check` on
     a complete phase and `run publish`/`run pr` for `commit` (both `by: "runtime"`), and
     `run_phase_done`; append-only, so a phase recorded twice never erases the first record.
     One merge keeps an older plugin from doubling a row: a `run_phase_done` with no `reason`
@@ -71,14 +84,14 @@ What a runtime has to provide, and what it can rely on:
     `nightqueue run check` alone, the memo of the last check of each artifact (its first
     notable line and the sha256 of the text it read); it supplies the reason of a re-run and
     keeps a check run twice on the same text from appending twice. It is not a `run_set` field.
-  - `termination{phase, reason, at, by?}`: `run_terminate`, and `nightqueue run check 01` on a
-    terminal triage verdict (`by: "runtime"`); a run terminated this way is never resumed by a
-    retry. A runtime-written termination lasts one attempt: a completed `run check 01` that
-    proceeds lifts it (`recorded: termination cleared`), and so does a `queue retry` of a `gate`
-    job. One written by hand (no `by`) is never lifted.
+  - `termination{phase, reason, at, by?, claim?}`: `run_terminate`, and `nightqueue run check 01` on a
+    terminal triage verdict (`by: "runtime"`). A termination speaks only for the claim that wrote
+    it: a retry without `fresh` consumes it, whoever wrote it, unless its stamp names a claim
+    older than the row's last, and the retried run resumes after its last completed phase. A completed `run check 01` that proceeds also lifts one the runtime
+    wrote (`recorded: termination cleared`).
   - `wip{status, phase, at, commit?, short?, branch?, files?, amended?, reason?, ref?, parent?}`:
-    `run_terminate` (in the same write as `termination`) and the runner at the finish of a job
-    that ended `cancelled` by itself; what the runtime did with the terminated run's work (see
+    `run_terminate` (in the same write as `termination`) and the runner at the finish
+    of a job that ended `cancelled` by itself; what the runtime did with the terminated run's work (see
     "A terminated run keeps its work" below). `status` is `committed`, `clean`, `skipped` or
     `failed`. `ref` is the `refs/nightqueue/wip/<slug>` ref naming `commit`, `parent` its parent,
     `files` the paths the commit carries. It never records a `commit` phase nor an `outcome`.
@@ -101,7 +114,9 @@ What a runtime has to provide, and what it can rely on:
     `done`; the job's `result.files` reads it first, then `wip.files`, else none.
     `status: "no_change"` is the run's deliberate conclusion that no code change is
     needed (triage verdict `NO-CHANGE-NEEDED`) and is refused without a `notice`, the
-    conclusion its origins are told when the job is closed.
+    conclusion its origins are told when the job is closed. An attempt's start erases nothing
+    here; a retry without `fresh` removes `status` and `notice`, whatever the status, and keeps
+    `prUrl` and `prTitle`, so a retried job is `done` only if it records `done` again.
   - `prTemplate{source, path?, headings, at}`: `nightqueue run pr` (both the
     `--template` query and the publishing call), the template the body is checked
     against - `repo` with its path, or `nightqueue`.
@@ -174,8 +189,8 @@ What a runtime has to provide, and what it can rely on:
   append that races the rename starts a live file. A replay that meets the database still
   unavailable stops there and leaves the rest of the file untouched.
 - Literals a runtime parses from the pipeline's stdout: `SLUG: <slug> TYPE: <type>`
-  (the run renames itself), `## Requires user confirmation` (the run is waiting on a human
-  gate), `## Notice` (the executive summary to deliver) and `QUEUE_SLUG:`, which
+  (the run renames itself), `## Requires user confirmation` (the narration marks a gate; it
+  decides no ending), `## Notice` (the executive summary to deliver) and `QUEUE_SLUG:`, which
   **is deprecated in favour of `SLUG:`** and still read.
 - Authority of each literal:
   - `SLUG:` - a standalone line, orchestrator text only. The FIRST valid declaration
@@ -191,55 +206,42 @@ What a runtime has to provide, and what it can rely on:
     than the named prompt, which has no other way to bind its slug, and the runtime
     still asks for it in the prompt of a job whose row carries no run yet.
   - `## Notice` - read from the FINAL `result` event; an intermediate message that
-    echoes an earlier one never wins.
+    echoes an earlier one never wins. It is shown as `run_notice` and recovers a lost row
+    (`queue repair --from-disk`); it never decides an ending and never fills `notice_md` of an
+    attempt the runner classified.
 - The prompt is the other direction of the same contract: the runtime names the run
   before the first phase with `Project: <name>` and `RUN_DIR: <absolute path>`, and a
   run that can be resumed also carries the block ``RESUME CANDIDATE (slug `<slug>`)``
   with `RUN_DIR:`, `Branch:`, `Worktree:`, `Last completed phase:`, `Resume from
   phase:` and `From stage:` - the decision is already taken when the prompt is built,
   and the pipeline reads it instead of re-deriving it (see [Queue](queue.md)).
-- The pull request of the run has one source chain, in this order: the
+- The pull request of the run has two sources, in this order: the `outcome.prUrl` the runtime
+  itself recorded in `state.json`, then the
   `{"type":"system","subtype":"code_change_published","url":…,"branch":…}` event the HOST emits
-  when it publishes the change - only when it proves it is the run's own delivery -, then the
-  `outcome.prUrl` the runtime itself recorded in `state.json`, then a publication that cannot
-  prove it, then the text of the stream. Only an event with
+  when it publishes the change. The text of the stream is not a source. Only an event with
   `"action":"created"` publishes a delivery, and one session may publish for more than
-  one repository: the run's own repository is the one the rest of the classification
-  reports, or the one of its FIRST publication. The run's own delivery is the LAST
+  one repository: the run's own repository is the one of its FIRST publication. The run's own delivery is the LAST
   publication of THAT repository whose `branch` is the run's own branch - the `branch`
   of `state.json` or its published alias (`worktree-feat+x` is `feat/x`, and a job's
   `worktree-x` is `<commit type>/x` for any commit type of the pipeline, the rename
   `nightqueue run pr` applies and then records as the run's branch). A publication that
   names no branch, or that the run cannot compare because it recorded none, is unproven:
-  it loses to a recorded `outcome.prUrl` and is only the delivery when the runtime
-  recorded none. A publication naming ANOTHER branch - a QA's scratch pull request, say -
-  is never the run's pull request, not even for lack of a better one. Every publication
-  dropped by these rules is named in the notice, on one line starting with
-  `⚠️ another pull request was published during this run and was NOT recorded as its delivery:`.
-  A publication for another repository, an event with any
-  other `action` and a `url` of another shape are all ignored. In the text - the last source, which serves
-  another provider and a runtime older than the event - a URL only counts as delivered
-  when it closes a line outside any code fence and that line does not report a failure;
-  a URL cited inside a sentence, an example or an error message is a reference, and a
-  run that delivers none is never `done`; it is a `gate` only when the run itself asked
-  for a decision - a recorded `outcome.status: "gate"` in `state.json`, or the
-  `## Requires user confirmation` marker in the stream - AND its resolved notice itself
-  carries that heading (`hasGateMarker`, reused from the stream); when the run's
-  `03-plan.md` is readable and has its own `## Requires user confirmation` section (heading
-  to the next level-2 heading, outside fences), a notice shorter than that section by more
-  than `GATE_NOTICE_MARGIN_CP` (200 code points, `src/queue/classify.mjs`) is read the same
-  way (except a notice recorded through `run_outcome` that nests another artifact's section:
-  its first non-blank line after the gate heading is another heading, the shape
-  `from_artifact` composes; that notice is another gate and is not measured against the
-  plan's section; a `## Notice` in the final text is always measured) - a gate whose notice does not carry the question is `failed`, with the
-  fixed notice `the run stopped at a gate but its notice does not carry the question - see
-  <plan path>` (`<plan path>` unknown when the classifier was given none); a clean run
-  reaching neither reading is `failed` otherwise, keeping its final text as the reason.
-  A clean run whose `state.json` records `outcome.status: "no_change"` with a notice, and
-  whose attempt committed nothing (its telemetry is neither `pr_opened` nor
-  `local_commit`), is `done` with no pull request and the conclusion as its notice - never
-  the `nothing to close` line; a stop, a timeout or a failed exit still wins over it, and the
-  record without a notice is `failed`.
+  it is the delivery only when the runtime recorded none. A publication naming ANOTHER
+  branch - a QA's scratch pull request, say - is never the run's pull request, not even for
+  lack of a better one, and no line names it any more; a row finished before this rule may still
+  carry `⚠️ another pull request was published during this run and was NOT recorded as its
+  delivery:`, which the notice reader strips. A publication for another repository, an event with
+  any other `action` and a `url` of another shape are all ignored.
+- The ending of an attempt is decided only from how the process ended and from `outcome` and
+  `termination` in `state.json`, by the first matching row of the table in
+  [Queue](queue.md): stopped, timed out, non-zero exit, then `done` with a pull request, `gate`
+  with a notice, `no_change` with a notice, a termination, and `failed` with a notice starting
+  `no outcome recorded:` for anything else. The record's `notice` is the job's notice. No heading,
+  result text or `pipeline_runs` row takes part.
+- A transient failure is read from the structured events of the last spawn, orchestrator only:
+  the fields `is_error`, `api_error_status`, `subtype` and `errors[]` of the last `result`, and
+  the `status` of the last `rate_limit_event`. It re-spawns at most `TRANSIENT_RESPAWNS` (2)
+  times inside the claim and spends no attempt (see [Queue](queue.md)).
 
 A notice holds only the job's own account: it carries no `Record:` line and a close appends
 no `Closed:` line. The PR, the merge and the status are shown from the job's fields
@@ -587,7 +589,7 @@ Job mode is unchanged and still fails open.
 In an operator session the MCP server's instructions replace the tools-only line with the
 three-band line and add one line on `connection-write`; any other client sees them unchanged.
 
-The thirty-three MCP tools of tool contract 10, with the parameters `nightqueue mcp` actually
+The thirty-three MCP tools of tool contract 11, with the parameters `nightqueue mcp` actually
 accepts (every answer carries `contract: 10`; a call to a tool an older contract had and this one
 dropped is answered with the older-definitions line):
 
@@ -604,7 +606,7 @@ dropped is answered with the older-definitions line):
 | `index_save` | `project`, `repo_root`, `files[{path, responsibility}]`, `libs?[{lib, version}]` |
 | `index_recall` | `project`, `repo_root?`, `query?` |
 | `pipeline_log` | `outcome`, `project?`, `slug?`, `task_type?`, `gate_stop?`, `duration_s?`, `phases?` (accepted and ignored: the phase rows come from the run's `state.json`, with their recorded `note` and `reason`; inside a job a run already recorded in this attempt answers `already_recorded: true` and adds no row; outside a job, or in a job with no recorded attempt start, so does a run whose last record carries the same outcome and phase count; the operator's outcomes add a row per call) |
-| `queue_add` | `project?`, `prompt`, `cwd?`, `register?`, `key?` (with `register`), `title?` (one line, at most 120 characters; blank is none), `priority?` (1-9), `max_attempts?` (1-10), `timeout_s?` (60-86400), `origin?` (a list of `{kind, ref}`; omitted or null detects every recognised link of the prompt, `[]` is none; the old `{kind, ref}` or `false` is refused as an older client, contract 6) (a prompt that depends on another job or pull request is refused before anything is registered or queued; see "A job is self-contained" below) |
+| `queue_add` | `project?`, `prompt`, `cwd?`, `register?`, `key?` (with `register`), `title?` (one line, at most 120 characters; blank is none), `priority?` (1-9), `timeout_s?` (60-86400), `origin?` (a list of `{kind, ref}`; omitted or null detects every recognised link of the prompt, `[]` is none; the old `{kind, ref}` or `false` is refused as an older client, contract 6); a `max_attempts` with a value is refused as an older client, contract 11 (a prompt that depends on another job or pull request is refused before anything is registered or queued; see "A job is self-contained" below) |
 | `project_register` | `cwd`, `name?`, `key?`, `org?` (registers the repository of `cwd`, a linked worktree as its main checkout, only after the person said yes; answers `{registered, project, key, org, path, hint}`; nothing is queued) |
 | `project_integrations` | `project`, `action` (`show`, `set`, `unset`), `key?` (`<kind>.<setting>`, required by `set`/`unset`), `value?` (text, required by `set`) (answers `{project, integrations, providers: [{kind, keys}]}` with the settings each provider of the build declares; `set` validates against the provider, `unset` of the last key leaves the project without integrations; `set`/`unset` refused from inside a job; never a secret) |
 | `tracker_issues` | `team?` (the tracker's team key), `project?` (the tracker's project name), `state?` (`open` default, `closed`, `all`), `limit?` (1-50, default 25), `include_filters?`, `text?` (title or description contains it, case-insensitive, at most 200), `label?` (one label name, exact, case-insensitive) (read-only, the home's Linear connection, no nightqueue project; answers `{ok: true, provider, items, truncated, filters?}` or the normal answer `{ok: false, error: "no-connection" \| "provider-unavailable", hint, provider}`; filters cached five minutes) |
@@ -662,6 +664,7 @@ starts on the branch as it is: the runner resets nothing, records nothing about 
 nothing to the prompt. The phases restart: a terminated run is never resumed. The runtime never
 creates a wip commit in an adopted worktree, which may hold the person's own uncommitted work. A
 `--fresh` retry drops the run and leaves the old branch at its wip commit.
+A retry without `fresh` consumes the termination, so the retried run resumes after its last completed phase, on the kept wip commit.
 
 `run publish` and `run commit` read `<base>..HEAD` before anything changes. A commit is the run's
 own when its subject is `wip(<slug>): ...`, `refs/nightqueue/wip/<slug>` exists and reaches it,
@@ -886,8 +889,8 @@ to the end of its last attempt (the read, while one is open); the three are null
 job that never ran. `started_at` is the first claim of the job and `attempt_started_at` the
 current one (null outside `running`); `tokens_*`, `cache_*`, `cost_usd` and the host and
 orchestrator counters are totals across every attempt, `orch_ctx_last` and `baseline_ctx`
-the last value. `attempts` stays the retry budget counter, which inner re-spawns increment
-too - the history count is `attempts_log.length`. A row answered by a write (the job a
+the last value. `attempts` is the job's own count, which inner re-spawns never move and which
+limits nothing - the history count is `attempts_log.length`. A row answered by a write (the job a
 cancel or a retry returns) carries none of the three keys. The keys are additive:
 `contract` is unchanged.
 `queue_status` never returns the prompt of a job and truncates `notice_md` and `result` at 500
@@ -1287,8 +1290,8 @@ nested under that heading; the question follows; inside a job the body ends with
 `Answer with: nightqueue queue retry J-<id> --note "<your answer>"`. A missing file or section,
 a path, `question`/`from_artifact` with another status, or either one together with `notice`
 is refused, and nothing is recorded. The answer echoes the composed `notice`. The pipeline
-then ends its turn with one plain line: a job whose final text has no `## Notice` still ends
-at `gate` with the recorded notice, and a `## Notice` in the text still wins over the record.
+then ends its turn with one plain line: the job ends at `gate` with the recorded notice, and a
+`## Notice` in the text never replaces it.
 
 **A job is self-contained, and a finished job does not resume.** `queue_add` refuses, before
 anything is registered or queued, a prompt that conditions the work on another job or pull

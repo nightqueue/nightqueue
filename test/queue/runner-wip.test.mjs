@@ -7,7 +7,6 @@ import { wipProblemLines } from "../../src/cli/run-publish.mjs";
 import { jobLogPath, jobWorktreePath, runDir } from "../../src/config/paths.mjs";
 import { openDb } from "../../src/memory/db.mjs";
 import { addJob, getJob } from "../../src/memory/jobs.mjs";
-import { logPipelineRun } from "../../src/memory/runs.mjs";
 import { readRunState } from "../../src/queue/resume.mjs";
 import { applyRetry } from "../../src/queue/retry.mjs";
 import { recordRunFields, recordTermination, recordWip } from "../../src/queue/run-state.mjs";
@@ -18,7 +17,7 @@ import { releaseJobWorktree } from "../../src/queue/worktree.mjs";
 import { isolatedHostVars } from "../../test-support/host.mjs";
 import { ensureProject, makeDir, makeHome, registerCheckout } from "../../test-support/memory.mjs";
 import { fakeCalls, useFakeClaude } from "../../test-support/queue-fake.mjs";
-import { doneStream, failureStream, noticeText, resultEvent, SLUG, slugEvent, systemInitEvent, toNdjson } from "../../test-support/streams.mjs";
+import { doneStream, failureStream, noticeText, resultEvent, SLUG, slugEvent, systemInitEvent, toNdjson, recordedDone } from "../../test-support/streams.mjs";
 import { addWorktree, git, gitVars, publishedCheckout } from "../../test-support/worktrees.mjs";
 
 const REASON = "INVALIDATED: [H6] the list reads one table";
@@ -58,12 +57,6 @@ function leaveWork(path) {
   rmSync(join(path, "tmp"), { recursive: true, force: true });
 }
 
-// Records that this attempt's telemetry committed nothing, which ends a clean no-PR run `cancelled`.
-function noCommitTelemetry(run) {
-  const { runId } = logPipelineRun({ projectId: run.projectId, slug: SLUG, outcome: "no_commit", phases: [] }, run.env);
-  openDb(run.env).prepare("UPDATE pipeline_runs SET created_at = datetime('now', '+1 hour') WHERE id = ?").run(runId);
-}
-
 // Runs the one job of the home through a real cycle.
 function runJob(run) {
   return runCycle({ jobId: run.id, env: run.env, deps: { gitImpl: preflightGit } });
@@ -89,7 +82,6 @@ async function terminatedAttempt(t, name, options = {}) {
   const run = makeWipRun(t, name, { attempts: options.attempts ?? [{ stdout: terminatedStream(options.notice), exitCode: 0 }], rowNotice: options.rowNotice, probe: options.probe });
   leaveWork(run.path);
   recordTermination({ projectId: run.projectId, slug: SLUG, phase: "qa", reason: REASON, env: run.env });
-  noCommitTelemetry(run);
   const cycle = await runJob(run);
   assert.equal(cycle.processed[0].status, "cancelled", JSON.stringify(cycle.processed));
   return run;
@@ -104,7 +96,7 @@ test("a run that terminated by itself leaves its work as one wip commit, and the
   const state = readRunState({ projectId: run.projectId, slug: SLUG, env: run.env });
   assert.deepEqual([state.wip.status, state.wip.commit, state.wip.branch], ["committed", head.commit, run.branch]);
   const notice = getJob(run.id, run.env).notice_md;
-  assert.ok(notice.startsWith("The run stopped at QA."), notice);
+  assert.ok(notice.startsWith(REASON), notice);
   assert.equal(countOf(notice, "Terminated run: "), 1, notice);
   assert.ok(notice.includes(`wip commit ${state.wip.short} kept on ${run.branch} (ref refs/nightqueue/wip/${SLUG}), local, never pushed, not reviewed.`), notice);
   assert.ok(notice.includes("the next attempt starts on the wip commit in the same worktree"), notice);
@@ -129,8 +121,8 @@ test("a pasted run_terminate notice and a previous attempt's row notice still le
 });
 
 test("a done or failed ending commits nothing and leaves HEAD where the run left it", async (t) => {
-  for (const [label, stdout, exitCode] of [["done", doneStream({ notice: "the pull request is open" }), 0], ["failed", failureStream(), 1]]) {
-    const run = makeWipRun(t, `wip-${label}`, { attempts: [{ stdout, exitCode }] });
+  for (const [label, attempt] of [["done", { stdout: doneStream({ notice: "the pull request is open" }), runState: recordedDone({ notice: "the pull request is open" }), exitCode: 0 }], ["failed", { stdout: failureStream(), exitCode: 1 }]]) {
+    const run = makeWipRun(t, `wip-${label}`, { attempts: [attempt] });
     leaveWork(run.path);
     const cycle = await runJob(run);
     assert.equal(cycle.processed[0].status, label, JSON.stringify(cycle.processed));
@@ -303,7 +295,6 @@ test("the job's files come from the terminated run's wip commit, never from a pl
   const run = makeWipRun(t, "wip-files", { attempts: [{ stdout: terminatedStream(), exitCode: 0 }] });
   leaveWork(run.path);
   recordTermination({ projectId: run.projectId, slug: SLUG, phase: "qa", reason: REASON, env: run.env });
-  noCommitTelemetry(run);
   writeFileSync(join(runDir(run.projectId, SLUG, run.env), "04-implementation.md"), "## Modified files\nplanted.txt\n");
   assert.equal((await runJob(run)).processed[0].status, "cancelled");
   assert.deepEqual([...resultOf(run).files].sort(), ["tmp-note.md", "work.txt"]);
@@ -341,7 +332,7 @@ test("a worktree removed by hand is recreated from the branch that carries the w
 });
 
 test("a retry refused because a start_branch job holds the wip branch resets nothing and keeps the wip record", async (t) => {
-  const run = await terminatedAttempt(t, "wip-held", { attempts: [{ stdout: terminatedStream(), exitCode: 0 }, { stdout: doneStream({ notice: "the pull request is open" }), exitCode: 0 }] });
+  const run = await terminatedAttempt(t, "wip-held", { attempts: [{ stdout: terminatedStream(), exitCode: 0 }, { stdout: doneStream({ notice: "the pull request is open" }), runState: recordedDone({ notice: "the pull request is open" }), exitCode: 0 }] });
   const wip = readRunState({ projectId: run.projectId, slug: SLUG, env: run.env }).wip;
   const holder = addJob({ projectId: run.projectId, prompt: "continue from the wip", startBranch: run.branch }, run.env).id;
   openDb(run.env).prepare("UPDATE jobs SET slug = 'holder-run' WHERE id = ?").run(holder);

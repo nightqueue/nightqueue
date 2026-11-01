@@ -28,6 +28,7 @@ import { V22, isPendingV22, migrateToV22 } from "./migration/v22.mjs";
 import { isPendingV24, migrateToV24 } from "./migration/v24.mjs";
 import { isPendingV25, migrateToV25 } from "./migration/v25.mjs";
 import { isPendingV26, migrateToV26 } from "./migration/v26.mjs";
+import { isPendingV27, migrateToV27 } from "./migration/v27.mjs";
 import { jobRef } from "./refs.mjs";
 import { ensureDefaultOrg } from "./registry.mjs";
 import { DB_USER_VERSION, sqlList } from "./schema.mjs";
@@ -84,6 +85,7 @@ const ONE_SHOT_STEPS = Object.freeze([
   { pending: isPendingV24, run: migrateToV24 },
   { pending: isPendingV25, run: migrateToV25 },
   { pending: isPendingV26, run: migrateToV26 },
+  { pending: isPendingV27, run: migrateToV27, leavesReferencesAlone: true },
 ]);
 
 // The tables the pending chain drops with no step before the drop still auditing their rows: the decisions from v22 on.
@@ -92,9 +94,9 @@ function droppedUnauditedTables(db) {
 }
 
 // Runs every pending one-shot step in order, each gate read after the step before it committed; the orphans the last step
-// refuses are refused before the first step, so a refusal leaves an older home exactly as it was.
+// refuses are refused before the first step that needs them gone, so a refusal leaves an older home exactly as it was.
 function runOneShotSteps(db, env) {
-  if (ONE_SHOT_STEPS.some((step) => step.pending(db))) refuseOrphans(db, env, DB_USER_VERSION, droppedUnauditedTables(db));
+  if (ONE_SHOT_STEPS.some((step) => !step.leavesReferencesAlone && step.pending(db))) refuseOrphans(db, env, DB_USER_VERSION, droppedUnauditedTables(db));
   for (const step of ONE_SHOT_STEPS) {
     if (step.pending(db)) step.run(db, env);
   }
@@ -151,6 +153,7 @@ function migrate(db) {
   if (version === 22 || version === 23) throw new UserError("the v24 migration did not run; nothing was stamped");
   if (version === 24) throw new UserError("the v25 migration did not run; nothing was stamped");
   if (version === 25) throw new UserError("the v26 migration did not run; nothing was stamped");
+  if (version === 26) throw new UserError("the v27 migration did not run; nothing was stamped");
   if (sharedSlugPending(db)) inTransaction(db, () => migrateSharedSlugs(db));
   db.exec(INDEXES);
   db.exec(FTS);

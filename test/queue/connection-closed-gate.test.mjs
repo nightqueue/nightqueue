@@ -10,7 +10,7 @@ import { runCycle } from "../../src/queue/runner.mjs";
 import { initGitRepo } from "../../test-support/git.mjs";
 import { ensureProject, makeDir, makeHome, registerCheckout } from "../../test-support/memory.mjs";
 import { useFakeClaude } from "../../test-support/queue-fake.mjs";
-import { attemptMarker, doneStream, failureStream, SLUG, systemInitEvent, toNdjson, toolResultEvent, toolUseEvent } from "../../test-support/streams.mjs";
+import { attemptMarker, doneStream, failureStream, SLUG, systemInitEvent, toNdjson, toolResultEvent, toolUseEvent, recordedDone } from "../../test-support/streams.mjs";
 
 const CLI = fileURLToPath(new URL("../../bin/nightqueue.mjs", import.meta.url));
 
@@ -39,11 +39,11 @@ function nightqueueCall(id, content, isError = false) {
 }
 
 // A home with one real clean repository and one pending job on it, the fake claude playing `stdout`.
-function realRepoJob(t, name, stdout, exitCode) {
+function realRepoJob(t, name, stdout, exitCode, runState = undefined) {
   const env = { ...makeHome(t, name), ...ISOLATED_GIT_VARS };
   const repo = initGitRepo(makeDir(t, `${name}-repo`));
   registerCheckout(env, { path: repo, name: "alpha" });
-  useFakeClaude(env, makeDir(t, `${name}-plan`), [{ stdout, exitCode }]);
+  useFakeClaude(env, makeDir(t, `${name}-plan`), [{ stdout, runState, exitCode }]);
   const projectId = ensureProject(env, "alpha");
   const id = addJob({ projectId, prompt: "fix the worker", slug: SLUG }, env).id;
   return { env, projectId, id, attemptsBefore: getJob(id, env).attempts };
@@ -95,7 +95,7 @@ test("a first nightqueue call answered \"Connection closed\" alone gates the job
 
 test("a pending nightqueue server that then answers a call is not blocked", async (t) => {
   const events = [initWithNightqueue("pending"), ...nightqueueCall("toolu_nq", "{\"ok\":true}")];
-  const home = realRepoJob(t, "closed-pending-then-ok", toNdjson(events) + doneStream(), 0);
+  const home = realRepoJob(t, "closed-pending-then-ok", toNdjson(events) + doneStream(), 0, recordedDone());
 
   const report = await runOnce(home);
 
@@ -151,7 +151,7 @@ test("the exact client error stays an unreachable server, in every shape it is r
 
 test("a healthy job whose first nightqueue result quotes \"Connection closed\" finishes done with its attempt spent", async (t) => {
   const events = [systemInitEvent(), ...nightqueueCall("toolu_quote", QUOTING_RECALL)];
-  const home = realRepoJob(t, "closed-quoted-ok", toNdjson(events) + doneStream(), 0);
+  const home = realRepoJob(t, "closed-quoted-ok", toNdjson(events) + doneStream(), 0, recordedDone());
 
   const report = await runOnce(home);
 

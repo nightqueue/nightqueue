@@ -9,7 +9,7 @@ import { runDrain } from "../../src/queue/runner.mjs";
 import { initGitRepo } from "../../test-support/git.mjs";
 import { ensureProject, makeDir, makeHome, registerCheckout } from "../../test-support/memory.mjs";
 import { useFakeClaude } from "../../test-support/queue-fake.mjs";
-import { doneStream } from "../../test-support/streams.mjs";
+import { doneStream, recordedDone } from "../../test-support/streams.mjs";
 
 const CLI = fileURLToPath(new URL("../../bin/nightqueue.mjs", import.meta.url));
 
@@ -47,7 +47,7 @@ function runCli(env, args) {
 }
 
 test("a drain over [A blocked, B clean] runs B in the same pass, leaves A at a gate with the block as notice, and a noteless retry runs A once fixed", async (t) => {
-  const attempts = [1, 2].map(() => ({ stdout: doneStream(), exitCode: 0 }));
+  const attempts = [1, 2].map(() => ({ stdout: doneStream({ slug: null }), runState: recordedDone(), exitCode: 0 }));
   const { env, alpha, a, b } = makeTwoProjectQueue(t, "preflight-gate-drain", attempts);
   const slept = [];
 
@@ -71,7 +71,7 @@ test("a drain over [A blocked, B clean] runs B in the same pass, leaves A at a g
 });
 
 test("a foreground drain prints exactly one gated line for the blocked job, and still runs the other one", (t) => {
-  const { env, a, b } = makeTwoProjectQueue(t, "preflight-gate-cli", [{ stdout: doneStream(), exitCode: 0 }]);
+  const { env, a, b } = makeTwoProjectQueue(t, "preflight-gate-cli", [{ stdout: doneStream({ slug: null }), runState: recordedDone(), exitCode: 0 }]);
 
   const ran = runCli(env, ["queue", "run", "--foreground"]);
 

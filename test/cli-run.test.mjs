@@ -121,6 +121,7 @@ test("`run log --json` answers the whole table, with the run it resolved and the
     projectId: projectIdOf(env, "alpha"),
     slug: SLUG,
     origins: [],
+    claim: { attempt: 0, session: null },
     runDir: runDir(projectIdOf(env, "alpha"), SLUG, env),
   });
   assert.equal(report.durationS, 900);

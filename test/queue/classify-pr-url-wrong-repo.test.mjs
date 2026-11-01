@@ -3,22 +3,23 @@ import { test } from "node:test";
 import { classifyJobResult } from "../../src/queue/classify.mjs";
 import { codeChangePublishedEvent, PR_URL, resultEvent, systemInitEvent, toNdjson } from "../../test-support/streams.mjs";
 
+const RECORDED_STATUS = { outcome: { status: "done", notice: "open" } };
+
 // H3 (group B): the job's own real PR event comes first; a stray `code_change_published` event
 // for a DIFFERENT repository arrives LAST in the same attempt's log (a real, non-injected route:
 // the agent's own Bash session runs `gh pr create -R other-org/other-repo …` for an unrelated
-// reason after already opening the run's real PR). `extractPublishedPrUrl` reads neither `repo`
-// nor `action`, so the runtime must not let the later, foreign event overwrite the delivery of
-// THIS run's own repository.
+// reason after already opening the run's real PR). The runtime must not let the later, foreign
+// event overwrite the delivery of the repository the run's FIRST publication named.
 test("a code_change_published event for another repository, arriving last, never overrides this run's own PR", () => {
   const foreignUrl = "https://github.com/other-org/other-repo/pull/999";
   const log = toNdjson([
     systemInitEvent(),
     codeChangePublishedEvent(), // the run's own, correct delivery: acme/api#42, action "created"
-    resultEvent({ text: `Done. Pull request: ${PR_URL}` }),
+    resultEvent({ text: "Finished." }),
     codeChangePublishedEvent({ url: foreignUrl, repo: "other-org/other-repo", identifier: "999" }),
   ]);
 
-  const outcome = classifyJobResult({ log, exitCode: 0 });
+  const outcome = classifyJobResult({ log, exitCode: 0, state: RECORDED_STATUS });
 
   assert.equal(outcome.prUrl, PR_URL, "a code_change_published event for a repo this run does not own must never become the run's delivered PR");
   assert.equal(outcome.status, "done");
@@ -35,11 +36,11 @@ test("a code_change_published event for a different PR with a non-created action
   const log = toNdjson([
     systemInitEvent(),
     codeChangePublishedEvent(), // action: "created" — the real delivery, acme/api#42
-    resultEvent({ text: `Done. Pull request: ${PR_URL}` }),
+    resultEvent({ text: "Finished." }),
     codeChangePublishedEvent({ url: staleUrl, identifier: "43", action: "closed" }),
   ]);
 
-  const outcome = classifyJobResult({ log, exitCode: 0 });
+  const outcome = classifyJobResult({ log, exitCode: 0, state: RECORDED_STATUS });
 
   assert.equal(outcome.prUrl, PR_URL, "a non-created action on a different PR must not be read as a competing delivery");
   assert.equal(outcome.status, "done");

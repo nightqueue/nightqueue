@@ -13,7 +13,7 @@ import { runCycle } from "../../src/queue/runner.mjs";
 import { recordJobBlock, recordOutcome, recordPhaseDone, recordRunFields, RUNTIME_ONLY_KEYS } from "../../src/queue/run-state.mjs";
 import { ensureProject, makeDir, makeHome, makeProject } from "../../test-support/memory.mjs";
 import { fakeCalls, useFakeClaude } from "../../test-support/queue-fake.mjs";
-import { doneStream, gateStream, PR_URL, resultEvent, SLUG, slugTypeEvent, systemInitEvent, toNdjson } from "../../test-support/streams.mjs";
+import { doneStream, gateStream, PR_URL, resultEvent, SLUG, slugTypeEvent, systemInitEvent, toNdjson, recordedDone, recordedGate } from "../../test-support/streams.mjs";
 import { fakeJobWorktree } from "../../test-support/job-worktree.mjs";
 import { makeSickHome } from "../../test-support/sick-home.mjs";
 
@@ -64,7 +64,7 @@ function childWrite(env, args) {
 }
 
 test("the runner writes the job block before the spawn, with its four fields", async (t) => {
-  const { env, planPath, statePath } = makeBlockHome(t, "job-block-free", [{ stdout: doneStream(), exitCode: 0 }]);
+  const { env, planPath, statePath } = makeBlockHome(t, "job-block-free", [{ stdout: doneStream(), runState: recordedDone(), exitCode: 0 }]);
   const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker" }, env).id;
 
   await runJobCycle(env, id);
@@ -79,8 +79,8 @@ test("the runner writes the job block before the spawn, with its four fields", a
 
 test("a second attempt of the same job keeps the job block and the createdAt of the first", async (t) => {
   const { env, statePath } = makeBlockHome(t, "job-block-retry", [
-    { stdout: gateStream(), exitCode: 0 },
-    { stdout: doneStream(), exitCode: 0 },
+    { stdout: gateStream(), runState: recordedGate(), exitCode: 0 },
+    { stdout: doneStream(), runState: recordedDone(), exitCode: 0 },
   ]);
   const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker" }, env).id;
   await runJobCycle(env, id);
@@ -184,12 +184,12 @@ test("the run of a job resolves from its row while the database answers, and fro
   assert.equal(recordJobBlock({ projectId, slug: "the-retry", block: { id, projectKey: "AP", createdAt }, env }).status, "written");
   assert.equal(recordJobBlock({ projectId, slug: "another-job", block: { id: id + 1, createdAt }, env }).status, "written");
 
-  assert.deepEqual(await resolveJobRun(id, env), { project: "alpha", projectId, slug: "the-retry", origins: [], source: "db" });
+  assert.deepEqual(await resolveJobRun(id, env), { project: "alpha", projectId, slug: "the-retry", origins: [], claim: { attempt: 0, session: null }, source: "db" });
   const traced = addJob({ projectId, prompt: "close the issue", slug: "the-traced", origin: [{ kind: "linear", ref: "mk-42" }] }, env).id;
   assert.deepEqual((await resolveJobRun(traced, env)).origins, [{ kind: "linear", ref: "MK-42" }]);
   const sick = makeSickHome(env);
   t.after(() => sick.restore());
-  assert.deepEqual(await resolveJobRun(id, env), { project: "AP", projectId, slug: "the-retry", origins: [], source: "disk" });
+  assert.deepEqual(await resolveJobRun(id, env), { project: "AP", projectId, slug: "the-retry", origins: [], claim: null, source: "disk" });
   assert.equal(diskJobRun(id + 7, env), null);
   await assert.rejects(resolveJobRun(id + 7, env), { name: "StoreUnavailableError", code: "SQLITE_NOTADB" });
 });

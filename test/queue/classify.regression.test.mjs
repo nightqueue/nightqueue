@@ -1,33 +1,24 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { classifyJobResult } from "../../src/queue/classify.mjs";
-import { extractPrUrl, extractResultText } from "../../src/queue/stream.mjs";
+import { SILENT_STOP_NOTICE, classifyJobResult } from "../../src/queue/classify.mjs";
 import { intermediateDeliveryStream, PR_URL } from "../../test-support/streams.mjs";
 
 // Job #17's exact shape: the PR delivery and the notice sit ONLY in an intermediate orchestrator
-// message (a table row ending in `|` plus a `Record: • PR <url>` line as the last line of that
-// message), and the trailing `result` event carries neither. exitCode is 0.
-test("a job whose PR delivery lives only in an intermediate message, with a table row ending in `|` earlier in it, still classifies as done with the real URL", () => {
+// message, and the trailing `result` event carries neither. exitCode is 0. The record is what
+// makes it a delivery: the text alone never does.
+test("a job whose PR delivery lives only in an intermediate message is done through its record, with the recorded URL", () => {
   const log = intermediateDeliveryStream();
 
-  // Documents WHY the whole-stream fallback is load-bearing: the trailing `result` text alone,
-  // read in isolation the way the pre-fix code did, carries no URL at all.
-  const resultText = extractResultText(log) ?? "";
-  assert.equal(extractPrUrl(resultText), null, "the final result text mentions no PR by itself");
-
-  const outcome = classifyJobResult({ log, exitCode: 0 });
-  assert.equal(outcome.status, "done", "the run really delivered a PR and must not be gated");
+  const outcome = classifyJobResult({ log, exitCode: 0, state: { outcome: { status: "done", prUrl: PR_URL, notice: "open" } } });
+  assert.equal(outcome.status, "done");
   assert.equal(outcome.prUrl, PR_URL);
 });
 
-test("the table row ending in `|` never supplies the URL by itself: only the `Record: • PR <url>` line delivers", () => {
-  // Same message, but the closing `Record:` line denies the delivery while the table row (which
-  // still ends in `|` and still mentions the URL) is untouched — if the table cell were ever
-  // treated as a delivery, this would wrongly classify as done.
-  const log = intermediateDeliveryStream({ delivered: false });
-
-  const outcome = classifyJobResult({ log, exitCode: 0 });
-  assert.equal(outcome.prUrl, null, "a table cell ending in a pipe must never count as a delivery");
-  // No PR, no gate marker and no recorded gate status: the run never asked for a decision, so it is a failure, not a gate.
-  assert.equal(outcome.status, "failed");
+test("the same stream with no record delivers nothing: neither its table row nor its `Record: • PR <url>` line is a source", () => {
+  for (const delivered of [true, false]) {
+    const outcome = classifyJobResult({ log: intermediateDeliveryStream({ delivered }), exitCode: 0 });
+    assert.equal(outcome.prUrl, null, "text was read as a delivery");
+    assert.equal(outcome.status, "failed");
+    assert.equal(outcome.noticeMd, SILENT_STOP_NOTICE);
+  }
 });

@@ -4,6 +4,7 @@ import { homedir } from "node:os";
 import { delimiter, dirname, isAbsolute, join } from "node:path";
 import { StringDecoder } from "node:string_decoder";
 import { UserError } from "../config/errors.mjs";
+import { claimPin, JOB_CLAIM_ENV } from "../config/job-home.mjs";
 import { homeDir, runDir } from "../config/paths.mjs";
 import { BASH_TIMEOUT_DEFAULT } from "../config/schema.mjs";
 import { originEntry, readOriginFiles } from "../integrations/enrich.mjs";
@@ -57,12 +58,13 @@ export function cliEntrypoint() {
   return join(packageRoot(), "bin", "nightqueue.mjs");
 }
 
-// Identity of an unattended run, pinned on the child: the job it may act on plus the home and the Claude settings it may never change.
-function jobIdentity(env, jobId) {
+// Identity of an unattended run, pinned on the child: the job it may act on, the claim it writes for, plus the home and the Claude settings it may never change.
+function jobIdentity(env, jobId, claim) {
   return {
     NIGHTQUEUE_JOB_ID: String(jobId),
     [JOB_HOME_ENV]: homeDir(env),
     [JOB_CLAUDE_DIR_ENV]: claudeConfigDir(env),
+    ...(claim ? { [JOB_CLAIM_ENV]: claimPin(claim) } : {}),
   };
 }
 
@@ -76,20 +78,20 @@ function operatorIdentity(operator) {
 }
 
 // Environment of the MCP server of the child: the home it answers for and, inside an unattended run, the job it is allowed to act on, or the operator session it serves.
-function mcpServerEnv(env, jobId, operator) {
+function mcpServerEnv(env, jobId, { operator, claim }) {
   const home = { NIGHTQUEUE_HOME: homeDir(env) };
-  if (jobId !== null && jobId !== undefined) return { ...home, ...jobIdentity(env, jobId) };
+  if (jobId !== null && jobId !== undefined) return { ...home, ...jobIdentity(env, jobId, claim) };
   return operator?.session ? { ...home, ...operatorIdentity(operator) } : home;
 }
 
 // Inline --mcp-config value: one single argv string, no shell and no temporary file; the job or operator identity is pinned here, never inherited from the parent process.
-export function mcpConfigArg(env = process.env, jobId = null, { operator = null } = {}) {
+export function mcpConfigArg(env = process.env, jobId = null, { operator = null, claim = null } = {}) {
   return JSON.stringify({
     mcpServers: {
       nightqueue: {
         command: process.execPath,
         args: [cliEntrypoint(), "mcp"],
-        env: mcpServerEnv(env, jobId, operator),
+        env: mcpServerEnv(env, jobId, { operator, claim }),
       },
     },
   });
@@ -239,7 +241,7 @@ export function buildPrompt({ job, handoff, openPrs, env = process.env } = {}) {
 }
 
 // Builds the argv of the child: an array, never a shell, fenced off from the operator's own environment unless inheritUserEnvironment is true, with --resume only behind the session id gate.
-export function buildArgs({ prompt, resumeSessionId = null, env = process.env, jobId = null, inheritUserEnvironment = false } = {}) {
+export function buildArgs({ prompt, resumeSessionId = null, env = process.env, jobId = null, claim = null, inheritUserEnvironment = false } = {}) {
   const args = [
     "-p",
     String(prompt ?? ""),
@@ -251,7 +253,7 @@ export function buildArgs({ prompt, resumeSessionId = null, env = process.env, j
     "--plugin-dir",
     pluginDir(),
     "--mcp-config",
-    mcpConfigArg(env, jobId),
+    mcpConfigArg(env, jobId, { claim }),
   ];
   if (inheritUserEnvironment !== true) {
     args.push("--strict-mcp-config", "--setting-sources", "project", "--settings", JSON.stringify(jobSettings(env)));
@@ -316,6 +318,8 @@ export function spawnClaude({
   env = process.env,
   attempt = 1,
   jobId = null,
+  worker = null,
+  ordinal = null,
   spawnImpl = spawn,
   onLine,
   stopSignalImpl = null,
@@ -333,10 +337,11 @@ export function spawnClaude({
     const logClosed = new Promise((done) => stream.once("close", done));
     stream.on("error", (err) => reportLogFailure(logPath, err));
     const resolved = resolveBinImpl(env);
-    const args = argsOverride ?? buildArgs({ prompt, resumeSessionId, env, jobId, inheritUserEnvironment });
+    const claim = { attempt, worker, ordinal };
+    const args = argsOverride ?? buildArgs({ prompt, resumeSessionId, env, jobId, claim, inheritUserEnvironment });
     const runtimeEnv = { ...BG_WAIT_CEILING_ENV, ...noOrphanTaskEnv(bashTimeoutS), [PLUGIN_DIR_ENV]: pluginDir() };
     const baseEnv = withoutOperatorSession(env);
-    const childEnv = jobId === null ? { ...baseEnv, ...runtimeEnv } : { ...baseEnv, ...jobIdentity(env, jobId), ...runtimeEnv };
+    const childEnv = jobId === null ? { ...baseEnv, ...runtimeEnv } : { ...baseEnv, ...jobIdentity(env, jobId, claim), ...runtimeEnv };
     const child = spawnImpl(resolved?.bin ?? "claude", args, { cwd, env: childEnv, stdio: SPAWN_STDIO });
     if (Number.isInteger(child?.pid)) holdJobAwakeImpl({ pid: child.pid, env });
     const chunks = [];

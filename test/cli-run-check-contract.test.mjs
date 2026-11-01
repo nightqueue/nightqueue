@@ -276,7 +276,7 @@ test("a completed check records its phase as the runtime, and the same artifact 
   assert.deepEqual(again.out, ["OK", "VERDICT: PASSED", "recorded: phase_done verification PASSED (already)"]);
   const { phases, checks } = stateOf(seeded);
   assert.equal(phases.length, 1);
-  assert.deepEqual({ ...phases[0], at: null }, { phase: "verification", at: null, artifact: "06-verification.md", verdict: "PASSED", by: "runtime" });
+  assert.deepEqual({ ...phases[0], at: null }, { phase: "verification", at: null, artifact: "06-verification.md", verdict: "PASSED", by: "runtime", claim: { attempt: 0, session: null } });
   assert.equal(checks["06"].line, "OK");
   assert.equal(checks["06"].ok, true);
   assert.equal(checks.lastFailure, undefined);
@@ -315,7 +315,7 @@ test("a terminal triage verdict records the termination, so the run is never res
   await runCheck(seeded.env, "01");
   const state = stateOf(seeded);
   const reason = "NOT-REPRODUCIBLE: The listing never showed archived jobs on the reported build.";
-  assert.deepEqual({ ...state.termination, at: null }, { phase: "triage", reason, at: null, by: "runtime" });
+  assert.deepEqual({ ...state.termination, at: null }, { phase: "triage", reason, at: null, by: "runtime", claim: { attempt: 0, session: null } });
   assert.equal(decideResume({ state }).reason, "terminated-by-verdict");
 });
 

@@ -34,7 +34,6 @@ export interface Job {
   status: JobStatus;
   priority: number;
   attempts: number;
-  max_attempts: number;
   timeout_s: number;
   slug: string | null;
   branch: string | null;

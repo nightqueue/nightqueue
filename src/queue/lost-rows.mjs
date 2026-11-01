@@ -1,9 +1,9 @@
 import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
-import { jobLogPath, jobWorktreePath, logsDir, runDir, runsDir } from "../config/paths.mjs";
+import { jobLogPath, jobWorktreePath, logsDir, runsDir } from "../config/paths.mjs";
 import { NO_CHANGE_RESOLUTION } from "../memory/jobs.mjs";
 import { jobRef } from "../memory/refs.mjs";
-import { brokenGateNotice, classifyJobResult, noChangeNotice } from "./classify.mjs";
+import { classifyJobResult, GATE_WITHOUT_NOTICE, isTerminalRuntimeKill, noChangeNotice, noticeWithAbandonedCommand } from "./classify.mjs";
 import { subdirectories } from "./job-run.mjs";
 import { liveRunners } from "./registry.mjs";
 import { isStateObject, readRunState } from "./resume.mjs";
@@ -128,14 +128,9 @@ function recoverableStatus(value) {
   return RECOVERABLE_STATUSES.includes(value) ? value : null;
 }
 
-// The plan of the run, the path the broken-gate notice names.
-function planPathOf(entry, env) {
-  return join(runDir(entry.projectId, entry.slug, env), "03-plan.md");
-}
-
 // The outcome the log's last attempt classifies to; the exit code is unknown, so it never reads as a clean ending.
-function classifiedFromLog(entry, stream, env) {
-  return classifyJobResult({ log: stream, exitCode: null, state: entry.state, planPath: planPathOf(entry, env) });
+function classifiedFromLog(entry, stream) {
+  return classifyJobResult({ log: stream, exitCode: null, state: entry.state });
 }
 
 // The pull request of a run: the pipeline's record, the witness, then the stream.
@@ -156,10 +151,10 @@ function recordedStatusOf(entry, stream) {
 }
 
 // The status the disk last recorded for a job, for the report.
-function lastStatusOf(entry, stream, env) {
+function lastStatusOf(entry, stream) {
   const recorded = recordedStatusOf(entry, stream);
   if (recorded) return recorded;
-  return stream ? classifiedFromLog(entry, stream, env).status ?? "unknown" : "unknown";
+  return stream ? classifiedFromLog(entry, stream).status ?? "unknown" : "unknown";
 }
 
 // The notice of a run: the stream's own `## Notice`, then the one the pipeline recorded.
@@ -180,15 +175,17 @@ export function deriveRecovered(entry, env = process.env) {
   const recorded = recordedStatusOf(entry, stream);
   if (recorded) {
     const noticeMd = noticeOf(entry, stream);
-    if (recorded === "gate" && !noticeMd) return { status: "failed", noticeMd: brokenGateNotice(planPathOf(entry, env)), prUrl };
+    if (recorded === "gate" && !noticeMd) return { status: "failed", noticeMd: GATE_WITHOUT_NOTICE, prUrl };
     if (recorded === "done" && !prUrl && recordsNoChange(entry)) {
       return { status: recorded, noticeMd: noChangeNotice(noticeMd), prUrl, resolution: NO_CHANGE_RESOLUTION };
     }
     return { status: recorded, noticeMd, prUrl };
   }
   if (!stream) return { status: "failed", noticeMd: NO_OUTCOME_NOTICE, prUrl };
-  const classified = classifiedFromLog(entry, stream, env);
-  return { status: classified.status, noticeMd: classified.noticeMd || NO_OUTCOME_NOTICE, prUrl: classified.prUrl ?? prUrl };
+  const classified = classifiedFromLog(entry, stream);
+  const own = noticeOf(entry, stream);
+  const noticeMd = isTerminalRuntimeKill(stream, entry.state) || !own ? classified.noticeMd : noticeWithAbandonedCommand(own, stream);
+  return { status: classified.status, noticeMd, prUrl: classified.prUrl ?? prUrl };
 }
 
 // The report line of one lost job, read from its disk entry.
@@ -199,7 +196,7 @@ function describeLost(entry, env) {
     project: entry.job?.projectKey ?? entry.projectId,
     projectId: entry.projectId,
     slug: entry.slug,
-    lastStatus: lastStatusOf(entry, stream, env),
+    lastStatus: lastStatusOf(entry, stream),
     prUrl: prUrlOf(entry, stream),
     hasLog: entry.hasLog,
     hasWorktree: entry.hasWorktree,

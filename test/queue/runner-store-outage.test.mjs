@@ -16,7 +16,7 @@ import { fakeJobWorktree } from "../../test-support/job-worktree.mjs";
 import { ensureProject, makeDir, makeHome, makeProject } from "../../test-support/memory.mjs";
 import { fakeCalls, useFakeClaude } from "../../test-support/queue-fake.mjs";
 import { capturedUnavailableError, makeSickHome } from "../../test-support/sick-home.mjs";
-import { doneStream, SLUG, slugTypeEvent, systemInitEvent, toNdjson } from "../../test-support/streams.mjs";
+import { doneStream, SLUG, slugTypeEvent, systemInitEvent, toNdjson, recordedDone, transientFailureStream } from "../../test-support/streams.mjs";
 
 const POLL_MS = 50;
 const OUTAGE_PREFIX = "nightqueue: the database is unavailable (SQLITE_NOTADB at ";
@@ -83,7 +83,7 @@ function neverEndingSleep(slept) {
 }
 
 test("a store outage mid-run keeps the child: one outage line, one recovery line, and the job still ends done", async (t) => {
-  const home = runnerHome(t, "outage-keeps-child", [{ holdMs: 1500, tail: doneStream(), exitCode: 0 }]);
+  const home = runnerHome(t, "outage-keeps-child", [{ holdMs: 1500, tail: doneStream(), runState: recordedDone(), exitCode: 0 }]);
   const slept = [];
   const { outage, lines } = recordingOutage(neverEndingSleep(slept));
   let sick = null;
@@ -108,7 +108,7 @@ test("a store outage mid-run keeps the child: one outage line, one recovery line
 });
 
 test("the held job's lease is renewed at once when the store comes back, while the backoff sleep is still pending", async (t) => {
-  const home = runnerHome(t, "outage-renew-at-once", [{ holdMs: 800, tail: doneStream(), exitCode: 0 }], { slug: null });
+  const home = runnerHome(t, "outage-renew-at-once", [{ holdMs: 800, tail: doneStream(), runState: recordedDone(), exitCode: 0 }], { slug: null });
   const slept = [];
   const { outage, lines } = recordingOutage(neverEndingSleep(slept));
   let sick = null;
@@ -133,7 +133,7 @@ test("the held job's lease is renewed at once when the store comes back, while t
 });
 
 test("an outage before the spawn makes the job wait, then run to completion with the attempts of a clean run", async (t) => {
-  const home = runnerHome(t, "outage-pre-spawn", [{ stdout: doneStream(), exitCode: 0 }], { slug: null });
+  const home = runnerHome(t, "outage-pre-spawn", [{ stdout: doneStream(), runState: recordedDone(), exitCode: 0 }], { slug: null });
   const slept = [];
   let sick = null;
   t.after(() => sick?.restore());
@@ -155,7 +155,7 @@ test("an outage before the spawn makes the job wait, then run to completion with
 });
 
 test("failed claims back off 30 s doubling to 5 min, and the next job is claimed once the store is back", async (t) => {
-  const home = runnerHome(t, "outage-backoff", [{ stdout: doneStream(), exitCode: 0 }]);
+  const home = runnerHome(t, "outage-backoff", [{ stdout: doneStream(), runState: recordedDone(), exitCode: 0 }]);
   const slept = [];
   let sick = null;
   t.after(() => sick?.restore());
@@ -177,7 +177,7 @@ test("failed claims back off 30 s doubling to 5 min, and the next job is claimed
 });
 
 test("a drain on a sick store never returns by itself: it waits out the outage and ends only on the stop signal", async (t) => {
-  const home = runnerHome(t, "outage-never-exits", [{ stdout: doneStream(), exitCode: 0 }]);
+  const home = runnerHome(t, "outage-never-exits", [{ stdout: doneStream(), runState: recordedDone(), exitCode: 0 }]);
   const sick = makeSickHome(home.env);
   t.after(() => sick.restore());
   const slept = [];
@@ -228,7 +228,7 @@ function sessionColumns(env, id) {
 // A job whose child announces its session and `SLUG: renamed-run TYPE: feature/refactor` after a hold, then waits before it exits done.
 function announcingHome(t, name) {
   const tail = toNdjson([systemInitEvent({ sessionId: OUTAGE_SESSION }), slugTypeEvent("renamed-run", "feature/refactor", { sessionId: OUTAGE_SESSION })]) + doneStream({ sessionId: OUTAGE_SESSION });
-  return runnerHome(t, name, [{ holdMs: 600, tail, afterHoldMs: 1200, exitCode: 0 }]);
+  return runnerHome(t, name, [{ holdMs: 600, tail, runState: recordedDone(), afterHoldMs: 1200, exitCode: 0 }]);
 }
 
 // The live pending-writes file of the job's provisional run, or "" when there is none.
@@ -263,6 +263,60 @@ test("facts announced during an outage are kept: the type is recorded, the slug 
   assert.equal(log.split("\n").filter((line) => line.startsWith("the database is unavailable: the session record waits in ")).length, 1, log);
   assert.match(log, /the run keeps the slug `fix-the-worker`: it could not be renamed to `renamed-run` \(the database is unavailable\)/);
   assert.deepEqual(sessionColumns(home.env, home.id), { session_id: OUTAGE_SESSION, last_session_id: OUTAGE_SESSION });
+});
+
+// Waits until the job log holds the given text.
+function logHolds(home, text) {
+  return until(() => existsSync(jobLogPath(home.id, home.env)) && readFileSync(jobLogPath(home.id, home.env), "utf8").includes(text), `the job log to say ${text}`);
+}
+
+test("two spawns of one attempt, each queued in its own outage, land in order: the row names the last session", async (t) => {
+  const failing = { holdMs: 400, tail: transientFailureStream({ sessionId: "sess-spawn-1", status: 529 }), afterHoldMs: 100, exitCode: 1 };
+  const delivered = { holdMs: 400, tail: doneStream({ sessionId: "sess-spawn-2" }), runState: recordedDone(), afterHoldMs: 100, exitCode: 0 };
+  const home = runnerHome(t, "outage-two-spawns", [failing, delivered]);
+  const { outage } = recordingOutage(neverEndingSleep([]));
+  let sick = null;
+  t.after(() => sick?.restore());
+  const cycle = runCycle({ jobId: home.id, env: home.env, deps: { worktreeImpl: fakeJobWorktree(), gitImpl: fakeGit(), stopPollMs: POLL_MS, storeOutage: outage, sleepImpl: async () => {} } });
+
+  await until(() => fakeCalls(home.planPath).length === 1, "the first spawn");
+  sick = makeSickHome(home.env);
+  await until(() => pendingText(home).includes(`session:${home.id}:1:sess-spawn-1`), "the first session to be queued");
+  await logHolds(home, "=== respawn 1/2 of attempt 1");
+  sick.restore();
+  await until(() => fakeCalls(home.planPath).length === 2, "the re-spawn");
+  sick = makeSickHome(home.env);
+  await until(() => pendingText(home).includes(`session:${home.id}:1:sess-spawn-2`), "the second session to be queued");
+  const report = (await cycle).processed[0];
+  assert.equal(report.status, "unrecorded", JSON.stringify(report));
+  sick.restore();
+
+  const replay = await replayAllPendingWrites({ env: home.env, store: openStore(home.env) });
+
+  assert.equal(replay.error, null);
+  assert.deepEqual(sessionColumns(home.env, home.id), { session_id: "sess-spawn-1", last_session_id: "sess-spawn-2" });
+  assert.equal(getJob(home.id, home.env).status, "done");
+});
+
+test("a first session queued by a spawn survives its re-spawn's direct write, whose own session stays the last one", async (t) => {
+  const failing = { holdMs: 400, tail: transientFailureStream({ sessionId: "sess-spawn-1", status: 529 }), afterHoldMs: 100, exitCode: 1 };
+  const delivered = { tail: doneStream({ sessionId: "sess-spawn-2" }), runState: recordedDone(), exitCode: 0 };
+  const home = runnerHome(t, "outage-spawn-superseded", [failing, delivered]);
+  const { outage } = recordingOutage(neverEndingSleep([]));
+  let sick = null;
+  t.after(() => sick?.restore());
+  const cycle = runCycle({ jobId: home.id, env: home.env, deps: { worktreeImpl: fakeJobWorktree(), gitImpl: fakeGit(), stopPollMs: POLL_MS, storeOutage: outage, sleepImpl: async () => {} } });
+
+  await until(() => fakeCalls(home.planPath).length === 1, "the first spawn");
+  sick = makeSickHome(home.env);
+  await until(() => pendingText(home).includes(`session:${home.id}:1:sess-spawn-1`), "the first session to be queued");
+  await logHolds(home, "=== respawn 1/2 of attempt 1");
+  sick.restore();
+  await cycle;
+
+  await replayAllPendingWrites({ env: home.env, store: openStore(home.env) });
+
+  assert.deepEqual(sessionColumns(home.env, home.id), { session_id: "sess-spawn-1", last_session_id: "sess-spawn-2" }, "the first session of the job was lost with its superseded entry");
 });
 
 test("a session and a finish queued during an outage are both applied by one replay after it, session first", async (t) => {

@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { openDb } from "../../src/memory/db.mjs";
 import { acquireClose, addJob, getJob } from "../../src/memory/jobs.mjs";
-import { STRAY_PR_PREFIX, classifyJobResult } from "../../src/queue/classify.mjs";
+import { classifyJobResult } from "../../src/queue/classify.mjs";
 import { runClosePipeline } from "../../src/queue/close.mjs";
 import { openStore } from "../../src/store/open.mjs";
 import { ensureProject, makeHome, makeProject } from "../../test-support/memory.mjs";
@@ -28,10 +28,6 @@ test("job 57, scenario A: the runtime QA's own scratch pull request on another b
 
   assert.equal(outcome.prUrl, OWN_PR, "job 57's own pull request (#72) must stay the recorded delivery");
   assert.equal(outcome.status, "done");
-  assert.ok(
-    outcome.noticeMd.endsWith(`${STRAY_PR_PREFIX}${QA_PR} on branch \`${QA_BRANCH}\`; recorded instead: ${OWN_PR}`),
-    `the notice must flag the stray QA pull request: ${outcome.noticeMd}`,
-  );
 });
 
 test("job 57, scenario B: closing the job's own recorded pull request never merges the QA's foreign pull request onto it", async (t) => {

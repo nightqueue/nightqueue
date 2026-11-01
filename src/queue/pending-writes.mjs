@@ -13,7 +13,7 @@ export const PENDING_KEYS = Object.freeze({
   park: (jobId, worker) => `park:${jobId}:${worker}`,
   telemetry: (jobId, worker) => `telemetry:${jobId}:${worker}`,
   runFacts: (jobId) => `run_facts:${jobId}:branch`,
-  session: (jobId, attempts) => `session:${jobId}:${attempts}`,
+  session: (jobId, attempts, sessionId) => `session:${jobId}:${attempts}:${sessionId}`,
   measures: (jobId, attempt) => `measures:${jobId}:${attempt}`,
   pipelineLog: (projectId, slug, at) => `pipeline_log:${projectId}/${slug}:${at}`,
   indexSave: (projectId, at) => `index_save:${projectId}:${at}`,
@@ -57,7 +57,7 @@ async function applyRunFacts(entry, store) {
   return (await store.jobs.persistRunFacts(entry.jobId, entry.payload)) ? "applied" : "superseded";
 }
 
-// Replays the session facts of one attempt, which only land on the same claim and never rewind a later attempt's session.
+// Replays the session facts of one spawn, which only land on the same claim and never rewind a later session.
 async function applySession(entry, store) {
   return (await store.jobs.fillSessionFacts(entry.jobId, entry.payload)) ? "applied" : "superseded";
 }

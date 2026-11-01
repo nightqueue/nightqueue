@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { addJob, getJob, retryJob } from "../../src/memory/jobs.mjs";
 import { runCycle } from "../../src/queue/runner.mjs";
 import { ensureProject, makeDir, makeHome, makeProject } from "../../test-support/memory.mjs";
-import { doneStream, PR_URL } from "../../test-support/streams.mjs";
+import { doneStream, PR_URL, recordedDone } from "../../test-support/streams.mjs";
 import { useFakeClaude } from "../../test-support/queue-fake.mjs";
 import { fakeJobWorktree } from "../../test-support/job-worktree.mjs";
 
@@ -22,7 +22,7 @@ function fakeGit({ status = "" } = {}) {
 test("a job gated by a preflight failure is not reclaimed until a noteless retry, then runs once the cause clears", async (t) => {
   const env = makeHome(t, "blocked-code-reclaim");
   makeProject(t, env, "alpha");
-  useFakeClaude(env, makeDir(t, "blocked-code-reclaim-plan"), [{ stdout: doneStream(), exitCode: 0 }]);
+  useFakeClaude(env, makeDir(t, "blocked-code-reclaim-plan"), [{ stdout: doneStream(), runState: recordedDone(), exitCode: 0 }]);
   const id = addJob({ projectId: ensureProject(env, "alpha"), prompt: "fix the worker" }, env).id;
 
   const blocked = await runCycle({ jobId: id, env, deps: { worktreeImpl: fakeJobWorktree(), gitImpl: fakeGit({ status: " M src/a.mjs" }) } });
@@ -39,7 +39,7 @@ test("a job gated by a preflight failure is not reclaimed until a noteless retry
   assert.deepEqual({ processed: untouched.processed, reason: untouched.reason }, { processed: [], reason: "not-pending" });
 
   const retried = retryJob(id, {}, env);
-  assert.deepEqual({ status: retried.status, blockedCode: retried.blocked_code, maxAttempts: retried.max_attempts }, { status: "pending", blockedCode: null, maxAttempts: stuck.max_attempts });
+  assert.deepEqual({ status: retried.status, blockedCode: retried.blocked_code }, { status: "pending", blockedCode: null });
 
   const recovered = await runCycle({ jobId: id, env, deps: { worktreeImpl: fakeJobWorktree(), gitImpl: fakeGit() } });
   assert.deepEqual(recovered.processed, [{ id, status: "done", prUrl: PR_URL, attempts: 1 }]);

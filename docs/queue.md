@@ -238,7 +238,12 @@ for the run: the runner processes at most n jobs that reach the agent and exits,
 `queue: stopped - the --max budget of this run is spent`. A job the preflight gates (a
 dirty checkout, a missing `claude` binary) spends none of it: the job stops at a gate and
 the same pass moves on to the next pending job with the budget intact. The budget applies to `--watch` and to a single foreground
-cycle too; without it the drain runs until nothing is pending. The command that starts it registers it in
+cycle too; without it the drain runs until nothing is pending. A job that comes back `pending`
+during a cycle (a rate-limit park whose reset has already passed, say) is not claimed again in
+that cycle: the jobs behind it still run, and with only such jobs left the cycle ends
+`already-tried`, which ends a drain too. `--watch` claims it again on its next pass. A claim that
+another runner raced away (`claim-raced`, a due job is still pending) never ends a drain: it waits
+the normal interval and claims again. The command that starts it registers it in
 `$NIGHTQUEUE_HOME/runners/<pid>.json` with `mode: "drain"` for as long as it lives, so
 `queue status` shows `runner: running (pid <pid>, drain, runtime <version>, since <iso>)`
 the instant the start returns, and `--stop` ends it. Its output
@@ -512,16 +517,12 @@ delivered a pull request URL, or concluded on purpose that no code change is nee
 *Resolved without change* below), `closed` (the job's pull request was merged
 through the closing pipeline, or a job resolved without change was closed through it - see
 *Closing a job* below), `gate` (the pipeline stopped asking for a human decision - a recorded
-`outcome.status: "gate"` in `state.json`, or the `## Requires user
-confirmation` marker in the stream), `failed` (a non-zero exit, a timeout, an
-orphan that had already spent its attempts, or a clean exit that ended with
-nothing to deliver and never asked for a decision) and `cancelled` (cancelled
+`outcome.status: "gate"` in `state.json`), `failed` (a non-zero exit, a timeout, an
+orphan, or a clean exit that recorded no outcome) and `cancelled` (cancelled
 by the operator, stopped while running, a pull request closed without being merged,
-or a clean exit whose attempt recorded `no_commit`). A job in `gate` ALWAYS carries the
-reason it stopped in `notice_md`: without a `## Notice` the reason is the
-summary the pipeline recorded in `state.json`, and the whole final text of the
-orchestrator when there is none, and a run that ended saying nothing at all is
-`failed` with a fixed warning instead of a gate nobody can read.
+or a clean exit that recorded a termination). A job in `gate` ALWAYS carries the
+reason it stopped in `notice_md`: it is the notice of the record, and a gate recorded with no
+notice is `failed` with a fixed warning instead of a gate nobody can read.
 
 **`closed` means merged or resolved without change, and the schema says so.** A row is
 `closed` only with an empty `close_status` and either a `pr_url` with a `close` checklist whose
@@ -533,21 +534,69 @@ and the MCP `queue_close`. `queue repair`, the witness reconciliation and every 
 refuse it by name (``status `closed` is written only by the closing pipeline; run nightqueue
 queue close <id>``), so a job is never closed by hand, by a flip of its status or by an agent.
 
-**A run that produced nothing is `cancelled`, not `failed`.** When an attempt exits cleanly
-with no pull request and no gate, and the run logged `no_commit` for THIS attempt (a
-`pipeline_runs` row of the job's project and slug written after the attempt started, which
-`nightqueue run report` derives from `state.json` in Phase 9), the job
-ends `cancelled` and its notice gains `nothing to close: the run produced no pull request`,
-as its own paragraph after the run's reason. A run that logged `local_commit`, or that logged
-nothing, stays `failed` as before; the worktree of a `cancelled` finish is kept or named by
-the same rule as a `failed` one.
+**The ending of an attempt comes from the process and the run's records, nothing else.** The
+runner reads how the process ended, and the `outcome` and `termination` of the run's
+`state.json`. Text printed by the session, a heading included, and `pipeline_runs` telemetry
+decide nothing. The first row that matches wins:
+
+| # | Condition | Status | `notice_md` |
+|---|---|---|---|
+| 1 | stopped by the operator | `cancelled` | `stopped by the operator` |
+| 2 | hit its total or idle timeout | `failed` | `the run hit its time limit` / `the run went idle past its limit` |
+| 3 | non-zero exit | `failed` | `the session exited with code N` (`the session ended with no exit code` when there is none) |
+| 4 | `outcome.status: "done"` and a pull request | `done` | the record's `notice` |
+| 5 | `outcome.status: "gate"` with a `notice` | `gate` | the record's `notice` |
+| 6 | `outcome.status: "no_change"` with a `notice` | `done`, no pull request | the conclusion, plus the next-step line |
+| 7 | a `termination` with a reason | `cancelled` | the reason, plus `nothing to close: the run produced no pull request` when there is no pull request |
+| 8 | anything else | `failed` | starts `no outcome recorded:`; a gate recorded with no notice reads `the run stopped at a gate but recorded no notice carrying the question` |
+
+A `failed` attempt that had recorded a gate with its question or a termination with its reason
+quotes it after its own text, so the question never stays only in `state.json`: `the session
+exited with code N after recording a gate: <question>`, and the same after a time limit or a CLI
+kill.
+
+A record speaks only for the claim that wrote it. Every `outcome`, `termination`, `phases[]` entry
+and `terminal` witness a job's process writes carries `claim: {attempt, session, ordinal}`, and the
+table reads only the records whose stamp names the current claim: one of another claim is ignored,
+never deleted, and the notice ends in one `ignored a record of attempt N` line per attempt, which
+is a runtime line the origins are not told. Readers compare the claim's ordinal where the stamp
+holds one, else the attempt, never the session, so a re-spawn reads its first spawn's records, and a
+run parked by a rate limit, re-claimed at the attempt it gave back, no longer reads the `outcome`,
+`termination` or `terminal` written before the park, naming that attempt in its notice. `phases[]` is read
+whole, so that run still resumes after its last completed phase. A stamp with no ordinal compares
+the attempt alone, and a record with no stamp reads as current: every run from before this rule, and
+every write from outside a job.
+
+The runner pins the claim on the session and its MCP server (`NIGHTQUEUE_JOB_CLAIM`). A session
+whose claim is over (another attempt, another runner, a later claim at the same attempt after a
+park, or a row no longer `running`) that calls `run_outcome`, `run_terminate`, `run_phase_done`,
+`run_skip`, `run_set` or `run publish` is told `attempt N of this job is over, so this
+record is ignored; end this session`; its record goes to `ignoredRecords` and no slot, phase or
+field moves. A late `run_terminate` commits nothing and makes no wip ref, and a late `run publish`
+stops before the commit, the rename, the push, the pull request and the worktree removal, so the
+live claim's worktree and branch stay as they were. A late `run check`, `run commit` or `run pr` is
+refused before any side effect, `attempt N of this job is over, so nothing was written; end this
+session`: no brief, slug, termination, commit or template moves. One attempt keeps at most five records in
+`ignoredRecords`, each cut to 4 KB; past that a late write is only counted, on the attempt's last
+entry. A newer stamp in `outcome` or `termination` holds against an older writer; an older one
+is displaced to `ignoredRecords`, and the new record starts from the host facts alone, so an old
+notice never merges into it.
+
+A CLI kill that ended the run comes first and is `failed` (see below). The pull request of rows
+4 and 7 is the record's `prUrl`, else the host's own publication; every row but 6 keeps it on the job.
+A session that prints `## Requires user confirmation` and never calls `run_outcome` therefore
+ends `failed`, and one that calls `run_terminate` and never runs `run report` ends `cancelled`
+with its reason. `nightqueue run publish` records `done` with no notice, so a delivered job's
+`notice_md` can be empty; `queue status <id>` still shows the stream's `## Notice` as
+`run_notice`. The worktree of a `cancelled` finish is kept or named by the same rule as a
+`failed` one.
 
 **Resolved without change is `done` with no pull request.** When the triage proves, with
 direct evidence, that the request needs no code change in the repository (the cause lives
 outside the code it controls, it is already fixed on the base branch, or the behavior is
 correct by design), its verdict is `NO-CHANGE-NEEDED`: the run terminates and records
 `run_outcome` with `status: "no_change"` and its conclusion as `notice`. A clean exit with that
-record, a notice and no commit ends `done` with no `pr_url`, its notice the conclusion and no
+record and a notice ends `done` with no `pr_url`, its notice the conclusion and no
 `nothing to close` line; `queue status` shows `resolution: "no-change"` and LAST says
 `resolved without change - close it with nightqueue queue close J-<id>`. The runtime appends
 `Next step: close the job so where it came from is told it was resolved without a code change.`
@@ -556,9 +605,10 @@ is never sent to the origins. The kind is the row's own marker (`result.resoluti
 "no-change"`, written only from that record), never the missing pull request alone: a PR-less
 `done` written by a repair, a reclassify or a recovery without the record is still refused
 with `nothing to close: the job has no pull request`. The record is the
-only way in: a `NOT-REPRODUCIBLE`, `NEEDS-CLARIFICATION` or `PROPOSE-ALTERNATIVE` run, and a `no_commit` exit without
-it, still end `cancelled`; the same record on an exit that failed, timed out or was stopped
-still ends `failed` or `cancelled`, and one without a notice is `failed`.
+only way in: a `NOT-REPRODUCIBLE`, `NEEDS-CLARIFICATION` or `PROPOSE-ALTERNATIVE` run ends by
+what it recorded instead, a termination (`cancelled`) or nothing (`failed`); the same record on
+an exit that failed, timed out or was stopped still ends `failed` or `cancelled`, and one without
+a notice is read as no record at all.
 
 **Rows closed before the closing pipeline existed.** The schema v16 migration runs once, on
 the first open after an upgrade, in one transaction, and leaves every row satisfying the
@@ -577,8 +627,9 @@ only where the notice holds exactly the line its checklist recorded.
 
 A `gate` job the preflight refused to start also carries a reason, in its own
 `blocked_code` column (a job whose worktree the runtime could not place gates the same way,
-with `worktree-failed`, and a job whose run directory was written under the old phase
-numbering with `pre-renumbering-run`, whose notice answers with `queue retry <ref> --fresh`
+with `worktree-failed`, a job whose run directory was written under the old phase
+numbering with `pre-renumbering-run`, and a job whose run directory another job's witness stamped
+with `foreign-run`; the notice of both answers with `queue retry <ref> --fresh`
 because a plain retry is refused) - it answers a different question than `status`: not where
 the job is, but why the runner never started it, and it is what lets `queue retry`
 send that job back without a `--note`. See **What the runner requires of the
@@ -656,13 +707,30 @@ the only thing that ever reaches the prompt of the run, in a block labelled
 exception is a gate the preflight wrote (its `blocked_code` is set): there is no
 question to answer, only a cause to fix, so `queue retry J-n` with no `--note` sends it
 back, clears `blocked_code` and does not check the cause itself - the next claim runs the
-preflight again and gates the job again if the cause is still there. Each
-retry widens the allowance of attempts by one, capped at 10, and never rewrites
-the attempts already spent; a retry of a preflight gate widens nothing, since the
-preflight already gave that attempt back.
+preflight again and gates the job again if the cause is still there. A job has no
+allowance of attempts: a retry never rewrites the attempts already spent, and no count ever
+refuses one.
 
 Without `--fresh` the retry keeps slug, branch, session and run directory, and
-the pipeline resumes from the last completed phase. The ceiling of those resumes
+the pipeline resumes from the last completed phase. It also consumes what the last attempt
+concluded, in one write under the run lock before the job goes back: `status` and `notice` leave
+the run's `outcome`, whatever the status, and the `termination` (any author) and the `terminal`
+witness go with them, while `prUrl`, `prTitle`, `wip` and `phases` stay. A record stamped with a
+claim older than the row's last belongs to a claim already over: it stays on disk and is not read,
+and `ignoredRecords` is never consumed. A record speaks only for
+the claim that wrote it, so a retried run that exits cleanly with no new record ends `failed`
+with the no-outcome notice and the old pull request on the row, never `gate`, `cancelled` with
+the old reason, or `done`. A retried job that already published is `done` only if the new attempt
+records it again, and `run publish` can: it edits the existing pull request. A retried terminated
+run resumes after its last completed phase, as an answered gate does; a terminal verdict on a
+phase entry still stops the resume. A refused retry changes nothing. A record that cannot be
+consumed (the run directory read-only, the lock held past its timeout) refuses the retry with
+`retry again in a moment` and writes nothing, and so does a row that moved after the retry checked
+it. A run directory another job's witness stamped refuses the retry too, naming that job and
+`queue retry <ref> --fresh`, which starts it over and deletes that directory; nothing is written.
+A claim over such a directory gates as `foreign-run` before the spawn and gives the attempt back,
+so no attempt starts reading a state that does not speak for it. A commit that throws after the consumption says so in its error, with the
+job's status: the question stays on the row, so retry again. The ceiling of those resumes
 lives in the `state.json` of the run (`resumeCount` against `maxResumes`, default
 `1`), not in the database: a SECOND retry without `--fresh` starts the run from
 scratch because the runtime decided so, which is the intended behaviour and not a
@@ -691,16 +759,17 @@ The ref stays on the old commit, which is the way back to it. A `wip(` commit th
 run's own, or any commit above an own one, is refused. To clean up, list the refs with
 `git for-each-ref refs/nightqueue/wip` and drop one with `git update-ref -d <ref>` once its work
 is delivered or abandoned.
+A retry without `--fresh` consumes the termination, so the retried run resumes after its last completed phase, on the kept wip commit.
 
-`queue repair <id>` re-classifies a job that ended `gate` or `failed` from its
-own persisted log plus the `outcome` recorded in the `state.json` of its run, and
-is the way a run that really opened a pull request but was recorded without its
+`queue repair <id>` re-classifies a job that ended `gate` or `failed` by the same table: the
+exit its row recorded, the `outcome` and `termination` in the `state.json` of its run, and the
+structured events of its persisted log. It is the way a run that really opened a pull request but was recorded without its
 link is corrected without editing sqlite by hand. It runs only when the operator
 asks for it, by id: it never runs on its own, and the automatic repair from the
 `terminal` witness is untouched by it. The row keeps the ending the process had
 (a killed, timed-out or non-zero-exit run is never turned into `done`), the
 witness in `state.json` is rewritten so file and row agree - a correction that is
-only the notice re-read from the log writes the row alone and leaves that witness
+only the notice re-read from the run's record writes the row alone and leaves that witness
 untouched - and a second call answers that there is nothing to correct and writes
 nothing. It refuses, naming the reason, an unknown job, a job running under a
 live lease, a job in any other status, a job whose log is gone and a job whose
@@ -798,9 +867,14 @@ becomes an orphan only 60 seconds after its lease expired, and even then it is
 left alone while the process named in `worker` is alive on this host - unless
 `attempt_started_at + timeout_s + 600` has already passed (the start of the current
 claim, never the job's first start, so a retried job gets a whole ceiling again), in
-which case it is recycled anyway, because reclaiming never depends on a healthy
-process. The next claim returns an orphan to `pending` (keeping its attempts and its
-first `started_at`) or fails it once it spent the `max_attempts` of its own row; its
+which case it is swept anyway, because sweeping never depends on a healthy
+process. The next claim never requeues an orphan: it ends `failed` (keeping its attempts and its
+first `started_at`) with `result` `{"orphaned":true}` and the notice `the runner died during
+attempt N (worker W, lease until L); nothing was requeued - send it back with nightqueue queue
+retry`, whatever the run had recorded before the death, so a machine reboot fails every running
+job until the operator retries it. A gate or a termination its own attempt had recorded is quoted
+in a last paragraph, `it had recorded a gate: <question>`, since the retry consumes the record, and
+a record of another attempt is not quoted but named, `ignored a record of attempt N`. Its
 attempt row is closed `lost` (`exit_reason` `orphaned`) at the last lease renewal,
 `lease_until - timeout_s - 600`. A runner that loses ownership kills its child
 in the same heartbeat and writes nothing but one line in the job log: the row
@@ -824,12 +898,11 @@ never counts twice. `started_at` is the first claim and never moves again;
 sum of the durations) and `wall_s` (the first start to the end of the last attempt).
 
 A claim is one row however many times the runner re-spawns inside it after a transient
-failure: `spawns` counts those inner spawns and the row sums their usage. That is why
-two numbers are shown side by side and never merged: `N attempts` is the length of
-`attempts_log`, one per claim, while `attempts X / max` is the retry budget counter,
-which every inner re-spawn also increments and which a release, a gate or a park gives
-back - the CLI prints it as `attempts        X / max (budget counter: inner retries
-count)` and the studio chip carries the same tooltip. `queue retry --fresh` keeps the
+failure: `spawns` counts those inner spawns and the row sums their usage. Two numbers are
+shown side by side and never merged: `N attempts` is the length of `attempts_log`, one per
+claim, while `attempts X` is the job's own count, which a re-spawn never moves and which a
+release, a gate or a park gives back - the CLI prints it as `attempts        X` and the studio
+chips read `attempt X`. It limits nothing. `queue retry --fresh` keeps the
 history: the next row is marked `fresh: true`. A job that ran before schema v23 has only
 its last attempt, rebuilt once from the job's own columns and marked `backfilled`; its
 `DURATION` and tokens read exactly as before.
@@ -852,8 +925,25 @@ Follow-up: carry the attempt's measures in the state.json terminal witness.
 **Timeouts.** Each job has its own total timeout (`--timeout`, default 4 hours)
 and every attempt also dies after 20 minutes without a single line on the
 stream. Neither is a transient failure: a timed out attempt is `failed` and is
-never retried. Only a provider failure (429, overload, connection reset) is
-retried, up to `--max-attempts`, backing off 5s, 15s and 45s.
+never retried.
+
+**Transient failures.** Only a provider failure the stream reports in a structured event is
+re-spawned: a last `result` with `is_error: true` and `api_error_status` 429, 500, 502, 503 or
+529, a last `result` of subtype `error_during_execution` with an `errors[]` entry starting
+`API Error: <one of those codes>`, or a last `rate_limit_event` that is `rejected`. The text of a
+`result`, of an assistant turn or of a tool never counts, so `fetch failed` in a test's output
+re-spawns nothing. The runner re-spawns inside the same claim at most twice
+(`TRANSIENT_RESPAWNS`), backing off 5s then 15s, and spends no attempt; `spawns` on the attempt
+row moves and `attempts` does not. Each one adds a line to the job log,
+`=== respawn k/2 of attempt N (<event>) @ <iso> ===`. A third failure ends the job by the table
+above. A run its own record already settled (rows 4 to 7 of the table) is never re-spawned: it ends
+by its exit code, with the pull request on the row and the record untouched.
+
+**Rate limits.** A non-zero exit parks the job at the reset only when the LAST rate-limit event
+of the spawn was `rejected` and a reset is known. A later `allowed` clears the pause this attempt
+holds, in memory and in the runner's registration; `allowed_warning` clears nothing and can still
+arm a pause, but a warning as the last event never parks the job, so that exit is classified by
+the table above.
 
 **The attempt has no other ceiling, and a deterministic rule never lives only in
 the prompt.** The runner starts the agent with
@@ -1052,7 +1142,7 @@ names `05-qa.md` and is newer than the last `implementation` record, so a re-imp
 never re-enters with the analyst round of its old implementation. A run that started before
 the phases became whole numbers is never resumed, on any path: a retry is refused with
 ``run started before the renumbering; retry with `fresh` `` (nothing written), the runner
-gates a claimed job (a swept or re-queued one included) as `pre-renumbering-run` before it
+gates a claimed job as `pre-renumbering-run` before it
 writes anything or spawns, and `run start` on such a run directory refuses with the same
 line; `fresh` starts it clean. A run the decision refuses -
 no state, a deliberate termination, a resume budget already spent - gets no block

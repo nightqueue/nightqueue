@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 import { execFileSync } from "node:child_process";
-import { appendFileSync, existsSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, readFileSync, realpathSync, renameSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { sep } from "node:path";
+import { join, sep } from "node:path";
 
 const PLAN_PATH = String(process.env.NIGHTQUEUE_FAKE_PLAN ?? "");
 const COUNTER_PATH = `${PLAN_PATH}.attempt`;
@@ -27,7 +27,7 @@ function nextAttempt(total) {
 
 // Records the argv and the job id of this call, so a test can assert the command the runner really built.
 function recordCall(plan) {
-  const call = { pid: process.pid, argv: process.argv.slice(2), jobId: process.env.NIGHTQUEUE_JOB_ID ?? null, cwd: process.cwd() };
+  const call = { pid: process.pid, argv: process.argv.slice(2), jobId: process.env.NIGHTQUEUE_JOB_ID ?? null, claim: process.env.NIGHTQUEUE_JOB_CLAIM ?? null, cwd: process.cwd() };
   if (typeof plan.probePath === "string") call.probeExisted = existsSync(plan.probePath);
   if (typeof plan.probeReadPath === "string") call.probedText = existsSync(plan.probeReadPath) ? readFileSync(plan.probeReadPath, "utf8") : null;
   if (typeof plan.probeStatusOf === "string") call.probedStatus = gitOut(plan.probeStatusOf, ["status", "--porcelain"]);
@@ -40,10 +40,29 @@ function gitOut(cwd, args) {
   return execFileSync("git", [...identity, ...args], { cwd, encoding: "utf8" });
 }
 
-// Refuses to commit anywhere outside the system temp dir, so a fake never commits into the enclosing repository.
-function assertInTempDir(cwd) {
+// Refuses to write anywhere outside the system temp dir, so a fake never touches the enclosing repository or a real home.
+function assertInTempDir(dir) {
   const root = realpathSync(tmpdir());
-  if (!realpathSync(cwd).startsWith(root + sep)) throw new Error(`refusing to commit outside ${root}: cwd is ${cwd}`);
+  if (!realpathSync(dir).startsWith(root + sep)) throw new Error(`refusing to write outside ${root}: the directory is ${dir}`);
+}
+
+// The run directory the runner handed this session in its prompt.
+function promptRunDir() {
+  const argv = process.argv.slice(2);
+  const found = /^RUN_DIR: (.+)$/m.exec(String(argv[argv.indexOf("-p") + 1] ?? ""));
+  if (!found) throw new Error("the attempt records a run state but its prompt hands over no RUN_DIR");
+  return found[1];
+}
+
+// Merges what this attempt's pipeline recorded into the state.json of its run, the way `run_outcome`, `run publish` and `run_terminate` keep every other field.
+function recordRunState(change) {
+  const dir = promptRunDir();
+  assertInTempDir(dir);
+  const path = join(dir, "state.json");
+  const state = existsSync(path) ? JSON.parse(readFileSync(path, "utf8")) : {};
+  const outcome = change.outcome ? { outcome: { ...state.outcome, ...change.outcome } } : {};
+  writeFileSync(`${path}.tmp`, JSON.stringify({ ...state, ...change, ...outcome }));
+  renameSync(`${path}.tmp`, path);
 }
 
 // Writes one file in the working directory and commits it, the way a run leaves its work on its branch.
@@ -61,6 +80,7 @@ function sleep(ms) {
 
 // Plays one attempt: the first slice of the stream, a silent hold, the rest, and a last silent hold before the exit.
 async function play(step) {
+  if (step.runState) recordRunState(step.runState);
   if (typeof step.commitFile === "string") commitFile(step.commitFile);
   if (Array.isArray(step.exec)) execFileSync(process.execPath, step.exec, { stdio: ["ignore", "ignore", "pipe"] });
   if (step.stdout) process.stdout.write(step.stdout);

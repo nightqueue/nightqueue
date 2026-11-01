@@ -1,5 +1,4 @@
 import { appendFileSync, mkdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
 import { UserError } from "../config/errors.mjs";
 import { jobLogPath, logsDir, runDir } from "../config/paths.mjs";
 import { packageRoot } from "../host/paths.mjs";
@@ -8,7 +7,7 @@ import { openStore } from "../store/open.mjs";
 import { classifyJobResult } from "./classify.mjs";
 import { deriveRecovered, findLostJobs, scanDisk, stillRunningCheck } from "./lost-rows.mjs";
 import { replayAllPendingWrites } from "./pending-writes.mjs";
-import { isRunPath, ownRunState, readRunState, writeRunTerminal } from "./resume.mjs";
+import { claimRunState, claimStamp, readRunState, rowClaimOrdinal, writeRunTerminal } from "./resume.mjs";
 import { lastAttemptStream } from "./stream.mjs";
 import { jobRef } from "../memory/refs.mjs";
 
@@ -77,17 +76,17 @@ function mirrorWitness(row, outcome, env) {
       writtenBy: packageRoot(),
       pid: process.pid,
       jobId: row.id,
+      claim: claimStamp({ attempt: row.attempts, session: row.last_session_id ?? null, ordinal: rowClaimOrdinal(row) }),
     },
     env,
   });
 }
 
-// The state and plan of the job's own run; a run whose witness another job stamped is foreign and lends the repair nothing.
+// The state of the job's own run as its last claim reads it; a run whose witness another job stamped is foreign and lends the repair nothing.
 function ownRun(row, env) {
-  const state = ownRunState({ projectId: row.project_id, slug: row.slug, jobId: row.id, env });
+  const state = claimRunState({ projectId: row.project_id, slug: row.slug, jobId: row.id, attempt: row.attempts, ordinal: rowClaimOrdinal(row), env });
   const foreign = state === null && readRunState({ projectId: row.project_id, slug: row.slug, env }) !== null;
-  const planPath = isRunPath(row.project_id, row.slug) && !foreign ? join(runDir(row.project_id, row.slug, env), "03-plan.md") : null;
-  return { state, planPath, foreign };
+  return { state, foreign };
 }
 
 // Re-derives the outcome of a gated or failed job from its own log and state.json, writing the row and the witness when it changed.
@@ -98,8 +97,8 @@ export async function reclassifyFromLog({ id, env = process.env } = {}) {
   refuseRow(id, row, await jobs.isJobActive(id));
   const log = lastAttemptStream(readJobLog(id, env));
   const ending = endingFromRow(id, row);
-  const { state, planPath, foreign } = ownRun(row, env);
-  const outcome = classifyJobResult({ log, ...ending, state, planPath });
+  const { state, foreign } = ownRun(row, env);
+  const outcome = classifyJobResult({ log, ...ending, state });
   const witness = differsFromWitness(row, outcome);
   const notice = noticeDiffers(row, outcome);
   if (!witness && !notice) return { id, from: row.status, to: row.status, prUrl: row.pr_url ?? null, changed: false, noticeOnly: false };

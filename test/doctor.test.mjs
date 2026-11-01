@@ -88,7 +88,7 @@ test("a host that went through setup has no failing check", async (t) => {
   assert.equal(statusOf(report, "database"), "warn");
   assert.equal(statusOf(report, "runtime"), "ok");
   assert.equal(statusOf(report, "tool contract"), "ok");
-  assert.match(report.checks.find((check) => check.name === "tool contract").detail, /^contract 10;/);
+  assert.match(report.checks.find((check) => check.name === "tool contract").detail, /^contract 11;/);
   assert.equal(statusOf(report, "shim nightqueue"), "ok");
   assert.equal(statusOf(report, "path"), "warn");
   assert.equal(statusOf(report, "embedding"), "warn");
@@ -369,7 +369,7 @@ test("the database check reads the schema version of an existing database", asyn
 
   const { report } = await diagnose(host.env);
   assert.equal(statusOf(report, "database"), "ok");
-  assert.match(report.checks.find((check) => check.name === "database").detail, /schema v26/);
+  assert.match(report.checks.find((check) => check.name === "database").detail, /schema v27/);
 });
 
 test("the database check warns about a v8 home and points at the command that migrates it", async (t) => {
@@ -379,7 +379,7 @@ test("the database check warns about a v8 home and points at the command that mi
   const { report } = await diagnose(host.env);
   const database = report.checks.find((check) => check.name === "database");
   assert.equal(database.status, "warn");
-  assert.match(database.detail, /schema v8, this nightqueue expects v26/);
+  assert.match(database.detail, /schema v8, this nightqueue expects v27/);
   assert.equal(database.hint, "run `nightqueue update`");
   assert.doesNotMatch(database.hint, /nightqueue memory stats/);
 });
@@ -392,7 +392,7 @@ test("the database check fails a schema newer than this build and asks for an up
   const { report } = await diagnose(host.env);
   const database = report.checks.find((check) => check.name === "database");
   assert.equal(database.status, "fail");
-  assert.match(database.detail, /schema v99, newer than this nightqueue \(v26\): update nightqueue \/ restart the client that runs the old version/);
+  assert.match(database.detail, /schema v99, newer than this nightqueue \(v27\): update nightqueue \/ restart the client that runs the old version/);
   assert.match(database.hint, /inspect/);
 });
 
@@ -548,7 +548,11 @@ test("the queue jobs check counts the jobs whose runner died, and only once the 
 
   const { report: orphaned } = await diagnose(host.env);
   assert.equal(statusOf(orphaned, "queue jobs"), "warn");
-  assert.equal(orphaned.checks.find((entry) => entry.name === "queue jobs").detail, "1 orphaned");
+  const orphanRow = orphaned.checks.find((entry) => entry.name === "queue jobs");
+  assert.equal(orphanRow.detail, "1 orphaned");
+  assert.match(orphanRow.hint, /fails them with a notice/);
+  assert.match(orphanRow.hint, /nightqueue queue retry <id>/);
+  assert.doesNotMatch(orphanRow.hint, /recycle/);
   assert.deepEqual(orphaned.checks.filter((entry) => entry.name.startsWith("queue") && entry.status === "fail"), []);
 });
 

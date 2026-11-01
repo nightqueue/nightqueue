@@ -32,6 +32,7 @@ const CAP = 4;
 const SLUG = "fix-the-worker";
 const NOTICE = "The pull request is open and the checks are green.";
 const REREAD_NOTICE = `Decide before the merge: ${"Still open: whether the old column name keeps working for one release. ".repeat(9)}`.trim();
+const DELIVERY = { status: "done", prUrl: PR_URL, notice: NOTICE };
 const CLEAN_ENDING = { status: "gate", prUrl: null, exitCode: 0, timedOut: false, idleTimedOut: false, attempts: 1 };
 
 // A home with one registered project and the queue table ready.
@@ -52,11 +53,11 @@ function writeJobLog(env, id, log) {
   writeFileSync(jobLogPath(id, env), log);
 }
 
-// Writes the state.json of the run, with the witness the runner left: the same wrong outcome the row carries.
-function writeRunState(env, { slug = SLUG, terminal = { status: "gate", prUrl: null, finishedAt: "2026-09-14T21:00:00Z" } } = {}) {
+// Writes the state.json of the run, with the outcome it recorded and the witness the runner left: the same wrong outcome the row carries.
+function writeRunState(env, { slug = SLUG, terminal = { status: "gate", prUrl: null, finishedAt: "2026-09-14T21:00:00Z" }, outcome = DELIVERY } = {}) {
   const dir = runDir(ensureProject(env, "alpha"), slug, env);
   mkdirSync(dir, { recursive: true });
-  const state = { schemaVersion: 1, slug, project: "alpha", resumeCount: 0, phases: [{ phase: "triage", artifact: "01-triage.md", verdict: "ok" }], terminal };
+  const state = { schemaVersion: 1, slug, project: "alpha", resumeCount: 0, phases: [{ phase: "triage", artifact: "01-triage.md", verdict: "ok" }], terminal, outcome };
   writeFileSync(join(dir, "state.json"), `${JSON.stringify(state, null, 2)}\n`);
   return join(dir, "state.json");
 }
@@ -124,9 +125,10 @@ test("the outcome the pipeline recorded in state.json is what the repair believe
 
 test("only the LAST attempt of an accumulated log decides: an older delivery never repairs a later failure", async (t) => {
   const env = makeQueue(t, "repair-attempts");
-  const log = `${attemptMarker(1)}\n${intermediateDeliveryStream()}${attemptMarker(2)}\n${gateStream({ slug: SLUG })}`;
+  const delivered = toNdjson([systemInitEvent(), codeChangePublishedEvent(), resultEvent({ text: "" })]);
+  const log = `${attemptMarker(1)}\n${delivered}${attemptMarker(2)}\n${gateStream({ slug: SLUG })}`;
   const id = finishedJob(env, { log });
-  const statePath = writeRunState(env);
+  const statePath = writeRunState(env, { outcome: { status: "gate", notice: GATE_NOTICE } });
   const before = readFileSync(statePath, "utf8");
 
   const outcome = await reclassifyFromLog({ id, env });
@@ -178,25 +180,25 @@ test("each refusal of `queue repair` names what is missing, and none of them wri
   assert.equal(getJob(noEnding, env).status, "gate");
 });
 
-// A run that stopped at the gate after writing a long `## Notice` in its final message, the heading itself inside its body.
-function gateWithNotice(body) {
-  return toNdjson([systemInitEvent(), slugEvent(SLUG), resultEvent({ text: noticeText(`${GATE_MARKER}\n\n${body}`) })]);
+// A run that stopped at the gate and said nothing of it in its final message.
+function gateLog() {
+  return toNdjson([systemInitEvent(), slugEvent(SLUG), resultEvent({ text: "Paused." })]);
 }
 
-// Writes the state.json of a run whose pipeline recorded a summary of its own notice, the shape the whole fix is about.
-function writeSummarizedOutcome(env) {
-  const dir = runDir(ensureProject(env, "alpha"), SLUG, env);
+// Writes the state.json of a run whose pipeline recorded the whole notice of its gate.
+function writeGateOutcome(env, slug = SLUG) {
+  const dir = runDir(ensureProject(env, "alpha"), slug, env);
   mkdirSync(dir, { recursive: true });
   const path = join(dir, "state.json");
-  const state = { schemaVersion: 1, slug: SLUG, phases: [], outcome: { status: "gate", notice: "Short summary the pipeline wrote.", updatedAt: "2026-09-14T21:00:00Z" } };
+  const state = { schemaVersion: 1, slug, phases: [], outcome: { status: "gate", notice: `${GATE_MARKER}\n\n${REREAD_NOTICE}`, updatedAt: "2026-09-14T21:00:00Z" } };
   writeFileSync(path, `${JSON.stringify(state, null, 2)}\n`);
   return path;
 }
 
 test("a repair whose only stale field is the notice writes it and leaves the witness of the run alone", async (t) => {
   const env = makeQueue(t, "repair-notice-only");
-  const id = finishedJob(env, { log: gateWithNotice(REREAD_NOTICE) });
-  const statePath = writeSummarizedOutcome(env);
+  const id = finishedJob(env, { log: gateLog() });
+  const statePath = writeGateOutcome(env);
   const before = readFileSync(statePath, "utf8");
   assert.equal(getJob(id, env).notice_md, NOTICE, "setup: the row already carried the notice of the run");
 
@@ -205,21 +207,21 @@ test("a repair whose only stale field is the notice writes it and leaves the wit
     { changed: outcome.changed, noticeOnly: outcome.noticeOnly, to: outcome.to, prUrl: outcome.prUrl },
     { changed: true, noticeOnly: true, to: "gate", prUrl: null },
   );
-  assert.equal(getJob(id, env).notice_md, `${GATE_MARKER}\n\n${REREAD_NOTICE}`, "the notice re-read from the log was dropped");
+  assert.equal(getJob(id, env).notice_md, `${GATE_MARKER}\n\n${REREAD_NOTICE}`, "the recorded notice was dropped");
   assert.equal(getJob(id, env).status, "gate");
   assert.equal(readFileSync(statePath, "utf8"), before, "a notice-only repair rewrote the witness of the run");
 });
 
-test("`queue repair` says it re-read the notice from the log, and `queue status` prints it whole", (t) => {
+test("`queue repair` says it re-read the notice from the record, and `queue status` prints it whole", (t) => {
   const env = makeQueue(t, "repair-notice-cli");
-  const id = finishedJob(env, { log: gateWithNotice(REREAD_NOTICE) });
-  const statePath = writeSummarizedOutcome(env);
+  const id = finishedJob(env, { log: gateLog() });
+  const statePath = writeGateOutcome(env);
   const before = readFileSync(statePath, "utf8");
 
   const repaired = runCli(env, ["queue", "repair", String(id)]);
   assert.equal(repaired.status, 0, repaired.stderr);
   assert.ok(
-    repaired.stdout.includes(`J-${id} is still \`gate\`; its notice was re-read from the log. Read it with: nightqueue queue status J-${id}`),
+    repaired.stdout.includes(`J-${id} is still \`gate\`; its notice was re-read from the run's record. Read it with: nightqueue queue status J-${id}`),
     repaired.stdout,
   );
   assert.equal(readFileSync(statePath, "utf8"), before, "a notice-only repair rewrote the witness of the run");
@@ -229,7 +231,8 @@ test("`queue repair` says it re-read the notice from the log, and `queue status`
   assert.ok(detail.stdout.includes(`  ${REREAD_NOTICE}`), detail.stdout);
   assert.equal(detail.stdout.includes("..."), false, "the detail cut the notice the repair had just corrected");
 
-  const other = finishedJob(env, { log: gateWithNotice(REREAD_NOTICE) });
+  const other = finishedJob(env, { log: gateLog(), slug: "other-run" });
+  writeGateOutcome(env, "other-run");
   const json = runCli(env, ["queue", "repair", String(other), "--json"]);
   assert.equal(json.status, 0, json.stderr);
   assert.deepEqual(JSON.parse(json.stdout).repair, { id: other, from: "gate", to: "gate", prUrl: null, changed: true, noticeOnly: true });
@@ -273,5 +276,5 @@ test("`queue repair` of a job whose QA published another branch's pull request r
   const outcome = await reclassifyFromLog({ id, env });
   assert.deepEqual({ to: outcome.to, prUrl: outcome.prUrl }, { to: "done", prUrl: PR_URL }, "the repair re-derived the QA's pull request");
   assert.equal(getJob(id, env).pr_url, PR_URL);
-  assert.ok(getJob(id, env).notice_md.includes(qaUrl), "the dropped publication was not named in the notice");
+  assert.equal(String(getJob(id, env).notice_md).includes(qaUrl), false, "the stray pull request line is no longer written");
 });

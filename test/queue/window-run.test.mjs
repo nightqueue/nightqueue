@@ -11,7 +11,7 @@ import { registerForegroundRunner } from "../../src/queue/start.mjs";
 import { resolveWindow } from "../../src/queue/window.mjs";
 import { ensureProject, makeDir, makeHome, makeProject } from "../../test-support/memory.mjs";
 import { useFakeClaude } from "../../test-support/queue-fake.mjs";
-import { doneStream, PR_URL } from "../../test-support/streams.mjs";
+import { doneStream, PR_URL, recordedDone } from "../../test-support/streams.mjs";
 import { fakeJobWorktree } from "../../test-support/job-worktree.mjs";
 
 const PROMPT = "fix the worker";
@@ -23,7 +23,7 @@ function fakeGit() {
 }
 
 // A home with one registered project and the fake `claude`, ready to run one job to `done`.
-function makeRunnerHome(t, name, attempts = [{ stdout: doneStream(), exitCode: 0 }]) {
+function makeRunnerHome(t, name, attempts = [{ stdout: doneStream(), runState: recordedDone(), exitCode: 0 }]) {
   const env = makeHome(t, name);
   makeProject(t, env, "alpha");
   useFakeClaude(env, makeDir(t, `${name}-plan`), attempts);

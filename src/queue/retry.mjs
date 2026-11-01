@@ -3,8 +3,8 @@ import { callerJobId } from "../config/job-home.mjs";
 import { ghPrViewAsync } from "../host/gh.mjs";
 import { openStore } from "../store/open.mjs";
 import { flattenPrState } from "./pr-state.mjs";
-import { clearRunTerminal, discardRunDir, PRE_RENUMBERING_REFUSAL, preRenumberingArtifact } from "./resume.mjs";
-import { clearTermination } from "./run-state.mjs";
+import { discardRunDir, PRE_RENUMBERING_REFUSAL, preRenumberingArtifact, rowClaimOrdinal } from "./resume.mjs";
+import { consumeRunConclusion } from "./run-state.mjs";
 import { jobRef } from "../memory/refs.mjs";
 import { OPERATOR_NOTE_LIMIT } from "../memory/jobs.mjs";
 
@@ -57,19 +57,71 @@ function refuseOverlongNote(note) {
   );
 }
 
-// Retries one job (a gate's answer also lifts the runtime's termination of that attempt) and, only with `fresh`, drops the run directory of the previous attempt; the order is fixed, so a refused retry never deletes anything.
-export async function applyRetry({ id, note, fresh = false, env = process.env, prStateImpl = ghPrViewAsync } = {}) {
+// Refuses, with the words `retryJob` would use, a retry the row does not allow, before anything is touched.
+async function refuseUnretryableRow(id, note, store) {
+  const refusal = await store.jobs.retryRefusalOf(id, { note });
+  if (refusal !== null) throw new UserError(refusal);
+}
+
+// Tells whether the row is still in the turn the retry checked: any retry, claim or new ending moves one of these.
+function sameTurn(before, now) {
+  return now?.status === before?.status && now?.attempts === before?.attempts && now?.finished_at === before?.finished_at;
+}
+
+// Consumes the last attempt's conclusion before the commit; a row that moved, a record that cannot be written or a run another job stamped refuses the retry with nothing written.
+async function consumeLastConclusion({ id, before, run, store }) {
+  let now = before;
+  const stillCurrent = async () => {
+    now = await store.jobs.getJob(id);
+    return sameTurn(before, now);
+  };
+  const consumed = await consumeRunConclusion({ ...run, jobId: id, attempt: before?.attempts, ordinal: rowClaimOrdinal(before), stillCurrent });
+  if (consumed.status === "moved") {
+    throw new UserError(`${jobRef(id)} changed while this retry was applied (it is now \`${now?.status}\`): nothing was written; read it with nightqueue queue status ${jobRef(id)}`);
+  }
+  if (consumed.status === "kept") {
+    throw new UserError(`${jobRef(id)}: the last attempt's record could not be consumed (${consumed.reason}): retry again in a moment; nothing was written`);
+  }
+  if (consumed.status === "foreign") {
+    throw new UserError(`${jobRef(id)}: the run directory \`${run.slug}\` is stamped by ${jobRef(consumed.stampedBy)}: nothing was written; \`nightqueue queue retry ${jobRef(id)} --fresh\` starts it over and deletes that directory`);
+  }
+  return consumed;
+}
+
+// The line a failed commit carries when the record was already consumed, read from the row as it is now.
+async function consumedLine(id, store) {
+  try {
+    const row = await store.jobs.getJob(id);
+    return `\n${jobRef(id)}: the last attempt's record was already consumed and the job is \`${row?.status}\`, its notice still on the row; retry again`;
+  } catch {
+    return `\n${jobRef(id)}: the last attempt's record was already consumed and the row could not be read; retry again`;
+  }
+}
+
+// Commits a plain retry; a commit that throws after a consumption says what was consumed and keeps its error class.
+async function commitAfterConsumption({ id, note, store, consumed }) {
+  try {
+    return await store.jobs.retryJob(id, { note, fresh: false });
+  } catch (err) {
+    if (consumed.status === "written") err.message += await consumedLine(id, store);
+    throw err;
+  }
+}
+
+// Retries one job and, only with `fresh`, drops the run directory of the previous attempt; a plain retry first consumes the last attempt's conclusion, before the commit, so nothing a claimed run records is ever erased and a refused retry touches nothing.
+export async function applyRetry({ id, note, fresh = false, env = process.env, prStateImpl = ghPrViewAsync, storeImpl = openStore } = {}) {
   requireOwnJob(id, env);
   refuseOverlongNote(note);
-  const store = openStore(env);
+  const store = storeImpl(env);
   const before = await store.jobs.getJob(id);
   await refuseFinishedJob(id, before, { env, prStateImpl });
   if (fresh !== true) refusePreRenumberingRun(before, env);
-  const job = await store.jobs.retryJob(id, { note, fresh });
+  await refuseUnretryableRow(id, note, store);
   const run = { projectId: before?.project_id, slug: before?.slug, env };
-  if (fresh !== true) {
-    if (before?.status === "gate") clearTermination(run);
-    return { job, runDir: null, witness: clearRunTerminal(run) };
+  if (fresh === true) {
+    const job = await store.jobs.retryJob(id, { note, fresh });
+    return { job, runDir: discardRunDir(run) };
   }
-  return { job, runDir: discardRunDir(run), witness: { status: "absent", path: null, reason: null } };
+  const consumed = await consumeLastConclusion({ id, before, run, store });
+  return { job: await commitAfterConsumption({ id, note, store, consumed }), runDir: null };
 }
