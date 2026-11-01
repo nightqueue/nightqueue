@@ -76,7 +76,6 @@ Only the subsections that ran, in any order, each with at least one bullet
 `- <what ran> — <result>`, the result ending in `PASSED`, `FAILED` or `SKIPPED (<reason>)`
 and an optional ✅/❌, e.g. `- http://localhost:3000/login, flow login → dashboard — the redirect was observed, PASSED ✅`.
 `Not tested:` comes after the last subsection. A table, another `###` subsection or an `N/A` is refused.
-A QA skip: one line `QA: skipped — <why>` right under the QA heading.
 
 ## Evidence
 
@@ -133,7 +132,8 @@ subsection — never a subsection without a file. `nightqueue run pr` answers
 ## Size
 
 The body fits on one screen — past that it stops being read. `## Changes` at most 10
-bullets of one line; the `## QA` section one subsection per method.
+bullets of one line; the `## QA` section one subsection per method. Write it already fitting; do
+not write long expecting someone to cut it.
 
 ## Before `nightqueue run pr`
 

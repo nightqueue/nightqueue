@@ -363,12 +363,12 @@ test("`run check 01` requires `Evidence level: <1-4>` as the first line under ##
     ["# Triage\n\n## Verdict: PROCEED\n\n**Evidence level:** 4\n" + TRIAGE_TAIL, ["OK", "VERDICT: PROCEED"]],
     ["# Triage\n\n## Verdict: PROCEED\n\n**Evidence level: 3**\n" + TRIAGE_TAIL, ["OK", "VERDICT: PROCEED"]],
     ["# Triage\n\n## Verdict: PROCEED\n\n**Evidence level: 5**\n" + TRIAGE_TAIL, EVIDENCE_MISSING],
-    ["# Triage\n\n## Verdict: NEEDS-CLARIFICATION\n\nEvidence level: 1\n" + TRIAGE_TAIL, ["OK", "VERDICT: PROCEED"]],
-    ["# Triage\n\n## Verdict: NOT-REPRODUCIBLE\n\nEvidence level: 1\n" + TRIAGE_TAIL, "MISSING: ## Open items"],
+    ["# Triage\n\n## Verdict: NEEDS-CLARIFICATION\n\nEvidence level: 1\n" + TRIAGE_TAIL + OPEN_ITEMS, ["OK", "VERDICT: NEEDS-CLARIFICATION"]],
+    ["# Triage\n\n## Verdict: NEEDS-CLARIFICATION\n\nEvidence level: 1\n" + TRIAGE_TAIL, "MISSING: ## Open items"],
     ["# Triage\n\n## Verdict: PROCEED\n\nEvidence level: 3\n", "MISSING: ## Validated brief, ## Out of scope, ## Request gaps"],
     ["# Triage\n\n## Verdict: PROCEED\n\nEvidence level: 3\n" + TRIAGE_TAIL.replace("\n## Request gaps\n- None.\n", ""), "MISSING: ## Request gaps"],
     ["# Triage\n\n## Diagnosis\n\n- cause\n", "MISSING: ## Verdict, ## Validated brief, ## Out of scope, ## Request gaps"],
-    ["# Triage\n\n## Verdict: MAYBE\n\nEvidence level: 2\n" + TRIAGE_TAIL, "MISSING: ## Verdict: <PROCEED|NO-CHANGE-NEEDED|NOT-REPRODUCIBLE>"],
+    ["# Triage\n\n## Verdict: MAYBE\n\nEvidence level: 2\n" + TRIAGE_TAIL, "MISSING: ## Verdict: <PROCEED|NO-CHANGE-NEEDED|NOT-REPRODUCIBLE|NEEDS-CLARIFICATION|PROPOSE-ALTERNATIVE>"],
   ];
   for (const [body, expected] of cases) {
     writeArtifact(env, "01-triage.md", body);

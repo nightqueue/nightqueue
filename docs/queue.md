@@ -210,13 +210,12 @@ code change.` followed by the run's conclusion, with no PR field, no link and th
 **Every job runs the one pipeline.** There is no risk tier: every run executes every
 phase (triager, exploration, architect, coder, QA and verifier), each agent on its own
 model (the defaults of `src/queue/routing.mjs`, overridable per project with
-`nightqueue project models`, see [CLI](cli.md)). How deep the QA goes is decided from the
-real change, not by the operator: a short triage lane classifies the diff and
-`run check 05 --stage triage` answers `QA-MODE: skip`, `lite` or `full`. A `skip` launches no
-attack lane, and the verifier always runs. `queue add --tier` and
+`nightqueue project models`, see [CLI](cli.md)). How deep the QA goes is decided by the
+plan, not by the operator: `run check 03` answers `QA: full` when the plan holds two or
+more 🔴 risks or declares an always-gate class, else `QA: lite`. `queue add --tier` and
 the `tier` parameter of `queue_add` were removed: a value is refused with
 ``\`tier\` was removed: every job runs the one /resolve pipeline (one model per agent, QA
-mode chosen by `run check 05 --stage triage`); drop it - a client still sending it is an older
+mode chosen by `run check 03`); drop it - a client still sending it is an older
 nightqueue plugin, update it``, and nothing is registered or queued. A prompt queued by an
 older runtime may still carry a `Tier:` line; the title ignores it and the run does not
 read it.
@@ -557,7 +556,7 @@ is never sent to the origins. The kind is the row's own marker (`result.resoluti
 "no-change"`, written only from that record), never the missing pull request alone: a PR-less
 `done` written by a repair, a reclassify or a recovery without the record is still refused
 with `nothing to close: the job has no pull request`. The record is the
-only way in: a `NOT-REPRODUCIBLE` run, and a `no_commit` exit without
+only way in: a `NOT-REPRODUCIBLE`, `NEEDS-CLARIFICATION` or `PROPOSE-ALTERNATIVE` run, and a `no_commit` exit without
 it, still end `cancelled`; the same record on an exit that failed, timed out or was stopped
 still ends `failed` or `cancelled`, and one without a notice is `failed`.
 
@@ -677,21 +676,21 @@ A run that terminated left its work as a local wip commit
 commit with the ref `refs/nightqueue/wip/<slug>`, written in the same step. A job that ended
 `cancelled` by itself has a notice that names the commit, the exact
 `Retry: nightqueue queue retry J-<id>` line and `New job from it: start_branch: <branch>` for a
-new job that continues from that branch. Any other ending (`failed`, an operator stop, a gate)
-whose branch still sits on such a commit prints a `Wip commit: ` paragraph with the
-`start_branch` line and no `Retry:` line.
+new job that continues from that branch. Any other ending (`failed`, an operator stop, a gate,
+`done` without a pull request) whose branch still sits on such a commit, its own or the one a
+`start_branch` job inherited, prints a `Wip commit: ` paragraph with the `start_branch` line and
+no `Retry:` line.
 
-At every claim whose HEAD is a commit a `refs/nightqueue/wip/*` ref names, the runner gives the
-changes back uncommitted before the session starts. That covers a retry without `--fresh`, in
-the same worktree or one recreated from the branch, and a new job queued with `start_branch`
-on that branch. The ref stays. The phases restart, because a terminated run is never resumed.
-A commit titled `wip(` with no such ref is never reset, and when HEAD moved off the wip commit
-nothing is reset. At the end of every attempt that got the work back and committed nothing on
-top of it, the runner moves the branch back onto the same wip commit without creating one; the
-attempt's later edits stay uncommitted. So `--fresh` leaves the old branch at its wip commit.
-`run publish` refuses a branch whose `base..HEAD` holds a commit a wip ref names: the wip is
-never pushed. To clean up, list the refs with `git for-each-ref refs/nightqueue/wip` and drop
-one with `git update-ref -d <ref>` once its work is delivered or abandoned.
+The next attempt starts on that commit, with a clean tree: a retry without `--fresh`, in the
+same worktree or one recreated from the branch, and a new job queued with `start_branch` on that
+branch. The runner resets nothing and the prompt says nothing about it. The phases restart,
+because a terminated run is never resumed. `--fresh` leaves the old branch at its wip commit.
+`run publish` and `run commit` fold the run's own wip commits into the single delivery commit,
+so the wip is never pushed. `run pr` refuses a branch still carrying one, naming `run publish`.
+The ref stays on the old commit, which is the way back to it. A `wip(` commit that is not the
+run's own, or any commit above an own one, is refused. To clean up, list the refs with
+`git for-each-ref refs/nightqueue/wip` and drop one with `git update-ref -d <ref>` once its work
+is delivered or abandoned.
 
 `queue repair <id>` re-classifies a job that ended `gate` or `failed` from its
 own persisted log plus the `outcome` recorded in the `state.json` of its run, and

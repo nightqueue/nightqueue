@@ -139,7 +139,7 @@ inside a job — each acts on the run of the job it is called from, never on the
   run commit --message-file <path>          stage what 04-implementation.md listed and commit it; --extra adds a pathspec
   run pr --body-file <path>                 check the body, push THIS run's branch under its final name and open the PR
   run start --type --commit-type            record THIS run's type; print its agent models, phases and PR template as JSON
-  run publish --message-file --body-file    check the body, commit the list once, push THIS run's branch and open the PR (--draft: as a draft)
+  run publish --message-file --body-file    check the body, commit the list once, push THIS run's branch and open the PR
   run report [--json]                       the tables of THIS run's final report: steps, happy or not
 
 options:

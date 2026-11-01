@@ -8,7 +8,7 @@
 **Type:** bug/error
 **Commit type:** fix
 
-## Verdict: NOT-REPRODUCIBLE
+## Verdict: NEEDS-CLARIFICATION
 
 Evidence level: 2
 

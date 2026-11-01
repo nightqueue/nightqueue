@@ -22,9 +22,7 @@
 - export csv · today: all · after: active · changed=yes · source=pipeline
 
 ### Requires user confirmation
-**Question:** approve fixing the retry path only?
-**Options:** (A) retry only, recommended; (B) every path
-**On go ahead:** the retry path is fixed
+- What the ticket expected: every path fixed · Why it is a problem: the cli path is shared · Proposed solution: fix retry only · Question: approve?
 
 ## Assumptions
 - [P1] the list reads one table — invalidated if: a view joins it.

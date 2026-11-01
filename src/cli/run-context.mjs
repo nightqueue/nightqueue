@@ -33,7 +33,7 @@ async function jobRun(own, values, env) {
   if (values.project !== undefined || values.slug !== undefined) refuseNamedRun(own);
   const run = await resolveJobRun(own, env);
   if (!isSafeSegment(run.slug)) refuseMissingSlug(own);
-  return { jobId: own, project: run.project, projectId: run.projectId, slug: run.slug, origins: run.origins ?? [] };
+  return { jobId: own, project: run.project, projectId: run.projectId, slug: run.slug, origins: run.origins ?? [], ...(run.startBranch ? { startBranch: run.startBranch } : {}) };
 }
 
 // The run an operator names from outside a job, where nothing else can tell which one it is.

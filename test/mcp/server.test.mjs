@@ -765,7 +765,7 @@ test("queue_add refuses a `tier` with the line naming its removal and queues not
   for (const tier of ["simple", "complex", "urgent"]) {
     const refused = await client.callTool({ name: "queue_add", arguments: { project: "alpha", prompt: "fix the worker", tier } });
     assert.equal(refused.isError, true, tier);
-    assert.match(textOf(refused), /`tier` was removed: every job runs the one \/resolve pipeline \(one model per agent, QA mode chosen by `run check 05 --stage triage`\)/);
+    assert.match(textOf(refused), /`tier` was removed: every job runs the one \/resolve pipeline \(one model per agent, QA mode chosen by `run check 03`\)/);
     assert.match(textOf(refused), /older nightqueue plugin, update it/);
     assert.doesNotMatch(textOf(refused), /\.mjs:\d+/);
   }

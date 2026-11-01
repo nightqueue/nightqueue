@@ -29,7 +29,6 @@ job is refused; outside one, `--project <name> --slug <slug>` is required.
 ```sh
 nightqueue run dir            # the absolute directory of this run: runs/<project_id>/<slug>
 nightqueue run check 03       # is the plan there, with the sections the pipeline reads?
-nightqueue run check 05 --stage triage   # how much QA does this change get? QA-MODE: skip|lite|full
 nightqueue run log            # one line per phase of this run, plus the total
 nightqueue run log --json     # the same table as the only thing on stdout
 nightqueue run commit --message-file msg.txt   # stage what the implementation listed, and commit it
@@ -38,7 +37,6 @@ nightqueue run pr --body-file body.md          # check the body, push and open t
 nightqueue run start                           # the run's agent models and phases, as JSON
 nightqueue run start --routing                 # the default agent model table, as markdown
 nightqueue run publish --message-file msg.txt --body-file body.md      # check the body, commit once, push and open the PR
-nightqueue run publish --message-file msg.txt --body-file body.md --draft   # the same, as a draft PR that lists what still fails
 nightqueue run report                          # the tables of the final report, from the run's own records
 ```
 
@@ -70,7 +68,7 @@ model table of `src/queue/routing.mjs` as markdown (`| Agent | Model |`, one row
 agent), and resolves no run and writes nothing, inside a job or outside.
 
 `run publish --message-file <p> --body-file <p> [--files-from <p>] [--extra
-<pathspec>]... [--title <t>] [--draft] [--remove-worktree]` is `run commit` then `run pr` in
+<pathspec>]... [--title <t>] [--remove-worktree]` is `run commit` then `run pr` in
 one call, in the safe order: the commit message is checked against the commit template
 in effect (the `commitTemplate` of `run start`), then the body against the pull request
 template in effect, then the list is checked for refused paths and scratch files, and only
@@ -88,38 +86,11 @@ already happened (every listed path clean and the branch ahead of its base) prin
 `COMMITTED: <sha> (already committed)` instead of committing again. The title is
 `--title`, else the body's `# <title>` line, else the subject of the commit message.
 It prints the same `CONVENTION:`, `COMMITTED:`, `BRANCH:`, `PR:` and `WORKTREE:`
-lines as the two commands, which keep working unchanged.
-
-A run whose `state.json` holds `qaMode.mode` `skip` owes the plain line
-`QA: skipped — <state.qaMode.reason>`, outside fenced code and HTML comments. The text comes from
-the state, so a body without it or with another reason prints `REJECTED: the QA of this run was
-skipped, so the body carries this exact line under its test section's heading: <line>` and nothing
-is committed or pushed. The template's rules do not read that line, so a word of its reason never
-blocks the body. `lite`, `full` or no `qaMode` owe nothing. `run pr` does not enforce this line.
-
-`--draft` is how a run that reached its fix limit still delivers. The body lists each failure
-on a plain `Remaining failure: <what>` line outside fenced code and HTML comments, and those lines
-are the only source of the count: a `--draft` with none prints `REJECTED: a draft pull request
-lists each failure on a Remaining failure: <what> line of its QA/verification section`, and nothing
-is committed or pushed. The pull request opens with `gh pr create --draft`; when the branch already
-has one, its body is replaced and `gh pr ready <url> --undo` converts it. A draft prints `DRAFT:
-draft pull request — N failures remain` (`1 failure remains`) after `PR:`, records the `commit`
-phase with the verdict `Draft PR opened`, and writes `outcome.draft: true`,
-`outcome.draftFailures: N` and the top-level `draftPrUrl`. When gh refuses the draft, on either
-path, the run still delivers: a refused create is retried once without the flag, gh's reason goes
-to stderr, `outcome.draftFailures: N` is written with no `outcome.draft`, and `run report` reads
-`Happy: no — pull request — N failures remain (gh refused the draft)`. When the retry fails too,
-the command names gh's reason, exits non-zero and the branch stays pushed. Without the flag, the
-one change is on a run's own draft: an existing pull request named by `draftPrUrl` is turned ready
-with `gh pr ready <url>` and prints `READY: <url>`; when gh refuses, stderr says `<url> stays a
-draft: <reason>`, and `outcome.staysDraft: true` adds that line to the report's open items. Any
-other pull request is left alone, and a draft a person set stays one. A run's own draft whose body
-still lists such a line is not turned ready and not refused: it stays a draft, the `DRAFT:` line adds
-`(stays a draft: the body still lists a Remaining failure: line)`, and `outcome.draft: true` and
-`outcome.draftFailures: N` are written. `run pr` has no such flag, but it shares both rules for a
-run's own draft. A text counts as a failure when it holds a word and is not wholly one of `none`,
-`nothing`, the placeholder words (`n/a`, `TBD`, `TODO`) or a `<what>` hint, so `[a.test: 3 failing]`
-or `TODO: flaky e2e` count and `<what>`, `none`, `n/a`, `-` or symbols alone do not.
+lines as the two commands. The run's own wip commits fold into the single delivery commit
+with the listed paths, printing `FOLDED: <n> wip commits (<m> files)` and any path left out with
+its reason; the wip ref keeps naming the old commit. A `wip(` commit that is not the run's own,
+and any commit above an own one, is refused with a `REJECTED:` line (see the runtime contract).
+The push records the files of HEAD as `outcome.files`.
 
 `run report [--json]` renders the table of Phase 9 from `state.json`, the job log
 and `03-plan.md`: ONE table, `Step | Agent | Result | Note | Time`, one row per execution
@@ -129,18 +100,12 @@ suffixed `🔁N`), plus one row per planned step with no record at its nominal p
 verification; `8 Commit/PR` reads the recorded delivery; a last `9 Report` row that is
 always `⏳ this report` and never counts against Happy). `Result` is the status icon plus
 the verdict word; `Note` the reason and note recorded, `-` when empty; `Time` the measured
-duration, `-` when none. A QA the triage skipped reads `| 5 QA | 🛡️ QA-Guardian | ⏭️ | no new
-risk: <why> | <time> |` and does not turn the run non-happy; a `qa` `SKIPPED` with no recorded
-`qaMode` of `skip`, and a `SKIPPED` verdict of any other phase, stay `⚠️`. The `8 Commit/PR` note of a draft reads `draft pull request <url> — N
-failures remain`. Then the `**Total:**`, then a `Happy: yes|no — <first failing
-gate>` line decided by the fail-safe rule (failures a pull request leaves open, a termination, a
-failed verdict, a re-run, a planned phase never recorded, a plan whose
-`## Requires user confirmation` holds a filled question the run recorded no pause on, no delivery
-recorded), and last a `## Open items` section: the line naming the failures a pull request leaves
-open, `pull request <url> stays a draft` when gh would not turn it ready,
-one `- <item>` line per `dedicated ticket:
+duration, `-` when none. Then the `**Total:**`, then a `Happy: yes|no — <first failing
+gate>` line decided by the fail-safe rule (a termination, a failed verdict, a re-run, a
+planned phase never recorded, a plan with `## Requires user confirmation`, no delivery
+recorded), and last a `## Open items` section: one `- <item>` line per `dedicated ticket:
 yes` suggestion of the last QA round (`dedicated ticket: <suggestion>`) and per `OPEN:`
-line `run check 03`/`05`/`07` would print (`03 open: …`, `05 open: …`, `07 open: …`), or `- none`. The layout
+line `run check 05`/`07` would print (`05 open: …`, `07 open: …`), or `- none`. The layout
 it fills is `plugin/skills/resolve/references/report.md`, rendered by the same template
 engine as `phase_prompt`; the orchestrator never reads that file, it pastes the output. The
 command also records the run's telemetry (the row `pipeline_log` used to write), in both
@@ -156,15 +121,13 @@ or `not recorded: <reason>`). A failed
 record is the fixed open item `the run was not recorded in the telemetry` (the reason stays
 only in `recorded`), never a non-zero exit.
 
-`run check <NN> [--stage analyst|triage]` is the artifact gate of a phase: it reads
+`run check <NN> [--stage analyst]` is the artifact gate of a phase: it reads
 `<RUN_DIR>/<NN-phase>.md` and prints `OK` or `MISSING: <sections>` - the
 sections required are `## Brief` (`00`, the `00-brief.md` written by `run check 01`; an older plugin writes it by hand), `## Verdict` (with `Evidence level: <1|2|3|4>` as its first line), `## Validated brief`, `## Out of scope` and `## Request gaps` (`01`), `## File map`, `## Access map` and
 `## Third-party libraries` (`02`), the four sections of the plan (`03`),
 `## Modified files` (`04`), `## Proven breaks`, `## Break hypotheses`, `## Test recipe`,
 `## Validated risks`, `## Invalidated assumptions` and `## Verdict` (`05 --stage analyst`, the
-analyst's round of `05-qa.md`), `## Diff classification`, `## New risk` and `## QA mode`
-(`05 --stage triage`, the last `source: qa-triage` round of `05-qa.md`, whichever rounds follow
-it), `## Proven breaks`,
+analyst's round of `05-qa.md`), `## Proven breaks`,
 `## Validated risks`, `## Invalidated assumptions`, `## Generated PoCs` and `## Verdict` (`05`),
 `## Checks run` and `## Verification` (`06`) and `## Runtime verdict`
 (`07`, the runtime lane's `07-runtime.md`). Each list is the mandatory part of the
@@ -186,12 +149,13 @@ round leaves open (`round <k> of <file> leaves the HTML comment opened at line <
 and a round heading inside a comment the round itself closes (`line <Y> of <file> (`## Round
 <k>`) sits inside the HTML comment ...`), every part in line order, joined by `; `. `04` is the only artifact with a fallback: with no file list,
 the command derives one from the changes of the run's worktree (`git diff
---name-only HEAD` plus `git ls-files --others --exclude-standard`), writes the
-artifact and prints `GENERATED` - and a worktree with no change at all prints
+--name-only HEAD` plus `git ls-files --others --exclude-standard`) and from what
+the run's own wip commits would carry into the delivery, writes the
+artifact and prints `GENERATED` - and a worktree with no change at all and no wip to fold prints
 `MISSING: ## Modified files (no changed files)` without writing anything. The
-three answers exit `0`: they are findings the orchestrator routes (relaunch the phase once,
-then follow the phase's row), not failures of the command; only an unknown `<NN>`, a stage other than
-`05 --stage analyst|triage`, a retired id of the old numbering (`renumbered: use <NN>`) or a run that
+three answers exit `0`: they are findings the agent judges (relaunch the phase
+or terminate), not failures of the command; only an unknown `<NN>`, a stage other than
+`05 --stage analyst`, a retired id of the old numbering (`renumbered: use <NN>`) or a run that
 cannot be resolved exits `1`. In a full QA, `run check 05` first writes the consolidated round
 (`source: runtime consolidation`) of the analyst's and the provers' rounds and answers over it
 (see [Runtime contract](runtime-contract.md), "The QA consolidation is the check's own").
@@ -200,12 +164,7 @@ The first line keeps that meaning; the check also answers the phase's verdict an
 fact per line under a stable prefix, in this order: `VERDICT: <value>` (`01`, `05`,
 `05 --stage analyst`, `06`, `07`; a verdict outside the phase's values is a `MISSING:` of the verdict line),
 `GATE: <code> — <evidence>`, `OPEN: <text>`, `TYPE-MISMATCH: …`,
-`CONFIRM: requires-user-confirmation — <question>` or `CONFIRM: answered` (`03`, only with a
-filled question, one with a `?`; a confirmation section with a `?` no label shape places, or a
-filled label with no `?`, is a `MISSING:`),
-`QA-MODE: skip|lite|full — <why>` (`05 --stage triage`; a `skip` with a `logic` line must name a
-test file inside the run's worktree, which the check reads on disk, a code file by extension and
-outside a vendored directory, else `MISSING:`), `QA-STAGE: provers|skip`
+`CONFIRM: requires-user-confirmation`, `QA: lite|full` (`03`), `QA-STAGE: provers|skip`
 (`05 --stage analyst`), `INVALIDATED: <item>`, `DIFF-APPLIES: yes|no`,
 `NEEDS-DEVICE`, `index: …` (`02`), the `recorded: …` lines, and `SCRIPT:` followed by the
 device script, always last. A `MISSING:` first line prints nothing else but a `REPAIRED:` line. Headings are matched
@@ -217,17 +176,12 @@ by prefix, outside fenced code and HTML comments; round artifacts are read on th
 `## Brief` (`brief-missing`, `brief-field-empty`, `brief-type-invalid`,
 `brief-commit-type-invalid`), records the Type (`recorded: type <type>`), writes the Brief
 into `<RUN_DIR>/00-brief.md` (`recorded: brief 00-brief.md`), records the commit type
-(`recorded: commit type <c>`), the termination of a terminal verdict
-(`recorded: run_terminate triage <VERDICT>`), and, last, the slug
+(`recorded: commit type <c>`), the termination of a terminal verdict, `PROPOSE-ALTERNATIVE`
+included (`recorded: run_terminate triage <VERDICT>`), and, last, the slug
 (`recorded: slug <slug>`, or `(renamed from <old>; run dir <path>)` when a job run still on
 its provisional slug takes the Brief's `**Slug:**`), and `05 --stage analyst` records the stage A marker
-(`recorded: qa_stage_a <verdict>`) and no phase. `05 --stage triage` records the decision
-(`recorded: qa_mode <mode>`, `(already)` when the same mode stands, however it is worded) and, only
-on a `skip`, the `qa` phase with the verdict `SKIPPED`, once while it is the phase's last entry; a `lite` or `full` decision removes that `SKIPPED`, and its QA records its phase through
-`05`. `05` with `INVALIDATED:` lines records no
-`qa` (`recorded: none (INVALIDATED: …)`). `03` and `05` print no `GATE:`: what they find is an
-`OPEN:` line, and the only human stop of a run is `CONFIRM: requires-user-confirmation`. Every gate
-code, the completion rule and the record
+(`recorded: qa_stage_a <verdict>`) and no phase. `05` with `INVALIDATED:` lines records no
+`qa` (`recorded: none (INVALIDATED: …)`). Every gate code, the completion rule and the record
 semantics are in [Runtime contract](runtime-contract.md) ("The artifact check answers the gates").
 
 `run append 05 --group <id> --from <file> [--project <name> --slug <slug>]` appends one prover
@@ -267,7 +221,9 @@ refusal. Before committing it prints `CONVENTION: <...>` - the file that
 declares the repository's commit convention (a commitlint config, `.husky/`,
 `.gitmessage`, `CONTRIBUTING*` or a `commitlint` block in `package.json`) and
 what the last 30 subjects really read like - so the message is written to the
-shape the repository uses.
+shape the repository uses. It folds the run's own wip commits and refuses a foreign one exactly
+as `run publish` does, and `run pr` refuses a branch still carrying a wip commit, naming
+`run publish`.
 
 `run pr` first resolves the run's checkout and finds the pull request template
 in effect there, first match wins: `.github/PULL_REQUEST_TEMPLATE.md`,
@@ -505,8 +461,8 @@ integrations`); detection only reports, it never sets `expo.ota`.
 **Project models.** `project models <project> [--set <agent>=<model>]... [--unset
 <agent>]... [--json]` shows or changes the model each agent of the pipeline runs on for
 that project. The defaults live in `src/queue/routing.mjs` (`run start --routing` prints
-them): triager `sonnet`, explore `haiku`, architect `opus`, coder `opus`, qa-triage
-`sonnet`, qa-analyst `sonnet`, qa-prover `haiku`, verifier `haiku`, reflector `haiku` (the merger runs on
+them): triager `sonnet`, explore `haiku`, architect `opus`, coder `opus`, qa-analyst
+`sonnet`, qa-prover `haiku`, verifier `haiku`, reflector `haiku` (the merger runs on
 `sonnet` and is not overridable). With no option it prints one `<agent>=<model>
 (default|project)` line per agent; `--json` gives `{project, agents: {<agent>: {model,
 source}}}`. `--set` takes an agent of that list and a model among `opus`, `sonnet` and
@@ -528,7 +484,7 @@ job, and the operator agent may not run it. The value is stored in the project's
 under `verification.demoRepo`, kept by `project models` and `project integrations` writes
 and never shown by `project integrations`. The verifier, runtime and QA requests render
 it as `{{DEMO_REPO}}` (`none configured` without one: no real pull request, the scenario
-is reported as an open item).
+is reported as a gate).
 
 A path that starts with `-` has to come after `--` (`nightqueue init -- -weird-dir`),
 otherwise it is parsed as an unknown option and rejected.

@@ -35,16 +35,6 @@ test("subsections in any order, one bullet per test, with optional ✅/❌ and a
   assert.deepEqual(qaProblems(t, "pr-body-any-order", qa, ["automated", "browser", "emulator"]), []);
 });
 
-test("a `QA: skipped — <why>` line right under `## QA` passes beside the verifier's subsection", (t) => {
-  const qa = "QA: skipped — only documentation text changed, with no runtime effect.\n### Automated\n- `npm test` — PASSED ✅\n" + NOT_TESTED;
-  assert.deepEqual(qaProblems(t, "pr-body-qa-skipped", qa), []);
-});
-
-test("a `QA: skipped — <why>` line never stands in for the verifier's subsection", (t) => {
-  const qa = "QA: skipped — only documentation text changed, with no runtime effect.\n" + NOT_TESTED;
-  assert.deepEqual(qaProblems(t, "pr-body-qa-skipped-alone", qa), [NO_SUBSECTION]);
-});
-
 test("a table under `## QA` is refused, with or without outer pipes", (t) => {
   const piped = "| Method | Executed | Result |\n| --- | --- | --- |\n| Automated | `npm test` | PASSED |\n" + NOT_TESTED;
   assert.deepEqual(qaProblems(t, "pr-body-table", piped), [TABLE_REFUSAL, NO_SUBSECTION]);

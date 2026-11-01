@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { parseExploreArtifact } from "../../src/cli/explore-artifact.mjs";
-import { lastRound, lastRoundWithSource, nextFixLoop, nextRound, PHASE_ARTIFACTS, QA_ANALYST_STAGE, QA_STAGES, QA_TRIAGE_STAGE } from "../../src/queue/phase-artifacts.mjs";
+import { lastRound, nextFixLoop, nextRound, PHASE_ARTIFACTS, QA_ANALYST_STAGE } from "../../src/queue/phase-artifacts.mjs";
 import { RESUME_PHASE_ORDER } from "../../src/queue/resume.mjs";
 
 const EXPLORE_HEADINGS = ["## File map", "## Access map", "## Third-party libraries"];
@@ -45,26 +45,12 @@ test("each artifact names the canonical phase it completes, and only the brief a
 test("the triage, QA, verification and runtime artifacts declare where their verdict is read and the values it takes", () => {
   const verdicts = [...PHASE_ARTIFACTS].filter(([, artifact]) => artifact.verdict).map(([check, artifact]) => [check, artifact.verdict.label]);
   assert.deepEqual(verdicts, [
-    ["01", "## Verdict: <PROCEED|NO-CHANGE-NEEDED|NOT-REPRODUCIBLE>"],
+    ["01", "## Verdict: <PROCEED|NO-CHANGE-NEEDED|NOT-REPRODUCIBLE|NEEDS-CLARIFICATION|PROPOSE-ALTERNATIVE>"],
     ["05", "## Verdict: <APPROVED|NEEDS FIX|NEEDS DISCUSSION> as the first line"],
     ["06", "## Verification: <PASSED|PASSED-STATIC|FAILED>"],
     ["07", "## Runtime verdict: <CONFIRMED|NOT-MET|SYMPTOM-PERSISTS|NEEDS-DEVICE|UNAVAILABLE> as the first line"],
   ]);
   assert.equal(QA_ANALYST_STAGE.verdict.label, "## Verdict: <APPROVED|NEEDS FIX|NEEDS DISCUSSION> as the first line");
-});
-
-test("the QA triage stage is a round of the QA's artifact that completes no phase, and it has no verdict", () => {
-  assert.deepEqual(Object.keys(QA_STAGES), ["analyst", "triage"]);
-  assert.equal(QA_TRIAGE_STAGE.file, PHASE_ARTIFACTS.get("05").file);
-  assert.deepEqual([QA_TRIAGE_STAGE.phase, QA_TRIAGE_STAGE.rounds, QA_TRIAGE_STAGE.verdict], [null, true, undefined]);
-  assert.deepEqual(QA_TRIAGE_STAGE.sections, ["## Diff classification", "## New risk", "## QA mode"]);
-});
-
-test("`lastRoundWithSource` is the last round of that source, wherever it sits, or null", () => {
-  const text = "## Round 1\nsource: qa-triage\nfirst\n## Round 2\n**source: `qa-triage`**\nsecond\n## Round 3\nsource: prover · group: g\nthird\n";
-  assert.deepEqual(lastRoundWithSource(text, QA_TRIAGE_STAGE.source), { number: 2, text: "## Round 2\n**source: `qa-triage`**\nsecond" });
-  assert.equal(lastRoundWithSource("source: qa-triage\n", QA_TRIAGE_STAGE.source), null, "a text with no round has no such round");
-  assert.equal(lastRoundWithSource("## Round 1\nno source\nsource: qa-triage\n", QA_TRIAGE_STAGE.source), null, "the source is the round's first line");
 });
 
 test("`lastRound` is the last `## Round` up to the end, or the whole text with no round", () => {

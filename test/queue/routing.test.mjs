@@ -27,7 +27,6 @@ test("every agent has its decided default model", () => {
     explore: "haiku",
     architect: "opus",
     coder: "opus",
-    "qa-triage": "sonnet",
     "qa-analyst": "sonnet",
     "qa-prover": "haiku",
     verifier: "haiku",
@@ -35,7 +34,7 @@ test("every agent has its decided default model", () => {
     merger: "sonnet",
   });
   assert.deepEqual(MODEL_NAMES, ["opus", "sonnet", "haiku"]);
-  assert.deepEqual(OVERRIDABLE_AGENTS, ["triager", "explore", "architect", "coder", "qa-triage", "qa-analyst", "qa-prover", "verifier", "reflector"]);
+  assert.deepEqual(OVERRIDABLE_AGENTS, ["triager", "explore", "architect", "coder", "qa-analyst", "qa-prover", "verifier", "reflector"]);
 });
 
 test("the printed model table reads exactly as the fixture", () => {
@@ -77,7 +76,7 @@ test("a stored merger override is ignored: the merger always runs on its default
 test("an agent or a model outside the accepted ones is refused, naming them", () => {
   assert.equal(requireAgent("coder"), "coder");
   assert.equal(requireModel("haiku"), "haiku");
-  assert.throws(() => requireAgent("merger"), /unknown agent `merger`; accepted: triager, explore, architect, coder, qa-triage, qa-analyst, qa-prover, verifier, reflector/);
+  assert.throws(() => requireAgent("merger"), /unknown agent `merger`; accepted: triager, explore, architect, coder, qa-analyst, qa-prover, verifier, reflector/);
   assert.throws(() => requireModel("gpt"), /unknown model `gpt`; accepted: opus, sonnet, haiku/);
 });
 

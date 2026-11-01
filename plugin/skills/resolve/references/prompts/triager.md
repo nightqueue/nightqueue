@@ -35,19 +35,19 @@ The request compressed (≤ 30 lines, never the raw text dragged forward); `run 
 **Stages:** <the request's numbered stages, in their order, verbatim — only when the request has them, omit the line otherwise>
 
 ## Request critique
-Whether the request is worth executing as asked; a doubt it raises goes to `## Request gaps`, never to a stop.
+Whether the request is worth executing as asked; it is what a `PROPOSE-ALTERNATIVE` verdict rests on.
 **Core assumption:** <what the request assumes to be true>
 **What would refute it:** <concrete evidence that would invalidate the assumption>
 **XY check:** <is the request a self-prescribed solution to a bigger problem? which one? — or `no`>
 **Simpler alternative:** <a cheaper path to the same Expected outcome — or `there is none`>
 
-A verdict other than `PROCEED` needs concrete evidence, never a style opinion. An empty repository is greenfield, never a reason to stop. An ambiguity in reading the request, a missing requirement or a cheaper alternative is a `## Request gaps` item the architect decides, never a stop. A request that conditions the work on another job's pull request ("after J-N", "once PR #N is merged", "depends on job …") is `PROCEED`, with exactly this as a `## Request gaps` item: {{DEPENDENT_REFUSAL}}
+A verdict other than `PROCEED` needs concrete evidence, never a style opinion. An empty repository is greenfield, never a reason to stop. An ambiguity in reading the request is a `## Request gaps` item, never a stop. A request that conditions the work on another job's pull request ("after J-N", "once PR #N is merged", "depends on job …") is `PROPOSE-ALTERNATIVE`, with exactly this as its open item: {{DEPENDENT_REFUSAL}}
 
-## Verdict: PROCEED | NO-CHANGE-NEEDED | NOT-REPRODUCIBLE
+## Verdict: PROCEED | NO-CHANGE-NEEDED | NOT-REPRODUCIBLE | NEEDS-CLARIFICATION | PROPOSE-ALTERNATIVE
 
 Evidence level: <1-4>
 
-The `Evidence level:` line is the first line under `## Verdict`, on every verdict, with one digit. The verdict decides whether the work goes on: `PROCEED` continues; the other two end it, on the evidence they state.
+The `Evidence level:` line is the first line under `## Verdict`, on every verdict, with one digit. The verdict decides whether the work goes on: `PROCEED` continues; every other verdict stops it, and `NEEDS-CLARIFICATION` and `PROPOSE-ALTERNATIVE` wait for the answer of the person who asked.
 
 ## Diagnosis  (bug only)
 - Exact symptom (target): <what the user observes, in mechanical terms>
@@ -87,9 +87,9 @@ No signal → `- None.`
 - Symptom fix (leaf): <what the literal fix would do, and why it enumerates the variants>
 - Suspected root + direction: <the change that would dissolve the family without enumerating it>
 
-## Open items  (only on `NOT-REPRODUCIBLE`)
-- <evidence of the non-reproduction, or what was left open>
-This section is what the person who asked reads.
+## Open items  (only when the verdict is not PROCEED)
+- <evidence of the non-reproduction, missing data, or open questions>
+On `PROPOSE-ALTERNATIVE`: the alternative and its trade-off, in ≤ 5 lines. On `NEEDS-CLARIFICATION`: one objective question. This section is what the person who asked reads before answering.
 
 {{>_shell-rule}}
 

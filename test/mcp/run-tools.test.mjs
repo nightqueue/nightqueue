@@ -10,9 +10,7 @@ import { runDir } from "../../src/config/paths.mjs";
 import { openDb } from "../../src/memory/db.mjs";
 import { addJob, claimJobById, persistRunFacts } from "../../src/memory/jobs.mjs";
 import { saveLesson } from "../../src/memory/lessons.mjs";
-import { openQuestion, questionDigest } from "../../src/queue/gate-question.mjs";
-import { clearRunOutcome, decideResume } from "../../src/queue/resume.mjs";
-import { applyRetry } from "../../src/queue/retry.mjs";
+import { decideResume } from "../../src/queue/resume.mjs";
 import { recordOutcome, recordPhaseDone, recordPrUrl, recordRunFields } from "../../src/queue/run-state.mjs";
 import { ensureProject, makeHome, makeProject, projectIdOf } from "../../test-support/memory.mjs";
 import { addWorktree, git, gitVars, makeDirty, publishedCheckout } from "../../test-support/worktrees.mjs";
@@ -354,60 +352,6 @@ test("`run_outcome` composes a gate notice from the run's artifact and question,
   assert.equal(composed.notice, expected);
   assert.deepEqual(readState(env, "alpha", SLUG).outcome.notice, expected);
   assert.equal(readState(env, "alpha", SLUG).outcome.status, "gate");
-  assert.equal("gateQuestionDigest" in readState(env, "alpha", SLUG), false, "a section with no filled question has no digest");
-
-  writeFileSync(join(dir, "03-plan.md"), "## Requires user confirmation\n**Question:** Approve C1?\n");
-  payloadOf(await client.callTool({ name: "run_outcome", arguments: { status: "gate", from_artifact: { file: "03-plan.md", section: "## Requires user confirmation" } } }));
-  assert.equal(readState(env, "alpha", SLUG).gateQuestionDigest, questionDigest("approve c1?"));
-});
-
-test("a gate records the digest when it shows the plan's question and clears it otherwise", async (t) => {
-  const { env, job } = makeRunningJob(t, "mcp-run-tools-gate-digest");
-  const dir = runDir(ensureProject(env, "alpha"), SLUG, env);
-  mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, "03-plan.md"), "## Requires user confirmation\n**Question:** Approve C1?\n\n## Identified risks\n- [R1] a.\n");
-  const client = await connect(t, { ...env, NIGHTQUEUE_JOB_ID: String(job.id) });
-  const digest = questionDigest("Approve C1?");
-  const digestAfter = async (args) => {
-    payloadOf(await client.callTool({ name: "run_outcome", arguments: args }));
-    return readState(env, "alpha", SLUG).gateQuestionDigest;
-  };
-
-  assert.equal(await digestAfter({ status: "gate", question: "Approve C1?" }), digest, "a question-only gate");
-  assert.equal(await digestAfter({ status: "done" }), digest, "a delivery leaves it");
-  assert.equal(await digestAfter({ status: "gate", notice: "runtime gate: a device is needed" }), undefined, "a free gate clears it");
-  assert.equal(await digestAfter({ status: "gate", notice: "Before going on: approve c1? Reply on the job." }), digest, "a free notice carrying the question");
-  assert.equal(await digestAfter({ status: "gate", from_artifact: { file: "03-plan.md", section: "## Identified risks" } }), undefined, "another section of the plan");
-  assert.equal(await digestAfter({ status: "gate", question: "Do you approve the first change?" }), undefined, "a paraphrase");
-  assert.equal(await digestAfter({ status: "gate", from_artifact: { file: "03-plan.md", section: "## Requires user confirmation" } }), digest, "the plan's own section");
-});
-
-test("a question-only pause, answered, reads as answered on the resumed check and survives the delivery", async (t) => {
-  const { env, job } = makeRunningJob(t, "mcp-run-tools-answered-chain");
-  const projectId = ensureProject(env, "alpha");
-  const dir = runDir(projectId, SLUG, env);
-  mkdirSync(dir, { recursive: true });
-  const plan = "## Implementation plan\n- x\n\n## Requires user confirmation\n**Question:** Approve C1?\n\n## Assumptions\n- [P1] a.\n\n## Pre-mortem\n- [PM1] a.\n\n## Identified risks\n- [R1] a.\n";
-  writeFileSync(join(dir, "03-plan.md"), plan);
-  const jobEnv = { ...env, NIGHTQUEUE_JOB_ID: String(job.id) };
-  const client = await connect(t, jobEnv);
-  recordRunFields({ projectId, slug: SLUG, fields: { type: "feature/refactor" }, env });
-  const check = async () => {
-    const out = [];
-    await run(["run", "check", "03"], { env: jobEnv, out: (line) => out.push(line), err: (line) => out.push(line), stdout: { write: () => {} } });
-    return out;
-  };
-  const paused = await check();
-  assert.ok(paused.includes("CONFIRM: requires-user-confirmation — Approve C1?"), paused.join("\n"));
-
-  payloadOf(await client.callTool({ name: "run_outcome", arguments: { status: "gate", question: "Approve C1?" } }));
-  openDb(env).prepare("UPDATE jobs SET status = 'gate' WHERE id = ?").run(job.id);
-  await applyRetry({ id: job.id, note: "go ahead", env });
-  clearRunOutcome({ projectId, slug: SLUG, env });
-
-  assert.ok((await check()).includes("CONFIRM: answered"));
-  recordOutcome({ projectId, slug: SLUG, status: "done", env });
-  assert.equal(openQuestion(plan, readState(env, "alpha", SLUG)), false, "the delivery lost the answered pause");
 });
 
 test("a refused `run_outcome` notice says why and that nothing was recorded, so the run can fix it and emit again", async (t) => {

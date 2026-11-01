@@ -4,8 +4,8 @@ import { UserError } from "../config/errors.mjs";
 import { writeFileAtomic } from "../config/store.mjs";
 import { FILE_LIST } from "../queue/file-list.mjs";
 import { CHECK_CONTEXT_FILES, evaluateCheck, fileListResult, repairedLine, roundDefectParts } from "../queue/check-contract.mjs";
-import { PHASE_ARTIFACTS, QA_STAGES, withClosedFence } from "../queue/phase-artifacts.mjs";
-import { jobOperatorNote } from "../queue/job-prompt.mjs";
+import { PHASE_ARTIFACTS, withClosedFence } from "../queue/phase-artifacts.mjs";
+import { jobPromptText } from "../queue/job-prompt.mjs";
 import { defaultGitImpl } from "../queue/preflight.mjs";
 import { consolidationNumbersOf, consolidationOf } from "../queue/qa-rounds.mjs";
 import { readRunState } from "../queue/resume.mjs";
@@ -17,12 +17,14 @@ import { APPEND_USAGE, appendedText, runAppend } from "./run-append.mjs";
 import { saveIndexFromText } from "./index-save.mjs";
 import { realPath } from "./paths.mjs";
 import { findPrTemplate } from "./pr-template.mjs";
-import { citedTestGaps } from "./qa-skip-tests.mjs";
 import { durationCell, phaseRows, readJobLog, readRequiredFile, requireRunState, resolveRun, RUN_OPTIONS, worktreeOf } from "./run-context.mjs";
 import {
   bodyProblemLines,
+  branchWips,
   commitPaths,
+  foldedPaths,
   listedFromArtifact,
+  nothingToCommit,
   openPullRequest,
   PUBLISH_USAGE,
   refusedLines,
@@ -30,13 +32,14 @@ import {
   runPublish,
   scratchProblemLines,
   stageable,
+  wipProblemLines,
 } from "./run-publish.mjs";
 import { REPORT_USAGE, runReport } from "./run-report.mjs";
 import { START_USAGE, runStart } from "./run-start.mjs";
 import { SECRETS_SWEEP_USAGE, runSecretsSweep } from "./secrets-sweep.mjs";
 
 const USAGE = {
-  check: "nightqueue run check <NN> [--stage analyst|triage] [--project <name> --slug <slug>]",
+  check: "nightqueue run check <NN> [--stage analyst] [--project <name> --slug <slug>]",
   append: APPEND_USAGE,
   commit: "nightqueue run commit --message-file <path> [--files-from <path>] [--extra <pathspec>]",
   dir: "nightqueue run dir [--project <name> --slug <slug>]",
@@ -124,10 +127,12 @@ function writeFileList(path, files) {
   }
 }
 
-// The gate of the implementation artifact, the only one with a fallback: no file list means deriving it from the worktree's own changes.
+// The gate of the implementation artifact, the only one with a fallback: no file list means deriving it from the worktree's own changes and what the run's own wip commits carry.
 function checkFileList(run, path, text, ctx) {
   if (listsFiles(text)) return "OK";
-  const files = changedFiles(worktreeOf(run, ctx.env), ctx.gitImpl ?? defaultGitImpl);
+  const cwd = worktreeOf(run, ctx.env);
+  const carried = foldedPaths(cwd, run, ctx.env).map((file) => join(cwd, file));
+  const files = [...new Set([...changedFiles(cwd, ctx.gitImpl ?? defaultGitImpl), ...carried])].sort();
   if (files.length === 0) return `MISSING: ${FILE_LIST} (no changed files)`;
   writeFileList(path, files);
   return "GENERATED";
@@ -177,8 +182,8 @@ export function validConsolidatedText(file, raw, consolidation) {
   return text;
 }
 
-// The gate of one phase, evaluated against the check contract on the artifact, the run files its rules read and the job's operator note; a round artifact gets its open fence closed first.
-function checkArtifact({ run, check, stage, state, operatorNote, ctx }) {
+// The gate of one phase, evaluated against the check contract on the artifact, the run files its rules read and the job's prompt; a round artifact gets its open fence closed first.
+function checkArtifact({ run, check, stage, state, prompt, ctx }) {
   const artifact = PHASE_ARTIFACTS.get(check);
   const path = join(run.runDir, artifact.file);
   if (artifact.sections[0] === FILE_LIST) {
@@ -186,17 +191,16 @@ function checkArtifact({ run, check, stage, state, operatorNote, ctx }) {
     return fileListResult(first, readArtifact(path));
   }
   const repaired = artifact.rounds ? repairRoundArtifact(run, path, ctx.env) : null;
-  const consolidationGaps = check === "05" && stage === null ? consolidateQa(run, path, ctx.env) : [];
+  const gaps = check === "05" && stage === null ? consolidateQa(run, path, ctx.env) : [];
   const files = [...new Set([...CHECK_CONTEXT_FILES, artifact.file])];
   const texts = Object.fromEntries(files.map((file) => [file, readArtifact(join(run.runDir, file))]));
-  const gaps = stage === "triage" ? citedTestGaps(run, texts[artifact.file], ctx.env) : consolidationGaps;
-  return { ...evaluateCheck({ check, stage, texts, state, gaps, operatorNote }), repaired };
+  return { ...evaluateCheck({ check, stage, texts, state, gaps, prompt }), repaired };
 }
 
-// The stage a check names, refused unless it is a QA stage on check `05`; null without one.
+// The stage a check names, refused unless it is `analyst` on check `05`; null without one.
 function checkStage(check, value) {
   if (value === undefined) return null;
-  if (!Object.hasOwn(QA_STAGES, value) || check !== "05") throw new UserError(`unknown stage \`${value}\` of check \`${check}\`; the stages are \`05 --stage ${Object.keys(QA_STAGES).join("|")}\``);
+  if (value !== "analyst" || check !== "05") throw new UserError(`unknown stage \`${value}\` of check \`${check}\`; the only stage is \`05 --stage analyst\``);
   return value;
 }
 
@@ -231,10 +235,16 @@ async function runCheck(argv, ctx) {
   const stage = checkStage(check, values.stage);
   const run = await resolveRun(values, ctx);
   const state = readRunState({ projectId: run.projectId, slug: run.slug, env: ctx.env });
-  const operatorNote = check === "03" ? await jobOperatorNote(run, ctx.env) : null;
-  const result = checkArtifact({ run, check, stage, state, operatorNote, ctx });
+  const prompt = check === "03" ? await jobPromptText(run, ctx.env) : null;
+  const result = checkArtifact({ run, check, stage, state, prompt, ctx });
   printCheck(result, await checkEffectLines({ run, check, stage, result, state, ctx }), ctx);
   return 0;
+}
+
+// Prints why `run commit` staged nothing; answers its exit code.
+function commitRefused(lines, ctx) {
+  for (const line of lines) ctx.out(line);
+  return 1;
 }
 
 // Runs `run commit`, which stages what the implementation artifact declared — and nothing the pipeline never commits — and commits it.
@@ -246,13 +256,12 @@ async function runCommit(argv, ctx) {
   const run = await resolveRun(values, ctx);
   const cwd = worktreeOf(run, ctx.env);
   const { artifact, listed } = listedFromArtifact(run, values["files-from"]);
-  const { paths, refused } = stageable({ cwd, listed, extras: values.extra ?? [], env: ctx.env });
-  if (refused.length > 0) {
-    for (const line of refusedLines(refused)) ctx.out(line);
-    return 1;
-  }
-  if (paths.length === 0) throw new UserError(`${artifact} lists no file under \`${FILE_LIST}\`: there is nothing to commit`);
-  return await commitPaths({ run, cwd, paths, messageFile, ctx });
+  const wips = branchWips(cwd, run, ctx.env);
+  if (wips.problems.length > 0) return commitRefused(wips.problems, ctx);
+  const { paths, refused, fold } = stageable({ cwd, listed, extras: values.extra ?? [], env: ctx.env, fold: wips.fold, runDir: run.runDir });
+  if (refused.length > 0) return commitRefused(refusedLines(refused), ctx);
+  if (nothingToCommit(paths, fold)) throw new UserError(`${artifact} lists no file under \`${FILE_LIST}\`: there is nothing to commit`);
+  return await commitPaths({ run, cwd, paths, messageFile, fold, ctx });
 }
 
 // Refuses a `run pr` call that asks for nothing, or for both the template query and a publication at once.
@@ -287,7 +296,7 @@ async function runPr(argv, ctx) {
   if (values.template === true) return 0;
   const bodyFile = resolve(values["body-file"]);
   const body = readRequiredFile(bodyFile, "--body-file");
-  const lines = [...bodyProblemLines({ run, template, body }), ...scratchProblemLines(cwd, run, ctx.env)];
+  const lines = [...bodyProblemLines({ run, template, body }), ...scratchProblemLines(cwd, run, ctx.env), ...wipProblemLines(cwd, run, ctx.env)];
   if (lines.length > 0) {
     for (const line of lines) ctx.out(line);
     ctx.out("nothing was pushed and no pull request was opened: fix the problems above and call `nightqueue run pr` again");

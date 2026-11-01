@@ -1,3 +1,0 @@
-OK
-CONFIRM: answered
-recorded: phase_done architecture OK

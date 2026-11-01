@@ -1,3 +1,4 @@
+import { UserError } from "../config/errors.mjs";
 import { runGit, runGitAsync } from "../host/git.mjs";
 import { jobRef } from "../memory/refs.mjs";
 import { neverCommittedReason } from "./never-committed.mjs";
@@ -11,6 +12,7 @@ export const WIP_KEPT_PREFIX = "Wip commit: ";
 export const WIP_REF_PREFIX = "refs/nightqueue/wip/";
 const WIP_LINE_PREFIXES = [WIP_PREFIX, WIP_RETRY_PREFIX, WIP_NEW_JOB_PREFIX, WIP_KEPT_PREFIX];
 const WIP_SUBJECT_PREFIX = "wip(";
+const WIP_SUBJECT_SLUG = /^wip\(([^)]+)\): /;
 const REASON_MAX = 120;
 const PATH_CHUNK = 500;
 const DEFAULT_BRANCHES = ["main", "master"];
@@ -252,91 +254,139 @@ export async function commitWipAsync({ cwd, slug, phase, reason, prior = null, s
   }
 }
 
-// Gives a runtime wip commit back as uncommitted changes (a mixed reset to its parent), only when a wip ref names HEAD; answers restored, none, moved or failed, and never rejects.
-export async function restoreWip({ cwd, env = process.env, gitImpl = runGitAsync } = {}) {
-  try {
-    return await runStepsAsync(restoreWipSteps(cwd), { cwd, env, gitImpl });
-  } catch (err) {
-    return { status: "failed", reason: String(err?.message ?? err).split("\n")[0] };
-  }
-}
-
 // The wip refs that name a commit, in ref order.
 function* wipRefsAt(commit) {
   const listed = (yield* gitText(["for-each-ref", `--points-at=${commit}`, "--format=%(refname)", WIP_REF_PREFIX])) ?? "";
   return listed.split("\n").filter(Boolean);
 }
 
-// The steps of `restoreWip`, which may throw.
-function* restoreWipSteps(cwd) {
-  const head = yield* gitText(["rev-parse", "--verify", "-q", "HEAD"]);
-  if (head === null) return { status: "failed", reason: `no commit HEAD readable in ${cwd}` };
-  const [ref] = yield* wipRefsAt(head);
-  if (!ref) return { status: "none", head };
-  const subject = (yield* gitText(["log", "-1", "--format=%s", "HEAD"])) ?? "";
-  if (!subject.startsWith(WIP_SUBJECT_PREFIX)) return { status: "moved", head, subject };
-  const { short, parent } = yield* commitIds(head);
-  if (!parent) return { status: "failed", reason: `the wip commit ${short} has no parent to give it back onto` };
-  const branch = (yield* gitText(["symbolic-ref", "--quiet", "--short", "HEAD"])) || null;
-  const reset = yield ["reset", "--mixed", "-q", parent];
-  if (!reset?.ok) return { status: "failed", reason: gitFailure(reset, "git reset of the wip commit failed") };
-  return { status: "restored", commit: head, short, subject, ref, parent, branch };
+// The commits a tip adds to a base, newest first, each with its subject.
+function* branchCommits(base, tip = "HEAD") {
+  const listed = yield ["log", "--topo-order", "--format=%H%x00%s", `${base}..${tip}`];
+  if (!listed?.ok) throw new UserError(gitFailure(listed, "git could not list the commits the branch adds"));
+  return String(listed.stdout ?? "").split("\n").filter(Boolean).map((line) => {
+    const [commit, subject = ""] = line.split("\0");
+    return { commit, subject };
+  });
 }
 
-// Puts the branch back on a restored wip commit at the end of an attempt (a mixed reset, no new commit), only while HEAD is still its parent; answers reanchored, none, moved or failed, and never rejects.
-export async function reanchorWip({ cwd, wip, env = process.env, gitImpl = runGitAsync } = {}) {
+// Every wip ref by name, and the ref naming each commit.
+function* wipRefIndex() {
+  const listed = yield ["for-each-ref", "--format=%(objectname) %(refname)", WIP_REF_PREFIX];
+  if (!listed?.ok) throw new UserError(gitFailure(listed, "git could not list the runtime's wip refs"));
+  const pairs = String(listed.stdout ?? "").split("\n").map((line) => line.trim().split(" ")).filter(([object, ref]) => object && ref);
+  return { names: new Set(pairs.map(([, ref]) => ref)), byCommit: new Map(pairs) };
+}
+
+// Tells whether a commit is the runtime's own for this run: a `wip(<slug>)` subject of an allowed slug, whose wip ref reaches it.
+function* isRunWip({ commit, subject }, { refs, slugs, anySlug }) {
+  const slug = WIP_SUBJECT_SLUG.exec(subject)?.[1];
+  if (!slug || !(anySlug || slugs.includes(slug)) || !refs.names.has(wipRef(slug))) return false;
+  const reached = yield ["merge-base", "--is-ancestor", commit, wipRef(slug)];
+  return reached?.ok === true;
+}
+
+// The refusal of a commit that is not the run's own and looks like a wip one (its subject or a wip ref naming it), or null.
+function foreignWipLine({ commit, subject, ref }) {
+  if (!ref && !subject.startsWith(WIP_SUBJECT_PREFIX)) return null;
+  return `REJECTED: the branch carries the wip commit ${commit.slice(0, 7)} (${ref ?? subject}), which is not this run's own and is never pushed: stop and record it as an open item; the operator squashes it`;
+}
+
+// The refusal of a commit above a wip commit, which a fold would squash into the delivery.
+function buriedLine({ commit, subject }, wip) {
+  return `REJECTED: the commit ${commit.slice(0, 7)} (${subject}) sits above the wip commit ${wip.commit.slice(0, 7)}, which is never pushed: stop and record it as an open item; the operator squashes it`;
+}
+
+// The refusals of what the branch adds, given each commit with its ownership and the index of the oldest own one (-1 for none).
+function ownershipProblems(commits, oldestOwn) {
+  return commits.flatMap((entry, index) => {
+    if (entry.own) return [];
+    const foreign = foreignWipLine(entry);
+    if (foreign) return [foreign];
+    return index < oldestOwn ? [buriedLine(entry, commits[oldestOwn])] : [];
+  });
+}
+
+// What folding the own commits takes: the commit they sit on and the paths they carry; or the refusal of a wip with no parent.
+function* foldOf(commits, oldestOwn) {
+  const oldest = commits[oldestOwn];
+  const parent = yield* gitText(["rev-parse", "--verify", "-q", `${oldest.commit}^`]);
+  if (!parent) return { problems: [`REJECTED: the wip commit ${oldest.commit.slice(0, 7)} has no parent, so it cannot be folded and is never pushed: stop and record it as an open item`], fold: null };
+  const head = commits[0].commit;
+  const changed = yield ["diff", "--name-only", "-z", "--no-renames", parent, head];
+  if (!changed?.ok) throw new UserError(gitFailure(changed, "git could not list the paths of the wip commits"));
+  const carried = String(changed.stdout ?? "").split("\0").filter(Boolean);
+  return { problems: [], fold: { head, parent, commits: commits.filter((entry) => entry.own).map((entry) => entry.commit), carried } };
+}
+
+// Each commit with the wip ref naming it and whether it is the run's own.
+function* withOwnership(entries, owner) {
+  const commits = [];
+  for (const entry of entries) commits.push({ ...entry, ref: owner.refs.byCommit.get(entry.commit) ?? null, own: yield* isRunWip(entry, owner) });
+  return commits;
+}
+
+// The paths the index holds against HEAD.
+function* stagedPaths() {
+  const staged = yield ["diff", "--cached", "--name-only", "-z", "--no-renames"];
+  if (!staged?.ok) throw new UserError(gitFailure(staged, "git could not list the staged paths"));
+  return String(staged.stdout ?? "").split("\0").filter(Boolean);
+}
+
+// The fold a kill cut between its reset and its commit: ORIG_HEAD holds only the run's own commits above HEAD and the index only what they carry; null for any other state.
+function* interruptedFold(owner) {
+  const tip = yield* gitText(["rev-parse", "--verify", "-q", "ORIG_HEAD"]);
+  if (!tip || !(yield ["merge-base", "--is-ancestor", "HEAD", tip])?.ok) return null;
+  const commits = yield* withOwnership(yield* branchCommits("HEAD", tip), owner);
+  if (commits.length === 0 || !commits.every((entry) => entry.own)) return null;
+  const staged = yield* stagedPaths();
+  const { fold } = yield* foldOf(commits, commits.length - 1);
+  return fold && staged.length > 0 && staged.every((path) => fold.carried.includes(path)) ? { ...fold, interrupted: true } : null;
+}
+
+// The steps of `readBranchWips`, which may throw.
+function* branchWipsSteps({ base, slugs, anySlug }) {
+  const owner = { refs: yield* wipRefIndex(), slugs, anySlug };
+  const commits = yield* withOwnership(yield* branchCommits(base), owner);
+  const oldestOwn = commits.findLastIndex((entry) => entry.own);
+  const problems = ownershipProblems(commits, oldestOwn);
+  if (problems.length > 0) return { problems, fold: null };
+  return oldestOwn < 0 ? { problems, fold: yield* interruptedFold(owner) } : yield* foldOf(commits, oldestOwn);
+}
+
+// Reads, without changing anything, the wip commits the branch adds to its base: the refusals of the foreign or buried ones, or the fold of the run's own; throws a `UserError` when git cannot answer.
+export function readBranchWips({ cwd, base, slugs, anySlug = false, env = process.env, gitImpl = runGit } = {}) {
+  return runStepsSync(branchWipsSteps({ base, slugs, anySlug }), { cwd, env, gitImpl });
+}
+
+// The steps of `wipAtHead`, which may throw.
+function* wipAtHeadSteps() {
+  const commit = yield* gitText(["rev-parse", "--verify", "-q", "HEAD"]);
+  const subject = commit ? ((yield* gitText(["log", "-1", "--format=%s", commit])) ?? "") : "";
+  const slug = WIP_SUBJECT_SLUG.exec(subject)?.[1];
+  if (!slug || !(yield* isRunWip({ commit, subject }, { refs: yield* wipRefIndex(), slugs: [slug] }))) return null;
+  const branch = (yield* gitText(["symbolic-ref", "--quiet", "--short", "HEAD"])) || null;
+  return { status: "committed", commit, short: (yield* commitIds(commit)).short, branch, ref: wipRef(slug) };
+}
+
+// The runtime's wip commit HEAD of a worktree sits on, whichever run made it, without changing anything; null for any other HEAD or when git cannot answer.
+export async function wipAtHead({ cwd, env = process.env, gitImpl = runGitAsync } = {}) {
   try {
-    return await runStepsAsync(reanchorWipSteps(cwd, wip), { cwd, env, gitImpl });
-  } catch (err) {
-    return { status: "failed", reason: String(err?.message ?? err).split("\n")[0] };
+    return await runStepsAsync(wipAtHeadSteps(), { cwd, env, gitImpl });
+  } catch {
+    return null;
   }
 }
 
-// Why a restored wip cannot be re-anchored on the current HEAD (other than HEAD having moved), or null when it can.
-function* reanchorRefusal(wip, head) {
-  if ((yield* gitText(["rev-parse", "--verify", "-q", `${wip.commit}^`])) !== head) return `the wip commit ${wip.commit} is not a child of HEAD`;
-  if ((yield* wipRefsAt(wip.commit)).length === 0) return `no wip ref names the commit ${wip.commit}`;
-  const branch = (yield* gitText(["symbolic-ref", "--quiet", "--short", "HEAD"])) || null;
-  return branch === wip.branch ? null : `HEAD is on ${branch ?? "a detached HEAD"}, not on the wip's branch ${wip.branch}`;
-}
-
-// The steps of `reanchorWip`, which may throw.
-function* reanchorWipSteps(cwd, wip) {
-  if (wip?.restored !== true || typeof wip.commit !== "string" || !wip.commit) return { status: "none" };
-  const head = yield* gitText(["rev-parse", "--verify", "-q", "HEAD"]);
-  if (head === null) return { status: "failed", reason: `no commit HEAD readable in ${cwd}` };
-  if (head !== wip.parent) return { status: "moved", head };
-  const refusal = yield* reanchorRefusal(wip, head);
-  if (refusal) return { status: "failed", reason: refusal };
-  const reset = yield ["reset", "--mixed", "-q", wip.commit];
-  if (!reset?.ok) return { status: "failed", reason: gitFailure(reset, "git reset onto the wip commit failed") };
-  return { status: "reanchored", commit: wip.commit };
-}
-
-// Tells whether the worktree still carries the changes of a wip commit given back earlier (a change on one of its paths), or whether they were discarded by hand; answers carried, discarded or failed, and never rejects.
-export async function worktreeCarriesWip({ cwd, wip, env = process.env, gitImpl = runGitAsync } = {}) {
-  try {
-    return await runStepsAsync(carriesWipSteps(wip), { cwd, env, gitImpl });
-  } catch (err) {
-    return { status: "failed", reason: String(err?.message ?? err).split("\n")[0] };
-  }
-}
-
-// The steps of `worktreeCarriesWip`, which may throw.
-function* carriesWipSteps(wip) {
-  if (typeof wip?.commit !== "string" || !wip.commit) return { status: "failed", reason: "the wip record names no commit" };
-  const paths = new Set(yield* wipFiles(wip.commit, wip));
-  if (paths.size === 0) return { status: "failed", reason: `the paths of the wip commit ${wip.commit} could not be read` };
-  const status = yield ["status", "--porcelain", "-z", "--untracked-files=all"];
-  if (!status?.ok) return { status: "failed", reason: gitFailure(status, "git status failed") };
-  const carried = statusEntries(status.stdout).some((entry) => paths.has(entry.path) || paths.has(entry.orig));
-  return { status: carried ? "carried" : "discarded" };
+// Runs one git command over the paths, chunked so argv stays bounded; answers the first failed result, or null.
+export function gitInChunks({ command, paths, cwd, env = process.env, gitImpl = runGit } = {}) {
+  return runStepsSync(inChunks(command, paths), { cwd, env, gitImpl });
 }
 
 // The first line of the paragraph: what happened to the work.
 function wipStatusLine(wip, worktree) {
   const where = worktree || "the run's worktree";
-  if (wip?.status === "committed") return `${WIP_PREFIX}work kept as wip commit ${wip.short} on branch ${wip.branch} (local, never pushed, not reviewed).`;
+  if (wip?.status === "committed") return `${WIP_PREFIX}wip commit ${wip.short} kept on ${wip.branch}${wip.ref ? ` (ref ${wip.ref})` : ""}, local, never pushed, not reviewed.`;
   if (wip?.status === "clean") return `${WIP_PREFIX}no wip commit, the worktree had no changes.`;
   if (wip?.reason === WIP_SKIP_REASONS.noWorktree) return `${WIP_PREFIX}no wip commit (${wip.reason}).`;
   if (wip?.status === "skipped") return `${WIP_PREFIX}no wip commit (${wip.reason}); the changes stay uncommitted in ${where}.`;
@@ -347,7 +397,7 @@ function wipStatusLine(wip, worktree) {
 export function wipNoticeLine({ wip, jobId = null, branch = null, worktree = null } = {}) {
   const lines = [wipStatusLine(wip, worktree)];
   if (Number.isSafeInteger(jobId) && jobId > 0) {
-    lines.push(`${WIP_RETRY_PREFIX} ${jobRef(jobId)} (the changes come back uncommitted in the same worktree; add --fresh to start over on a new branch)`);
+    lines.push(`${WIP_RETRY_PREFIX} ${jobRef(jobId)} (the next attempt starts on the wip commit in the same worktree; add --fresh to start over on a new branch)`);
   }
   if (branch) lines.push(`${WIP_NEW_JOB_PREFIX} start_branch: ${branch}`);
   else if (wip?.reason === WIP_SKIP_REASONS.detached) lines.push(`${WIP_NEW_JOB_PREFIX} no branch (detached HEAD)`);

@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { COMMIT_TYPES } from "../../src/queue/branch-name.mjs";
 import { skillReferencesDir } from "../../src/queue/skill-template.mjs";
-import { briefCommitType, briefGates, briefSlug, briefType, hintPatterns, REQUIRED_FIELDS } from "../../src/queue/triage-brief.mjs";
+import { briefGates, briefSlug, briefType, hintPatterns, REQUIRED_FIELDS } from "../../src/queue/triage-brief.mjs";
 
 const TEMPLATE = readFileSync(join(skillReferencesDir(), "prompts", "triager.md"), "utf8");
 const FILLED = { "Affected area": "src/a.mjs", Context: "c", Objective: "o", "Expected outcome": "e", "Commit type": "fix" };
@@ -53,53 +53,6 @@ test("hintPatterns keeps each `**Field:** <…>` line, strips a section wrapper 
   assert.ok(patterns.get("Commit type").test("<one of feat, fix>"));
   assert.equal(patterns.get("Objective").test("what to change"), false);
   assert.equal(hintPatterns("").size, 0);
-});
-
-test("a Type or commit type is read by its leading token, so a suffix passes and a value that merely starts alike does not", () => {
-  const types = [
-    ["bug/error (security)", "bug/error"],
-    ["**Feature/Refactor** — the listing", "feature/refactor"],
-    ["feature", null],
-    ["bug/error-ish", null],
-    ["(security) bug/error", null],
-  ];
-  for (const [value, expected] of types) {
-    const triage = triageWith({ Type: value });
-    assert.equal(briefType(triage), expected, value);
-    assert.equal(briefGates(triage, "PROCEED").some((gate) => gate.code === "brief-type-invalid"), expected === null, value);
-  }
-  const commitTypes = [
-    ["fix(queue)", "fix"],
-    ["refactor everything", "refactor"],
-    ["feature", null],
-    ["3 fix", null],
-  ];
-  for (const [value, expected] of commitTypes) {
-    const triage = triageWith({ "Commit type": value });
-    assert.equal(briefCommitType(triage), expected, value);
-    assert.equal(briefGates(triage, "PROCEED").some((gate) => gate.code === "brief-commit-type-invalid"), expected === null, value);
-  }
-});
-
-test("an option list reads as undecided, while a value that names one type passes", () => {
-  const types = ["bug/error | feature/refactor", "bug/error or feature/refactor", "bug/error / feature/refactor", "bug/error, feature/refactor", "bug/error vs feature/refactor"];
-  for (const value of types) {
-    const triage = triageWith({ Type: value });
-    assert.equal(briefType(triage), null, value);
-    assert.equal(briefGates(triage, "PROCEED").some((gate) => gate.code === "brief-type-invalid"), true, value);
-  }
-  for (const value of ["feat | fix | refactor | docs", "fix or feat"]) {
-    const triage = triageWith({ "Commit type": value });
-    assert.equal(briefCommitType(triage), null, value);
-    assert.equal(briefGates(triage, "PROCEED").some((gate) => gate.code === "brief-commit-type-invalid"), true, value);
-  }
-  const decided = [
-    ["fix — not a refactor", "fix"],
-    ["refactor everything", "refactor"],
-    ["fix or chore-ish", "fix"],
-    ["fix, in the queue", "fix"],
-  ];
-  for (const [value, expected] of decided) assert.equal(briefCommitType(triageWith({ "Commit type": value })), expected, value);
 });
 
 test("the shipped triager template gives a hint for every required field", () => {

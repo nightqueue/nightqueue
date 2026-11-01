@@ -34,7 +34,7 @@ import { liveRunnersReport, unreadableRegistry } from "../queue/registry.mjs";
 import { failedCoreSection, jobDetailView, prUrlsOf, queueView } from "../queue/view.mjs";
 import { isSafeSegment, readRunState, RESUME_PHASE_ORDER } from "../queue/resume.mjs";
 import { resolveJobRun } from "../queue/job-run.mjs";
-import { composeGateNotice, gateDigestOf } from "../queue/gate-notice.mjs";
+import { composeGateNotice } from "../queue/gate-notice.mjs";
 import { runDir as runDirOf } from "../config/paths.mjs";
 import { attemptSince, recordPipelineRun, statePipelinePhases } from "../queue/pipeline-record.mjs";
 import { applyRetry, callerJobId } from "../queue/retry.mjs";
@@ -283,12 +283,6 @@ function composedGateNotice(args, run, env) {
     question: args.question,
     fromArtifact: args.from_artifact ?? null,
   });
-}
-
-// The digest one `run_outcome` records: at a gate, the plan's question it shows or null to clear an earlier one; undefined leaves the record alone.
-function pausedDigest(status, { run, notice, env }) {
-  if (status !== "gate" || typeof run.projectId !== "string" || run.projectId === "") return undefined;
-  return gateDigestOf({ runDir: runDirOf(run.projectId, run.slug, env), notice: notice ?? "" });
 }
 
 // The fields of state.json `run_set` writes, in the argument names the plugin sends.
@@ -1358,7 +1352,7 @@ function toolDefinitions(env, state) {
         description:
           "Sends a gated, failed or cancelled job back to the queue. A gated job only moves with `note`, which reaches the run as the answer to its gate - except a job the preflight gated (its `blocked_code` is set: dirty checkout, wrong branch, missing checkout or `claude`, or `store-unavailable`: the session could not reach this server), which moves without one once its cause is fixed. A finished job never resumes: a `closed` job, or a `done` job whose pull request is merged, is refused with \"a finished job does not resume; queue a new one\". " +
           "Without `fresh` the run resumes from the last phase, keeping slug, branch, session and run directory; with `fresh` it starts from phase 0 and the run directory is dropped. " +
-          "A run whose branch carries a terminated run's wip commit gets its changes back uncommitted; `fresh` starts on a new branch and leaves that one untouched. " +
+          "A run whose branch carries a terminated run's wip commit starts on it, and `run publish` folds it into the delivery commit; `fresh` starts on a new branch and leaves that one untouched. " +
           "`run` starts a DETACHED runner, the same one `queue_run` starts - and the same one the `--run` of the CLI starts, unless it is asked for `--foreground`; a job that cannot be claimed right now answers `waiting` and starts nothing. " +
           "Inside an unattended run this tool only accepts the id of the job it is running: retrying another job is refused, because the note is delivered as a human answer in that job's next prompt.",
         inputSchema: {
@@ -1403,7 +1397,7 @@ function toolDefinitions(env, state) {
       config: {
         description:
           "Records that the run stopped on purpose at a phase, with the reason; a run terminated this way is never resumed by a retry, which restarts its phases. " +
-          "The runtime commits the worktree's changes on the job's branch as `wip(<slug>): terminated at <phase> — <reason>` (local, never pushed) and answers `wip` and the `notice` to report verbatim; a repeated call keeps the same wip commit; a retry gets those changes back uncommitted. " +
+          "The runtime commits the worktree's changes on the job's branch as `wip(<slug>): terminated at <phase> — <reason>` (local, never pushed) and answers `wip` and the `notice` to report verbatim; a repeated call keeps the same wip commit; a retry starts on that commit. " +
           "Inside a job the run is resolved from the job's own row — passing `project` or `slug` there is refused; outside a job both are required.",
         inputSchema: { phase: z.enum(RESUME_PHASE_ORDER), reason: z.string(), project: optionalText, slug: optionalText },
       },
@@ -1433,7 +1427,6 @@ function toolDefinitions(env, state) {
         description:
           "Records how the run ended: `done` when the pull request exists, `gate` with the `notice` the operator has to answer, `no_change` with the run's conclusion as `notice` when the run concluded on purpose that no code change is needed (the job ends `done` with no pull request). " +
           "A `gate` may instead send `question` and/or `from_artifact: {file, section}` (a run artifact such as `03-plan.md` and a heading such as `## Requires user confirmation`): the runtime composes the whole `## Notice` body - the section verbatim under `## Requires user confirmation`, the question, and the answer line - and returns it as `notice`; then end the turn, with no `## Notice` in the final text. `notice` together with either is refused. " +
-          "A `gate` whose text carries the plan's question records its digest as `gateQuestionDigest`, which lets the resumed `run check 03` print `CONFIRM: answered` for that question; any other gate clears it. " +
           "The pull request URL is NOT a parameter: the runtime writes it from what the session really published. " +
           "Inside a job the run is resolved from the job's own row — passing `project` or `slug` there is refused; outside a job both are required.",
         inputSchema: {
@@ -1447,10 +1440,9 @@ function toolDefinitions(env, state) {
       },
       handler: async (args) => {
         const run = await callerRun(args, env);
-        const composed = wantsComposedNotice(args);
-        const notice = composed ? composedGateNotice(args, run, env) : args.notice;
-        const answer = runAnswer(recordOutcome({ ...run, status: args.status, notice, questionDigest: pausedDigest(args.status, { run, notice, env }), env }), run);
-        return composed ? { ...answer, notice } : answer;
+        if (!wantsComposedNotice(args)) return runAnswer(recordOutcome({ ...run, status: args.status, notice: args.notice, env }), run);
+        const notice = composedGateNotice(args, run, env);
+        return { ...runAnswer(recordOutcome({ ...run, status: args.status, notice, env }), run), notice };
       },
     },
     {

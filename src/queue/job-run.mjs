@@ -43,7 +43,7 @@ export function diskJobRun(jobId, env = process.env) {
 export async function resolveJobRun(jobId, env = process.env) {
   try {
     const row = await openStore(env).jobs.getJob(jobId);
-    return { project: row?.project ?? null, projectId: row?.project_id ?? null, slug: row?.slug ?? null, origins: parseOriginsColumn(row?.origin), source: "db" };
+    return { project: row?.project ?? null, projectId: row?.project_id ?? null, slug: row?.slug ?? null, origins: parseOriginsColumn(row?.origin), ...(row?.start_branch ? { startBranch: row.start_branch } : {}), source: "db" };
   } catch (err) {
     if (!isStoreOutage(err)) throw err;
     const found = diskJobRun(jobId, env);

@@ -181,21 +181,13 @@ test("the prompt asks for the pipeline, the slug line and the gate, and carries 
   assert.match(prompt, /^\/nightqueue:resolve fix the worker\n/);
   assert.match(prompt, /J-7/);
   assert.match(prompt, /QUEUE_SLUG: <slug>/);
-  assert.match(prompt, /^The only human stop is Phase 3, on a filled `## Requires user confirmation` question; everything else is routed or an open item\.$/m);
   assert.match(prompt, /OPERATOR ANSWER TO THE GATE: deliver without the migration/);
   assert.equal(buildPrompt({ job: JOB }).includes("OPERATOR ANSWER TO THE GATE"), false);
   assert.equal(buildPrompt({ job: JOB }).includes("RESUME CANDIDATE"), false);
 });
 
-test("the RESTORED WIP line names the subject in parentheses only when the record has one", () => {
-  const tail = " are back as uncommitted changes in the worktree; keep them.";
-  const withSubject = buildPrompt({ job: JOB, restoredWip: { short: "abc1234", subject: "wip(s): terminated\n at qa" } });
-  assert.ok(withSubject.includes(`RESTORED WIP: the previous attempt's changes from commit abc1234 (wip(s): terminated at qa)${tail}`), withSubject);
-  for (const subject of [undefined, "", "   "]) {
-    const prompt = buildPrompt({ job: JOB, restoredWip: { short: "abc1234", subject } });
-    assert.ok(prompt.includes(`RESTORED WIP: the previous attempt's changes from commit abc1234${tail}`), prompt);
-    assert.equal(prompt.includes("()"), false);
-  }
+test("the prompt says nothing about wip: the worktree speaks for itself", () => {
+  assert.equal(/\bwip\b/i.test(buildPrompt({ job: JOB })), false);
 });
 
 test("a note the prompt already carries as its Operator note section is not repeated as a gate answer", () => {

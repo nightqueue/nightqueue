@@ -3,8 +3,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { composeGateNotice, gateDigestOf } from "../../src/queue/gate-notice.mjs";
-import { questionDigest } from "../../src/queue/gate-question.mjs";
+import { composeGateNotice } from "../../src/queue/gate-notice.mjs";
 
 const PLAN = [
   "## Implementation plan",
@@ -48,31 +47,16 @@ test("the confirmation section is carried verbatim, the fenced copy is ignored, 
   assert.equal(notice, `## Requires user confirmation\n1. Approve C1?\n2. Approve C2?\n\n${ANSWER_LINE}`);
 });
 
-test("a question under a level-2 heading reaches the notice, and the pause records its digest", (t) => {
-  const runDir = makeRunDir(t);
-  writeFileSync(join(runDir, "03-plan.md"), "## Requires user confirmation\n## Question\nDrop the column?\n\n## Assumptions\n- none\n");
-  const notice = composeGateNotice({ runDir, fromArtifact: { file: "03-plan.md", section: "## Requires user confirmation" } });
-  assert.equal(notice, "## Requires user confirmation\n### Question\nDrop the column?");
-  assert.equal(gateDigestOf({ runDir, notice }), questionDigest("Drop the column?"));
-});
-
-test("a notice that re-types the question with no label still records its digest", (t) => {
-  const runDir = makeRunDir(t);
-  writeFileSync(join(runDir, "03-plan.md"), "## Requires user confirmation\n**Question:** Keep the **old** column?\n");
-  assert.equal(gateDigestOf({ runDir, notice: "Keep the _old_ column ?" }), questionDigest("Keep the old column?"));
-  assert.equal(gateDigestOf({ runDir, notice: "Drop every column?" }), null);
-});
-
 test("another section is nested under the confirmation heading, followed by the question", (t) => {
   const notice = composeGateNotice({
     runDir: makeRunDir(t),
     jobId: 7,
-    question: "Does run start change?",
+    question: "GATE: usage-coverage-cond-1 — run start",
     fromArtifact: { file: "03-plan.md", section: "## Usage coverage" },
   });
   assert.equal(
     notice,
-    `## Requires user confirmation\n\n## Usage coverage\n- run start · changed=yes · source=pipeline\n\nDoes run start change?\n\n${ANSWER_LINE}`,
+    `## Requires user confirmation\n\n## Usage coverage\n- run start · changed=yes · source=pipeline\n\nGATE: usage-coverage-cond-1 — run start\n\n${ANSWER_LINE}`,
   );
 });
 

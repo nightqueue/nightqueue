@@ -1,8 +1,7 @@
 The agent models below are the single source. The dominant capability of the agent decides its model:
 - writes/edits code or carries the design judgment every later phase builds on → `opus` (architect, coder);
 - reasons and critiques without writing code in bulk → `sonnet` (triager: writes the Brief, critiques the
-  request and reproduces the bug; qa-analyst: adversarial analysis grouped by root, the lite QA included;
-  qa-triage: classifies the real diff under a written rule and decides how much attack it deserves);
+  request and reproduces the bug; qa-analyst: adversarial analysis grouped by root, the lite QA included);
 - bounded, mechanical or command-driven work over material another agent already reasoned about → `haiku`
   (explore maps files the triage already scoped; provers write and run one PoC for one pre-analysed
   hypothesis; verifier runs the project's checks and the PoCs; reflector distils lessons from written artifacts).

@@ -4,7 +4,6 @@
 | 🧭 explore | haiku |
 | 📐 architect | opus |
 | ⚙️ coder | opus |
-| qa-triage | sonnet |
 | qa-analyst | sonnet |
 | qa-prover | haiku |
 | ✅ verifier | haiku |

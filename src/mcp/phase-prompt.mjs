@@ -1,13 +1,13 @@
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { baseRef } from "../cli/run-publish.mjs";
 import { UserError } from "../config/errors.mjs";
 import { runDir } from "../config/paths.mjs";
 import { packageRoot } from "../host/paths.mjs";
 import { originEntry, readOriginFiles } from "../integrations/enrich.mjs";
 import { registeredProject } from "../memory/registry-access.mjs";
 import { COMMIT_TYPES } from "../queue/branch-name.mjs";
+import { qaModeOf } from "../queue/check-contract.mjs";
 import { DEPENDENT_PROMPT_REFUSAL } from "../queue/dependent-prompt.mjs";
 import { nextFixLoop, nextRound } from "../queue/phase-artifacts.mjs";
 import { isStateObject, readRunState } from "../queue/resume.mjs";
@@ -28,7 +28,6 @@ const TARGETS = {
   "coder-fix": { agent: "nightqueue:coder", model: "coder", phase: "implementation", artifact: "04-implementation.md", check: "04" },
   verifier: { agent: "nightqueue:verifier", model: "verifier", phase: "verification", artifact: "06-verification.md", check: "06" },
   runtime: { agent: "nightqueue:verifier", model: "verifier", phase: "runtime", artifact: "07-runtime.md", check: "07" },
-  "qa-triage": { agent: "nightqueue:qa-guardian", model: "qa-triage", phase: "qa", artifact: "05-qa.md", check: "05 --stage triage" },
   "qa-lite": { agent: "nightqueue:qa-guardian", model: "qa-analyst", phase: "qa", artifact: "05-qa.md", check: "05" },
   "qa-analyst": { agent: "nightqueue:qa-guardian", model: "qa-analyst", phase: "qa", artifact: "05-qa.md", check: "05 --stage analyst" },
   "qa-prover": { agent: "nightqueue:qa-guardian", model: "qa-prover", phase: "qa", artifact: "05-qa.md", check: null },
@@ -44,7 +43,6 @@ export const LESSON_TARGET_OF = {
   architect: "architect",
   coder: "coder",
   verifier: "verifier",
-  "qa-triage": "qa",
   "qa-lite": "qa",
   "qa-analyst": "qa",
 };
@@ -52,7 +50,7 @@ export const LESSON_TARGET_OF = {
 const BUG = "bug/error";
 const INDEX_LIMIT = 40;
 const BRIEF_FILE = "00-brief.md";
-const ROUND_TARGETS = ["verifier", "runtime", "qa-triage", "qa-lite", "qa-analyst"];
+const ROUND_TARGETS = ["verifier", "runtime", "qa-lite", "qa-analyst"];
 const INJECTED_LIMIT = 40;
 const NONE_RECORDED = "none recorded";
 
@@ -128,12 +126,6 @@ async function contextBlock({ template, query, run, repo, env, openItems }) {
     phaseContextBlock({ target, query, project: run.project, repoRoot: repo, origin: template !== "triager" }, env),
   );
   return answer.block ?? "";
-}
-
-// The base branch the QA triage compares the diff with: `HEAD` with an open item when it cannot be found, an empty text for any other template.
-async function baseRefValue({ template, repo, env, openItems }) {
-  if (template !== "qa-triage") return "";
-  return tolerant(openItems, "the base branch lookup", "HEAD", () => baseRef(repo, env));
 }
 
 // The known index of the project for the explore's map.
@@ -314,7 +306,6 @@ async function promptValues({ args, template, run, state, env, openItems }) {
     DRAFT_PATH: draftPathOf(args.target, dir, text(args.group)),
     GROUP_ID: groupIdValue(args.target, text(args.group)),
     DEMO_REPO: await demoRepoValue({ run, env, openItems }),
-    BASE_REF: await baseRefValue(lookup),
     ...(await reflectorValues({ template, run, state, env, openItems })),
   };
 }
@@ -332,12 +323,13 @@ async function runProjectAgents({ run, env, openItems }) {
   return tolerant(openItems, "the project's agent models", null, () => openStore(env).projects.agents(run.projectId));
 }
 
-// Names in an open item a QA target the run's recorded QA mode does not ask (`qa-lite` under `full`, the analyst or a prover under `lite`, any of them under `skip`); no record, no item.
-function noteQaModeMismatch({ target, state, openItems }) {
+// Names in an open item a QA target the plan's QA mode does not ask (`qa-lite` under `full`, the analyst or a prover under `lite`); no plan, no item.
+function noteQaModeMismatch({ target, dir, openItems }) {
   const wanted = QA_TARGET_MODE[target];
-  const mode = isStateObject(state) && isStateObject(state.qaMode) ? state.qaMode.mode : null;
-  if (!wanted || typeof mode !== "string") return;
-  if (mode !== wanted) openItems.push(`the run's QA mode is ${mode} (\`run check 05 --stage triage\`); ${target} was rendered anyway`);
+  const plan = wanted ? readHandoff(dir, "03-plan.md") : "";
+  if (plan.trim() === "") return;
+  const mode = qaModeOf(plan);
+  if (mode !== wanted) openItems.push(`the plan's QA mode is ${mode} (\`run check 03\`); ${target} was rendered anyway`);
 }
 
 // The complete prompt of one subagent of THIS run, with the agent, its model (the default or the project's override), the artifact and the gate the orchestrator passes through unchanged.
@@ -349,7 +341,7 @@ export async function phasePrompt(args, { run, env = process.env }) {
   const template = args.target;
   const openItems = [];
   const values = await promptValues({ args, template, run, state, env, openItems });
-  noteQaModeMismatch({ target: args.target, state, openItems });
+  noteQaModeMismatch({ target: args.target, dir: values.RUN_DIR, openItems });
   const model = modelFor(spec.model, await runProjectAgents({ run, env, openItems }));
   return {
     prompt: renderTemplate(template, values),

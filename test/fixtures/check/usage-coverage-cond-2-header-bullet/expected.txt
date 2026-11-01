@@ -1,0 +1,4 @@
+OK
+GATE: usage-coverage-cond-2 — **Always-gate class:** yes — the queries change which rows they return
+QA: full
+recorded: none (GATE: usage-coverage-cond-2 — **Always-gate class:** yes — the queries change which rows they return)

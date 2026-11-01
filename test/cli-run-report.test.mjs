@@ -7,7 +7,6 @@ import { reportRows } from "../src/cli/run-report.mjs";
 import { jobLogPath, logsDir, pendingWritesPath, runDir } from "../src/config/paths.mjs";
 import { openDb } from "../src/memory/db.mjs";
 import { addJob } from "../src/memory/jobs.mjs";
-import { questionDigest } from "../src/queue/gate-question.mjs";
 import { readRunState, saveRunState } from "../src/queue/resume.mjs";
 import { recordOutcome, recordPhaseDone, recordPrUrl, recordRunFields, recordTermination } from "../src/queue/run-state.mjs";
 import { ensureProject, makeHome, makeProject } from "../test-support/memory.mjs";
@@ -297,7 +296,7 @@ test("every failing gate of the fail-safe rule makes the run not happy", async (
       (target) => {
         recordPhases(target, COMPLEX_CLEAN);
         mkdirSync(runDir(target.projectId, SLUG, target.env), { recursive: true });
-        writeFileSync(join(runDir(target.projectId, SLUG, target.env), "03-plan.md"), "## Implementation plan\n\n## Requires user confirmation\n\n**Question:** which one?\n");
+        writeFileSync(join(runDir(target.projectId, SLUG, target.env), "03-plan.md"), "## Implementation plan\n\n## Requires user confirmation\n\nwhich one?\n");
       },
       /^Happy: no — the plan carries ## Requires user confirmation$/,
     ],
@@ -313,50 +312,6 @@ test("every failing gate of the fail-safe rule makes the run not happy", async (
     const lines = await report(env, id);
     assert.ok(lines.some((line) => expected.test(line)), `${name}:\n${lines.join("\n")}`);
   }
-});
-
-test("a plan's filled question counts against Happy only until the run records a pause on it", async (t) => {
-  const plan = "## Implementation plan\n\n## Requires user confirmation\n\n**Question:** which one?\n";
-  const happyLine = (lines) => lines.find((line) => line.startsWith("Happy:"));
-  const arrange = (name, lastSteps) => {
-    const made = makeRun(t, `report-question-${name}`);
-    recordPhases(made.run, COMPLEX_CLEAN);
-    mkdirSync(runDir(made.run.projectId, SLUG, made.env), { recursive: true });
-    writeFileSync(join(runDir(made.run.projectId, SLUG, made.env), "03-plan.md"), plan);
-    lastSteps(made.run);
-    return made;
-  };
-
-  const answered = arrange("answered", (target) => {
-    recordOutcome({ ...target, status: "gate", questionDigest: questionDigest("which one?") });
-    recordDelivery(target);
-  });
-  assert.equal(happyLine(await report(answered.env, answered.id)), "Happy: yes");
-
-  const unanswered = arrange("unanswered", (target) => recordOutcome({ ...target, status: "gate", questionDigest: questionDigest("which one?") }));
-  assert.equal(happyLine(await report(unanswered.env, unanswered.id)), "Happy: no — the run recorded no delivery (outcome gate)");
-
-  const staleQuestion = arrange("stale", (target) => {
-    recordOutcome({ ...target, status: "gate", questionDigest: questionDigest("another one?") });
-    recordDelivery(target);
-  });
-  assert.equal(happyLine(await report(staleQuestion.env, staleQuestion.id)), "Happy: no — the plan carries ## Requires user confirmation");
-});
-
-test("a pull request gh would not leave as a draft or turn ready keeps its open item", async (t) => {
-  const { env, id, run: target } = makeRun(t, "report-refused-draft");
-  recordPhases(target, COMPLEX_CLEAN);
-  recordOutcome({ ...target, status: "done", failures: 1 });
-  recordPrUrl({ ...target, prUrl: PR });
-  const refused = await report(env, id);
-  assert.ok(refused.includes("Happy: no — pull request — 1 failure remains (gh refused the draft)"), refused.join("\n"));
-  assert.ok(refused.includes("- pull request — 1 failure remains (gh refused the draft)"), refused.join("\n"));
-  assert.ok(refused.some((line) => line.includes(`pull request ${PR} — 1 failure remains (gh refused the draft)`)), refused.join("\n"));
-
-  recordOutcome({ ...target, status: "done", staysDraft: true });
-  const stays = await report(env, id);
-  assert.ok(stays.includes("Happy: yes"), stays.join("\n"));
-  assert.ok(stays.includes(`- pull request ${PR} stays a draft`), stays.join("\n"));
 });
 
 test("a PASSED run that recorded no runtime lane skips 7 as a static change", async (t) => {
@@ -447,126 +402,6 @@ function writeRunFile(target, file, text) {
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, file), text);
 }
-
-const SKIP_WHY = "only documentation text changed, with no runtime effect.";
-const SKIP_ROUND = `## Round 1\nsource: qa-triage\n\n## Diff classification\n- copy/docs: README.md\n\n## New risk\nnone\n\n## QA mode\nskip — ${SKIP_WHY}\n`;
-
-// Writes a triage round and runs the real triage check on it.
-async function checkTriageRound({ target, env, id }, round) {
-  writeRunFile(target, "05-qa.md", round);
-  const code = await run(["run", "check", "05", "--stage", "triage"], { env: { ...env, NIGHTQUEUE_JOB_ID: String(id) }, out: () => {}, err: () => {}, stdout: { write: () => {} } });
-  assert.equal(code, 0);
-}
-
-// Records a whole delivered run whose QA the real triage check skipped.
-async function recordSkippedRun(target, env, id) {
-  recordPhases(target, COMPLEX_CLEAN.slice(0, 4));
-  await checkTriageRound({ target, env, id }, SKIP_ROUND);
-  recordPhases(target, COMPLEX_CLEAN.slice(5));
-  recordDelivery(target);
-}
-
-test("a reworded relaunch of a skip on a delivered run shows no re-run and keeps the run happy", async (t) => {
-  const { env, id, run: target } = makeRun(t, "report-qa-skip-reworded");
-  recordPhases(target, COMPLEX_CLEAN.slice(0, 4));
-  await checkTriageRound({ target, env, id }, SKIP_ROUND);
-  await checkTriageRound({ target, env, id }, SKIP_ROUND.replace(SKIP_WHY, "docs only, nothing executes."));
-  recordPhases(target, COMPLEX_CLEAN.slice(5));
-  recordDelivery(target);
-
-  const lines = await report(env, id);
-
-  assert.ok(lines.includes(`| 5 QA | 🛡️ QA-Guardian | ⏭️ | no new risk: ${SKIP_WHY} | - |`), lines.join("\n"));
-  assert.ok(!lines.some((line) => line.includes("🔁")), lines.join("\n"));
-  assert.ok(lines.includes("Happy: yes"), lines.join("\n"));
-});
-
-// A triage round that moves a skip to the given QA mode.
-function movedRound(mode) {
-  return `## Round 1\nsource: qa-triage\n\n## Diff classification\n- logic: src/list.mjs\n\n## New risk\nnone\n\n## QA mode\n${mode}\n`;
-}
-
-const MOVED_MODES = [
-  ["lite", "lite — the listing's filter changed."],
-  ["full", "full — the retry path changed."],
-];
-
-for (const [mode, line] of MOVED_MODES) {
-  test(`a skip moved to ${mode} drops its entry, so the QA row reads not recorded and shows no skip`, async (t) => {
-    const { env, id, run: target } = makeRun(t, `report-qa-skip-then-${mode}`);
-    recordPhases(target, COMPLEX_CLEAN.slice(0, 4));
-    await checkTriageRound({ target, env, id }, SKIP_ROUND);
-    assert.equal(readRunState(target).phases.filter((entry) => entry.phase === "qa").length, 1);
-    await checkTriageRound({ target, env, id }, movedRound(line));
-
-    const state = readRunState(target);
-    assert.equal(state.qaMode.mode, mode);
-    assert.deepEqual(state.phases.map((entry) => entry.phase), COMPLEX_CLEAN.slice(0, 4).map(([phase]) => phase));
-
-    const lines = await report(env, id);
-    assert.ok(lines.includes("| 5 QA | 🛡️ QA-Guardian | ⚠️ | not recorded | - |"), lines.join("\n"));
-    assert.ok(!lines.some((row) => row.includes("SKIPPED") || row.includes("⏭️") || row.includes("no new risk")), lines.join("\n"));
-  });
-
-  test(`the real QA after a skip moved to ${mode} is its first launch: no re-run and the run stays happy`, async (t) => {
-    const { env, id, run: target } = makeRun(t, `report-qa-real-after-${mode}`);
-    recordPhases(target, COMPLEX_CLEAN.slice(0, 4));
-    await checkTriageRound({ target, env, id }, SKIP_ROUND);
-    await checkTriageRound({ target, env, id }, movedRound(line));
-    recordPhases(target, COMPLEX_CLEAN.slice(4));
-    recordDelivery(target);
-
-    const lines = await report(env, id);
-
-    assert.equal(readRunState(target).phases.filter((entry) => entry.phase === "qa").length, 1);
-    assert.ok(!lines.some((row) => row.includes("🔁")), lines.join("\n"));
-    assert.ok(lines.includes("Happy: yes"), lines.join("\n"));
-  });
-}
-
-test("a QA the triage skipped reads ⏭️ with its why, keeps the run happy and leaves no open item", async (t) => {
-  const { env, id, run: target } = makeRun(t, "report-qa-skip");
-  await recordSkippedRun(target, env, id);
-
-  const lines = await report(env, id);
-
-  assert.ok(lines.includes(`| 5 QA | 🛡️ QA-Guardian | ⏭️ | no new risk: ${SKIP_WHY} | - |`), lines.join("\n"));
-  assert.ok(lines.includes("Happy: yes"), lines.join("\n"));
-  assert.deepEqual(lines.slice(-3), ["## Open items", "", "- none"]);
-});
-
-test("a QA the triage skipped is an ok, first-launch phase in the telemetry and stops no gate", async (t) => {
-  const { env, id, run: target } = makeRun(t, "report-qa-skip-telemetry");
-  await recordSkippedRun(target, env, id);
-
-  await report(env, id);
-
-  const [recorded] = recordedRuns(env);
-  assert.ok(recorded.phases.includes("qa:ok:0"), recorded.phases.join(", "));
-  assert.equal(recorded.gateStop, null);
-});
-
-test("a SKIPPED verdict outside the QA is not a skip: it stays ⚠️ and the run is not happy", async (t) => {
-  const { env, id, run: target } = makeRun(t, "report-verifier-skipped");
-  recordPhases(target, COMPLEX_CLEAN.map((entry) => (entry[0] === "verification" ? ["verification", "SKIPPED", "not run"] : entry)));
-  recordDelivery(target);
-
-  const lines = await report(env, id);
-
-  assert.ok(lines.includes("| 6 Verification | ✅ Verifier | ⚠️ SKIPPED | not run | - |"), lines.join("\n"));
-  assert.ok(lines.includes("Happy: no — 6 Verification ⚠️ not run"), lines.join("\n"));
-});
-
-test("a qa SKIPPED no qaMode of skip backs is no skip: it stays ⚠️ and the run is not happy", async (t) => {
-  const { env, id, run: target } = makeRun(t, "report-qa-forged");
-  recordPhases(target, COMPLEX_CLEAN.map((entry) => (entry[0] === "qa" ? ["qa", "SKIPPED", "x"] : entry)));
-  recordDelivery(target);
-
-  const lines = await report(env, id);
-
-  assert.ok(lines.includes("| 5 QA | 🛡️ QA-Guardian | ⚠️ SKIPPED | x | - |"), lines.join("\n"));
-  assert.ok(lines.includes("Happy: no — 5 QA ⚠️ x"), lines.join("\n"));
-});
 
 test("the report lists the QA's dedicated-ticket suggestions and the runtime's open scenarios under `## Open items`", async (t) => {
   const { env, id, run: target } = makeRun(t, "report-open-items");

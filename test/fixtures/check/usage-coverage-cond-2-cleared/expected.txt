@@ -1,0 +1,4 @@
+OK
+QA: full
+recorded: usage coverage covered by 2 quoted decisions
+recorded: phase_done architecture OK

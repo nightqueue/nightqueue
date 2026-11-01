@@ -13,7 +13,7 @@ const REQUESTS = {
   explore: ["explore"],
   architect: ["architect"],
   coder: ["coder", "coder-fix"],
-  "qa-guardian": ["qa-triage", "qa-lite", "qa-analyst", "qa-prover"],
+  "qa-guardian": ["qa-lite", "qa-analyst", "qa-prover"],
   verifier: ["verifier", "runtime"],
 };
 const INDEPENDENT = Object.keys(REQUESTS);
@@ -89,23 +89,19 @@ function carriesDeliver(request, name) {
   return shared.length > 0;
 }
 
-// The triager frames the raw request itself, its request asks for the Brief and the critique, and neither text offers a verdict that waits for an answer.
-test("the triager frames the request, its request delivers the Brief and the request critique, and no verdict waits for an answer", () => {
+// The triager frames the raw request itself, and its request asks for the Brief, the critique and the alternative verdict.
+test("the triager frames the request, and its request delivers the Brief and the request critique", () => {
   const agent = readFileSync(join(ROOT, "plugin/agents/triager.md"), "utf8");
   assert.ok(agent.split("\n").includes("## Framing the request"), "the triager agent has no ## Framing the request section");
   const request = readFileSync(join(PROMPTS, "triager.md"), "utf8");
-  for (const part of ["\n## Brief\n", "\n## Request critique\n", "\n## Verdict: PROCEED | NO-CHANGE-NEEDED | NOT-REPRODUCIBLE\n"]) {
+  for (const part of ["\n## Brief\n", "\n## Request critique\n", "PROPOSE-ALTERNATIVE"]) {
     assert.ok(request.includes(part), `the triager request does not carry ${part.trim()}`);
-  }
-  for (const word of ["NEEDS-CLARIFICATION", "PROPOSE-ALTERNATIVE"]) {
-    assert.equal(agent.includes(word), false, `the triager agent still offers ${word}`);
-    assert.equal(request.includes(word), false, `the triager request still offers ${word}`);
   }
 });
 
 // What the agent must deliver and how it returns lives in the request the pipeline renders.
 test("each pipeline-independent agent's request owns the deliverable, the handoff and the shell rule", () => {
-  assert.equal(Object.values(REQUESTS).flat().length, 11, "the six agents no longer map to their eleven requests");
+  assert.equal(Object.values(REQUESTS).flat().length, 10, "the six agents no longer map to their ten requests");
   for (const name of Object.values(REQUESTS).flat()) {
     const request = readFileSync(join(PROMPTS, `${name}.md`), "utf8");
     assert.ok(carriesDeliver(request, name), `the ${name} request does not carry ## Deliver`);

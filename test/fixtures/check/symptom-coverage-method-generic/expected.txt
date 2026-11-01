@@ -1,0 +1,4 @@
+OK
+VERDICT: APPROVED
+GATE: symptom-coverage-method-generic — I reviewed the plan
+recorded: none (GATE: symptom-coverage-method-generic — I reviewed the plan)

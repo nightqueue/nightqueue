@@ -1,8 +1,10 @@
 # Phase 8 — Commit and PR
 
-A limit of Phase 6 or 7 adds `--draft` to the command below and one `Remaining failure: <what>`
-line per failure to the body's test section; it answers `DRAFT:`. A terminated run's wip commit
-is the runtime's, never a delivery nor `run publish`.
+Only execute this phase if Phase 6 returned `## Verification: PASSED` **and** Phase
+7 (when applicable) confirmed the change at runtime (its case's proof, SKILL.md
+Phase 7). If the verification failed after the fix iterations
+or the runtime validation showed the bug persisting, **no delivery commit/PR** — straight to
+Phase 9 (a terminated run's wip commit is the runtime's, never a delivery nor `run publish`).
 
 The command below owns the mechanics — staging, the commit, the branch name, the push and
 `gh pr create`. What stays yours is the judgment: which files, which message, which body.
@@ -17,7 +19,7 @@ before step 2 and after the pull request exists.
      `git status --short` first: a file that is neither in `## Modified files` nor a QA test is
      left out and recorded as an ⚠️ open item — never opened, never included in the dark; a file
      IN the scope that mixes pre-existing unrequested hunks (read from the verifier's
-     diff-hygiene finding in `06-verification.md`) → commit it, ⚠️ open item.
+     diff-hygiene finding in `06-verification.md`) → ask the user BEFORE committing.
    - Follow the `commitTemplate` `run start` answered; when its `source` is `nightqueue` (the
      fallback), read `references/commit-template.md` first.
    - The message is yours: follow the convention the repository declares (`run start` answered it as `commitConvention`; the command prints it again as
@@ -46,7 +48,7 @@ before step 2 and after the pull request exists.
      `api-*.log`, `browser-*.png|.log`, `emulator-*.png|.log` (Phase 7); when the QA
      produced `05-qa.md`, you may add `automated-qa.md` with Write from its last round's PoC excerpt. A
      method with no evidence file has no row. Repository template: its own test section, in its own
-     format. A QA skip: `QA: skipped — <why>` (from `QA-MODE:` or `state.qaMode.reason`) right under its section's heading.
+     format.
    - **No bare `#<number>` in the title or body** — GitHub cross-references an unrelated
      issue/PR and notifies it. The only `#<number>` allowed is a real issue of this repository in the `Fixes`/`Closes` line.
    - **No job ref (`J-24`), run slug, `Refs` line or `Opened by nightqueue` line in the body**
@@ -56,7 +58,7 @@ before step 2 and after the pull request exists.
      of step 1) and run
      `nightqueue run publish --message-file <RUN_DIR>/commit-message.txt --body-file <RUN_DIR>/pr-body.md`,
      with one `--extra <pathspec>` per file outside the artifact's list. It checks the body BEFORE
-     anything is committed, stages exactly the list and commits it
+     anything is committed, stages exactly the list — never a blind `git add -A` — and commits it
      ONCE (a retry answers `COMMITTED: <sha> (already committed)`), renames the branch to its final
      name (a job's `worktree-<slug>` becomes `<commit type>/<slug>`, the type read from the commit
      subject; an interactive `worktree-<type>+<slug>` becomes `<type>/<slug>`), pushes it and opens
@@ -72,13 +74,11 @@ before step 2 and after the pull request exists.
      reads `MISSING: evidence for QA section <method>`) mean the body failed the check of the
      template in effect (a heading missing or out of order, a nightqueue heading against a
      repository template, the `## QA` subsections or the `Not tested:` line, a bare `#<number>`, a
-     placeholder or a leftover `<...>` example) and nothing was pushed. Fix the body or the
-     evidence and call the command again; a `… wip commit` one: never rewrite history, open
-     item, no PR.
+     placeholder or a leftover `<...>` example) and nothing was pushed. Fix the body or evidence
+     and retry; a `… wip commit` one is not yours (yours folds): never rewrite history, open item, no PR.
    - `run publish` records the delivery itself.
    - If `gh` is not installed or could not open the pull request, the command says so with the
      branch already pushed: inform it; the pull request is opened by hand.
-     A refused `--draft` opens a normal pull request; the report keeps the failures.
 
 3. **Cycle closing belongs to the runtime, not to this pipeline.** The pipeline ends at an open PR;
    merge, delivery, the issue tracker and the executive notice are the runtime's — never run them inline.

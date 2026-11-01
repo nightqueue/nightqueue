@@ -1,0 +1,4 @@
+OK
+VERDICT: APPROVED
+GATE: symptom-coverage-n-mismatch — N=3 plan=2
+recorded: none (GATE: symptom-coverage-n-mismatch — N=3 plan=2)

@@ -1,6 +1,6 @@
 ## Deliver
 
-`05-qa.md` holds four kinds of `## Round`: a triage round (`source: qa-triage`) and a lite or analyst round, each written by its lane; a prover round, appended by the runtime through `nightqueue run append 05`; and the consolidated round, written by `nightqueue run check 05` (`source: runtime consolidation`). Never write a consolidated round yourself.
+`05-qa.md` holds three kinds of `## Round`: a lite or analyst round, written by its lane; a prover round, appended by the runtime through `nightqueue run append 05`; and the consolidated round, written by `nightqueue run check 05` (`source: runtime consolidation`). Never write a consolidated round yourself.
 
 {{#GROUP}}
 Write the PoC files assigned to your group, with their assigned names, under `{{RUN_DIR}}/poc/` — never in the repo. Your round draft carries, in this order and with these headings (the runtime stamps its `source: prover · group:` line, never write one):
@@ -44,18 +44,15 @@ Your independent enumeration of the entry points of the target code, written BEF
 {{/HAS_USAGE_COVERAGE}}
 ## Validated risks
 {{#IS_BUG}}
-`omitted: <file:line, …|none>` — the vectors you found outside the plan's ## Symptom coverage table.
+First line: `Symptom coverage: <N> · <command/criterion of your re-enumeration> · omitted: <file:line | none>`. N = the total lines of the plan's ## Symptom coverage table (covered + not-covered), NOT the vectors you confirmed in the diff: a not-covered vector counts towards N even without being in the diff, and an omitted vector you discovered does not enter N, only `omitted:`.
 {{/IS_BUG}}
 {{#HAS_USAGE_COVERAGE}}
-`divergences: <file:line, …|none>` — where your ## Access map (QA) and the plan differ.
-`unconfirmed decisions: <item, …|none>` — the plan's decisions no named consumer proves or breaks.
+Next line (the first, without the line above): `Usage coverage: <N> · <M> · divergences: <file:line, …|none> · unconfirmed decisions: <item, …|none>`. N = the scenario lines (starting with `- `) inside the plan's ## Usage coverage, from the heading to the next `## `, outside a code block — the **Diff axis:**, **Always-gate class:** and **Scenarios consulted:** lines do NOT count. M = the entry-point lines of your ## Access map (QA) — the `partial:` and `unimplemented intent:` lines do NOT count. Both counts are audited with these same definitions.
 {{/HAS_USAGE_COVERAGE}}
-Each of these lines, when filled, is an open item of the delivery and never stops the run.
 Then the HELD/BROKE result of each risk of the plan, of the regression in callers and of the Robustness test (an analysis writes "→ hypothesis H<n>" for a runtime one).
 
 ## Invalidated assumptions
 (the assumption knocked down + the evidence; or `None`)
-List only assumptions proven false; one that held is not an item here.
 
 ## Generated PoCs
 (the *.poc.test.* / *.fuzz.test.* / *.regression.test.* files created under `{{RUN_DIR}}/poc/`, with the vector each one attacks; or `None — nothing exercisable at runtime`)

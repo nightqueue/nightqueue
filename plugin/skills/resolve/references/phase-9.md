@@ -1,5 +1,7 @@
 # Phase 9 — Report
 
+Use the visual identity of the legend and the status icons throughout the report.
+
 **Open the report with `nightqueue run report`, pasted verbatim** (Bash, inside the job; outside
 one, with `--project <project> --slug <slug>`). It prints the `## 🗂️ Report — <slug>` header, then
 ONE table — one row per recorded execution, in order: every step, a re-run as its own row
@@ -46,8 +48,9 @@ in user language.
 
 ## Notice
 
-Mandatory on BOTH paths: the executive notice the operator reviews before closing the job. The
-Phase 3 pause's notice is never written here: the runtime composes it from its `run_outcome` record.
+Mandatory on BOTH paths: the executive notice the operator reviews before closing the job. A gate
+notice (the pauses of Phases 1, 3, 5 and 7) is never written here: the runtime composes it from the
+gate's `run_outcome` record.
 
 Model (the fence delimits the MODEL in this document; the real report emits it **without** a fence):
 
@@ -88,7 +91,6 @@ The writing rules:
    the review found" is mandatory when the QA ran (≤3 bullets). Omitting an open item to look
    clean is the most expensive mistake of this notice.
 5. **The header and the label are derived from the artifacts:**
-   - a draft pull request → `⚠️ Draft pull request — N failures remain` + `Still open IN THIS FIX:`;
    - a `not-covered` vector in `03-plan.md` `## Symptom coverage`, or a `NOT MET` row of the
      Phase 7 table → `⚠️ Partially fixed — <what was left out>` + `Still open IN THIS FIX:`;
    - a `dedicated ticket: yes` item → `Still open — a DIFFERENT problem, does not affect this fix:`;

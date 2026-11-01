@@ -1,3 +1,0 @@
-OK
-QA-MODE: full — a new migration changes the schema.
-recorded: qa_mode full
