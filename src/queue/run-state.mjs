@@ -239,21 +239,6 @@ export function recordWip({ projectId, slug, wip, env = process.env } = {}) {
   return record({ projectId, slug, env, change: (_state, at) => ({ wip: { ...wip, at } }) });
 }
 
-// Drops the wip record of a run, once its work was given back to the worktree.
-export function clearWip({ projectId, slug, env = process.env } = {}) {
-  return underRunLock({
-    projectId,
-    slug,
-    env,
-    write: () => {
-      const state = readRunState({ projectId, slug, env });
-      if (!isStateObject(state?.wip)) return { status: "absent", path: null, reason: null };
-      const { wip: _dropped, ...rest } = state;
-      return saveRunState({ projectId, slug, env, state: { ...rest, updatedAt: new Date().toISOString() } });
-    },
-  });
-}
-
 // Whether the state holds a termination of that author (and of that phase, when one is named).
 function holdsTermination(state, { phase, onlyBy }) {
   const termination = isStateObject(state) ? state.termination : null;
@@ -275,8 +260,8 @@ export function clearTermination({ projectId, slug, phase = null, onlyBy = RUNTI
   });
 }
 
-// Records how the run ended; the pull request URL is the runtime's to write, so an outcome already carrying one keeps it.
-export function recordOutcome({ projectId, slug, status, notice, env = process.env } = {}) {
+// Records how the run ended, with the files it delivered when known; the pull request URL is the runtime's to write, so an outcome already carrying one keeps it.
+export function recordOutcome({ projectId, slug, status, notice, files, env = process.env } = {}) {
   if (!RUN_OUTCOME_STATUSES.includes(status)) return refuseEnum("status", status, RUN_OUTCOME_STATUSES);
   if (status === NO_CHANGE_OUTCOME && trimmedText(notice) === null) {
     return kept("a no_change outcome needs the run's conclusion as its notice: it is what the origins are told on close");
@@ -286,7 +271,7 @@ export function recordOutcome({ projectId, slug, status, notice, env = process.e
     slug,
     env,
     change: (state, at) => ({
-      outcome: withText({ ...(isStateObject(state.outcome) ? state.outcome : {}), status, at }, { notice }),
+      outcome: withText({ ...(isStateObject(state.outcome) ? state.outcome : {}), status, at, ...(Array.isArray(files) ? { files } : {}) }, { notice }),
     }),
   });
 }

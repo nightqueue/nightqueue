@@ -8,7 +8,7 @@ import { neverCommittedReason } from "../queue/never-committed.mjs";
 import { publishedBodyFile } from "../queue/pr-footer.mjs";
 import { readRunState } from "../queue/resume.mjs";
 import { coverageRecordLine } from "../queue/usage-coverage-record.mjs";
-import { WIP_REF_PREFIX } from "../queue/wip-commit.mjs";
+import { gitInChunks, readBranchWips, statusEntries, WIP_REF_PREFIX } from "../queue/wip-commit.mjs";
 import { recordOutcome, recordPhaseDone, recordPrUrl, recordRunFields, RUNTIME_AUTHOR } from "../queue/run-state.mjs";
 import { checkArgs, parseCommand } from "./args.mjs";
 import { commitMessageProblems, conventionFile, CONVENTIONAL_SUBJECT_RE, findCommitTemplate } from "./commit-template.mjs";
@@ -47,9 +47,9 @@ export function listedFromArtifact(run, filesFrom) {
   return { artifact, listed: listedFiles(readRequiredFile(artifact, "--files-from")) };
 }
 
-// The same entries, each lockfile among them refused unless the paired-manifest rule lets it through for this publish set.
-function withLockfileReasons(entries, rule) {
-  const set = new Set(entries.map((entry) => entry.path));
+// The same entries, each lockfile among them refused unless the paired-manifest rule lets it through for this publish set, which includes what a fold carries.
+function withLockfileReasons(entries, rule, carried) {
+  const set = new Set([...entries.map((entry) => entry.path), ...carried]);
   return entries.map((entry) => (entry.reason ? entry : { ...entry, reason: rule.reasonFor(entry.path, set) }));
 }
 
@@ -71,18 +71,31 @@ function expandExtra(cwd, pathspec, env) {
   return files;
 }
 
-// What this commit may stage, or the paths it refuses: the listed files and the `--extra` pathspecs first, then everything those really match.
-export function stageable({ cwd, listed, extras, env, install }) {
+// The fold split into what it carries into the delivery and what it leaves out, on disk and uncommitted, with the reason of each.
+function foldWithLeftOut({ fold, paths, rule, cwd, runDir }) {
+  const set = new Set([...fold.carried, ...paths]);
+  const scratch = new Set(scratchFiles(fold.carried, { cwd, runDir }));
+  const entries = fold.carried.map((path) => ({
+    path,
+    reason: neverCommittedReason(path) ?? (scratch.has(path) ? "a scratch file" : rule.reasonFor(path, set)),
+  }));
+  return { ...fold, carried: entries.filter((entry) => !entry.reason).map((entry) => entry.path), leftOut: entries.filter((entry) => entry.reason) };
+}
+
+// What this commit may stage, or the paths it refuses: the listed files and the `--extra` pathspecs first, then everything those really match; a fold comes back split by what it may carry.
+export function stageable({ cwd, listed, extras, env, install, fold = null, runDir = null }) {
   const rule = lockfileRule({ cwd, env, baseRef: () => baseRef(cwd, env), install });
+  const carried = fold?.carried ?? [];
   const files = candidates(cwd, listed);
   const pathspecs = candidates(cwd, extras);
-  const asked = withLockfileReasons([...files, ...pathspecs], rule).filter((entry) => entry.reason);
-  if (asked.length > 0) return { paths: [], refused: asked };
+  const asked = withLockfileReasons([...files, ...pathspecs], rule, carried).filter((entry) => entry.reason);
+  if (asked.length > 0) return { paths: [], refused: asked, fold: null };
   const matched = candidates(cwd, extras.flatMap((pathspec) => expandExtra(cwd, pathspec, env)));
-  const everything = withLockfileReasons([...files, ...matched], rule);
+  const everything = withLockfileReasons([...files, ...matched], rule, carried);
   const refused = everything.filter((entry) => entry.reason);
+  if (refused.length > 0) return { paths: [], refused, fold: null };
   const paths = [...new Set(everything.map((entry) => entry.path))];
-  return { paths: refused.length > 0 ? [] : paths, refused };
+  return { paths, refused, fold: fold ? foldWithLeftOut({ fold, paths, rule, cwd, runDir }) : null };
 }
 
 // The two lines a refused list prints, the second one saying `--extra` is no way around it.
@@ -107,13 +120,76 @@ export function commitConvention(cwd, env) {
   return `${declared ? `declared by ${declared}; ` : ""}${inferredConvention(cwd, env)}`;
 }
 
-// Stages exactly the list and commits it with the agent's own message; a git refusal is reported as it came, never guessed at.
-function commitFiles({ cwd, paths, messageFile, env }) {
+// Stages exactly the list; a git refusal is reported as it came, never guessed at.
+function stageList({ cwd, paths, env }) {
   const staged = runGit({ args: ["add", "--", ...paths], cwd, env });
   if (!staged.ok) throw new UserError(`git could not stage the list in ${cwd}: ${failureLine(staged)}`);
+}
+
+// Commits what is staged with the agent's own message; a git refusal is reported as it came, never guessed at.
+function commitStaged({ cwd, messageFile, env }) {
   const committed = runGit({ args: ["commit", "-F", messageFile], cwd, env });
   if (!committed.ok) throw new UserError(`git could not commit in ${cwd}: ${failureLine(committed)}`);
-  return shortHead(cwd, env);
+}
+
+// The carried paths the worktree changed after the wip commit, which the delivery must take as the worktree has them.
+function carriedChanges({ cwd, fold, env }) {
+  const status = runGit({ args: ["status", "--porcelain", "-z", "--untracked-files=all", "--no-renames"], cwd, env });
+  if (!status.ok) throw new UserError(`git could not read the status of ${cwd}: ${failureLine(status)}`);
+  const carried = new Set(fold.carried);
+  return statusEntries(status.stdout).filter((entry) => entry.changed && carried.has(entry.path)).map((entry) => entry.path);
+}
+
+// Runs one literal-pathspec git command over the paths, refusing with what git said.
+function literalPaths({ command, paths, cwd, env, what }) {
+  const failed = gitInChunks({ command: ["--literal-pathspecs", ...command, "--"], paths, cwd, env });
+  if (failed) throw new UserError(`git could not ${what} in ${cwd}: ${failureLine(failed)}`);
+}
+
+// Stages the delivery on the wip's parent, whose index already holds the wip: drops what is left out, adds the list and the carried paths edited since.
+function stageFold({ cwd, paths, fold, env }) {
+  literalPaths({ command: ["reset", "-q"], paths: fold.leftOut.map((entry) => entry.path), cwd, env, what: "unstage what the fold leaves out" });
+  const carried = new Set(fold.carried);
+  const added = paths.filter((path) => !carried.has(path));
+  if (added.length > 0) stageList({ cwd, paths: added, env });
+  literalPaths({ command: ["add"], paths: carriedChanges({ cwd, fold, env }), cwd, env, what: "stage the carried paths" });
+}
+
+// Puts the branch and the index back on the wip commit after a fold that failed, the worktree untouched; answers what to add to the error.
+function undoFold({ cwd, fold, env }) {
+  const back = runGit({ args: ["reset", "-q", fold.head], cwd, env });
+  if (!back.ok) return `the branch could not be put back on the wip commit ${fold.head}: ${failureLine(back)}`;
+  return `the branch is back on the wip commit ${fold.head.slice(0, 7)}`;
+}
+
+// Moves the branch onto the wip's parent keeping the index; a fold a kill interrupted already sits there, and a second reset would overwrite the ORIG_HEAD that identifies it.
+function moveOntoParent({ cwd, fold, env }) {
+  if (fold.interrupted) return;
+  const moved = runGit({ args: ["reset", "--soft", "-q", fold.parent], cwd, env });
+  if (!moved.ok) throw new UserError(`git could not move the branch off the wip commit in ${cwd}: ${failureLine(moved)}`);
+}
+
+// Replaces the run's own wip commits with one delivery commit on their parent; a failure leaves the branch back on the wip, whose ref is never touched.
+function commitFold({ cwd, paths, fold, messageFile, env }) {
+  moveOntoParent({ cwd, fold, env });
+  try {
+    stageFold({ cwd, paths, fold, env });
+    commitStaged({ cwd, messageFile, env });
+  } catch (error) {
+    throw new UserError(`${error.message}; ${undoFold({ cwd, fold, env })}`);
+  }
+}
+
+// The line reporting a fold: how many wip commits and files went in, and what stayed out with its reason.
+function foldedLine(fold) {
+  const leftOut = fold.leftOut.map((entry) => `${entry.path} (${entry.reason})`).join(", ");
+  return `FOLDED: ${fold.commits.length} wip commits (${fold.carried.length} files)${leftOut ? `; left out: ${leftOut}` : ""}`;
+}
+
+// The paths HEAD changed, or null when git cannot answer.
+function headPaths(cwd, env) {
+  const listed = runGit({ args: ["diff-tree", "--no-commit-id", "--name-only", "-r", "-z", "--root", "HEAD"], cwd, env });
+  return listed.ok ? listed.stdout.split("\0").filter(Boolean) : null;
 }
 
 // The short hash of HEAD, or `HEAD` when git cannot name it.
@@ -129,15 +205,22 @@ function refsTrailerLine(message) {
   return at < 0 ? null : { number: at + 1, line: lines[at].trim() };
 }
 
-// Commits the stageable paths with the agent's message, printing the convention and the commit; answers the exit code of the step.
-export async function commitPaths({ cwd, paths, messageFile, ctx }) {
+// Commits the stageable paths with the agent's message, folding the run's own wip commits into it, printing the convention and the commit; answers the exit code of the step.
+export async function commitPaths({ cwd, paths, messageFile, fold = null, ctx }) {
   const trailer = refsTrailerLine(readRequiredFile(messageFile, "--message-file"));
   if (trailer !== null) {
     ctx.out(`REFUSED: line ${trailer.number} of the message is a \`Refs:\` trailer, which is reserved and never written by an agent: ${trailer.line}`);
     return 1;
   }
   ctx.out(`CONVENTION: ${commitConvention(cwd, ctx.env)}`);
-  ctx.out(`COMMITTED: ${commitFiles({ cwd, paths, messageFile, env: ctx.env })} (${paths.length} files)`);
+  if (fold) {
+    commitFold({ cwd, paths, fold, messageFile, env: ctx.env });
+    ctx.out(foldedLine(fold));
+  } else {
+    stageList({ cwd, paths, env: ctx.env });
+    commitStaged({ cwd, messageFile, env: ctx.env });
+  }
+  ctx.out(`COMMITTED: ${shortHead(cwd, ctx.env)} (${(headPaths(cwd, ctx.env) ?? paths).length} files)`);
   return 0;
 }
 
@@ -157,47 +240,65 @@ export function messageProblemLines(cwd, messageFile, env) {
   return commitMessageProblems(message, findCommitTemplate(cwd, env)).map((reason) => `REJECTED: commit message — ${reason}`);
 }
 
-// The first ref among the remote and local default branches that exists in the worktree: the base the branch is compared with.
+// The first ref among the remote and local default branches that exists in the worktree, or undefined.
+function findBaseRef(cwd, env) {
+  return BASE_REFS.find((ref) => runGit({ args: ["rev-parse", "--verify", "--quiet", ref], cwd, env }).ok);
+}
+
+// The base the branch is compared with, refused when no default branch exists in the worktree.
 function baseRef(cwd, env) {
-  const found = BASE_REFS.find((ref) => runGit({ args: ["rev-parse", "--verify", "--quiet", ref], cwd, env }).ok);
+  const found = findBaseRef(cwd, env);
   if (!found) throw new UserError(`no base branch (${BASE_REFS.join(", ")}) exists in ${cwd}: the files the branch adds cannot be checked for scratch`);
   return found;
 }
 
-// The files the branch adds against its base, as repo-relative paths.
-function addedFiles(cwd, env) {
-  const added = runGit({ args: ["diff", "--name-only", "-z", "--no-renames", "--diff-filter=A", `${baseRef(cwd, env)}...HEAD`], cwd, env });
+// The files the branch adds against its base up to a commit, as repo-relative paths.
+function addedFiles(cwd, env, upTo) {
+  const added = runGit({ args: ["diff", "--name-only", "-z", "--no-renames", "--diff-filter=A", `${baseRef(cwd, env)}...${upTo}`], cwd, env });
   if (!added.ok) throw new UserError(`git could not list the files the branch adds: ${failureLine(added)}`);
   return added.stdout.split("\0").filter(Boolean);
 }
 
-// One `REJECTED:` line per scratch file the branch adds (plus the paths about to be committed), each naming the way out.
-export function scratchProblemLines(cwd, run, env, pending = []) {
-  const paths = [...new Set([...addedFiles(cwd, env), ...pending])];
+// One `REJECTED:` line per scratch file the branch adds up to a commit (plus the paths about to be committed), each naming the way out.
+export function scratchProblemLines(cwd, run, env, pending = [], upTo = "HEAD") {
+  const paths = [...new Set([...addedFiles(cwd, env, upTo), ...pending])];
   return scratchFiles(paths, { cwd, runDir: run.runDir }).map(
     (path) => `REJECTED: scratch file ${path} — remove it, or promote it to a hermetic test with a real name, then commit and retry`,
   );
 }
 
-// The commits the runtime's wip refs name, by object id, each with its ref name.
-function wipRefTargets(cwd, env) {
-  const listed = runGit({ args: ["for-each-ref", "--format=%(objectname) %(refname)", WIP_REF_PREFIX], cwd, env });
-  if (!listed.ok) throw new UserError(`git could not list the runtime's wip refs: ${failureLine(listed)}`);
-  return new Map(outputLines(listed).map((line) => line.split(" ")).filter(([object, ref]) => object && ref).map(([object, ref]) => [object, ref]));
+// The slugs whose wip commits are this run's own: its slug, and the one its wip record names when a retry renamed the run.
+function ownWipSlugs(run, env) {
+  const ref = readRunState({ projectId: run.projectId, slug: run.slug, env })?.wip?.ref;
+  return typeof ref === "string" && ref.startsWith(WIP_REF_PREFIX) ? [run.slug, ref.slice(WIP_REF_PREFIX.length)] : [run.slug];
 }
 
-// One `REJECTED:` line per runtime wip commit the branch carries above its base, which is never pushed.
-export function wipProblemLines(cwd, env) {
-  const targets = wipRefTargets(cwd, env);
-  if (targets.size === 0) return [];
-  const ahead = runGit({ args: ["rev-list", `${baseRef(cwd, env)}..HEAD`], cwd, env });
-  if (!ahead.ok) throw new UserError(`git could not list the commits the branch adds: ${failureLine(ahead)}`);
-  return outputLines(ahead)
-    .filter((commit) => targets.has(commit))
-    .map(
-      (commit) =>
-        `REJECTED: the branch carries the runtime's wip commit ${commit.slice(0, 7)} (${targets.get(commit)}), which is never pushed: stop and record it as an open item; the operator squashes it or retries the job so the claim gives it back uncommitted`,
-    );
+// What the branch's wip commits mean for a commit: the refusals, or the fold of the run's own; a job with `start_branch` also owns the wips it inherited, and with no base there is nothing to compare.
+export function branchWips(cwd, run, env) {
+  const base = findBaseRef(cwd, env);
+  if (!base) return { problems: [], fold: null };
+  return readBranchWips({ cwd, base, slugs: ownWipSlugs(run, env), anySlug: Boolean(run.startBranch), env });
+}
+
+// The paths the run's own wip commits would carry into a delivery, for a list derived on a clean retry; only the publication runs the paired install.
+export function foldedPaths(cwd, run, env) {
+  const { fold } = branchWips(cwd, run, env);
+  if (!fold) return [];
+  return stageable({ cwd, listed: [], extras: [], env, fold, runDir: run.runDir, install: () => ({ ok: true }) }).fold.carried;
+}
+
+// True when a commit would take nothing: no path to stage and no wip path to carry.
+export function nothingToCommit(paths, fold) {
+  return paths.length === 0 && (fold?.carried.length ?? 0) === 0;
+}
+
+// One `REJECTED:` line per wip commit the branch still carries, for a publication that does not fold, naming the way out for the run's own.
+export function wipProblemLines(cwd, run, env) {
+  const { problems, fold } = branchWips(cwd, run, env);
+  const own = (fold?.commits ?? []).map(
+    (commit) => `REJECTED: the branch carries the runtime's wip commit ${commit.slice(0, 7)}, which is never pushed: call \`nightqueue run publish\`, which folds it into the delivery commit`,
+  );
+  return [...problems, ...own];
 }
 
 // The title of the pull request: the one the caller passed, or the `# <title>` the body opens with.
@@ -237,14 +338,14 @@ function recordPublishedBranch({ run, branch, ctx }) {
   if (recorded.status !== "written") ctx.err(`nightqueue: the published branch was not recorded on the run: ${recorded.reason}`);
 }
 
-// Publishes the branch and opens the pull request, then records the run as done with the URL gh answered: the record is written
+// Publishes the branch and opens the pull request, then records the run as done with the URL gh answered and the files HEAD delivered: the record is written
 // here, at the point of publication, so a run driven outside the queue runner (a resumed session, another program) ends up
 // with the same state.json as one the runner watched. A value the record refuses is reported, never fatal.
-function publishBranch({ run, cwd, branch, title, bodyFile, env }) {
+function publishBranch({ run, cwd, branch, title, bodyFile, files, env }) {
   const pushed = runGit({ args: ["push", "-u", "origin", branch], cwd, env });
   if (!pushed.ok) throw new UserError(`git could not push \`${branch}\`: ${failureLine(pushed)}`);
   const url = openOrUpdatePr({ branch, title, bodyFile, cwd, env });
-  const recorded = recordOutcome({ projectId: run.projectId, slug: run.slug, status: "done", env });
+  const recorded = recordOutcome({ projectId: run.projectId, slug: run.slug, status: "done", ...(files ? { files } : {}), env });
   const prRecorded = recordPrUrl({ projectId: run.projectId, slug: run.slug, prUrl: url, prTitle: title, env });
   return { url, recorded, prRecorded };
 }
@@ -282,7 +383,9 @@ export async function openPullRequest({ run, cwd, bodyFile, body, title, removeW
   const final = publishedBranchName(current, { type: state?.type, slug: run.slug, commitType: headCommitType(cwd, ctx.env) });
   const branch = renameBranch({ cwd, current, final, env: ctx.env });
   recordPublishedBranch({ run, branch, ctx });
-  const { url, recorded, prRecorded } = publishBranch({ run, cwd, branch, title: prTitle(title, body), bodyFile: published, env: ctx.env });
+  const files = headPaths(cwd, ctx.env);
+  if (files === null) ctx.err("nightqueue: the delivered files could not be read from HEAD, so the outcome records none");
+  const { url, recorded, prRecorded } = publishBranch({ run, cwd, branch, title: prTitle(title, body), bodyFile: published, files, env: ctx.env });
   ctx.out(`BRANCH: ${branch}${branch === current ? "" : ` (renamed from ${current})`}`);
   ctx.out(`PR: ${url ?? "opened"}`);
   if (recorded.status !== "written") ctx.err(`nightqueue: the run was not recorded as done: ${recorded.reason}`);
@@ -293,11 +396,12 @@ export async function openPullRequest({ run, cwd, bodyFile, body, title, removeW
   return 0;
 }
 
-// True when every path is clean and the branch is ahead of its base: a retry after the commit already happened.
+// True when every path is clean, nothing is staged and the branch is ahead of its base: a retry after the commit already happened.
 function alreadyCommitted(cwd, paths, env) {
   if (paths.length === 0) return false;
   const status = runGit({ args: ["status", "--porcelain", "--", ...paths], cwd, env });
   if (!status.ok || outputLines(status).length > 0) return false;
+  if (!runGit({ args: ["diff", "--cached", "--quiet"], cwd, env }).ok) return false;
   const ahead = runGit({ args: ["rev-list", "--count", `${baseRef(cwd, env)}..HEAD`], cwd, env });
   return ahead.ok && Number(ahead.stdout.trim()) > 0;
 }
@@ -309,11 +413,11 @@ function refuse(lines, ctx) {
   return 1;
 }
 
-// Commits the list, or answers the commit a previous attempt of this same publication already made.
-async function commitOnce({ run, cwd, paths, messageFile, ctx }) {
-  if (!alreadyCommitted(cwd, paths, ctx.env)) {
-    if (paths.length === 0) throw new UserError(`the artifact lists no file under \`${FILE_LIST}\`: there is nothing to commit`);
-    return await commitPaths({ run, cwd, paths, messageFile, ctx });
+// Commits the list, or answers the commit a previous attempt of this same publication already made; a fold always commits.
+async function commitOnce({ run, cwd, paths, messageFile, fold, ctx }) {
+  if (fold || !alreadyCommitted(cwd, paths, ctx.env)) {
+    if (nothingToCommit(paths, fold)) throw new UserError(`the artifact lists no file under \`${FILE_LIST}\`: there is nothing to commit`);
+    return await commitPaths({ run, cwd, paths, messageFile, fold, ctx });
   }
   ctx.out(`CONVENTION: ${commitConvention(cwd, ctx.env)}`);
   ctx.out(`COMMITTED: ${shortHead(cwd, ctx.env)} (already committed)`);
@@ -356,13 +460,13 @@ export async function runPublish(argv, ctx) {
   const problems = [...messageProblemLines(cwd, messageFile, ctx.env), ...bodyProblemLines({ run, template: findPrTemplate(cwd), body })];
   if (problems.length > 0) return refuse(problems, ctx);
   const { listed } = listedFromArtifact(run, values["files-from"]);
-  const { paths, refused } = stageable({ cwd, listed, extras: values.extra ?? [], env: ctx.env });
+  const wips = branchWips(cwd, run, ctx.env);
+  if (wips.problems.length > 0) return refuse(wips.problems, ctx);
+  const { paths, refused, fold } = stageable({ cwd, listed, extras: values.extra ?? [], env: ctx.env, fold: wips.fold, runDir: run.runDir });
   if (refused.length > 0) return refuse(refusedLines(refused), ctx);
-  const scratch = scratchProblemLines(cwd, run, ctx.env, paths);
+  const scratch = scratchProblemLines(cwd, run, ctx.env, paths, fold?.parent);
   if (scratch.length > 0) return refuse(scratch, ctx);
-  const wips = wipProblemLines(cwd, ctx.env);
-  if (wips.length > 0) return refuse(wips, ctx);
-  const committed = await commitOnce({ run, cwd, paths, messageFile, ctx });
+  const committed = await commitOnce({ run, cwd, paths, messageFile, fold, ctx });
   if (committed !== 0) return committed;
   return await openPullRequest({ run, cwd, bodyFile, body, title, removeWorktree: values["remove-worktree"] === true, ctx });
 }

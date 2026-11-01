@@ -1352,7 +1352,7 @@ function toolDefinitions(env, state) {
         description:
           "Sends a gated, failed or cancelled job back to the queue. A gated job only moves with `note`, which reaches the run as the answer to its gate - except a job the preflight gated (its `blocked_code` is set: dirty checkout, wrong branch, missing checkout or `claude`, or `store-unavailable`: the session could not reach this server), which moves without one once its cause is fixed. A finished job never resumes: a `closed` job, or a `done` job whose pull request is merged, is refused with \"a finished job does not resume; queue a new one\". " +
           "Without `fresh` the run resumes from the last phase, keeping slug, branch, session and run directory; with `fresh` it starts from phase 0 and the run directory is dropped. " +
-          "A run whose branch carries a terminated run's wip commit gets its changes back uncommitted; `fresh` starts on a new branch and leaves that one untouched. " +
+          "A run whose branch carries a terminated run's wip commit starts on it, and `run publish` folds it into the delivery commit; `fresh` starts on a new branch and leaves that one untouched. " +
           "`run` starts a DETACHED runner, the same one `queue_run` starts - and the same one the `--run` of the CLI starts, unless it is asked for `--foreground`; a job that cannot be claimed right now answers `waiting` and starts nothing. " +
           "Inside an unattended run this tool only accepts the id of the job it is running: retrying another job is refused, because the note is delivered as a human answer in that job's next prompt.",
         inputSchema: {
@@ -1397,7 +1397,7 @@ function toolDefinitions(env, state) {
       config: {
         description:
           "Records that the run stopped on purpose at a phase, with the reason; a run terminated this way is never resumed by a retry, which restarts its phases. " +
-          "The runtime commits the worktree's changes on the job's branch as `wip(<slug>): terminated at <phase> — <reason>` (local, never pushed) and answers `wip` and the `notice` to report verbatim; a repeated call keeps the same wip commit; a retry gets those changes back uncommitted. " +
+          "The runtime commits the worktree's changes on the job's branch as `wip(<slug>): terminated at <phase> — <reason>` (local, never pushed) and answers `wip` and the `notice` to report verbatim; a repeated call keeps the same wip commit; a retry starts on that commit. " +
           "Inside a job the run is resolved from the job's own row — passing `project` or `slug` there is refused; outside a job both are required.",
         inputSchema: { phase: z.enum(RESUME_PHASE_ORDER), reason: z.string(), project: optionalText, slug: optionalText },
       },

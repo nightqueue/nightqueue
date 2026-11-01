@@ -20,8 +20,11 @@ import { findPrTemplate } from "./pr-template.mjs";
 import { durationCell, phaseRows, readJobLog, readRequiredFile, requireRunState, resolveRun, RUN_OPTIONS, worktreeOf } from "./run-context.mjs";
 import {
   bodyProblemLines,
+  branchWips,
   commitPaths,
+  foldedPaths,
   listedFromArtifact,
+  nothingToCommit,
   openPullRequest,
   PUBLISH_USAGE,
   refusedLines,
@@ -29,6 +32,7 @@ import {
   runPublish,
   scratchProblemLines,
   stageable,
+  wipProblemLines,
 } from "./run-publish.mjs";
 import { REPORT_USAGE, runReport } from "./run-report.mjs";
 import { START_USAGE, runStart } from "./run-start.mjs";
@@ -123,10 +127,12 @@ function writeFileList(path, files) {
   }
 }
 
-// The gate of the implementation artifact, the only one with a fallback: no file list means deriving it from the worktree's own changes.
+// The gate of the implementation artifact, the only one with a fallback: no file list means deriving it from the worktree's own changes and what the run's own wip commits carry.
 function checkFileList(run, path, text, ctx) {
   if (listsFiles(text)) return "OK";
-  const files = changedFiles(worktreeOf(run, ctx.env), ctx.gitImpl ?? defaultGitImpl);
+  const cwd = worktreeOf(run, ctx.env);
+  const carried = foldedPaths(cwd, run, ctx.env).map((file) => join(cwd, file));
+  const files = [...new Set([...changedFiles(cwd, ctx.gitImpl ?? defaultGitImpl), ...carried])].sort();
   if (files.length === 0) return `MISSING: ${FILE_LIST} (no changed files)`;
   writeFileList(path, files);
   return "GENERATED";
@@ -235,6 +241,12 @@ async function runCheck(argv, ctx) {
   return 0;
 }
 
+// Prints why `run commit` staged nothing; answers its exit code.
+function commitRefused(lines, ctx) {
+  for (const line of lines) ctx.out(line);
+  return 1;
+}
+
 // Runs `run commit`, which stages what the implementation artifact declared — and nothing the pipeline never commits — and commits it.
 async function runCommit(argv, ctx) {
   const options = { "files-from": { type: "string" }, extra: { type: "string", multiple: true }, "message-file": { type: "string" } };
@@ -244,13 +256,12 @@ async function runCommit(argv, ctx) {
   const run = await resolveRun(values, ctx);
   const cwd = worktreeOf(run, ctx.env);
   const { artifact, listed } = listedFromArtifact(run, values["files-from"]);
-  const { paths, refused } = stageable({ cwd, listed, extras: values.extra ?? [], env: ctx.env });
-  if (refused.length > 0) {
-    for (const line of refusedLines(refused)) ctx.out(line);
-    return 1;
-  }
-  if (paths.length === 0) throw new UserError(`${artifact} lists no file under \`${FILE_LIST}\`: there is nothing to commit`);
-  return await commitPaths({ run, cwd, paths, messageFile, ctx });
+  const wips = branchWips(cwd, run, ctx.env);
+  if (wips.problems.length > 0) return commitRefused(wips.problems, ctx);
+  const { paths, refused, fold } = stageable({ cwd, listed, extras: values.extra ?? [], env: ctx.env, fold: wips.fold, runDir: run.runDir });
+  if (refused.length > 0) return commitRefused(refusedLines(refused), ctx);
+  if (nothingToCommit(paths, fold)) throw new UserError(`${artifact} lists no file under \`${FILE_LIST}\`: there is nothing to commit`);
+  return await commitPaths({ run, cwd, paths, messageFile, fold, ctx });
 }
 
 // Refuses a `run pr` call that asks for nothing, or for both the template query and a publication at once.
@@ -285,7 +296,7 @@ async function runPr(argv, ctx) {
   if (values.template === true) return 0;
   const bodyFile = resolve(values["body-file"]);
   const body = readRequiredFile(bodyFile, "--body-file");
-  const lines = [...bodyProblemLines({ run, template, body }), ...scratchProblemLines(cwd, run, ctx.env)];
+  const lines = [...bodyProblemLines({ run, template, body }), ...scratchProblemLines(cwd, run, ctx.env), ...wipProblemLines(cwd, run, ctx.env)];
   if (lines.length > 0) {
     for (const line of lines) ctx.out(line);
     ctx.out("nothing was pushed and no pull request was opened: fix the problems above and call `nightqueue run pr` again");

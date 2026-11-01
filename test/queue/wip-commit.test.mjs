@@ -10,8 +10,7 @@ import {
   WIP_SKIP_REASONS,
   commitWip,
   commitWipAsync,
-  reanchorWip,
-  restoreWip,
+  readBranchWips,
   statusEntries,
   wipKeptLine,
   wipMessage,
@@ -333,86 +332,99 @@ test("a worktree that is not a git checkout answers failed and never throws", (t
   assert.ok(wip.reason, "a failed wip names no reason");
 });
 
-test("the restore gives the wip a ref names back as uncommitted changes, and keeps the ref", async (t) => {
-  const { env, worktree, base } = makeRepo(t);
-  writeFileSync(join(worktree, "a.txt"), "two\n");
-  put(worktree, "new.txt");
-  const wip = commit(env, worktree);
-  assert.deepEqual(await restoreWip({ cwd: worktree, env }), {
-    status: "restored", commit: wip.commit, short: wip.short, subject: "wip(s): terminated at qa — line one", ref: WIP_REF, parent: base, branch: "fix/x",
-  });
-  assert.equal(git(env, worktree, "rev-parse", "HEAD"), base);
-  assert.equal(git(env, worktree, "symbolic-ref", "--short", "HEAD"), "fix/x");
-  assert.deepEqual(git(env, worktree, "status", "--short").split("\n").map((line) => line.trim()).sort(), ["?? new.txt", "M a.txt"]);
-  assert.equal(git(env, worktree, "rev-parse", WIP_REF), wip.commit, "the restore dropped the only durable copy");
-  assert.deepEqual(await restoreWip({ cwd: worktree, env }), { status: "none", head: base });
-});
-
-test("a human `wip(` commit with no ref, or a commit on top of a ref'd wip, is never reset", async (t) => {
-  const { env, worktree } = makeRepo(t);
-  put(worktree, "human.txt");
-  git(env, worktree, "add", "human.txt");
-  git(env, worktree, "commit", "-q", "--no-verify", "-m", "wip(s): by hand");
-  const human = git(env, worktree, "rev-parse", "HEAD");
-  assert.equal((await restoreWip({ cwd: worktree, env })).status, "none");
-  assert.equal(git(env, worktree, "rev-parse", "HEAD"), human);
-  put(worktree, "new.txt");
-  commit(env, worktree);
-  put(worktree, "hand.txt");
-  git(env, worktree, "add", "hand.txt");
-  git(env, worktree, "commit", "-q", "--no-verify", "-m", "by hand");
-  const head = git(env, worktree, "rev-parse", "HEAD");
-  assert.equal((await restoreWip({ cwd: worktree, env })).status, "none");
-  assert.equal(git(env, worktree, "rev-parse", "HEAD"), head);
-});
-
-test("a ref'd HEAD whose subject is not a wip is never reset, and a worktree that is gone fails without throwing", async (t) => {
-  const { env, worktree, base } = makeRepo(t);
-  git(env, worktree, "update-ref", WIP_REF, base);
-  assert.equal((await restoreWip({ cwd: worktree, env })).status, "moved");
-  assert.equal(git(env, worktree, "rev-parse", "HEAD"), base);
-  assert.equal((await restoreWip({ cwd: join(worktree, "..", "missing"), env })).status, "failed");
-});
-
-// A wip committed then given back by the restore, as the claim records it.
-async function restoredWip(env, worktree) {
-  put(worktree, "new.txt");
-  commit(env, worktree);
-  const { status: _status, ...ids } = await restoreWip({ cwd: worktree, env });
-  return { ...ids, status: "committed", restored: true };
+// A commit on the branch with the given subject, answered by its id.
+function commitSubject(env, worktree, subject) {
+  git(env, worktree, "commit", "-q", "--allow-empty", "--no-verify", "-m", subject);
+  return git(env, worktree, "rev-parse", "HEAD");
 }
 
-test("the re-anchor puts the branch back on the restored wip, leaves later edits uncommitted and creates no commit", async (t) => {
-  const { env, worktree } = makeRepo(t);
-  const wip = await restoredWip(env, worktree);
-  put(worktree, "later.txt");
-  const before = git(env, worktree, "rev-list", "--all", "--count");
-  assert.deepEqual(await reanchorWip({ cwd: worktree, wip, env }), { status: "reanchored", commit: wip.commit });
-  assert.equal(git(env, worktree, "rev-parse", "HEAD"), wip.commit);
-  assert.equal(git(env, worktree, "symbolic-ref", "--short", "HEAD"), "fix/x");
-  assert.equal(git(env, worktree, "rev-list", "--all", "--count"), before);
-  assert.deepEqual(git(env, worktree, "status", "--short").split("\n").map((line) => line.trim()), ["?? later.txt"]);
-});
+// What the branch's wip commits read as for the run `s`, against `main`.
+function reading(env, worktree, extra = {}) {
+  return readBranchWips({ cwd: worktree, base: "main", slugs: ["s"], env, ...extra });
+}
 
-test("the re-anchor never resets a HEAD the attempt moved, a record not restored, or a wip whose ref is gone", async (t) => {
-  const { env, worktree } = makeRepo(t);
-  const wip = await restoredWip(env, worktree);
-  assert.deepEqual(await reanchorWip({ cwd: worktree, wip: { ...wip, restored: false }, env }), { status: "none" });
+test("the run's own wip commits read as one fold: every path they carry, a stacked older wip included, and nothing changes", (t) => {
+  const { env, worktree, base } = makeRepo(t);
+  put(worktree, "one.txt");
+  const older = commit(env, worktree).commit;
   git(env, worktree, "update-ref", "-d", WIP_REF);
-  assert.equal((await reanchorWip({ cwd: worktree, wip, env })).status, "failed");
-  assert.equal(git(env, worktree, "rev-parse", "HEAD"), wip.parent);
-  git(env, worktree, "update-ref", WIP_REF, wip.commit);
-  assert.equal((await reanchorWip({ cwd: worktree, wip: { ...wip, branch: "other" }, env })).status, "failed");
-  git(env, worktree, "add", "new.txt");
-  git(env, worktree, "commit", "-q", "--no-verify", "-m", "delivery");
-  const delivered = git(env, worktree, "rev-parse", "HEAD");
-  assert.deepEqual(await reanchorWip({ cwd: worktree, wip, env }), { status: "moved", head: delivered });
-  assert.equal(git(env, worktree, "rev-parse", "HEAD"), delivered);
+  put(worktree, "two.txt");
+  git(env, worktree, "add", "two.txt");
+  const newer = commitSubject(env, worktree, "wip(s): terminated at qa — again");
+  git(env, worktree, "update-ref", WIP_REF, newer);
+  const { problems, fold } = reading(env, worktree);
+  assert.deepEqual(problems, []);
+  assert.deepEqual({ ...fold, carried: [...fold.carried].sort() }, { head: newer, parent: base, commits: [newer, older], carried: ["one.txt", "two.txt"] });
+  assert.equal(git(env, worktree, "rev-parse", "HEAD"), newer);
 });
 
-const RETRY = "Retry: nightqueue queue retry J-7 (the changes come back uncommitted in the same worktree; add --fresh to start over on a new branch)";
+test("a branch with no wip reads as nothing to fold", (t) => {
+  const { env, worktree } = makeRepo(t);
+  assert.deepEqual(reading(env, worktree), { problems: [], fold: null });
+  commitSubject(env, worktree, "feat: a plain commit");
+  assert.deepEqual(reading(env, worktree), { problems: [], fold: null });
+});
+
+test("a wip subject with no ref, with another run's ref, or a slug that is not a ref name is foreign and refused", (t) => {
+  const cases = [
+    { subject: "wip(s): by hand", ref: null },
+    { subject: "wip(other): terminated at qa — why", ref: "refs/nightqueue/wip/other" },
+    { subject: "wip(a b): x", ref: null },
+    { subject: "wip(s) no colon", ref: null },
+  ];
+  for (const { subject, ref } of cases) {
+    const { env, worktree } = makeRepo(t);
+    const made = commitSubject(env, worktree, subject);
+    if (ref) git(env, worktree, "update-ref", ref, made);
+    const { problems, fold } = reading(env, worktree);
+    assert.equal(fold, null, subject);
+    assert.deepEqual(problems, [`REJECTED: the branch carries the wip commit ${made.slice(0, 7)} (${ref ?? subject}), which is not this run's own and is never pushed: stop and record it as an open item; the operator squashes it`], subject);
+  }
+});
+
+test("a wip of another slug is own for a start_branch job or a listed slug, and a human `wip(` commit stays foreign there", (t) => {
+  const { env, worktree, base } = makeRepo(t);
+  const inherited = commitSubject(env, worktree, "wip(other): terminated at qa — why");
+  git(env, worktree, "update-ref", "refs/nightqueue/wip/other", inherited);
+  assert.deepEqual(reading(env, worktree, { anySlug: true }).fold.commits, [inherited]);
+  assert.equal(reading(env, worktree, { slugs: ["s", "other"] }).fold.parent, base);
+  const human = commitSubject(env, worktree, "wip(hand): by hand");
+  const { problems, fold } = reading(env, worktree, { anySlug: true });
+  assert.equal(fold, null);
+  assert.equal(problems.length, 1);
+  assert.ok(problems[0].includes(human.slice(0, 7)), problems[0]);
+});
+
+test("a ref-named commit with no wip subject is refused, and so is a plain commit above an own wip, each in one line", (t) => {
+  const { env, worktree } = makeRepo(t);
+  const named = commitSubject(env, worktree, "feat: not a wip");
+  git(env, worktree, "update-ref", "refs/nightqueue/wip/other", named);
+  assert.deepEqual(reading(env, worktree).problems, [`REJECTED: the branch carries the wip commit ${named.slice(0, 7)} (refs/nightqueue/wip/other), which is not this run's own and is never pushed: stop and record it as an open item; the operator squashes it`]);
+  git(env, worktree, "update-ref", "-d", "refs/nightqueue/wip/other");
+  put(worktree, "new.txt");
+  const wip = commit(env, worktree).commit;
+  const above = commitSubject(env, worktree, "by hand on top");
+  assert.deepEqual(reading(env, worktree).problems, [`REJECTED: the commit ${above.slice(0, 7)} (by hand on top) sits above the wip commit ${wip.slice(0, 7)}, which is never pushed: stop and record it as an open item; the operator squashes it`]);
+});
+
+test("a plain commit below an own wip stays out of the fold", (t) => {
+  const { env, worktree } = makeRepo(t);
+  const below = commitSubject(env, worktree, "feat: below");
+  put(worktree, "new.txt");
+  const wip = commit(env, worktree).commit;
+  const { problems, fold } = reading(env, worktree);
+  assert.deepEqual([problems, fold.parent, fold.commits], [[], below, [wip]]);
+});
+
+test("a git that cannot list the branch refuses with what it said", (t) => {
+  const { env, worktree } = makeRepo(t);
+  assert.throws(() => reading(env, worktree, { base: "no-such-ref" }), /git could not list the commits the branch adds/);
+});
+
+const RETRY = "Retry: nightqueue queue retry J-7 (the next attempt starts on the wip commit in the same worktree; add --fresh to start over on a new branch)";
 const NOTICE_FORMS = [
-  { wip: { status: "committed", short: "abc1234", branch: "fix/x" }, first: "Terminated run: work kept as wip commit abc1234 on branch fix/x (local, never pushed, not reviewed)." },
+  { wip: { status: "committed", short: "abc1234", branch: "fix/x" }, first: "Terminated run: wip commit abc1234 kept on fix/x, local, never pushed, not reviewed." },
+  { wip: { status: "committed", short: "abc1234", branch: "fix/x", ref: "refs/nightqueue/wip/s" }, first: "Terminated run: wip commit abc1234 kept on fix/x (ref refs/nightqueue/wip/s), local, never pushed, not reviewed." },
   { wip: { status: "clean", branch: "fix/x" }, first: "Terminated run: no wip commit, the worktree had no changes." },
   { wip: { status: "skipped", branch: "fix/x", reason: WIP_SKIP_REASONS.adopted }, first: "Terminated run: no wip commit (adopted worktree); the changes stay uncommitted in /w." },
   { wip: { status: "skipped", branch: "main", reason: WIP_SKIP_REASONS.defaultBranch }, first: "Terminated run: no wip commit (default branch); the changes stay uncommitted in /w." },

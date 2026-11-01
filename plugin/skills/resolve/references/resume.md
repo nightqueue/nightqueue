@@ -20,6 +20,5 @@ A ``RESUME CANDIDATE (slug `<slug>`)`` block: this run continues one the runtime
   block, **start clean** from Phase 0.
 - **`Re-run: <phase> — <reason>`** → run that phase (the runtime refused to skip it); each line
   verbatim → open item of Phase 9 and the notice.
-- `RESTORED WIP:` → the previous attempt's work is back uncommitted: keep it.
 - Safety: a resume follows only a retry of a TERMINAL job or the first claim of an
   operator-queued job — NEVER reuse a running job's worktree.

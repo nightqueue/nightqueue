@@ -203,8 +203,8 @@ test("a second INVALIDATED pauses at a gate, its answer has three paths, and no 
   assert.ok(resume.includes("(b) ship as is → the `VERDICT:` row, the lines ⚠️ open items"), "resume.md lost answer (b)");
   assert.ok(resume.includes("(c) terminate → `run_terminate` (`qa`, the reason)"), "resume.md lost answer (c)");
   assert.ok(resume.includes("Never pause twice on them."), "resume.md lets the INVALIDATED pause repeat");
-  assert.ok(RESUME.includes("`RESTORED WIP:` → the previous attempt's work is back uncommitted: keep it."), "resume.md no longer keeps a restored wip");
-  assert.ok(buildPrompt({ job: { prompt: "x" }, restoredWip: { short: "abc1234", subject: "wip(s): terminated at qa — why" } }).includes("RESTORED WIP: "), "the prompt no longer carries the RESTORED WIP line the skill reads");
+  assert.equal(RESUME.includes("RESTORED WIP"), false, "resume.md still reads a RESTORED WIP line nothing prints");
+  assert.equal(buildPrompt({ job: { prompt: "x" } }).includes("RESTORED WIP"), false, "the prompt still carries a RESTORED WIP line");
   const pluginDir = new URL("../plugin/", import.meta.url);
   const files = readdirSync(pluginDir, { recursive: true }).map(String).filter((name) => name.endsWith(".md"));
   assert.deepEqual(files.filter((name) => folded(readFileSync(new URL(name, pluginDir), "utf8")).includes("without a commit")), [], "a plugin text still says to terminate without a commit");

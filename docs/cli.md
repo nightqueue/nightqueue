@@ -86,7 +86,11 @@ already happened (every listed path clean and the branch ahead of its base) prin
 `COMMITTED: <sha> (already committed)` instead of committing again. The title is
 `--title`, else the body's `# <title>` line, else the subject of the commit message.
 It prints the same `CONVENTION:`, `COMMITTED:`, `BRANCH:`, `PR:` and `WORKTREE:`
-lines as the two commands, which keep working unchanged.
+lines as the two commands. The run's own wip commits fold into the single delivery commit
+with the listed paths, printing `FOLDED: <n> wip commits (<m> files)` and any path left out with
+its reason; the wip ref keeps naming the old commit. A `wip(` commit that is not the run's own,
+and any commit above an own one, is refused with a `REJECTED:` line (see the runtime contract).
+The push records the files of HEAD as `outcome.files`.
 
 `run report [--json]` renders the table of Phase 9 from `state.json`, the job log
 and `03-plan.md`: ONE table, `Step | Agent | Result | Note | Time`, one row per execution
@@ -145,8 +149,9 @@ round leaves open (`round <k> of <file> leaves the HTML comment opened at line <
 and a round heading inside a comment the round itself closes (`line <Y> of <file> (`## Round
 <k>`) sits inside the HTML comment ...`), every part in line order, joined by `; `. `04` is the only artifact with a fallback: with no file list,
 the command derives one from the changes of the run's worktree (`git diff
---name-only HEAD` plus `git ls-files --others --exclude-standard`), writes the
-artifact and prints `GENERATED` - and a worktree with no change at all prints
+--name-only HEAD` plus `git ls-files --others --exclude-standard`) and from what
+the run's own wip commits would carry into the delivery, writes the
+artifact and prints `GENERATED` - and a worktree with no change at all and no wip to fold prints
 `MISSING: ## Modified files (no changed files)` without writing anything. The
 three answers exit `0`: they are findings the agent judges (relaunch the phase
 or terminate), not failures of the command; only an unknown `<NN>`, a stage other than
@@ -216,7 +221,9 @@ refusal. Before committing it prints `CONVENTION: <...>` - the file that
 declares the repository's commit convention (a commitlint config, `.husky/`,
 `.gitmessage`, `CONTRIBUTING*` or a `commitlint` block in `package.json`) and
 what the last 30 subjects really read like - so the message is written to the
-shape the repository uses.
+shape the repository uses. It folds the run's own wip commits and refuses a foreign one exactly
+as `run publish` does, and `run pr` refuses a branch still carrying a wip commit, naming
+`run publish`.
 
 `run pr` first resolves the run's checkout and finds the pull request template
 in effect there, first match wins: `.github/PULL_REQUEST_TEMPLATE.md`,

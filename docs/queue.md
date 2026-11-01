@@ -676,21 +676,21 @@ A run that terminated left its work as a local wip commit
 commit with the ref `refs/nightqueue/wip/<slug>`, written in the same step. A job that ended
 `cancelled` by itself has a notice that names the commit, the exact
 `Retry: nightqueue queue retry J-<id>` line and `New job from it: start_branch: <branch>` for a
-new job that continues from that branch. Any other ending (`failed`, an operator stop, a gate)
-whose branch still sits on such a commit prints a `Wip commit: ` paragraph with the
-`start_branch` line and no `Retry:` line.
+new job that continues from that branch. Any other ending (`failed`, an operator stop, a gate,
+`done` without a pull request) whose branch still sits on such a commit, its own or the one a
+`start_branch` job inherited, prints a `Wip commit: ` paragraph with the `start_branch` line and
+no `Retry:` line.
 
-At every claim whose HEAD is a commit a `refs/nightqueue/wip/*` ref names, the runner gives the
-changes back uncommitted before the session starts. That covers a retry without `--fresh`, in
-the same worktree or one recreated from the branch, and a new job queued with `start_branch`
-on that branch. The ref stays. The phases restart, because a terminated run is never resumed.
-A commit titled `wip(` with no such ref is never reset, and when HEAD moved off the wip commit
-nothing is reset. At the end of every attempt that got the work back and committed nothing on
-top of it, the runner moves the branch back onto the same wip commit without creating one; the
-attempt's later edits stay uncommitted. So `--fresh` leaves the old branch at its wip commit.
-`run publish` refuses a branch whose `base..HEAD` holds a commit a wip ref names: the wip is
-never pushed. To clean up, list the refs with `git for-each-ref refs/nightqueue/wip` and drop
-one with `git update-ref -d <ref>` once its work is delivered or abandoned.
+The next attempt starts on that commit, with a clean tree: a retry without `--fresh`, in the
+same worktree or one recreated from the branch, and a new job queued with `start_branch` on that
+branch. The runner resets nothing and the prompt says nothing about it. The phases restart,
+because a terminated run is never resumed. `--fresh` leaves the old branch at its wip commit.
+`run publish` and `run commit` fold the run's own wip commits into the single delivery commit,
+so the wip is never pushed. `run pr` refuses a branch still carrying one, naming `run publish`.
+The ref stays on the old commit, which is the way back to it. A `wip(` commit that is not the
+run's own, or any commit above an own one, is refused. To clean up, list the refs with
+`git for-each-ref refs/nightqueue/wip` and drop one with `git update-ref -d <ref>` once its work
+is delivered or abandoned.
 
 `queue repair <id>` re-classifies a job that ended `gate` or `failed` from its
 own persisted log plus the `outcome` recorded in the `state.json` of its run, and
