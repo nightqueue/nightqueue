@@ -7,11 +7,13 @@ rendered by `phase_prompt` (`qa-lite`, `qa-analyst`, `qa-prover`), never assembl
 shared report format they all deliver is `deliverables/qa-report.md`. Every lane writes into ONE
 artifact, `05-qa.md`, one `## Round <n>` per launch.
 
-**Mode — read from `run check 03`:** the `QA: lite|full` line of the last
-`nightqueue run check 03` answer decides, and nothing else (on a resume, run the check again:
-it is a pure read of the plan). The check answers `full` when the plan declares
-`**Always-gate class:** yes` or lists two or more 🔴 risks under `## Identified risks`, and
-`lite` otherwise.
+**Triage first:** launch 1 qa-guardian — `phase_prompt` with `target: "qa-triage"`, launched as
+`lite` below — header `🛡️ QA-GUARDIAN · TRIAGE · ...`, then `nightqueue run check 05 --stage triage`.
+Its `QA-MODE:` line decides, and nothing else. On `MISSING`, relaunch once (`note` = the lines);
+if it persists, `lite`, ⚠️ open item. On a resume at Phase 5 run the check first (a pure read);
+launch the lane only on its `MISSING`.
+
+**skip → no attack lane:** the check recorded it; Phase 6, never `run check 05`.
 
 **lite → one lane:** launch 1 qa-guardian — `phase_prompt` with `target: "qa-lite"`, then
 `Agent` with the answered `subagent_type`, `model` and `prompt` verbatim — header
@@ -30,7 +32,7 @@ verbatim — header `🛡️ QA-GUARDIAN · ANALYST · ...`. It writes its round
 
 **Stage A gate:** run `nightqueue run check 05 --stage analyst` (the Phase 0 artifact gate),
 which reads the analyst's round for the sections of the analyst request's `## Deliver` — on
-`MISSING`, relaunch the analyst (🔁) once with the check's lines as `note`; if it persists, terminate and inform the user. It
+`MISSING`, relaunch the analyst (🔁) once with the check's lines as `note`; if it persists, Phase 6, ⚠️ open item. It
 answers `QA-STAGE: provers|skip` and records the marker itself (`recorded: qa_stage_a <verdict>`)
 BEFORE stage B — never by writing a file: this is what makes a resume skip the analyst if the
 provers die halfway. On `QA-STAGE: skip` (zero runtime hypotheses), go straight to
@@ -60,6 +62,5 @@ The aggregate verdict counts proof: any merged round with a non-`None` `## Prove
 `NEEDS FIX`; else the provers' verdicts plus the coverage of the analyst's `H<n>` ids (any
 `NEEDS FIX` or `BROKE` line → `NEEDS FIX`, else any `NEEDS DISCUSSION`, unreadable verdict,
 `INCONCLUSIVE` line or id with no prover line → `NEEDS DISCUSSION`, else `APPROVED`); with no prover
-round, open hypotheses → `NEEDS DISCUSSION`, and no hypothesis → the analyst's verdict. A `GATE:` line relaunches the QA once,
-from the analyst; a persisting usage-coverage-only GATE pauses (SKILL.md Phase 5), never terminates; a second `INVALIDATED:` too. The check reads the
+round, open hypotheses → `NEEDS DISCUSSION`, and no hypothesis → the analyst's verdict. The check reads the
 last `## Round`, the one Phase 6 and Phase 9 re-read.

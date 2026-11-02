@@ -94,6 +94,16 @@ test("a run older than the attempt is ignored and state.json speaks, with an ope
   assert.deepEqual(openItems, [FALLBACK_ITEM]);
 });
 
+test("a QA skip reaches the reflector's timeline with its reason, from either source", async (t) => {
+  const { env, run } = makeJobRun(t, "timeline-qa-skip");
+  const reason = "QA skipped: only text changed.";
+  const fromState = await timeline({ run, state: { phases: [{ phase: "qa", verdict: "SKIPPED", note: "only text changed.", reason }] }, env });
+  assert.equal(fromState.text, `1. qa · - · SKIPPED · ${reason}`);
+  logRun(env, run.projectId, [{ phase: "qa", model: "sonnet", status: "ok", reason }]);
+  const fromRecord = await timeline({ run, env });
+  assert.equal(fromRecord.text, `1. qa · sonnet · ok · ${reason}`);
+});
+
 test("no recorded run and no state phases answer `none recorded`", async (t) => {
   const { env, run } = makeJobRun(t, "timeline-empty");
   const { text, openItems } = await timeline({ run, env });

@@ -2,6 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { UserError } from "../config/errors.mjs";
 import { jobRef } from "../memory/refs.mjs";
+import { comparableQuestion, gateQuestion, nestQuestionHeading, questionDigest } from "./gate-question.mjs";
 import { lastRound, PHASE_ARTIFACTS } from "./phase-artifacts.mjs";
 import { hasGateMarker, sectionOf, sectionOfAnyLevel } from "./stream.mjs";
 
@@ -40,7 +41,7 @@ function artifactSection(runDir, fromArtifact) {
   if (!section.startsWith("#")) {
     throw new UserError(`\`from_artifact.section\` must be a heading such as \`## Requires user confirmation\`, not \`${section}\`: nothing was recorded`);
   }
-  const text = readRunArtifact(runDir, file);
+  const text = nestQuestionHeading(readRunArtifact(runDir, file));
   const body = sectionOf(text, section) ?? sectionOfAnyLevel(text, section);
   if (body === null) throw new UserError(`${file} has no \`${section}\` section: nothing was recorded`);
   return body;
@@ -50,6 +51,25 @@ function artifactSection(runDir, fromArtifact) {
 function underGateHeading(section) {
   const firstLine = section.split("\n")[0];
   return hasGateMarker(firstLine) ? section : `${GATE_HEADING}\n\n${section}`;
+}
+
+// The plan of the run, or an empty text when it is absent or unreadable: a gate on a run with no plan still records.
+function planTextOf(runDir) {
+  try {
+    return readRunArtifact(runDir, PHASE_ARTIFACTS.get("03").file);
+  } catch {
+    return "";
+  }
+}
+
+// The digest a pause records: the one of the plan's filled question when the notice shows it to the operator, else null.
+export function gateDigestOf({ runDir, notice = "" } = {}) {
+  const question = gateQuestion(planTextOf(runDir));
+  if (question === null) return null;
+  const digest = questionDigest(question);
+  const shown = gateQuestion(notice);
+  if (shown !== null && questionDigest(shown) === digest) return digest;
+  return comparableQuestion(notice).includes(comparableQuestion(question)) ? digest : null;
 }
 
 // The whole `## Notice` body of a gate, composed from an artifact section and/or a question, ending with how to answer it.

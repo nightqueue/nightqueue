@@ -234,7 +234,7 @@ export function buildPrompt({ job, handoff, openPrs, env = process.env } = {}) {
     `Unattended run, ${jobRef(job?.id)}, no operator available.`,
     ...runLines(job, env),
     "Open the pull request at the end.",
-    "If you need a human decision, stop at the gate and print `## Requires user confirmation`.",
+    "The only human stop is Phase 3, on a filled `## Requires user confirmation` question; everything else is routed or an open item.",
     "Shell rule: the worktree isolation refuses commands it cannot verify - one simple command per Bash call, no heredocs, no `\\` continuations, no `cd … && …`; longer snippets are files written with Write and run by path.",
   ].join("\n");
   return `${base}${originBlock(job, env)}${operatorBlock(job?.operator_note, job?.prompt)}${resumeBlock(handoff)}${openPrsBlock(openPrs)}`;

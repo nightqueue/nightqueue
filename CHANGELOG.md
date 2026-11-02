@@ -26,6 +26,15 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **`nightqueue run publish --draft` delivers a run that reached its fix limit.** The pull request
+  opens as a draft, or an existing one is converted with `gh pr ready --undo`. The count comes
+  from the body's unfenced `Remaining failure: <what>` lines, and a `--draft` with none is refused
+  before anything is committed. The command prints `DRAFT: draft pull request — N failures remain`,
+  records `outcome.draft` and `outcome.draftFailures`, and `run report` names the draft in its
+  delivery note, its `Happy:` line and its open items. When gh refuses the draft, the run still
+  delivers a normal pull request, and the report reads `Happy: no` with the failures. A later publish
+  without the flag turns the run's own draft ready (`READY: <url>`), unless its body still lists a
+  failure, when it stays a draft with the count recorded; every other pull request is left alone.
 - **The operator uses the person's own MCP servers.** `nightqueue open` and `nightqueue queue
   session` now start the operator with `--setting-sources user,project,local`, so the servers
   the person configured (user, project and local scope, and their user-scope plugins) are
@@ -289,6 +298,46 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 - **A rung's refusal explains itself.** When a run on `worktree-<slug>-<n>` meets a pull request on
   the plain `<type>/<slug>`, `queue close` names the collision and adds that the way out is to fix
   `pr_url` or cancel the job.
+- **The QA triages the real diff and decides how much QA it gets.** Phase 5 now opens with a short
+  `sonnet` lane (`phase_prompt` target `qa-triage`, overridable with `project models`) that
+  classifies what changed and writes a `source: qa-triage` round in `05-qa.md`. `nightqueue run
+  check 05 --stage triage` prints `QA-MODE: skip|lite|full — <why>`, the only line the orchestrator
+  follows, and records `qaMode{mode, reason, at}`. `full` answers a migration, a new route, auth,
+  payment, concurrency, parsing of external input, personal data or a 🔴 plan risk; `skip` needs no
+  new risk and only copy, docs, inert config, a pure rename, tests, or logic covered by a test the
+  sentence names; anything else is `lite`. A classification line off the list of kinds is refused
+  unless the answer is `full`. A skip launches no attack lane, the verifier still runs,
+  `run report` shows `5 QA ⏭️ no new risk: <why>` and stays happy, and `run publish` refuses a body
+  without the exact line `QA: skipped — <state.qaMode.reason>`. A logic skip must name a test file
+  that exists inside the worktree, read on disk with `..` and links resolved; an invented path, an
+  escape or a worktree the check cannot read answers `MISSING:` and records no skip. A `qa` `SKIPPED` with no `qaMode` of `skip` behind it reads `⚠️` and a resume
+  still owes that QA; a reworded relaunch of the same skip records nothing new, and a `lite` or `full`
+  decision after a skip removes its `SKIPPED` entry, so the real QA is no re-run. The reflector saves a `target: qa` lesson only when a defect later appears
+  in the skipped area. This replaces the plan-decided QA mode of the `Added` section above:
+  `run check 03` no longer prints `QA:`, and the plan's `**Always-gate class:**` field no longer
+  decides the mode. The `tier` refusal line now names the new check.
+- **A `/resolve` run pauses only at Phase 3, on a real question.** A job now runs unattended from
+  request to pull request unless the architect writes a filled `**Question:**` under
+  `## Requires user confirmation`, which it does only when the decision changes behaviour, data or
+  scope, the request does not settle it, and choosing wrong is costly to undo. Any other gap is the
+  architect's to decide and record in `## Decisions taken`. `run check 03` prints
+  `CONFIRM: requires-user-confirmation — <question>` only with a filled question, and
+  `CONFIRM: answered` when a job's operator note exists and the question's digest matches
+  `gateQuestionDigest`, recorded by any gate that shows the plan's question and cleared by any other.
+  The reader takes the label in its common shapes and reads a value as a question by its `?`; a `?`
+  it cannot place or a filled label with no `?` is a `MISSING:` with one relaunch, and `run report` reads an answered pause as happy. After code exists no phase terminates or
+  pauses: a finding is an `OPEN:` line or an open item, and the fix loop's limit opens a draft pull
+  request instead of cancelling the job.
+- **`run check 03` and `run check 05` no longer gate.** `coverage-vector-no-reason` and
+  `coverage-enumeration-no-method` are now `OPEN:` lines, the enumeration read from the bullets and
+  fenced commands under its label. `05` prints one `OPEN:` per filled `omitted:`, `divergences:` or
+  `unconfirmed decisions:` line, with no count to reconcile. `run report` lists the `OPEN:` lines of
+  `03` too.
+- **The triage reads a Brief's leading token, and has three verdicts.** `bug/error (security)` and
+  `fix(queue)` pass `brief-type-invalid` and `brief-commit-type-invalid`. The verdicts are `PROCEED`,
+  `NO-CHANGE-NEEDED` and `NOT-REPRODUCIBLE`; an ambiguity or a cheaper alternative is a
+  `## Request gaps` item. A `NEEDS-CLARIFICATION` or `PROPOSE-ALTERNATIVE` artifact still parses and
+  reads as `PROCEED`.
 - **The operator agent disallows `RemoteTrigger`.** Only a claude.ai login exposes it, and it
   reached the operator with no band decision. It is now in `disallowedTools` and in the probed
   built-in list of the plugin test.
@@ -485,6 +534,13 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Removed
 
+- **The gates that forced a pause or a relaunch by paperwork.** `run check` no longer answers
+  `coverage-not-covered-without-confirmation`, `usage-coverage-cond-1` to `-cond-4`,
+  `symptom-coverage-n-mismatch`, `symptom-coverage-omitted-empty`,
+  `symptom-coverage-method-generic`, `usage-coverage-nm-mismatch`,
+  `usage-coverage-divergences-empty` or `usage-coverage-held-on-pipeline`. The `Usage coverage:` and
+  `Symptom coverage:` lines of the QA report, the usage-coverage record and its pull request footer
+  line are gone with them. This replaces the earlier Unreleased entries that named those codes.
 - **The `triage` and `qa` operator agents**, with the qa lane of the operator guard and the
   `subagent-stop` hook that dropped the worktree `nightqueue:qa` announced. `nightqueue sandbox
   worktree` stays a CLI facility, swept by `nightqueue open` and `nightqueue doctor --fix`.

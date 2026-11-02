@@ -3,8 +3,11 @@ import { join } from "node:path";
 import { UserError } from "../config/errors.mjs";
 import { NIGHTQUEUE_SECTIONS } from "./pr-template.mjs";
 
+// A `<...>` example left over from the template.
+export const ANGLE_PLACEHOLDER = /<[A-Za-z][A-Za-z0-9 _./'-]*>/;
+
 // What a placeholder left over from the template looks like: the double curly braces and the `<...>` examples.
-const PLACEHOLDERS = [/\{\{[^}\n]*\}\}/, /<[A-Za-z][A-Za-z0-9 _./'-]*>/];
+const PLACEHOLDERS = [/\{\{[^}\n]*\}\}/, ANGLE_PLACEHOLDER];
 
 // A bare `#<number>`, which GitHub turns into a cross-reference to an unrelated thread of the repository; a code span hides it.
 const BARE_REFERENCE = /(^|[^`\w&])#\d+\b/;

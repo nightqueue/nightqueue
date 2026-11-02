@@ -1,6 +1,5 @@
 OK
-GATE: coverage-vector-no-reason — V14 · Status: covered under (A) · not-covered under (B)
-GATE: coverage-enumeration-no-method — I read the operator code paths
-CONFIRM: requires-user-confirmation
-QA: lite
-recorded: none (GATE: coverage-vector-no-reason — V14 · Status: covered under (A) · not-covered under (B))
+OPEN: coverage-vector-no-reason — V14 · Status: covered under (A) · not-covered under (B)
+OPEN: coverage-enumeration-no-method — I read the operator code paths
+CONFIRM: requires-user-confirmation — should the escape apply to every git read (A) or only to the grep path (B)?
+recorded: phase_done architecture OK

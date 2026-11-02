@@ -1,3 +1,0 @@
-OK
-QA: lite
-recorded: phase_done architecture OK
