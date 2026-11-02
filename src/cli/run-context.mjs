@@ -149,6 +149,37 @@ export function worktreeOf({ project, projectId, slug }, env) {
   return recorded || projectCheckout(project, env);
 }
 
+// The lines a read-only git command answered, or null when git refused to answer at all.
+function gitLines(gitImpl, cwd, args) {
+  try {
+    return String(gitImpl({ args, cwd }) ?? "")
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean);
+  } catch {
+    return null;
+  }
+}
+
+// Every file the worktree changed, tracked and untracked alike, as the absolute paths a `## Modified files` lists.
+export function changedFiles(cwd, gitImpl) {
+  const tracked = gitLines(gitImpl, cwd, ["diff", "--name-only", "HEAD"]);
+  const untracked = gitLines(gitImpl, cwd, ["ls-files", "--others", "--exclude-standard"]);
+  if (tracked === null && untracked === null) {
+    throw new UserError(`git answered nothing about \`${cwd}\`: the worktree of this run is gone or is not a git repository`);
+  }
+  return [...new Set([...(tracked ?? []), ...(untracked ?? [])])].sort().map((file) => join(cwd, file));
+}
+
+// One file of the run directory, or an empty text when the run wrote none.
+export function readRunFile(runDir, file) {
+  try {
+    return readFileSync(join(runDir, file), "utf8");
+  } catch {
+    return "";
+  }
+}
+
 // A file the command cannot work without, read from where the caller pointed at it.
 export function readRequiredFile(path, flag) {
   try {

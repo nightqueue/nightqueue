@@ -2,11 +2,11 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
+import { packageRoot } from "../../src/host/paths.mjs";
 import { COMMIT_TYPES } from "../../src/queue/branch-name.mjs";
-import { skillReferencesDir } from "../../src/queue/skill-template.mjs";
 import { briefCommitType, briefGates, briefSlug, briefType, hintPatterns, REQUIRED_FIELDS } from "../../src/queue/triage-brief.mjs";
 
-const TEMPLATE = readFileSync(join(skillReferencesDir(), "prompts", "triager.md"), "utf8");
+const TEMPLATE = readFileSync(join(packageRoot(), "plugin", "agents", "triager.md"), "utf8");
 const FILLED = { "Affected area": "src/a.mjs", Context: "c", Objective: "o", "Expected outcome": "e", "Commit type": "fix" };
 
 // A triage whose Brief carries the filled fields with the given overrides, one `**Field:** value` line each.
@@ -102,7 +102,11 @@ test("an option list reads as undecided, while a value that names one type passe
   for (const [value, expected] of decided) assert.equal(briefCommitType(triageWith({ "Commit type": value })), expected, value);
 });
 
-test("the shipped triager template gives a hint for every required field", () => {
+test("the shipped triager agent gives a hint for every required field, so its swallowed read cannot silently disable the gate", () => {
   const patterns = hintPatterns(TEMPLATE);
-  for (const field of REQUIRED_FIELDS) assert.ok(patterns.has(field), `the triager template has no hint for ${field}`);
+  for (const field of REQUIRED_FIELDS) assert.ok(patterns.has(field), `the triager agent has no hint for ${field}`);
+  for (const line of TEMPLATE.split("\n").filter((text) => /^\*\*(Objective|Context|Expected outcome):\*\* </.test(text))) {
+    const [, field, hint] = /^\*\*([^*]+):\*\* (<.*>)$/.exec(line);
+    assert.deepEqual(briefGates(triageWith({ [field]: hint }), "PROCEED"), [{ code: "brief-field-empty", evidence: field }], field);
+  }
 });

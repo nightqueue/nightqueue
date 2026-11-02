@@ -1,8 +1,8 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { packageRoot } from "../host/paths.mjs";
 import { PIPELINE_TASK_TYPES } from "../memory/runs.mjs";
 import { COMMIT_TYPES } from "./branch-name.mjs";
-import { skillReferencesDir } from "./skill-template.mjs";
 import { wholeHeadingSectionOf } from "./stream.mjs";
 
 // The `## Brief` the triage writes: the section `run check 01` copies into `00-brief.md`, and the gates it must pass first.
@@ -67,11 +67,11 @@ export function hintPatterns(templateText) {
 
 let cachedHints = null;
 
-// The field hints of the triager template the runtime renders; an unreadable template gives none, leaving only the placeholder words.
+// The field hints of the Brief layout the triager agent carries; an unreadable agent file gives none, leaving only the placeholder words.
 function templateHints() {
   if (cachedHints) return cachedHints;
   try {
-    cachedHints = hintPatterns(readFileSync(join(skillReferencesDir(), "prompts", "triager.md"), "utf8"));
+    cachedHints = hintPatterns(readFileSync(join(packageRoot(), "plugin", "agents", "triager.md"), "utf8"));
   } catch {
     cachedHints = new Map();
   }

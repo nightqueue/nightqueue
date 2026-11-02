@@ -1,10 +1,11 @@
-import { readdirSync, readFileSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 export const SKILL_DIR = join(resolve(dirname(fileURLToPath(import.meta.url)), ".."), "plugin", "skills", "resolve");
 
 export const LAZY_REFERENCES = Object.freeze([
+  "phases.md",
   "phase-8.md",
   "phase-9.md",
   "interactive-worktree.md",
@@ -20,13 +21,9 @@ export function fileBytes(path) {
   return Buffer.byteLength(readFileSync(path, "utf8"));
 }
 
-// The skill files every run loads: SKILL.md and every shared prompt partial (references/prompts/_*.md).
+// The skill files every run loads: SKILL.md alone.
 export function alwaysLoadedFiles(skillDir = SKILL_DIR) {
-  const promptsDir = join(skillDir, "references", "prompts");
-  const partials = readdirSync(promptsDir)
-    .filter((name) => name.startsWith("_") && name.endsWith(".md"))
-    .sort();
-  return [join(skillDir, "SKILL.md"), ...partials.map((name) => join(promptsDir, name))];
+  return [join(skillDir, "SKILL.md")];
 }
 
 // The references a run reads only when its phase says so.
@@ -37,6 +34,17 @@ export function lazyFiles(skillDir = SKILL_DIR) {
 // The bytes every run loads from the skill.
 export function alwaysLoadedBytes(skillDir = SKILL_DIR) {
   return alwaysLoadedFiles(skillDir).reduce((sum, path) => sum + fileBytes(path), 0);
+}
+
+// The `## Phase prompts` of a SKILL text: the shared return lines and each target's block, its `<RETURN>` written out.
+export function phasePrompts(text = readFileSync(join(SKILL_DIR, "SKILL.md"), "utf8")) {
+  const section = text.slice(text.indexOf("## Phase prompts"));
+  const returnLines = /^```\n(RETURN-HEAD:[^]*?)\n```$/m.exec(section)?.[1].split("\n") ?? [];
+  const blocks = {};
+  for (const [, target, body] of section.matchAll(/^### (\S+)\n```\n([^]*?)\n```$/gm)) {
+    blocks[target] = body.split("\n").flatMap((line) => (line === "<RETURN>" ? returnLines : [line]));
+  }
+  return { returnLines, blocks };
 }
 
 // The markdown heading a line opens, or null for a body line.

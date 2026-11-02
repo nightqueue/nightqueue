@@ -2,14 +2,16 @@ import assert from "node:assert/strict";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { test } from "node:test";
 import { PHASE_TARGETS } from "../src/mcp/phase-context.mjs";
-import { LESSON_TARGET_OF, PROMPT_TARGETS } from "../src/mcp/phase-prompt.mjs";
 import { evaluateCheck } from "../src/queue/check-contract.mjs";
 import { PHASE_NAMES } from "../src/queue/resume.mjs";
 import { AGENT_MODELS, PIPELINE_CONSTANTS } from "../src/queue/routing.mjs";
 import { RUN_OUTCOME_STATUSES } from "../src/queue/run-state.mjs";
 import { buildPrompt } from "../src/queue/spawn.mjs";
+import { phasePrompts } from "../test-support/skill-size.mjs";
 
-const SKILL = readFileSync(new URL("../plugin/skills/resolve/SKILL.md", import.meta.url), "utf8");
+const SKILL_FILE = readFileSync(new URL("../plugin/skills/resolve/SKILL.md", import.meta.url), "utf8");
+const PHASES = readFileSync(new URL("../plugin/skills/resolve/references/phases.md", import.meta.url), "utf8");
+const SKILL = `${SKILL_FILE}\n${PHASES}`;
 const INTERACTIVE = readFileSync(new URL("../plugin/skills/resolve/references/interactive-worktree.md", import.meta.url), "utf8");
 const PHASE_8 = readFileSync(new URL("../plugin/skills/resolve/references/phase-8.md", import.meta.url), "utf8");
 const PHASE_9 = readFileSync(new URL("../plugin/skills/resolve/references/phase-9.md", import.meta.url), "utf8");
@@ -45,17 +47,17 @@ function contextTargets(text) {
   return [...text.matchAll(/`context_for_phase` \(target: "([a-z]+)"\)/g)].map((match) => match[1]);
 }
 
-// A prompt template of the resolve skill, as the runtime renders it from.
-function promptTemplate(name) {
-  return readFileSync(new URL(`../plugin/skills/resolve/references/prompts/${name}.md`, import.meta.url), "utf8");
+// The `## Inside a run` section of one agent definition.
+function runSection(agent) {
+  const text = readFileSync(new URL(`../plugin/agents/${agent}.md`, import.meta.url), "utf8");
+  return text.slice(text.indexOf("## Inside a run"));
 }
 
-test("every subagent prompt takes its context from one context block, in the old placeholder order", () => {
-  const skillOrder = ["triager", "explore", "architect", "coder", "verifier"];
-  assert.deepEqual(skillOrder.map((template) => LESSON_TARGET_OF[template]), ["triager", "explore", "architect", "coder", "verifier"]);
-  assert.deepEqual(["qa-lite", "qa-analyst"].map((template) => LESSON_TARGET_OF[template]), ["qa", "qa"]);
-  for (const target of Object.values(LESSON_TARGET_OF)) {
-    assert.ok(PHASE_TARGETS.includes(target), `a prompt names \`${target}\`, which the context block does not accept`);
+test("every agent of a run fetches its own context block, with a target the tool accepts", () => {
+  const targets = { triager: "triager", explore: "explore", architect: "architect", coder: "coder", verifier: "verifier", "qa-guardian": "qa", reflector: "reflector" };
+  for (const [agent, target] of Object.entries(targets)) {
+    assert.ok(runSection(agent).includes(`\`target: "${target}"\``), `${agent} does not fetch its context with \`${target}\``);
+    assert.ok(PHASE_TARGETS.includes(target), `${agent} names \`${target}\`, which the context block does not accept`);
   }
   for (const text of [SKILL, QA_PHASE]) {
     assert.deepEqual(contextTargets(text), [], "a hand-filled context placeholder survived outside the templates");
@@ -65,19 +67,15 @@ test("every subagent prompt takes its context from one context block, in the old
   assert.equal(SKILL.includes("[Include only if memory_recall returned something:]"), false, "a memory_recall placeholder survived");
 });
 
-test("the per-phase section hands the prompt, the context block and the exclusion to the server", () => {
-  assert.ok(SKILL.includes("### Context per phase (applies to every phase with a subagent)"), SKILL);
-  assert.ok(SKILL.includes("Every subagent prompt comes from ONE `phase_prompt` call (MCP `nightqueue`) with `target` = the"), SKILL);
-  for (const target of PROMPT_TARGETS) assert.ok(SKILL.includes(`\`${target}\``), `the skill never names the \`${target}\` prompt`);
-  assert.ok(SKILL.includes("the server excludes by itself the lessons already injected in earlier phases of this session"), SKILL);
-  for (const heading of ["## Applicable lessons", "## Project memory", "## Structural index", "## Related jobs", "## Job origin"]) {
-    assert.ok(SKILL.includes(`\`${heading}\``), `the per-phase section no longer names \`${heading}\` of the context block`);
-  }
-  assert.ok(SKILL.includes("Pass `prompt` to the launch verbatim with the answered `subagent_type` and `model`"), "the orchestrator may edit the rendered prompt");
+test("a launch is one filled block of the skill: the prompt lives in `## Phase prompts` and no tool renders it", () => {
+  assert.ok(SKILL_FILE.includes("Fill one block and launch it"), "the skill no longer says how a block becomes a launch");
+  assert.ok(SKILL_FILE.includes("No other call is needed"), "the skill asks for another call before a launch");
+  assert.ok(SKILL_FILE.includes("the filled block, fence removed, is the whole `prompt`"), "the skill lets the fence reach the prompt, where the hook reads no declaration");
+  for (const target of Object.keys(phasePrompts().blocks)) assert.ok(SKILL_FILE.includes(`\`${target}\``), `the phase index never names the \`${target}\` block`);
+  for (const text of [SKILL, QA_PHASE, INTERACTIVE]) assert.equal(text.includes("phase_prompt"), false, "a plugin text still calls the removed tool");
   assert.equal(/Also pass `exclude_ids`/.test(SKILL), false, "the agent is still told to rebuild exclude_ids by hand");
   assert.equal(/repeat the call without `exclude_ids`/.test(SKILL), false, "the agent is still told to retry the recall by hand");
-  assert.equal(SKILL.includes("answers `unknown` for `phase_prompt`"), false, "the older-runtime fallback of phase_prompt survived");
-  assert.ok(TOOLS.includes('name: "phase_prompt"'), "the skill names a tool src/mcp/tools.mjs does not register");
+  assert.equal(TOOLS.includes('name: "phase_prompt"'), false, "the removed tool is still registered");
 });
 
 test("every run executes the one pipeline: the skill names no tier, no raise and no risk classification", () => {
@@ -100,7 +98,7 @@ test("the agent models live in one module, never copied into the skill", () => {
   assert.equal(SKILL.includes("| Routing | trivial | simple | complex |"), false, "the skill still carries a copy of the routing table");
   assert.equal(SKILL.includes("| Agent | Model |"), false, "the skill carries a copy of the agent model table");
   assert.equal(SKILL.includes("## Appendix A"), false, "the skill still carries the routing rationale");
-  assert.ok(SKILL.includes("- (d) the harness's subagent launch, with the `subagent_type` and `model` the runtime answers;"), "the launch no longer takes the model the runtime answers");
+  assert.ok(SKILL.includes("- (d) the harness's subagent launch, with the `subagent_type` and `model` of its block;"), "the launch no longer takes the model of its block");
   assert.equal(SKILL.includes("**Agent models**"), false, "the skill still restates where the models come from");
   assert.deepEqual(
     [AGENT_MODELS.triager, AGENT_MODELS.explore, AGENT_MODELS.architect, AGENT_MODELS.coder, AGENT_MODELS.verifier],
@@ -110,9 +108,8 @@ test("the agent models live in one module, never copied into the skill", () => {
   for (const method of ["automated", "api", "emulator", "browser"]) assert.match(PIPELINE_CONSTANTS.qaMethods, new RegExp(`\\b${method}\\b`));
 });
 
-test("every run shares the full verifier scope, and the verifier prompt reads it from the constants", () => {
-  assert.match(PIPELINE_CONSTANTS.verifierScope, /typecheck, lint, build, tests\) \+ the QA's PoCs/);
-  assert.ok(promptTemplate("verifier").includes("Run: {{VERIFIER_SCOPE}}."), "the verifier prompt no longer reads the scope constant");
+test("every run shares the full verifier scope, written in the verifier's run section", () => {
+  assert.match(runSection("verifier"), /typecheck, lint, build, tests\) \+ the QA's PoCs/);
 });
 
 test("the fast tracks are gone: no fast block, no tier scoping note, and the fix loop has a fixed limit", () => {
@@ -140,7 +137,7 @@ function phase5Text() {
 
 test("Phase 5 takes the QA mode from the `QA-MODE:` line of run check 05 --stage triage, and nothing else", () => {
   const phase5 = phase5Text();
-  assert.ok(phase5.includes("**Triage first:** 1 qa-guardian with `phase_prompt` `qa-triage`, then `nightqueue run check 05 --stage triage`."), "Phase 5 no longer starts with the triage");
+  assert.ok(phase5.includes("**Triage first:** 1 qa-guardian with the `qa-triage` block, then `nightqueue run check 05 --stage triage`."), "Phase 5 no longer starts with the triage");
   assert.ok(phase5.includes("| `QA-MODE: skip — <why>` | recorded by the check; Phase 6, no attack lane |"), "a skip no longer goes to Phase 6 with no attack lane");
   assert.ok(phase5.includes("| `QA-MODE: lite — <why>` | one qa-guardian with `qa-lite` |"), "lite lost its lane");
   assert.ok(phase5.includes("| `QA-MODE: full — <why>` | Stage A analyst then N provers, then `run check 05` consolidates |"), "full lost its stages");
@@ -153,7 +150,7 @@ test("Phase 5 takes the QA mode from the `QA-MODE:` line of run check 05 --stage
 
 test("a skipped QA is told in the pull request: Phase 8 and the template place the `QA: skipped` line under the QA heading", () => {
   const template = readFileSync(new URL("../plugin/skills/resolve/references/pr-template.md", import.meta.url), "utf8");
-  assert.ok(folded(PHASE_8).includes("A QA skip: `QA: skipped — <why>` (from `QA-MODE:` or `state.qaMode.reason`) right under its section's heading."), "Phase 8 no longer writes the skip line");
+  assert.ok(folded(PHASE_8).includes("A QA skip: `QA: skipped — <why>` (from `QA-MODE:` or the Facts' `QA mode:`) right under its section's heading."), "Phase 8 no longer writes the skip line");
   assert.ok(template.includes("A QA skip: one line `QA: skipped — <why>` right under the QA heading."), "the template no longer places the skip line");
 });
 
@@ -202,7 +199,7 @@ test("Phase 3 pauses once, on a filled question, and its answer runs the check b
   assert.ok(phase3.includes("Any other answer → relaunch the architect once (🔁, `note` = the answer), then `run check 03` again"), "an answer that changes the plan no longer reaches the architect");
   assert.ok(phase3.includes("an interactive run's chat answer counts as `CONFIRM: answered`"), "an interactive answer never prints the answered line, so it would pause forever");
   assert.ok(resumeSection().includes("An answer at Phase 3: `run check 03` first, then its table and answer rule"), "a resumed run skips the Phase 3 answer rule");
-  const architect = folded(promptTemplate("architect"));
+  const architect = folded(runSection("architect"));
   assert.ok(architect.includes("Each row carries ONE status, `covered` or `not-covered`: the one the plan ships."), "the architect prompt lost the single-status rule");
   assert.ok(architect.includes("An either/or decision is taken by you and recorded in `## Decisions taken`, never left in a row's Status or Reason."), "the architect prompt lets an either/or land in a coverage row");
   assert.ok(architect.includes("drops the answered `## Requires user confirmation`; keep that section only for a NEW question."), "an answered relaunch keeps the settled confirmation");
@@ -250,7 +247,7 @@ test("a second INVALIDATED is recorded as a decision, and a further one is bound
 });
 
 test("the architect prompt's symptom coverage table carries only statuses the check accepts", () => {
-  const template = promptTemplate("architect");
+  const template = runSection("architect");
   const section = template.slice(template.indexOf("## Symptom coverage"), template.indexOf("Rules: list ALL the paths"));
   const table = section.split("\n").filter((line) => line.startsWith("|")).join("\n");
   const plan = ["## Implementation plan", "- a fix.", "", "## Symptom coverage", '**How I enumerated:** `grep -rn "x" src`', "", table, "", "## Requires user confirmation", "**Question:** which trade-off?", "", "## Assumptions", "- [P1] a.", "", "## Pre-mortem", "- [PM1] a.", "", "## Identified risks", "- [R1] a."].join("\n");
@@ -262,7 +259,7 @@ test("the architect prompt's symptom coverage table carries only statuses the ch
 });
 
 test("the coder prompts never carry pasted file content, and no fast variant ships", () => {
-  for (const text of [SKILL, promptTemplate("coder"), promptTemplate("coder-fix")]) {
+  for (const text of [SKILL, runSection("coder")]) {
     assert.equal(text.includes("[CONTENT READ INLINE]"), false, "a coder prompt still pastes file content");
     assert.equal(text.includes("Content of the affected files:"), false, "a coder prompt still pastes file content");
   }
@@ -331,9 +328,7 @@ test("the QA echo is gone, and the pair that replaces it is really in the flow",
   assert.equal(/ECHO per section/.test(SKILL), false, "a QA prompt still asks for the echo of the plan");
   assert.equal(/echo line per section/.test(QA_AGENT), false, "the qa-guardian agent still returns the echo of the plan");
   assert.equal(SKILL.includes("Validation of the QA echo"), false, "the orchestrator still audits an echo nobody returns");
-  for (const template of ["qa-lite", "qa-analyst"]) {
-    assert.ok(promptTemplate(template).includes("`{{RUN_DIR}}/03-plan.md` (open it only AFTER step 0"), `the ${template} prompt stopped reading the plan`);
-  }
+  assert.ok(runSection("qa-guardian").includes("`<RUN_DIR>/03-plan.md` (open it only AFTER step 0"), "the QA lanes stopped reading the plan");
   assert.ok(
     CLI_RUN.includes('sections: ["## Proven breaks", "## Validated risks", "## Invalidated assumptions", "## Generated PoCs", "## Verdict"]'),
     "`run check 05` no longer requires the sections of the QA report's ## Deliver",
@@ -495,7 +490,7 @@ test("Phase 8 is the one `nightqueue run publish` call the CLI really offers, an
 
 test("step 4 splits the worktree: a queued job runs in the one the runtime created, an interactive /resolve still creates its own", () => {
   const start = SKILL.indexOf("4. **The worktree.**");
-  const end = SKILL.indexOf("5. Every prompt carries the shell rule", start);
+  const end = SKILL.indexOf("5. Every agent definition carries the shell rule", start);
   assert.ok(start >= 0 && end > start, "the skill no longer documents the worktree in step 4");
   const step = SKILL.slice(start, end);
   assert.ok(step.includes("the runtime created it at `$PWD`"), "a queued job is no longer told the runtime placed its worktree");
@@ -511,7 +506,7 @@ test("step 4 splits the worktree: a queued job runs in the one the runtime creat
 // The text of Phase 0, from its heading to the fast tracks block.
 function phaseZero() {
   const start = SKILL.indexOf("### Phase 0");
-  const end = SKILL.indexOf("### Context per phase", start);
+  const end = SKILL.indexOf("### Phases 1–10", start);
   assert.ok(start >= 0 && end > start, "the skill no longer documents Phase 0");
   return SKILL.slice(start, end);
 }
@@ -539,33 +534,27 @@ test("Phase 1 maps the Brief gates and the rename to an action, and no retired v
   assert.equal(table.includes("raw_evidence"), false, "Phase 1 still passes the raw evidence the triager no longer receives");
 });
 
-test("the QA methodology lives in references/qa-phase.md and its prompts in references/prompts/, and both readers point there", () => {
+test("the QA methodology lives in references/qa-phase.md and its method in the qa-guardian's run section, and both readers point there", () => {
   const phase5 = SKILL.slice(SKILL.indexOf("### Phase 5 —"), SKILL.indexOf("### Phase 6 —"));
   assert.match(phase5, /Read `references\/qa-phase\.md`/, "Phase 5 no longer points to the QA reference");
   assert.equal(phase5.includes("_qa-attack-brief.md"), false, "Phase 5 still reads the attack brief the QA prompts already render");
-  assert.ok(promptTemplate("qa-lite").includes("{{>_qa-attack-brief}}"), "the LITE prompt no longer renders the attack brief");
-  assert.ok(promptTemplate("qa-analyst").includes("{{>_qa-attack-brief}}"), "the ANALYST prompt no longer renders the attack brief");
+  assert.ok(runSection("qa-guardian").includes("**QA attack brief.**"), "the qa-guardian no longer carries the attack brief");
   assert.ok(phase5.includes("| `run check 05` answers | Action |"), "Phase 5 no longer maps the answer of `run check 05`");
   assert.equal(phase5.includes("**Validation of the"), false, "Phase 5 still audits the QA coverage by hand");
-  for (const [, name] of `${SKILL}${QA_PHASE}`.matchAll(/deliverables\/([a-z0-9-]+\.md)/g)) {
-    assert.ok(existsSync(new URL(`../plugin/skills/resolve/references/deliverables/${name}`, import.meta.url)), `the skill names deliverables/${name}, which is not on disk`);
-  }
+  assert.equal(/deliverables\/|prompts\//.test(`${SKILL}${QA_PHASE}`), false, "the skill names a removed template directory");
   assert.equal(QA_PHASE.includes("operator hunt"), false, "references/qa-phase.md still describes the operator hunt the operator guard removed");
   for (const anchor of ["**Stage A gate:**", "**Consolidation — by the runtime:**"]) {
     const count = [SKILL, QA_PHASE, OPERATOR].reduce((sum, text) => sum + text.split(anchor).length - 1, 0);
     assert.equal(count, 1, `\`${anchor}\` is not written exactly once across the skill, the reference and the operator`);
     assert.ok(QA_PHASE.includes(anchor), `\`${anchor}\` left references/qa-phase.md`);
   }
-  for (const [anchor, template] of [["Mode: LITE", "qa-lite"], ["Mode: ANALYST", "qa-analyst"], ["Mode: PROVER", "qa-prover"]]) {
-    assert.equal([SKILL, QA_PHASE, OPERATOR].some((text) => text.includes(anchor)), false, `\`${anchor}\` is still written by hand outside its template`);
-    assert.ok(promptTemplate(template).includes(anchor), `\`${anchor}\` left prompts/${template}.md`);
+  for (const anchor of ["Mode: LITE", "Mode: ANALYST", "Mode: PROVER"]) {
+    assert.equal([SKILL, QA_PHASE, OPERATOR].some((text) => text.includes(anchor)), false, `\`${anchor}\` is still written outside the qa-guardian`);
+    assert.ok(runSection("qa-guardian").includes(anchor), `\`${anchor}\` left the qa-guardian`);
   }
   assert.equal(QA_PHASE.includes("#### QA attack brief"), false, "the QA attack brief is still copied in the reference");
   for (const [, name] of SKILL.matchAll(/references\/([a-z0-9-]+\.md)/g)) {
     assert.ok(existsSync(new URL(`../plugin/skills/resolve/references/${name}`, import.meta.url)), `the skill names references/${name}, which is not on disk`);
-  }
-  for (const [, name] of `${SKILL}${QA_PHASE}`.matchAll(/prompts\/([a-z0-9_-]+\.md)/g)) {
-    assert.ok(existsSync(new URL(`../plugin/skills/resolve/references/prompts/${name}`, import.meta.url)), `the skill names prompts/${name}, which is not on disk`);
   }
 });
 
@@ -585,15 +574,12 @@ test("no plugin text names a block or a line the runtime no longer prints", () =
 test("the round artifacts are append-only and read by their last round, and no template or agent still says `iteration N`", () => {
   assert.equal(SKILL.includes("**Round artifacts**"), false, "the skill still restates the round rule `_round.md` carries");
   assert.ok(QA_PHASE.includes("writes `## Round <n+1>` marked\n`source: runtime consolidation`"));
-  assert.ok(promptTemplate("coder-fix").includes("{{>deliverables/implementation}}"));
-  assert.ok(promptTemplate("../deliverables/implementation").includes("### Fix loop {{FIX_LOOP}} — what was wrong / what changed"));
-  assert.ok(promptTemplate("_round").includes("Never edit an earlier round"));
-  for (const name of ["verifier", "runtime", "qa-lite", "qa-analyst"]) {
-    assert.ok(promptTemplate(name).includes("{{>_round}}"), `${name} misses the round rule`);
+  assert.ok(runSection("coder").includes("### Fix loop <n> — what was wrong / what changed"));
+  for (const name of ["verifier", "qa-guardian"]) {
+    assert.ok(runSection(name).includes("Never edit an earlier round"), `${name} misses the round rule`);
   }
-  const prompts = readdirSync(new URL("../plugin/skills/resolve/references/prompts/", import.meta.url)).map((file) => promptTemplate(file.replace(/\.md$/, "")));
   const agents = ["verifier", "qa-guardian", "coder"].map((name) => readFileSync(new URL(`../plugin/agents/${name}.md`, import.meta.url), "utf8"));
-  for (const text of [...prompts, ...agents, SKILL, QA_PHASE]) {
+  for (const text of [...agents, SKILL, QA_PHASE]) {
     assert.equal(/iteration N\b|Verification — iteration|append per iteration/.test(text), false);
   }
 });
@@ -611,7 +597,7 @@ test("Phase 10 launches the reflector once at the end of every run and lists its
   const start = SKILL.indexOf("### Phase 10 — Reflect");
   assert.ok(start > SKILL.indexOf("### Phase 9 — Report"), "Phase 10 is missing or sits before Phase 9");
   const phase = SKILL.slice(start);
-  assert.ok(phase.includes('`phase_prompt` with `target: "reflector"`'));
+  assert.ok(phase.includes("Launch: the `reflector` block."));
   assert.ok(phase.includes("BEFORE the final text"));
   assert.ok(phase.includes("a terminated run"));
   assert.match(phase, /It does not run at\s+the Phase 3 pause/);
@@ -680,6 +666,19 @@ test("the skill carries no phase header rule and SKILL.md prints no agent header
   assert.deepEqual(headerLines, [], "SKILL.md still prints an agent header line");
 });
 
+test("the orchestrator reads no run artifact: Phases 8 and 9 and the pull request draw on the Facts, and the contract rules `<RUN_DIR>` out", () => {
+  const template = readFileSync(new URL("../plugin/skills/resolve/references/pr-template.md", import.meta.url), "utf8");
+  const artifacts = /`?(?:<RUN_DIR>\/)?0[0-7]-[a-z-]+\.md`?/;
+  for (const [name, text] of [["phase-8.md", PHASE_8], ["phase-9.md", PHASE_9], ["pr-template.md", template]]) {
+    assert.equal(artifacts.test(text), false, `${name} still names a run artifact: ${artifacts.exec(text)?.[0]}`);
+  }
+  assert.equal(/Re-read|re-read/.test(PHASE_9), false, "phase-9.md still re-reads something");
+  assert.ok(PHASE_8.includes("`nightqueue run report --facts`"), "Phase 8 no longer takes its material from the Facts");
+  assert.ok(folded(PHASE_9).includes("all that sits above its `## Facts for the report`"), "Phase 9 may paste the Facts into the final text");
+  assert.ok(SKILL.includes("It works through five channels only; `<RUN_DIR>` files are not one:"), "`<RUN_DIR>` files are a channel again");
+  assert.ok(SKILL.includes("(`run check <NN>` tells, never Read/Glob)"), "a resume may test an artifact's existence by reading it");
+});
+
 test("the contract lists exactly the five channels (a)-(e), and names the reflector as the run's only writer", () => {
   const start = SKILL.indexOf("## The orchestrator's contract");
   const contract = SKILL.slice(start, SKILL.indexOf("\n## ", start + 1));
@@ -692,7 +691,7 @@ test("the contract lists exactly the five channels (a)-(e), and names the reflec
 test("references/interactive-worktree.md is the only file of the skill that names the host's worktree tool", () => {
   const skillDir = new URL("../plugin/skills/resolve/", import.meta.url);
   const files = readdirSync(skillDir, { recursive: true }).map(String).filter((name) => name.endsWith(".md"));
-  assert.ok(files.length > 10, "the skill files were not found");
+  assert.ok(files.length >= 8, "the skill files were not found");
   const naming = files.filter((name) => /EnterWorktree|ExitWorktree/.test(readFileSync(new URL(name, skillDir), "utf8")));
   assert.deepEqual(naming, ["references/interactive-worktree.md"]);
 });

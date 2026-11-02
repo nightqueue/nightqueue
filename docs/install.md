@@ -199,9 +199,9 @@ echo "$LINEAR_API_KEY" | nightqueue connection add linear --type linear   # opti
    (`claude_desktop_config.json`), when that app is installed - an app that is
    not installed is a `skipped` step and never a directory this CLI creates.
    `--no-desktop` skips it.
-6. the three hooks in `<claude config>/settings.json`: `SessionStart`,
-   `UserPromptSubmit` and the `PreToolUse` agent-foreground guard, pointing at that
-   same entry. A leftover nightqueue `SessionEnd` entry from an older version is
+6. the four hooks in `<claude config>/settings.json`: `SessionStart`,
+   `UserPromptSubmit`, the `PreToolUse` agent-foreground guard and the `SubagentStop`
+   return-syntax check, pointing at that same entry. A leftover nightqueue `SessionEnd` entry from an older version is
    removed (a third-party `SessionEnd` hook stays).
 7. the runtime as a local marketplace, plus the plugin installed from it.
 8. the semantic recall: the embedding library in `$NIGHTQUEUE_HOME/embedding`
@@ -213,7 +213,7 @@ runtime that is not there would break every session of the host.
 
 `--remove` undoes steps 3 to 7 - the shims, the marked PATH block, the MCP server,
 its entry in the Claude Desktop configuration,
-the three hook entries (and a leftover `SessionEnd` one), the plugin and the marketplace - and asks before
+the four hook entries (and a leftover `SessionEnd` one), the plugin and the marketplace - and asks before
 deleting `runtime/` and `embedding/`. It never touches `config.json`,
 `secrets.json` or the database; only `--remove --purge` deletes
 `$NIGHTQUEUE_HOME` whole.

@@ -8,6 +8,19 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Phase prompts are short and live in the SKILL; the agents know how.** The method, the artifact
+  layouts and the first-step fetches moved from `references/prompts/` into a `## Inside a run` section
+  of each agent, and `## Phase prompts` of the resolve SKILL holds one block of at most 12 lines per
+  target, filled and launched with no other call. `references/prompts/`, `references/deliverables/` and
+  the `phase_prompt` MCP tool are gone: a cached client calling it is refused, naming `## Phase prompts`. The
+  orchestrator's main thread no longer reads `<RUN_DIR>`: `run report` prints a bounded `## Facts for the
+  report`, and the new `run report --facts` prints it alone and records nothing, for Phase 8; its
+  `Changed outside the list:` lines stop at 30, test files first, then say how many more
+  `git status --short` shows. A new `SubagentStop` hook enforces the `RETURN-HEAD:`/`RETURN-MAX-LINES:`
+  lines any prompt declares outside a code fence, blocking a stop once and failing open; the runtime hardcodes no return format. `run start` also answers
+  `needsSlug`, `demoRepo`, `baseRef`, `pluginRoot`, `stages` and `drafts`, and `run append 05` takes `--group-label`.
+  `nightqueue setup` required to register the hook, MCP clients restart (tool contract bump, tool contract 13).
+
 - **The runner hands a run its facts, and the pipeline decides where to continue.** The
   `RESUME CANDIDATE` block, the resume cap, the terminal-verdict stop, the operator re-runs and the QA
   stage marker are gone: a prompt now carries a `RUN FACTS` block of records (phases, answers, wip,

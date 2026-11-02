@@ -37,7 +37,6 @@ const CONTRACT_TOOLS = [
   "memory_recall",
   "memory_save",
   "operator_consent",
-  "phase_prompt",
   "pipeline_log",
   "project_integrations",
   "project_register",
@@ -95,13 +94,13 @@ function textOf(result) {
   return result.content.map((block) => block.text).join("\n");
 }
 
-test("the server exposes exactly the thirty-three tools of the contract, none of them a decision tool", async (t) => {
+test("the server exposes exactly the thirty-two tools of the contract, none of them a decision tool", async (t) => {
   const env = makeHome(t, "mcp-tools");
   const client = await connect(t, env);
   const names = (await client.listTools()).tools.map((tool) => tool.name).sort();
   assert.deepEqual(names, CONTRACT_TOOLS);
   assert.equal(names.some((name) => name.startsWith("decision_")), false);
-  assert.equal(names.length, 33, "the contract list and the server disagree on how many tools there are");
+  assert.equal(names.length, 32, "the contract list and the server disagree on how many tools there are");
   const consent = (await client.listTools()).tools.find((tool) => tool.name === "operator_consent");
   assert.ok(consent.description.includes("never call it without the person's explicit answer, quoted in `answer`"), consent.description);
 });
@@ -134,7 +133,7 @@ test("connection_call with an unknown connection name is a normal no-connection 
     error: "no-connection",
     status: null,
     detail: "no stored connection named that way; the person lists them with `nightqueue connection list`",
-    contract: 12,
+    contract: 13,
   });
 });
 
@@ -172,7 +171,7 @@ test("tracker_issues with no tracker connection is a normal answer carrying the 
     error: "no-connection",
     provider: "linear",
     hint: 'connect it: echo "$LINEAR_API_KEY" | nightqueue connection add linear --type linear',
-    contract: 12,
+    contract: 13,
   });
 });
 
@@ -200,7 +199,7 @@ test("every new tracker tool with no tracker connection answers the no-connectio
       error: "no-connection",
       provider: "linear",
       hint: 'connect it: echo "$LINEAR_API_KEY" | nightqueue connection add linear --type linear',
-      contract: 12,
+      contract: 13,
     }, name);
   }
 });
@@ -369,7 +368,6 @@ test("the lesson, memory, index, phase and pipeline tools refuse an unknown proj
     ["index_save", { project: "ghost", repo_root: alpha, files: [{ path: "src/a.mjs", responsibility: "the module" }] }],
     ["index_recall", { project: "ghost" }],
     ["context_for_phase", { target: "coder", project: "ghost" }],
-    ["phase_prompt", { target: "coder", project: "ghost", slug: "a-run" }],
     ["pipeline_log", { project: "ghost", slug: "a-run", outcome: "investigated" }],
   ]) {
     const refused = await client.callTool({ name, arguments: args });
@@ -530,7 +528,7 @@ test("the index round trip reports the freshness of the checkout", async (t) => 
       },
     }),
   );
-  assert.deepEqual(saved, { ok: true, files: 1, libs: 0, contract: 12 });
+  assert.deepEqual(saved, { ok: true, files: 1, libs: 0, contract: 13 });
 
   const fresh = payloadOf(
     await client.callTool({ name: "index_recall", arguments: { project: "alpha", repo_root: repo } }),
@@ -686,7 +684,7 @@ test("queue_add enqueues by project NAME and refuses a path or a project nobody 
     timeoutS: 600,
     origin: [],
     hint: "queued J-1 for `alpha` (1 pending). 0 runners online - pending jobs will wait until `nightqueue queue run` starts one.",
-    contract: 12,
+    contract: 13,
   });
   assert.equal(getJob(1, env).prompt, "fix the worker");
 
@@ -1549,7 +1547,7 @@ test("queue_stop answers the CLI line per runner, and refuses an unknown pid", a
   const client = await connect(t, env);
 
   const empty = payloadOf(await client.callTool({ name: "queue_stop", arguments: {} }));
-  assert.deepEqual(empty, { ok: true, runners: [{ outcome: "absent", pid: null, message: "runner is not running" }], contract: 12 });
+  assert.deepEqual(empty, { ok: true, runners: [{ outcome: "absent", pid: null, message: "runner is not running" }], contract: 13 });
 
   const unknown = await client.callTool({ name: "queue_stop", arguments: { pid: 999999 } });
   assert.equal(unknown.isError, true, textOf(unknown));
@@ -1706,6 +1704,17 @@ test("lesson_save with no title answers a one-line error, never the zod dump", a
   assert.match(text, /missing required field\(s\): title/);
   assert.equal(text.includes("\n"), false, `the error is not a single line: ${text}`);
   assert.doesNotMatch(text, /Invalid arguments for tool/, "the zod dump leaked through");
+});
+
+test("the removed prompt tool is refused with the older-definitions line, naming where a launch comes from", async (t) => {
+  const env = makeHome(t, "mcp-phase-prompt-gone");
+  makeProject(t, env, "alpha");
+  const client = await connect(t, env);
+  const answer = await client.callTool({ name: "phase_prompt", arguments: { target: "coder" } }).catch((err) => err);
+  const text = String(answer?.message ?? textOf(answer));
+  assert.ok(answer instanceof Error || answer.isError === true, text);
+  assert.match(text, /your client has the tool definitions of an older nightqueue/);
+  assert.match(text, /`## Phase prompts` of the resolve SKILL/);
 });
 
 test("a call to a removed decision tool is refused with the older-definitions line", async (t) => {

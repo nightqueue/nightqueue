@@ -6,7 +6,7 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { runDir } from "../src/config/paths.mjs";
 import { run } from "../src/cli/index.mjs";
-import { proverRound } from "../src/cli/run-append.mjs";
+import { groupIdFromLabel, proverRound } from "../src/cli/run-append.mjs";
 import { roundsOf } from "../src/queue/phase-artifacts.mjs";
 import { appendRoundText, consolidationOf } from "../src/queue/qa-rounds.mjs";
 import { recordRunFields } from "../src/queue/run-state.mjs";
@@ -37,8 +37,13 @@ function draft(dir, group) {
 
 // Runs `nightqueue run append` in a child process of its own, resolving its exit code and output.
 function spawnAppend(env, from, group) {
+  return spawnAppendFlags(env, ["--group", group, "--from", from, "--project", "alpha", "--slug", SLUG]);
+}
+
+// Runs the real binary's `run append 05` with the flags given, resolving its exit code and output.
+function spawnAppendFlags(env, flags) {
   return new Promise((done, fail) => {
-    const child = spawn(process.execPath, [BIN, "run", "append", "05", "--group", group, "--from", from, "--project", "alpha", "--slug", SLUG], { env });
+    const child = spawn(process.execPath, [BIN, "run", "append", "05", ...flags], { env });
     let out = "";
     child.stdout.on("data", (chunk) => (out += chunk));
     child.stderr.on("data", (chunk) => (out += chunk));
@@ -90,6 +95,65 @@ test("`run check 05 --stage analyst` records stage A only, and `run check 05` wr
     assert.notEqual(refused.code, 0);
     assert.match(refused.err.join("\n"), /unknown stage/);
   }
+});
+
+test("`--group-label` stamps the id its label derives: the same label the same id, two labels two ids", async (t) => {
+  const { env, path, drafts } = seededRun(t, "cli-run-append-label");
+  const target = ["--project", "alpha", "--slug", SLUG];
+  const label = "H1, H2 — cache root";
+  const append = (group) => runCli(env, ["run", "append", "05", "--group-label", group, "--from", draft(drafts, "g1"), ...target]);
+
+  for (const group of [label, ` ${label} `, "H3 — other root"]) assert.equal((await append(group)).code, 0, group);
+
+  const sources = roundsOf(readFileSync(path, "utf8")).slice(1).map((round) => round.text.split("\n")[1]);
+  assert.deepEqual(sources, [`source: prover · group: ${groupIdFromLabel(label)}`, `source: prover · group: ${groupIdFromLabel(label)}`, `source: prover · group: ${groupIdFromLabel("H3 — other root")}`]);
+  assert.match(groupIdFromLabel(label), /^h1-h2-cache-root-[0-9a-f]{8}$/);
+  assert.notEqual(groupIdFromLabel(label), groupIdFromLabel("H3 — other root"));
+});
+
+test("`--group-label` refuses a blank label and `--group` next to it", async (t) => {
+  const { env, drafts } = seededRun(t, "cli-run-append-label-refusals");
+  const target = ["--project", "alpha", "--slug", SLUG, "--from", draft(drafts, "g1")];
+  const blank = await runCli(env, ["run", "append", "05", "--group-label", "  ", ...target]);
+  assert.match(blank.err.join("\n"), /`--group-label <label>` is blank/);
+  const both = await runCli(env, ["run", "append", "05", "--group", "a-1", "--group-label", "a", ...target]);
+  assert.match(both.err.join("\n"), /name the same thing/);
+});
+
+test("the real binary appends a `--group-label` round: the runtime's stamp replaces the draft's, and a label with no letters is its hash", async (t) => {
+  const { env, path, drafts } = seededRun(t, "cli-run-append-label-binary");
+  const target = ["--from", draft(drafts, "g1"), "--project", "alpha", "--slug", SLUG];
+
+  for (const label of ["H1 — cache root", "— ! —"]) {
+    const result = await spawnAppendFlags(env, ["--group-label", label, ...target]);
+    assert.equal(result.code, 0, result.out);
+  }
+
+  const sources = roundsOf(readFileSync(path, "utf8")).slice(1).map((round) => round.text.split("\n")[1]);
+  assert.deepEqual(sources, [`source: prover · group: ${groupIdFromLabel("H1 — cache root")}`, `source: prover · group: ${groupIdFromLabel("— ! —")}`]);
+  assert.match(groupIdFromLabel("— ! —"), /^[0-9a-f]{8}$/);
+});
+
+test("the real binary refuses every malformed group with a non-zero exit, leaving `05-qa.md` untouched", async (t) => {
+  const { env, path, drafts } = seededRun(t, "cli-run-append-label-binary-refusals");
+  const target = ["--from", draft(drafts, "g1"), "--project", "alpha", "--slug", SLUG];
+  const before = readFileSync(path, "utf8");
+  const refusals = [
+    { flags: ["--group-label", "", ...target], message: /`--group-label <label>` is blank/ },
+    { flags: ["--group-label", "   ", ...target], message: /`--group-label <label>` is blank/ },
+    { flags: ["--group", "g1", "--group-label", "g1", ...target], message: /name the same thing/ },
+    { flags: ["--group", "", "--group-label", "g1", ...target], message: /name the same thing/ },
+    { flags: target, message: /`--group <id>` is required/ },
+    { flags: [...target, "--group-label"], message: /group-label/ },
+  ];
+
+  for (const { flags, message } of refusals) {
+    const result = await spawnAppendFlags(env, flags);
+    assert.notEqual(result.code, 0, flags.join(" "));
+    assert.match(result.out, message, flags.join(" "));
+  }
+
+  assert.equal(readFileSync(path, "utf8"), before);
 });
 
 test("`run append` refuses a draft it cannot append as one prover round", async (t) => {

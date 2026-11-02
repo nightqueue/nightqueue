@@ -36,6 +36,31 @@ function lessonIdsOf(block) {
   return [...block.matchAll(/\[L(\d+)\]/g)].map((match) => Number(match[1]));
 }
 
+test("the reflector's block is its run's timeline and given lessons: it recalls no lesson and marks none as seen", async (t) => {
+  const { env } = makeRunningJob(t, "phase-context-reflector", { sessionId: "reflector-session" });
+  addLesson(env, "the worker leaks a descriptor");
+  const run = { project: "alpha", projectId: projectIdOf(env, "alpha"), slug: "rewrite-the-runner" };
+
+  const answer = await phaseContextBlock({ target: "reflector", query: "worker", run }, env);
+
+  assert.match(answer.block, /^## Run timeline\n[\s\S]*\n\n## Lessons given to this run\nnone recorded$/);
+  assert.equal(answer.block.includes("## Applicable lessons"), false);
+  assert.equal(answer.project, "alpha");
+  assert.ok(Array.isArray(answer.open_items));
+  assert.equal(existsSync(sessionStatePath("reflector-session", env)), false, "the reflector marked a lesson as seen");
+});
+
+test("the reflector's block names the lessons the run was given, with their titles", async (t) => {
+  const { env } = makeRunningJob(t, "phase-context-reflector-given", { sessionId: "given-session" });
+  const id = addLesson(env, "the worker leaks a descriptor");
+  await phaseContextBlock({ target: "coder", query: "worker descriptor" }, env);
+  const run = { project: "alpha", projectId: projectIdOf(env, "alpha"), slug: "rewrite-the-runner" };
+
+  const { block } = await phaseContextBlock({ target: "reflector", run }, env);
+
+  assert.ok(block.includes(`- [L${id}] the worker leaks a descriptor`), block);
+});
+
 test("a fresh phase gets a block, and the next phase of the same run gets other lessons", async (t) => {
   const { env } = makeRunningJob(t, "phase-context-fresh");
   for (let i = 0; i < 8; i += 1) addLesson(env, `the worker leaks a descriptor number ${i}`);

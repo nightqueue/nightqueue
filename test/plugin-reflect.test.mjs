@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { pluginDir } from "../src/queue/spawn.mjs";
+import { phasePrompts } from "../test-support/skill-size.mjs";
 
 const RUBRIC = readFileSync(join(pluginDir(), "skills/reflect/references/rubric.md"), "utf8").replace(/\s+/g, " ");
 const SKILL_TEXT = readFileSync(join(pluginDir(), "skills/reflect/SKILL.md"), "utf8");
@@ -77,11 +78,11 @@ test("the reflect skill documents that an interactive recurrence bumps attempts 
 
 const AGENT_TEXT = readFileSync(join(pluginDir(), "agents/reflector.md"), "utf8");
 const AGENT = AGENT_TEXT.replace(/\s+/g, " ");
-const TEMPLATE = readFileSync(join(pluginDir(), "skills/resolve/references/prompts/reflector.md"), "utf8");
+const RUN_SECTION = AGENT_TEXT.slice(AGENT_TEXT.indexOf("## Inside a run"));
 
-test("the reflector agent is granted exactly Read and the three lesson/memory tools", () => {
+test("the reflector agent is granted exactly Read, the three lesson/memory tools and its run's context", () => {
   const tools = /^tools: (.+)$/m.exec(AGENT_TEXT)?.[1];
-  assert.deepEqual(tools?.split(", "), ["Read", "mcp__nightqueue__lesson_recall", "mcp__nightqueue__lesson_save", "mcp__nightqueue__memory_save"]);
+  assert.deepEqual(tools?.split(", "), ["Read", "mcp__nightqueue__lesson_recall", "mcp__nightqueue__lesson_save", "mcp__nightqueue__memory_save", "mcp__nightqueue__context_for_phase"]);
   assert.match(AGENT_TEXT, /^name: reflector$/m);
 });
 
@@ -94,19 +95,25 @@ test("the reflector reads every round and fix loop, never the job's stream or lo
   assert.equal(AGENT.includes("decision_save"), false);
 });
 
-test("the reflector template has no artifact handoff and names the rubric, state.json, the timeline and the rounds rule", () => {
-  assert.equal(TEMPLATE.includes("{{>_handoff}}"), false);
-  assert.equal(TEMPLATE.includes("ARTIFACT_PATH"), false);
-  assert.ok(TEMPLATE.includes("RUBRIC: {{PLUGIN_ROOT}}/skills/reflect/references/rubric.md"));
-  assert.ok(TEMPLATE.includes("`state.json`"));
-  assert.ok(TEMPLATE.includes("## Run timeline\n{{TIMELINE}}"));
-  assert.ok(TEMPLATE.includes("## Lessons given to this run\n{{INJECTED_LESSONS}}"));
-  assert.ok(TEMPLATE.includes("Read every round and every fix-loop block; never the job's stream/log."));
-  assert.ok(TEMPLATE.includes("{{>_footer}}"));
+test("the reflector's run section has no artifact handoff and names the rubric, state.json, the timeline and the rounds rule", () => {
+  assert.equal(RUN_SECTION.includes("ARTIFACT_PATH"), false);
+  assert.ok(RUN_SECTION.includes("RUBRIC: `<PLUGIN_ROOT>/skills/reflect/references/rubric.md`"));
+  assert.ok(RUN_SECTION.includes("`state.json`"));
+  assert.ok(RUN_SECTION.includes('`target: "reflector"`'));
+  assert.ok(RUN_SECTION.includes("`## Run timeline`"));
+  assert.ok(RUN_SECTION.includes("`## Lessons given to this run`"));
+  assert.ok(RUN_SECTION.includes("Read every round and every fix-loop block; never the job's stream/log."));
 });
 
-test("the reflector template reads qaMode and points a QA skip to the rubric's rule", () => {
-  const folded = TEMPLATE.replace(/\s+/g, " ");
+test("the reflector's block names its run, its plugin root and its own return head", () => {
+  const { blocks } = phasePrompts();
+  for (const field of ["RUN_DIR: ", "PROJECT: ", "PLUGIN_ROOT: ", "RETURN-HEAD: REFLECTION: "]) {
+    assert.ok(blocks.reflector.some((line) => line.startsWith(field)), `the reflector block lost ${field}`);
+  }
+});
+
+test("the reflector's run section reads qaMode and points a QA skip to the rubric's rule", () => {
+  const folded = RUN_SECTION.replace(/\s+/g, " ");
   assert.ok(folded.includes("`state.json` (`termination`, `answers`, `lastClaim.attempt`, `qaMode`)"), folded);
   assert.ok(folded.includes("a QA skip follows the rubric's `## A QA skip`"), folded);
   assert.match(folded, /later defect in the skipped area is a lesson with `target: qa`, a skip that held saves nothing/);

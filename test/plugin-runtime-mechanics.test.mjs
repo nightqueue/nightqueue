@@ -3,15 +3,14 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
+import { phasePrompts } from "../test-support/skill-size.mjs";
 
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
 const AGENTS = ["coder", "qa-guardian", "verifier", "triager", "explore", "architect"];
 const SKILL = join(ROOT, "plugin/skills/resolve/SKILL.md");
 const REFERENCES = join(ROOT, "plugin/skills/resolve/references");
 const QA_PHASE = join(REFERENCES, "qa-phase.md");
-const PROMPTS = join(ROOT, "plugin/skills/resolve/references/prompts");
-const REPOSITORY_LINE = "Repository: {{REPOSITORY}}";
-const PROJECT_LINE = "Project: {{PROJECT}}";
+const PHASES = join(REFERENCES, "phases.md");
 const RUNTIME_WORK = {
   verifier: "nightqueue verify",
   explore: "nightqueue libs",
@@ -27,7 +26,6 @@ const REQUESTS = {
   verifier: ["verifier", "runtime"],
 };
 const INDEPENDENT = Object.keys(REQUESTS);
-const DELIVERABLES = join(ROOT, "plugin/skills/resolve/references/deliverables");
 
 // Lists every file under plugin/ as an absolute path
 function pluginFiles() {
@@ -37,14 +35,19 @@ function pluginFiles() {
     .map((entry) => join(entry.parentPath ?? entry.path, entry.name));
 }
 
-// The prompt templates of the resolve skill, partials (`_*.md`) excluded
-function promptTemplates() {
-  return readdirSync(PROMPTS).filter((name) => name.endsWith(".md") && !name.startsWith("_")).sort();
+// The fields a target's block of `## Phase prompts` declares, one per line.
+function blockFields(target) {
+  return phasePrompts().blocks[target].map((line) => line.split(":")[0]);
 }
 
 // Reads one plugin agent file with its line wrapping collapsed
 function readAgent(agent) {
   return readFileSync(join(ROOT, `plugin/agents/${agent}.md`), "utf8").replace(/\s+/g, " ");
+}
+
+// One plugin agent's text above its `## Inside a run` section, line wrapping collapsed
+function independentPart(agent) {
+  return readAgent(agent).split(" ## Inside a run ")[0];
 }
 
 // The runtime resolves a path to its registered project, so no agent derives the project by hand.
@@ -60,19 +63,15 @@ test("each agent names the runtime work that replaced its prose", () => {
   for (const [agent, mention] of Object.entries(RUNTIME_WORK)) {
     assert.ok(readAgent(agent).includes(mention), `${agent} does not name \`${mention}\``);
   }
-  assert.equal(readAgent("explore").includes("index-save"), false, "explore.md still names the index persistence");
-  assert.ok(
-    readFileSync(join(PROMPTS, "explore.md"), "utf8").includes("nightqueue run index-save"),
-    "the explore request does not say the runtime persists the index from its artifact",
-  );
+  assert.equal(independentPart("explore").includes("index-save"), false, "explore.md names the index persistence outside a run");
+  assert.ok(readAgent("explore").includes("nightqueue run index-save"), "explore.md does not say the runtime persists the index inside a run");
 });
 
-// A pipeline-independent agent learns about the runtime blocks from its request, never from its file.
-test("the triager's request names the blocks the runtime hands it", () => {
-  const request = readFileSync(join(PROMPTS, "triager.md"), "utf8");
+// A pipeline-independent agent learns about the runtime blocks only inside a run, never from the text any request reads.
+test("the triager's run section names the blocks the runtime hands it", () => {
   for (const block of ["`open-prs` entry of the job origin", "## Related jobs"]) {
-    assert.ok(request.includes(block), `the triager request does not name \`${block}\``);
-    assert.equal(readAgent("triager").includes(block), false, `triager.md still names \`${block}\``);
+    assert.ok(readAgent("triager").includes(block), `the triager's run section does not name \`${block}\``);
+    assert.equal(independentPart("triager").includes(block), false, `triager.md names \`${block}\` outside a run`);
   }
 });
 
@@ -83,18 +82,17 @@ test("the verifier reads the diff-hygiene line instead of running git itself", (
   assert.ok(agent.includes("the summary of `git diff --stat`"), "the verifier does not report the scale of the change");
 });
 
-// Every subagent prompt template that carries the repository path also names the project: they all end with the shared footer.
-test("each Repository template of the skill carries a Project line", () => {
-  const footer = readFileSync(join(PROMPTS, "_footer.md"), "utf8").split("\n");
-  const at = footer.indexOf(REPOSITORY_LINE);
-  assert.ok(at >= 0, "the shared footer lost its Repository line");
-  assert.equal(footer[at + 1], PROJECT_LINE, "the Repository line of the footer is not followed by its Project line");
-  const templates = promptTemplates();
-  assert.ok(templates.length >= 11, "the skill lost its prompt templates");
-  for (const name of templates) {
-    const text = readFileSync(join(PROMPTS, name), "utf8");
-    const named = text.includes("{{>_footer}}") || (text.includes("project: {{PROJECT}}") && text.includes("repo_root: {{REPOSITORY}}"));
-    assert.ok(named, `${name} names neither the repository nor the project`);
+// Every block that carries the worktree also names the project, and each run agent reads the two as its Repository and Project.
+test("each block of the skill carries a PROJECT line next to its WORKTREE line", () => {
+  const { blocks } = phasePrompts();
+  assert.ok(Object.keys(blocks).length >= 12, "the skill lost its blocks");
+  for (const [target, lines] of Object.entries(blocks)) {
+    const fields = lines.map((line) => line.split(":")[0]);
+    assert.ok(fields.includes("RUN_DIR") && fields.includes("PROJECT"), `the ${target} block names neither the run nor the project`);
+    if (target !== "reflector") assert.equal(fields[fields.indexOf("WORKTREE") + 1], "PROJECT", `the WORKTREE line of the ${target} block is not followed by its PROJECT line`);
+  }
+  for (const agent of AGENTS) {
+    assert.ok(readAgent(agent).includes("`WORKTREE` is the `Repository:` and `PROJECT` the `Project:`"), `${agent} does not read its block's worktree and project`);
   }
   const references = readdirSync(REFERENCES).filter((name) => name.endsWith(".md")).map((name) => join(REFERENCES, name));
   assert.ok(references.includes(QA_PHASE), "the skill's top-level references were not found");
@@ -112,11 +110,11 @@ test("the qa-guardian calls the sweep and still resolves its own plugin paths", 
     agent.includes("fall back to `Glob` for `**/skills/qa-guardian/SKILL.md`"),
     "qa-guardian lost the Glob fallback for a prompt that brings no absolute path",
   );
-  assert.ok(readFileSync(join(PROMPTS, "_qa-skill.md"), "utf8").startsWith("QA_SKILL: {{PLUGIN_ROOT}}/"), "the plugin paths partial lost its QA_SKILL line");
+  assert.ok(agent.includes("QA_SKILL: `<PLUGIN_ROOT>/skills/qa-guardian/SKILL.md`"), "the qa-guardian lost its QA_SKILL line");
   assert.deepEqual(
-    promptTemplates().filter((name) => readFileSync(join(PROMPTS, name), "utf8").includes("{{>_qa-skill}}")),
-    ["qa-analyst.md", "qa-lite.md", "qa-prover.md"],
-    "the three qa-guardian prompts do not all carry the plugin paths",
+    REQUESTS["qa-guardian"].filter((target) => blockFields(target).includes("PLUGIN_ROOT")),
+    ["qa-lite", "qa-analyst", "qa-prover"],
+    "the three qa-guardian blocks do not all carry the plugin root",
   );
 });
 
@@ -125,54 +123,45 @@ test("each agent returns a short pointer, never file contents nor a diff", () =>
   for (const agent of AGENTS.filter((name) => !INDEPENDENT.includes(name))) {
     assert.ok(readAgent(agent).includes("never file contents, never a diff"), `${agent} may still return file contents or a diff`);
   }
-  const handoff = readFileSync(join(PROMPTS, "_handoff.md"), "utf8");
-  assert.ok(handoff.includes("never file contents, never a diff"), "the shared handoff lost the short-pointer return");
-  for (const [agent, requests] of Object.entries(REQUESTS)) {
-    for (const request of requests) {
-      assert.ok(readFileSync(join(PROMPTS, `${request}.md`), "utf8").includes("{{>_handoff}}"), `the ${request} request does not carry the shared handoff`);
-    }
-    assert.equal(readAgent(agent).includes("never file contents, never a diff"), false, `${agent}.md still carries the return format`);
+  for (const agent of Object.keys(REQUESTS)) {
+    assert.equal(independentPart(agent).includes("never file contents, never a diff"), false, `${agent}.md carries the return format outside a run`);
+    assert.ok(readAgent(agent).includes("never file contents, never a diff"), `${agent}.md lost the short-pointer return of a run`);
   }
 });
 
 // The coder's deliverable holds the sections the stage lanes append to, its request scopes a lane to its stage, and the agent reads with the discipline that keeps a lane small.
 test("the coder writes the staged handoff sections and reads with discipline", () => {
-  const deliverable = readFileSync(join(DELIVERABLES, "implementation.md"), "utf8");
-  for (const section of ["## Modified files", "## Done", "## Left", "## How it was tested"]) {
-    assert.ok(deliverable.includes(section), `the implementation deliverable does not name \`${section}\``);
-  }
   const agent = readAgent("coder");
+  for (const section of ["## Modified files", "## Done", "## Left", "## How it was tested"]) {
+    assert.ok(agent.includes(section), `the coder's run section does not name \`${section}\``);
+  }
   assert.ok(agent.includes("## Reading discipline"), "coder.md lost its reading discipline");
   assert.ok(agent.includes("under ~300 lines"), "coder.md lost the whole-file Read threshold");
   assert.ok(agent.includes("When the request names a stage, implement only that stage"), "coder.md does not scope a task to its stage");
-  assert.ok(readFileSync(join(PROMPTS, "coder.md"), "utf8").includes("Stage: {{STAGE}}"), "the coder request does not name its stage");
+  assert.ok(phasePrompts().blocks.coder.includes("STAGE: <stage>"), "the coder block does not name its stage");
 });
 
-// The verifier owns the method of proving by execution; the runtime request owns the verdict and the plan line the skill branches on.
-test("the verifier owns the runtime method and its request the verdict the skill reads", () => {
+// The verifier owns the method of proving by execution and the verdicts; its block owns the line that tells a runtime lane apart.
+test("the verifier owns the runtime method and the verdict the phases read", () => {
   const agent = readAgent("verifier");
-  const request = readFileSync(join(PROMPTS, "runtime.md"), "utf8");
-  const skill = readFileSync(SKILL, "utf8");
+  const phases = readFileSync(PHASES, "utf8");
   assert.ok(agent.includes("## Proving by execution"), "verifier.md does not carry `## Proving by execution`");
   assert.ok(agent.includes("a scenario with no recorded attempt is not `to confirm`"), "the unavailable rule left the verifier");
   for (const phrase of ["## Runtime verdict", "Diff applies plan: yes|no"]) {
-    assert.ok(request.includes(phrase), `the runtime request does not carry \`${phrase}\``);
+    assert.ok(agent.includes(phrase), `the runtime section does not carry \`${phrase}\``);
   }
-  assert.match(request, /^Mode: RUNTIME$/m, "the runtime request lost its `Mode: RUNTIME` line");
+  assert.ok(phasePrompts().blocks.runtime.includes("Mode: RUNTIME"), "the runtime block lost its `Mode: RUNTIME` line");
   for (const verdict of ["CONFIRMED", "NOT-MET", "SYMPTOM-PERSISTS", "NEEDS-DEVICE", "UNAVAILABLE"]) {
-    assert.ok(request.includes(`\`${verdict}\``), `the runtime request does not name the \`${verdict}\` verdict`);
-    assert.ok(skill.includes(`\`${verdict}\``) || skill.includes(`\`VERDICT: ${verdict}`), `the skill does not route the \`${verdict}\` verdict`);
+    assert.ok(agent.includes(`\`${verdict}\``), `the runtime section does not name the \`${verdict}\` verdict`);
+    assert.ok(phases.includes(`\`${verdict}\``) || phases.includes(`\`VERDICT: ${verdict}`), `the phases do not route the \`${verdict}\` verdict`);
   }
-  assert.ok(
-    readFileSync(join(DELIVERABLES, "verification.md"), "utf8").includes("evidence/automated-verification.md"),
-    "the verification deliverable does not write its evidence file",
-  );
-  assert.equal(skill.includes("Decide the path by the change:"), false, "the skill still carries the runtime cases");
+  assert.ok(agent.includes("evidence/automated-verification.md"), "the verifier's run section does not write its evidence file");
+  assert.equal(phases.includes("Decide the path by the change:"), false, "the phases still carry the runtime cases");
 });
 
 // One coder lane per stage keeps the binding rule of a staged Brief: the verifier runs between stages.
 test("the stage lanes keep the verifier between stages", () => {
-  const skill = readFileSync(SKILL, "utf8").replace(/\s+/g, " ");
+  const skill = readFileSync(PHASES, "utf8").replace(/\s+/g, " ");
   assert.ok(skill.includes("Phase 4 implements stage by stage with the verifier between stages"), "the skill lost the binding stage rule of a staged Brief");
   assert.ok(skill.includes("then the verifier between stages"), "the one-lane-per-stage text skips the verifier between stages");
   assert.equal(skill.includes("Phase 5 and Phase 6 run once"), false, "the stage lanes still defer every verification to the end");

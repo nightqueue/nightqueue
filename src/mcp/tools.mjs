@@ -77,7 +77,6 @@ import {
   trackerUpdate,
 } from "../integrations/tracker.mjs";
 import { callerContext, PHASE_TARGETS, phaseContextBlock, recallFreshLessons, runInjectedLessonIds } from "./phase-context.mjs";
-import { phasePrompt, PROMPT_TARGETS } from "./phase-prompt.mjs";
 import { readVersion } from "../cli/version.mjs";
 import {
   newContractState,
@@ -206,6 +205,11 @@ async function operatorRun(args, env) {
 async function callerRun(args, env) {
   const own = callerJobId(env);
   return own === null ? await operatorRun(args, env) : await jobRun(own, args, env);
+}
+
+// The run the reflector's context reads: inside a job its own, whatever the call names; outside one the `project` and `slug` pair.
+async function reflectorRun(args, env) {
+  return callerRun(callerJobId(env) === null ? args : {}, env);
 }
 
 // The run a `pipeline_log` call records: inside a job the job's own row names it, whatever the call sent, and outside one only the call can say which run it is.
@@ -822,7 +826,7 @@ function operatorConsentTool(env) {
   };
 }
 
-// The thirty-three tools of the plugin contract, with the parameter names the plugin actually sends.
+// The thirty-two tools of the plugin contract, with the parameter names the plugin actually sends.
 function toolDefinitions(env, state) {
   return [
     {
@@ -859,19 +863,20 @@ function toolDefinitions(env, state) {
       name: "context_for_phase",
       config: {
         description:
-          "The context block of one pipeline phase, already formatted: `## Applicable lessons` ([L<id>]), `## Project memory` ([M<id>]) and, for `target: \"explore\"`, `## Structural index`. " +
-          "Paste `block` into the subagent's prompt as it comes; an empty `block` means there is genuinely nothing to inject, so the sections are omitted. " +
+          "The context block a subagent fetches as its first step, already formatted: `## Applicable lessons` ([L<id>]), `## Project memory` ([M<id>]) and, for `target: \"explore\"`, `## Structural index`; an empty `block` means there is genuinely nothing to read. " +
+          "`target: \"reflector\"` answers `## Run timeline` and `## Lessons given to this run` of the run instead, with `open_items`; outside a job it needs `project` and `slug`. " +
           "Inside a job the project and the already-injected lessons come from the job's own run: the same lesson is not handed to two phases, unless it is all this run has to give.",
         inputSchema: {
           target: z.enum(PHASE_TARGETS),
           query: optionalText,
           project: optionalText,
+          slug: optionalText,
           repo_root: optionalText,
           exclude_ids: z.array(z.unknown()).nullable().optional(),
         },
       },
       handler: async (args) =>
-        degradedPhaseContext(args, () =>
+        degradedPhaseContext(args, async () =>
           phaseContextBlock(
             {
               target: args.target,
@@ -879,36 +884,11 @@ function toolDefinitions(env, state) {
               project: args.project,
               repoRoot: args.repo_root,
               excludeIds: args.exclude_ids,
+              run: args.target === "reflector" ? await reflectorRun(args, env) : null,
             },
             env,
           ),
         ),
-    },
-    {
-      name: "phase_prompt",
-      config: {
-        description:
-          "The complete prompt of one /resolve subagent for THIS run, rendered by the runtime from the plugin's templates: the handoff contract, the model of its agent (the default or the project's override) and the context block. " +
-          "`triager` renders from the request: inside a job the job's own prompt (plus the operator's gate answer), outside a job the `request` argument, required there. Every other target reads the Brief of `<RUN_DIR>/00-brief.md`, written by `nightqueue run check 01`, and refuses `request`. " +
-          "Pass `prompt` to the `Agent` tool verbatim, with the answered `subagent_type` and `model`, then gate the answered `artifact` with `nightqueue run check <check>`. " +
-          "`reflector` (Phase 10) renders with no artifact and `check` null: launch it and gate nothing. " +
-          "`coder` and `verifier` render the fast-track prompt on trivial/simple; `note` is relaunch context (a fix loop, a re-architect, a re-triage), `raw_evidence` is accepted and ignored, `group` the hypotheses of one prover. " +
-          "Inside a job the run is resolved from the job's own row — passing `project` or `slug` there is refused; outside a job both are required.",
-        inputSchema: {
-          target: z.enum(PROMPT_TARGETS),
-          query: optionalText,
-          request: optionalText,
-          stage: optionalText,
-          delivery_constraints: optionalText,
-          raw_evidence: optionalText,
-          group: optionalText,
-          note: optionalText,
-          artifact: ignoredOldField,
-          project: optionalText,
-          slug: optionalText,
-        },
-      },
-      handler: async (args) => phasePrompt(args, { run: await callerRun(args, env), env }),
     },
     {
       name: "lesson_save",
@@ -1498,7 +1478,7 @@ function refuseRemovedToolCalls(server, state) {
   });
 }
 
-// Builds the MCP server with the thirty-three tools of the plugin contract.
+// Builds the MCP server with the thirty-two tools of the plugin contract.
 export function createServer(env = process.env) {
   const server = new McpServer(
     {

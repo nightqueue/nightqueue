@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { run } from "../src/cli/index.mjs";
@@ -7,9 +8,9 @@ import { runDir } from "../src/config/paths.mjs";
 import { openDb } from "../src/memory/db.mjs";
 import { addJob } from "../src/memory/jobs.mjs";
 import { readRunState } from "../src/queue/resume.mjs";
-import { setProjectAgents } from "../src/memory/registry.mjs";
+import { setProjectAgents, setProjectDemoRepo } from "../src/memory/registry.mjs";
 import { AGENT_MODELS, modelTable } from "../src/queue/routing.mjs";
-import { recordRunFields } from "../src/queue/run-state.mjs";
+import { recordPhaseDone, recordRunFields } from "../src/queue/run-state.mjs";
 import { ensureProject, makeHome, makeProject, projectPathOf } from "../test-support/memory.mjs";
 
 const SLUG = "add-slugify";
@@ -75,6 +76,12 @@ test("`run start` answers the run, its agent models, and every phase but no task
     "commitConvention",
     "commitTemplate",
     "promptFile",
+    "needsSlug",
+    "demoRepo",
+    "baseRef",
+    "pluginRoot",
+    "stages",
+    "drafts",
   ]);
   assert.equal(answer.promptFile, join(answer.runDir, "00-prompt.md"));
   assert.equal(readFileSync(answer.promptFile, "utf8"), "add slugify\n");
@@ -267,4 +274,102 @@ test("outside a job `run start` works on the run the operator names, creating it
   const named = await runCli(env, [...START, "--project", "alpha", "--slug", SLUG], { jobId: boundJob(env) });
   assert.equal(named.code, 1);
   assert.match(named.errText, /refusing to name a run from inside job/);
+});
+
+test("`needsSlug` is true only while the job's slug is the provisional one the runtime derived", async (t) => {
+  const env = makeQueue(t, "run-start-needs-slug");
+  assert.equal(answerOf(await runCli(env, START, { jobId: boundJob(env, "add-slugify") })).needsSlug, true);
+  assert.equal(answerOf(await runCli(env, START, { jobId: boundJob(env, "a-named-run") })).needsSlug, false);
+  assert.equal(answerOf(await runCli(env, [...START, "--project", "alpha", "--slug", SLUG])).needsSlug, false, "outside a job the slug is the operator's");
+});
+
+test("`demoRepo` answers the project's checkout, or `none configured`", async (t) => {
+  const env = makeQueue(t, "run-start-demo-repo");
+  assert.equal(answerOf(await runCli(env, START, { jobId: boundJob(env) })).demoRepo, "none configured");
+  setProjectDemoRepo(openDb(env), { id: ensureProject(env, "alpha"), value: "/demo/checkout" });
+  assert.equal(answerOf(await runCli(env, START, { jobId: boundJob(env) })).demoRepo, "/demo/checkout");
+});
+
+test("`baseRef` answers the default branch, and `HEAD` with a stderr line in a repository without one", async (t) => {
+  const env = { ...makeQueue(t, "run-start-base-ref"), GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_SYSTEM: "/dev/null" };
+  const repo = projectPathOf(env, "alpha");
+  const git = (...args) => execFileSync("git", ["-C", repo, ...args], { env: { ...env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" } });
+  rmSync(join(repo, ".git"), { recursive: true, force: true });
+  git("init", "-q", "-b", "trunk");
+  git("commit", "-q", "--allow-empty", "-m", "first");
+
+  const without = await runCli(env, START, { jobId: boundJob(env) });
+  assert.equal(answerOf(without).baseRef, "HEAD");
+  assert.match(without.errText, /answering `HEAD` as the base branch: no base branch/);
+
+  git("branch", "-m", "main");
+  assert.equal(answerOf(await runCli(env, START, { jobId: boundJob(env) })).baseRef, "main");
+});
+
+test("`pluginRoot` is the plugin of this runtime, the directory the agents and the skills ship in", async (t) => {
+  const env = makeQueue(t, "run-start-plugin-root");
+  const { pluginRoot } = answerOf(await runCli(env, START, { jobId: boundJob(env) }));
+  assert.ok(existsSync(join(pluginRoot, "agents", "triager.md")), pluginRoot);
+  assert.ok(existsSync(join(pluginRoot, "skills", "reflect", "references", "rubric.md")), pluginRoot);
+});
+
+test("`stages` is empty with no Brief or no field, and lists the Brief's numbered stages in order, on one line or several", async (t) => {
+  const env = makeQueue(t, "run-start-stages");
+  const id = boundJob(env);
+  const dir = runDir(ensureProject(env, "alpha"), SLUG, env);
+  const stagesWith = async (brief) => {
+    writeFileSync(join(dir, "00-brief.md"), brief);
+    return answerOf(await runCli(env, START, { jobId: id })).stages;
+  };
+
+  assert.deepEqual(answerOf(await runCli(env, START, { jobId: id })).stages, []);
+  assert.deepEqual(await stagesWith("## Brief\n**Type:** bug/error\n"), []);
+  assert.deepEqual(await stagesWith("## Brief\n**Stages:** 1) runtime; 2) shim\n**Slug:** a\n"), ["1) runtime; 2) shim"]);
+  assert.deepEqual(await stagesWith("## Brief\n**Stages:** \n1. first\n2. second\n\n## Request critique\n"), ["1. first", "2. second"]);
+  assert.deepEqual(await stagesWith("## Brief\n**Stages:**\n1. only\n"), ["1. only"]);
+});
+
+test("`run start` deletes a previous attempt's delivery drafts and keeps every other file of the run", async (t) => {
+  const env = makeQueue(t, "run-start-stale-drafts");
+  const id = boundJob(env);
+  const dir = runDir(ensureProject(env, "alpha"), SLUG, env);
+  mkdirSync(dir, { recursive: true });
+  for (const file of ["commit-message.txt", "pr-body.md", "pr-body.published.md", "03-plan.md"]) writeFileSync(join(dir, file), "kept?\n");
+
+  answerOf(await runCli(env, START, { jobId: id }));
+
+  assert.equal(existsSync(join(dir, "commit-message.txt")), false);
+  assert.equal(existsSync(join(dir, "pr-body.md")), false);
+  assert.equal(existsSync(join(dir, "pr-body.published.md")), true);
+  assert.equal(existsSync(join(dir, "03-plan.md")), true);
+  assert.deepEqual(answerOf(await runCli(env, START, { jobId: id })).drafts, []);
+});
+
+for (const phase of ["verification", "runtime"]) {
+  test(`\`run start\` keeps the drafts of a run that recorded \`${phase}\` and names them in \`drafts\``, async (t) => {
+    const env = makeQueue(t, `run-start-kept-drafts-${phase}`);
+    const id = boundJob(env);
+    const projectId = ensureProject(env, "alpha");
+    const dir = runDir(projectId, SLUG, env);
+    assert.equal(recordPhaseDone({ projectId, slug: SLUG, phase, env }).status, "written");
+    writeFileSync(join(dir, "commit-message.txt"), "feat: x\n");
+
+    assert.deepEqual(answerOf(await runCli(env, START, { jobId: id })).drafts, ["commit-message.txt"]);
+    assert.equal(readFileSync(join(dir, "commit-message.txt"), "utf8"), "feat: x\n");
+
+    writeFileSync(join(dir, "pr-body.md"), "## Report\n");
+    assert.deepEqual(answerOf(await runCli(env, START, { jobId: id })).drafts, ["commit-message.txt", "pr-body.md"]);
+  });
+}
+
+test("`run start` still deletes the drafts of a run whose earlier phases only are recorded", async (t) => {
+  const env = makeQueue(t, "run-start-early-phase-drafts");
+  const id = boundJob(env);
+  const projectId = ensureProject(env, "alpha");
+  const dir = runDir(projectId, SLUG, env);
+  assert.equal(recordPhaseDone({ projectId, slug: SLUG, phase: "implementation", env }).status, "written");
+  writeFileSync(join(dir, "pr-body.md"), "## Report\n");
+
+  assert.deepEqual(answerOf(await runCli(env, START, { jobId: id })).drafts, []);
+  assert.equal(existsSync(join(dir, "pr-body.md")), false);
 });

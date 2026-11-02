@@ -171,6 +171,7 @@ test("an empty or malformed event answers nothing and never throws", () => {
 });
 
 const ORCHESTRATOR_REDIRECT = "the orchestrator does not read the repository - hand the path to the coder / ask the verifier";
+const READ_DENIAL = "the orchestrator reads only the pipeline; a phase's result is its subagent's return and the output of `nightqueue run check`/`run report`";
 
 // A job home with one run dir, a plugin dir and a worktree, all under a temp dir, plus the env the runtime pins on the child.
 function jobFixture(t) {
@@ -208,19 +209,22 @@ function denyReasonOf(answer) {
   return hookSpecificOutput.permissionDecisionReason;
 }
 
-test("the orchestrator reads its run's handoff files and the plugin, and nothing else", (t) => {
+test("the orchestrator reads the plugin and nothing else, its run's artifacts included", (t) => {
   const { env, runDir, plugin, worktree } = jobFixture(t);
   const allowed = [
-    ["Read", { file_path: join(runDir, "03-plan.md") }],
     ["Read", { file_path: join(plugin, "skills", "resolve", "SKILL.md") }],
-    ["Grep", { pattern: "Verdict", path: runDir }],
-    ["Glob", { pattern: `${runDir}/*.md` }],
-    ["Glob", { pattern: "*.md", path: runDir }],
+    ["Grep", { pattern: "Verdict", path: join(plugin, "skills") }],
+    ["Glob", { pattern: `${plugin}/skills/*.md` }],
   ];
   for (const [tool, toolInput] of allowed) {
     assert.equal(runAgentForeground({ input: mainCall(tool, toolInput, worktree), env }), "", `${tool} ${JSON.stringify(toolInput)}`);
   }
   const denied = [
+    ["Read", { file_path: join(runDir, "05-qa.md") }, join(runDir, "05-qa.md")],
+    ["Read", { file_path: join(runDir, "03-plan.md") }, join(runDir, "03-plan.md")],
+    ["Grep", { pattern: "Verdict", path: runDir }, runDir],
+    ["Glob", { pattern: `${runDir}/*.md` }, runDir],
+    ["Glob", { pattern: "*.md", path: runDir }, runDir],
     ["Read", { file_path: join(worktree, "src", "app.mjs") }, join(worktree, "src", "app.mjs")],
     ["Read", { file_path: "src/app.mjs" }, join(worktree, "src", "app.mjs")],
     ["Grep", { pattern: "export" }, worktree],
@@ -230,10 +234,15 @@ test("the orchestrator reads its run's handoff files and the plugin, and nothing
   ];
   for (const [tool, toolInput, shown] of denied) {
     const reason = denyReasonOf(runAgentForeground({ input: mainCall(tool, toolInput, worktree), env }));
-    assert.ok(reason.startsWith(ORCHESTRATOR_REDIRECT), reason);
-    assert.match(reason, /handoff file under RUN_DIR/);
+    assert.ok(reason.startsWith(READ_DENIAL), reason);
     if (shown) assert.ok(reason.includes(shown), `${reason} does not name ${shown}`);
   }
+});
+
+test("a subagent's read of a run artifact passes: the narrowed roots bind the main thread alone", (t) => {
+  const { env, runDir, worktree } = jobFixture(t);
+  const input = { ...mainCall("Read", { file_path: join(runDir, "05-qa.md") }, worktree), agent_id: "a1", agent_type: "qa-guardian" };
+  assert.equal(runAgentForeground({ input, env }), "");
 });
 
 test("the orchestrator reads the file its own session spilled a large tool result into, and nothing else of the host's configuration", (t) => {
@@ -248,10 +257,10 @@ test("the orchestrator reads the file its own session spilled a large tool resul
   const ownSession = { session_id: "0b6f3c1e-session", transcript_path: join(project, "0b6f3c1e-session.jsonl") };
   const read = (file_path, session) => runAgentForeground({ input: { ...mainCall("Read", { file_path }, worktree), ...session }, env });
   assert.equal(read(spilled, ownSession), "");
-  assert.ok(denyReasonOf(read(otherJob, ownSession)).startsWith(ORCHESTRATOR_REDIRECT), "another session's spill was readable");
-  assert.ok(denyReasonOf(read(spilled, {})).startsWith(ORCHESTRATOR_REDIRECT), "a spill was readable without the session's transcript path");
-  assert.ok(denyReasonOf(read(spilled, { transcript_path: ownSession.transcript_path, session_id: undefined })).startsWith(ORCHESTRATOR_REDIRECT));
-  assert.ok(denyReasonOf(read(join(env.CLAUDE_CONFIG_DIR, "settings.json"), ownSession)).startsWith(ORCHESTRATOR_REDIRECT));
+  assert.ok(denyReasonOf(read(otherJob, ownSession)).startsWith(READ_DENIAL), "another session's spill was readable");
+  assert.ok(denyReasonOf(read(spilled, {})).startsWith(READ_DENIAL), "a spill was readable without the session's transcript path");
+  assert.ok(denyReasonOf(read(spilled, { transcript_path: ownSession.transcript_path, session_id: undefined })).startsWith(READ_DENIAL));
+  assert.ok(denyReasonOf(read(join(env.CLAUDE_CONFIG_DIR, "settings.json"), ownSession)).startsWith(READ_DENIAL));
 });
 
 test("a subagent's read of the worktree is never scoped: the payload carries agent_id", (t) => {

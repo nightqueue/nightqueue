@@ -17,7 +17,7 @@ import { saveIndexFromText } from "./index-save.mjs";
 import { realPath } from "./paths.mjs";
 import { findPrTemplate } from "./pr-template.mjs";
 import { citedTestGaps } from "./qa-skip-tests.mjs";
-import { durationCell, phaseRows, readJobLog, readRequiredFile, requireRunState, resolveRun, resolveWritableRun, RUN_OPTIONS, worktreeOf } from "./run-context.mjs";
+import { changedFiles, durationCell, phaseRows, readJobLog, readRequiredFile, requireRunState, resolveRun, resolveWritableRun, RUN_OPTIONS, worktreeOf } from "./run-context.mjs";
 import {
   bodyProblemLines,
   branchWips,
@@ -85,28 +85,6 @@ function readArtifact(path) {
   } catch {
     return "";
   }
-}
-
-// The lines a read-only git command answered, or null when git refused to answer at all.
-function gitLines(gitImpl, cwd, args) {
-  try {
-    return String(gitImpl({ args, cwd }) ?? "")
-      .split("\n")
-      .map((line) => line.trim())
-      .filter(Boolean);
-  } catch {
-    return null;
-  }
-}
-
-// Every file the worktree changed, tracked and untracked alike, as the absolute paths a `## Modified files` lists.
-function changedFiles(cwd, gitImpl) {
-  const tracked = gitLines(gitImpl, cwd, ["diff", "--name-only", "HEAD"]);
-  const untracked = gitLines(gitImpl, cwd, ["ls-files", "--others", "--exclude-standard"]);
-  if (tracked === null && untracked === null) {
-    throw new UserError(`git answered nothing about \`${cwd}\`: the worktree of this run is gone or is not a git repository`);
-  }
-  return [...new Set([...(tracked ?? []), ...(untracked ?? [])])].sort().map((file) => join(cwd, file));
 }
 
 // Whether the implementation artifact already lists at least one file, which is what its section exists for.

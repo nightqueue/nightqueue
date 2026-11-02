@@ -1,18 +1,18 @@
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import { CHECK_CONTEXT_FILES, evaluateCheck } from "../queue/check-contract.mjs";
 import { openQuestion } from "../queue/gate-question.mjs";
 import { lastRound, PHASE_ARTIFACTS } from "../queue/phase-artifacts.mjs";
 import { attemptSince, derivedGateStop, derivedOutcome, recordPipelineRun, statePipelinePhases, verdictIcon, verdictWord } from "../queue/pipeline-record.mjs";
+import { defaultGitImpl } from "../queue/preflight.mjs";
 import { isStateObject } from "../queue/resume.mjs";
 import { draftLine, refusedDraftLine } from "../queue/run-state.mjs";
 import { renderSkillTemplate, skillReferencesDir } from "../queue/skill-template.mjs";
 import { sectionOf } from "../queue/stream.mjs";
 import { runDurationS } from "../queue/telemetry.mjs";
 import { checkArgs, parseCommand } from "./args.mjs";
-import { durationCell, phaseRows, readJobLog, requireRunState, resolveRun, RUN_OPTIONS } from "./run-context.mjs";
+import { FACTS_HEADING, reportFacts } from "./report-facts.mjs";
+import { changedFiles, durationCell, phaseRows, readJobLog, readRunFile, requireRunState, resolveRun, RUN_OPTIONS, worktreeOf } from "./run-context.mjs";
 
-export const REPORT_USAGE = "nightqueue run report [--json] [--project <name> --slug <slug>]";
+export const REPORT_USAGE = "nightqueue run report [--json] [--facts] [--project <name> --slug <slug>]";
 
 // The steps of the report, in order: the canonical phase, the step label and the agent of the visual identity.
 const STEPS = [
@@ -140,15 +140,6 @@ export function reportRows(state, measured) {
   }
   fill(STEPS.length);
   return rows;
-}
-
-// One file of the run directory, or an empty text when the run wrote none.
-function readRunFile(runDir, file) {
-  try {
-    return readFileSync(join(runDir, file), "utf8");
-  } catch {
-    return "";
-  }
 }
 
 // The Step cell of one row: its label, suffixed with the launch number of a re-run.
@@ -314,16 +305,40 @@ function reportLines(report) {
   return renderSkillTemplate(skillReferencesDir(), "report", reportValues(report)).replace(/\n$/, "").split("\n");
 }
 
-// Runs `run report`, which renders the tables of the final report from the run's own records.
+// The worktree of the run and what it changed, or null when git cannot tell.
+function worktreeChanges(run, ctx) {
+  try {
+    const path = worktreeOf(run, ctx.env);
+    return { path, changed: changedFiles(path, ctx.gitImpl ?? defaultGitImpl) };
+  } catch {
+    return null;
+  }
+}
+
+// The printed lines of the facts section.
+function factLines(facts) {
+  return ["", FACTS_HEADING, "", ...facts];
+}
+
+// Answers `run report --facts`: the facts section alone, with nothing recorded.
+function printFacts(facts, values, ctx) {
+  if (values.json === true) ctx.out(JSON.stringify({ facts }));
+  else for (const line of factLines(facts).slice(1)) ctx.out(line);
+  return 0;
+}
+
+// Runs `run report`, which renders the tables of the final report from the run's own records, then the facts of its artifacts; `--facts` prints only those and records nothing.
 export async function runReport(argv, ctx) {
-  const { values, positionals } = parseCommand(argv, { ...RUN_OPTIONS, json: { type: "boolean" } });
+  const { values, positionals } = parseCommand(argv, { ...RUN_OPTIONS, json: { type: "boolean" }, facts: { type: "boolean" } });
   checkArgs(positionals, { max: 0, usage: REPORT_USAGE });
   const run = await resolveRun(values, ctx);
   const state = requireRunState(run, ctx.env);
+  const facts = reportFacts({ runDir: run.runDir, state, worktree: worktreeChanges(run, ctx) });
+  if (values.facts === true) return printFacts(facts, values, ctx);
   const openItems = runOpenItems(run.runDir, state);
   const recorded = await recordRun(run, state, { env: ctx.env, openItems });
-  const report = { ...buildReport(run, state, readJobLog(run.jobId, ctx.env)), openItems, recorded };
+  const report = { ...buildReport(run, state, readJobLog(run.jobId, ctx.env)), openItems, recorded, facts };
   if (values.json === true) ctx.out(JSON.stringify(report));
-  else for (const line of reportLines(report)) ctx.out(line);
+  else for (const line of [...reportLines(report), ...factLines(facts)]) ctx.out(line);
   return 0;
 }

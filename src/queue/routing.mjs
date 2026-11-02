@@ -1,6 +1,6 @@
 /*
  * The agent models of the /resolve pipeline and its constants: the single source of every model an agent runs on.
- * `nightqueue run start` answers the models of the run's project and `phase_prompt` reads them, so no prompt restates them.
+ * `nightqueue run start` answers the models of the run's project and the orchestrator launches each block with them, so no prompt restates them.
  *
  * Model rationale:
  *
@@ -37,12 +37,11 @@ export const AGENT_MODELS = Object.freeze({
   merger: "sonnet",
 });
 
-// The agents a project may override: every agent phase_prompt renders (the merger runs in the close, outside phase_prompt).
+// The agents a project may override: every agent the pipeline launches (the merger runs in the close, outside it).
 export const OVERRIDABLE_AGENTS = Object.freeze(Object.keys(AGENT_MODELS).filter((agent) => agent !== "merger"));
 
 // The values every run shares, whatever its project.
 export const PIPELINE_CONSTANTS = Object.freeze({
-  verifierScope: "the project's real checks (typecheck, lint, build, tests) + the QA's PoCs",
   maxFixIterations: 2,
   qaMethods:
     "automated; + api for an API change; + emulator for a UI change in an Expo repo; + browser for a UI change in a web repo",

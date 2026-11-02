@@ -92,7 +92,6 @@ test("every run goes through every phase, and an unknown type is refused", () =>
 
 test("the pipeline constants are the same for every run", () => {
   assert.equal(PIPELINE_CONSTANTS.maxFixIterations, 2);
-  assert.equal(PIPELINE_CONSTANTS.verifierScope, "the project's real checks (typecheck, lint, build, tests) + the QA's PoCs");
   assert.match(PIPELINE_CONSTANTS.qaMethods, /^automated;/);
 });
 

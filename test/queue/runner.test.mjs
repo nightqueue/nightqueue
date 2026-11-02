@@ -118,7 +118,7 @@ function orchestratorToolsEvent(messageId, tools, usage) {
   return event;
 }
 
-test("a finished run persists what its orchestrator did: turns, reads outside the run, Bash, exploration Bash and the last context", async (t) => {
+test("a finished run persists what its orchestrator did: turns, reads outside the plugin (a run artifact counts), Bash, exploration Bash and the last context", async (t) => {
   const env = makeHome(t, "runner-orchestrator-counts");
   const repo = makeProject(t, env, "alpha");
   const triage = join(runDir(ensureProject(env, "alpha"), SLUG, env), "01-triage.md");
@@ -153,7 +153,7 @@ test("a finished run persists what its orchestrator did: turns, reads outside th
   const row = getJob(id, env);
   assert.deepEqual(
     { turns: row.orch_turns, reads: row.orch_reads, bash: row.orch_bash, explore: row.orch_bash_explore, context: row.orch_ctx_last },
-    { turns: 3, reads: 2, bash: 2, explore: 1, context: 2305 },
+    { turns: 3, reads: 3, bash: 2, explore: 1, context: 2305 },
   );
 });
 

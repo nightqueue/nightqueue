@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { parseExploreArtifact } from "../../src/cli/explore-artifact.mjs";
-import { lastRound, lastRoundWithSource, nextFixLoop, nextRound, PHASE_ARTIFACTS, QA_ANALYST_STAGE, QA_STAGES, QA_TRIAGE_STAGE } from "../../src/queue/phase-artifacts.mjs";
+import { lastRound, lastRoundWithSource, nextRound, PHASE_ARTIFACTS, QA_ANALYST_STAGE, QA_STAGES, QA_TRIAGE_STAGE } from "../../src/queue/phase-artifacts.mjs";
 import { PHASE_NAMES } from "../../src/queue/resume.mjs";
 
 const EXPLORE_HEADINGS = ["## File map", "## Access map", "## Third-party libraries"];
@@ -102,12 +102,4 @@ test("a decorated two-digit round counts, and a heading with no number boundary 
     assert.equal(nextRound(`${notRound}\n`), 1, notRound);
     assert.equal(lastRound(`## Round 1\na\n${notRound}\nb\n`), `## Round 1\na\n${notRound}\nb\n`, notRound);
   }
-});
-
-test("`nextFixLoop` is the highest `### Fix loop` plus one, or 1", () => {
-  assert.equal(nextFixLoop("## Modified files\n/a.mjs\n"), 1);
-  assert.equal(nextFixLoop("### Fix loop 1 — what was wrong / what changed\n"), 2);
-  assert.equal(nextFixLoop("### Fix loop 1 — x\n### Fix loop 2 — y\n### Fix loop 3 — z\n"), 4);
-  assert.equal(nextFixLoop("### Fix loop 1 — x\n### Fix loop 3 — z\n"), 4);
-  assert.equal(nextFixLoop("### Fix loops ahead\n"), 1);
 });

@@ -1,22 +1,14 @@
 import assert from "node:assert/strict";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
-const PROMPTS = join(ROOT, "plugin/skills/resolve/references/prompts");
-const DELIVERABLES = join(ROOT, "plugin/skills/resolve/references/deliverables");
-// The requests the pipeline renders for each agent whose file holds only who it is and how it thinks.
-const REQUESTS = {
-  triager: ["triager"],
-  explore: ["explore"],
-  architect: ["architect"],
-  coder: ["coder", "coder-fix"],
-  "qa-guardian": ["qa-triage", "qa-lite", "qa-analyst", "qa-prover"],
-  verifier: ["verifier", "runtime"],
-};
-const INDEPENDENT = Object.keys(REQUESTS);
+const RUN_HEADING = "\n## Inside a run\n";
+// The agents whose text above `## Inside a run` holds only who they are and how they think.
+const INDEPENDENT = ["triager", "explore", "architect", "coder", "qa-guardian", "verifier"];
+const RUN_AGENTS = [...INDEPENDENT, "reflector"];
 const PIPELINE_TERMS = [
   "01-triage",
   "02-explore",
@@ -40,12 +32,18 @@ const PIPELINE_TERMS = [
   "index_recall",
   "Applicable lessons",
 ];
-const DELIVERABLE_PARTIAL = /\{\{>deliverables\/([\w-]+)\}\}/g;
 
-// A pipeline-independent agent names no phase, artifact, orchestrator, other agent, shell rule or runtime block; it may name itself.
-test("each pipeline-independent agent file names nothing of the pipeline", () => {
+// One agent definition split at `## Inside a run`: what holds for any request, then what holds inside a run.
+function agentParts(agent) {
+  const text = readFileSync(join(ROOT, `plugin/agents/${agent}.md`), "utf8");
+  const [independent, ...run] = text.split(RUN_HEADING);
+  return { independent, run: run.join(RUN_HEADING) };
+}
+
+// Above `## Inside a run` a pipeline-independent agent names no phase, artifact, orchestrator, other agent, shell rule or runtime block; it may name itself.
+test("each pipeline-independent agent file names nothing of the pipeline above its run section", () => {
   for (const agent of INDEPENDENT) {
-    const text = readFileSync(join(ROOT, `plugin/agents/${agent}.md`), "utf8");
+    const text = agentParts(agent).independent;
     for (const term of PIPELINE_TERMS.filter((name) => name !== agent)) {
       assert.equal(text.includes(term), false, `${agent} names the pipeline: ${term}`);
     }
@@ -77,40 +75,35 @@ test("each pipeline-independent agent caps its evidence at 2 under a request tha
   }
 });
 
-// The `## Deliver` block of a request is inline, or comes from every shared deliverable it includes.
-function carriesDeliver(request, name) {
-  if (request.includes("## Deliver")) return true;
-  const shared = [...request.matchAll(DELIVERABLE_PARTIAL)].map((match) => match[1]);
-  for (const deliverable of shared) {
-    const file = join(DELIVERABLES, `${deliverable}.md`);
-    assert.ok(existsSync(file), `the ${name} request includes a deliverable that does not exist: ${deliverable}`);
-    assert.ok(readFileSync(file, "utf8").includes("## Deliver"), `the ${deliverable} deliverable carries no ## Deliver`);
-  }
-  return shared.length > 0;
-}
-
-// The triager frames the raw request itself, its request asks for the Brief and the critique, and neither text offers a verdict that waits for an answer.
-test("the triager frames the request, its request delivers the Brief and the request critique, and no verdict waits for an answer", () => {
-  const agent = readFileSync(join(ROOT, "plugin/agents/triager.md"), "utf8");
-  assert.ok(agent.split("\n").includes("## Framing the request"), "the triager agent has no ## Framing the request section");
-  const request = readFileSync(join(PROMPTS, "triager.md"), "utf8");
+// The triager frames the raw request itself, its run section delivers the Brief and the critique, and no text offers a verdict that waits for an answer.
+test("the triager frames the request, its run section delivers the Brief and the request critique, and no verdict waits for an answer", () => {
+  const { independent, run } = agentParts("triager");
+  assert.ok(independent.split("\n").includes("## Framing the request"), "the triager agent has no ## Framing the request section");
   for (const part of ["\n## Brief\n", "\n## Request critique\n", "\n## Verdict: PROCEED | NO-CHANGE-NEEDED | NOT-REPRODUCIBLE\n"]) {
-    assert.ok(request.includes(part), `the triager request does not carry ${part.trim()}`);
+    assert.ok(run.includes(part), `the triager run section does not carry ${part.trim()}`);
   }
   for (const word of ["NEEDS-CLARIFICATION", "PROPOSE-ALTERNATIVE"]) {
-    assert.equal(agent.includes(word), false, `the triager agent still offers ${word}`);
-    assert.equal(request.includes(word), false, `the triager request still offers ${word}`);
+    assert.equal(independent.includes(word) || run.includes(word), false, `the triager agent still offers ${word}`);
   }
 });
 
-// What the agent must deliver and how it returns lives in the request the pipeline renders.
-test("each pipeline-independent agent's request owns the deliverable, the handoff and the shell rule", () => {
-  assert.equal(Object.values(REQUESTS).flat().length, 11, "the six agents no longer map to their eleven requests");
-  for (const name of Object.values(REQUESTS).flat()) {
-    const request = readFileSync(join(PROMPTS, `${name}.md`), "utf8");
-    assert.ok(carriesDeliver(request, name), `the ${name} request does not carry ## Deliver`);
-    for (const part of ["{{>_handoff}}", "{{>_shell-rule}}"]) {
-      assert.ok(request.includes(part), `the ${name} request does not carry ${part}`);
+// What an agent delivers inside a run and how it returns is its own, and only a request naming a run reaches that section.
+test("each run agent's last section is conditioned on `RUN_DIR:` and carries the deliverable, the return rule and the shell rule", () => {
+  for (const agent of RUN_AGENTS) {
+    const { run } = agentParts(agent);
+    assert.ok(run.trim().startsWith("This section applies only when the request carries a `RUN_DIR:` line"), `${agent}: the run section is not conditioned`);
+    for (const part of ["Deliver", "RETURN-HEAD:", "Shell rule: "]) {
+      assert.ok(run.includes(part), `${agent}: the run section does not carry ${part}`);
     }
+  }
+});
+
+// A request of the operator names no run, so an agent it delegates to must hold its whole independent method before the run section.
+test("the run section comes last in each run agent's file", () => {
+  for (const agent of RUN_AGENTS) {
+    const { independent, run } = agentParts(agent);
+    assert.ok(independent.length > 0 && run.length > 0, `${agent} has no run section`);
+    const headings = run.replace(/^(`{3,})[\s\S]*?^\1$/gm, "").match(/^## .+$/gm) ?? [];
+    assert.deepEqual(headings, [], `${agent}: a section follows the run section`);
   }
 });

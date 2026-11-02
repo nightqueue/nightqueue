@@ -1,7 +1,8 @@
-import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { UserError } from "../config/errors.mjs";
+import { packageRoot } from "../host/paths.mjs";
 import { PIPELINE_TASK_TYPES } from "../memory/runs.mjs";
 import { COMMIT_TYPES } from "../queue/branch-name.mjs";
 import { jobPromptText } from "../queue/job-prompt.mjs";
@@ -9,18 +10,24 @@ import { DEFAULT_PIPELINE, installedPipelineVersion, pipelineVersionBlock } from
 import { isSafeSegment, isStateObject, readRunState } from "../queue/resume.mjs";
 import { callerJobId } from "../queue/retry.mjs";
 import { agentModels, modelTable, phasesFor } from "../queue/routing.mjs";
+import { isProvisionalSlug } from "../queue/run-slug.mjs";
 import { recordPipeline, recordPipelineUnpinned, recordPrTemplate, recordRunFields } from "../queue/run-state.mjs";
 import { openStore } from "../store/open.mjs";
 import { checkArgs, parseCommand } from "./args.mjs";
 import { findCommitTemplate } from "./commit-template.mjs";
 import { findPrTemplate } from "./pr-template.mjs";
-import { commitConvention } from "./run-publish.mjs";
+import { baseRef, commitConvention } from "./run-publish.mjs";
 import { resolveRun, RUN_OPTIONS, worktreeOf } from "./run-context.mjs";
 
 export const START_USAGE =
   "nightqueue run start [--type <bug/error|feature/refactor>] [--commit-type <type>] [--expect-slug <slug>] [--project <name> --slug <slug>] | --routing";
 
 const PROMPT_FILE = "00-prompt.md";
+const DELIVERY_DRAFTS = ["commit-message.txt", "pr-body.md"];
+const PHASES_BEFORE_DELIVERY = ["verification", "runtime"];
+const NO_DEMO_REPO = "none configured";
+const BRIEF_FILE = "00-brief.md";
+const STAGES_FIELD = "**Stages:**";
 
 const TIER_REMOVED = "`--tier` was removed: every run executes the one pipeline; run `nightqueue run start` without it";
 
@@ -133,6 +140,80 @@ async function writePromptFile(run, ctx) {
   }
 }
 
+// Deletes the delivery drafts of a previous attempt, which this session must write anew without reading them; a failure is reported, never fatal.
+function removeDeliveryDrafts(run, ctx) {
+  for (const file of DELIVERY_DRAFTS) {
+    try {
+      rmSync(join(run.runDir, file), { force: true });
+    } catch (error) {
+      ctx.err(`nightqueue: the stale ${file} was not removed: ${error?.message ?? String(error)}`);
+    }
+  }
+}
+
+// Whether the run recorded a phase Phase 8 follows, the only way a draft of its own can exist.
+function reachedDelivery(state) {
+  return isStateObject(state) && Array.isArray(state.phases) && state.phases.some((entry) => PHASES_BEFORE_DELIVERY.includes(entry?.phase));
+}
+
+// The drafts an earlier Phase 8 of this run left, kept for the resumed session; with no such phase recorded they are a previous attempt's and go.
+function settleDeliveryDrafts(run, state, ctx) {
+  if (reachedDelivery(state)) return DELIVERY_DRAFTS.filter((file) => existsSync(join(run.runDir, file)));
+  removeDeliveryDrafts(run, ctx);
+  return [];
+}
+
+// Whether the triager must name the run: true while the slug is the provisional one the runtime derived for this job; false outside a job or when the row cannot be read.
+async function needsSlugOf(run, ctx) {
+  const own = callerJobId(ctx.env);
+  if (own === null) return false;
+  try {
+    return isProvisionalSlug(await openStore(ctx.env).jobs.getJob(own), run.slug);
+  } catch (error) {
+    ctx.err(`nightqueue: this job's row could not be read, answering needsSlug false: ${error?.message ?? String(error)}`);
+    return false;
+  }
+}
+
+// The demo repository of the run's project as a request shows it: its path, or `none configured`.
+async function demoRepoOf(run, ctx) {
+  if (!run.projectId) return NO_DEMO_REPO;
+  try {
+    return (await openStore(ctx.env).projects.demoRepo(run.projectId)) || NO_DEMO_REPO;
+  } catch (error) {
+    ctx.err(`nightqueue: the project's demo repository could not be read: ${error?.message ?? String(error)}`);
+    return NO_DEMO_REPO;
+  }
+}
+
+// The base branch the QA triage compares the diff with: `HEAD`, said on stderr, when none can be found.
+function baseRefOf(cwd, ctx) {
+  try {
+    return baseRef(cwd, ctx.env);
+  } catch (error) {
+    ctx.err(`nightqueue: answering \`HEAD\` as the base branch: ${error?.message ?? String(error)}`);
+    return "HEAD";
+  }
+}
+
+// The numbered stages of the run's Brief, what a resumed orchestrator launches its coders by; none before the triage wrote the Brief.
+function briefStages(run, ctx) {
+  let text;
+  try {
+    text = readFileSync(join(run.runDir, BRIEF_FILE), "utf8");
+  } catch (error) {
+    if (error?.code !== "ENOENT") ctx.err(`nightqueue: the stages of the Brief could not be read: ${error?.message ?? String(error)}`);
+    return [];
+  }
+  const lines = text.split("\n");
+  const start = lines.findIndex((line) => line.startsWith(STAGES_FIELD));
+  if (start < 0) return [];
+  const rest = lines.slice(start + 1);
+  const end = rest.findIndex((line) => line.trim() === "" || /^(\*\*|#)/.test(line));
+  const field = [lines[start].slice(STAGES_FIELD.length), ...(end < 0 ? rest : rest.slice(0, end))];
+  return field.map((line) => line.trim()).filter((line) => line !== "");
+}
+
 // A text field of state.json, or null when the run never recorded it.
 function stateText(state, field) {
   return isStateObject(state) && typeof state[field] === "string" && state[field].trim() ? state[field].trim() : null;
@@ -164,6 +245,7 @@ export async function runStart(argv, ctx) {
   const prTemplate = recordTemplate(run, cwd, ctx);
   const promptFile = await writePromptFile(run, ctx);
   const state = readRunState({ projectId: run.projectId, slug: run.slug, env: ctx.env });
+  const drafts = settleDeliveryDrafts(run, state, ctx);
   const answer = {
     project: run.project,
     slug: run.slug,
@@ -180,6 +262,12 @@ export async function runStart(argv, ctx) {
     commitConvention: commitConvention(cwd, ctx.env),
     commitTemplate: findCommitTemplate(cwd, ctx.env),
     promptFile,
+    needsSlug: await needsSlugOf(run, ctx),
+    demoRepo: await demoRepoOf(run, ctx),
+    baseRef: baseRefOf(cwd, ctx),
+    pluginRoot: join(packageRoot(), "plugin"),
+    stages: briefStages(run, ctx),
+    drafts,
   };
   ctx.out(JSON.stringify(answer));
   return 0;

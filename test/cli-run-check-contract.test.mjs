@@ -5,7 +5,6 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { runDir } from "../src/config/paths.mjs";
 import { run } from "../src/cli/index.mjs";
-import { phasePrompt } from "../src/mcp/phase-prompt.mjs";
 import { openDb } from "../src/memory/db.mjs";
 import { addJob, getJob } from "../src/memory/jobs.mjs";
 import { evaluateCheck } from "../src/queue/check-contract.mjs";
@@ -154,17 +153,12 @@ test("a QA line left empty, as a placeholder or `none` opens nothing, and the ol
 });
 
 test("the QA text asks the three open lines, audits no count and never reports to a pause", () => {
-  const references = join(dirname(fileURLToPath(import.meta.url)), "..", "plugin", "skills", "resolve", "references");
-  const report = readFileSync(join(references, "deliverables", "qa-report.md"), "utf8");
-  for (const label of ["`omitted: ", "`divergences: ", "`unconfirmed decisions: "]) assert.ok(report.includes(label), label);
-  const brief = readFileSync(join(references, "prompts", "_qa-attack-brief.md"), "utf8");
   const agent = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "plugin", "agents", "qa-guardian.md"), "utf8");
-  for (const [name, text] of Object.entries({ report, brief, agent })) {
-    for (const gone of ["Symptom coverage:", "Usage coverage:", "source=pipeline", "`HELD` is FORBIDDEN", "as a gate", "## Requires user confirmation"]) {
-      assert.equal(text.includes(gone), false, `${name} still says ${gone}`);
-    }
+  for (const label of ["`omitted: ", "`divergences: ", "`unconfirmed decisions: "]) assert.ok(agent.includes(label), label);
+  for (const gone of ["Symptom coverage:", "Usage coverage:", "source=pipeline", "`HELD` is FORBIDDEN", "as a gate", "## Requires user confirmation"]) {
+    assert.equal(agent.includes(gone), false, `the qa-guardian still says ${gone}`);
   }
-  assert.ok(brief.includes("You never ask the operator") && agent.includes("You never ask the operator"));
+  assert.ok(agent.includes("You never ask the operator"));
 });
 
 // ---- Stage 2: the effects a check chains after its contract lines.
@@ -733,7 +727,7 @@ test("`run_set` refuses the QA mode, whole or dotted, and `--stage` accepts no i
 });
 
 test("the round shape the lane is asked for is the one the skip fixture proves", () => {
-  const template = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "plugin", "skills", "resolve", "references", "prompts", "qa-triage.md"), "utf8");
+  const template = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "plugin", "agents", "qa-guardian.md"), "utf8");
   const round = readFixture("qa-triage-skip").texts["05-qa.md"].split("\n").slice(1);
   for (const line of round.filter((text) => text !== "")) assert.ok(template.split("\n").includes(line), `the prompt lost the line: ${line}`);
 });
@@ -857,10 +851,8 @@ test("check 01 writes the Brief the phase prompts read and records the type and 
   assert.match(brief, /^\*\*Expected outcome:\*\* the archived jobs are listed$/m);
   const state = stateOf(seeded);
   assert.deepEqual([state.type, state.commitType], ["bug/error", "fix"]);
-  const run = { project: "alpha", projectId: seeded.projectId, slug: SLUG };
-  const { prompt } = await phasePrompt({ target: "explore" }, { run, env: seeded.env });
-  assert.ok(prompt.includes("Find the files related to: src/a.mjs"), prompt);
-  assert.ok(prompt.includes("Task objective: list the jobs"), prompt);
+  assert.match(brief, /^\*\*Affected area:\*\* src\/a\.mjs$/m);
+  assert.match(brief, /^\*\*Objective:\*\* list the jobs$/m);
 });
 
 test("a valid Brief Type overrides a different recorded type, and says what it replaced", async (t) => {
@@ -900,12 +892,9 @@ test("a provisional run keeps its slug when the Brief's slug is taken, missing o
 const PLUGIN = join(dirname(fileURLToPath(import.meta.url)), "..", "plugin");
 
 test("the plan template asks one filled question, records decisions, and no architect text manufactures the confirmation", () => {
-  const template = readFileSync(join(PLUGIN, "skills", "resolve", "references", "prompts", "architect.md"), "utf8");
   const agent = readFileSync(join(PLUGIN, "agents", "architect.md"), "utf8");
-  for (const part of ["**Question:**", "**Options:**", "**On go ahead:**", "## Decisions taken"]) assert.ok(template.includes(part), `the plan template lost ${part}`);
-  for (const text of [template, agent]) {
-    for (const gone of ["source=", "When to stop and ask", "requires `## Requires user confirmation`", "stop and ask", "is a gate", "→ gate"]) assert.equal(text.includes(gone), false, `an architect text still says ${gone}`);
-  }
+  for (const part of ["**Question:**", "**Options:**", "**On go ahead:**", "## Decisions taken"]) assert.ok(agent.includes(part), `the plan template lost ${part}`);
+  for (const gone of ["source=", "When to stop and ask", "requires `## Requires user confirmation`", "stop and ask", "is a gate", "→ gate"]) assert.equal(agent.includes(gone), false, `the architect still says ${gone}`);
   for (const part of ["changes observable behavior, data or scope", "the request does not", "costly to undo"]) assert.ok(agent.replace(/\s+/g, " ").includes(part), `the agent lost the rule part ${part}`);
 });
 

@@ -1,10 +1,8 @@
 import { existsSync, lstatSync, readdirSync, readlinkSync, realpathSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
-import { homeDir } from "../config/paths.mjs";
 import { claudeConfigDir, claudePluginsDir, hostPackageRoot, packageRoot } from "../host/paths.mjs";
 
 export const PLUGIN_DIR_ENV = "NIGHTQUEUE_PLUGIN_DIR";
-const JOB_HOME_ENV = "NIGHTQUEUE_JOB_HOME";
 const SPILL_DIR = "tool-results";
 const MAX_LINK_HOPS = 40;
 
@@ -245,12 +243,6 @@ export function canonicalPath(path) {
   return canonicalAfterHops(path, 0);
 }
 
-// The home of the job the hook runs for: the one the runtime pinned on the child, else the configuration home.
-function jobHome(env) {
-  const pinned = typeof env?.[JOB_HOME_ENV] === "string" ? env[JOB_HOME_ENV].trim() : "";
-  return pinned ? resolve(pinned) : homeDir(env);
-}
-
 // The directory where the host spills a large tool result of one session, next to its transcript; null without both.
 export function sessionSpillRoot({ transcriptPath, sessionId } = {}) {
   if (typeof sessionId !== "string" || !SAFE_SESSION_ID.test(sessionId)) return null;
@@ -279,13 +271,9 @@ export function pluginRoots(env = process.env) {
   return candidates.filter(Boolean).map(canonicalPath);
 }
 
-// Directories the orchestrator of a queued job may read: the runs of its home, every copy of the plugin it may load the skill from, and the host's spill of a large tool result of its own sessions only.
+// Directories the orchestrator of a queued job may read: every copy of the plugin it may load the skill from, and the host's spill of a large tool result of its own sessions only.
 export function orchestratorRoots(env = process.env, sessions = []) {
-  const candidates = [
-    join(jobHome(env), "runs"),
-    ...pluginRoots(env),
-    ...(Array.isArray(sessions) ? sessions : []).map(sessionSpillRoot),
-  ];
+  const candidates = [...pluginRoots(env), ...(Array.isArray(sessions) ? sessions : []).map(sessionSpillRoot)];
   return [...new Set(candidates.filter(Boolean).map(canonicalPath))];
 }
 

@@ -56,7 +56,10 @@ recorded (it never creates a worktree), `type` (the recorded one, else the reque
 one, else null), `commitType` (the requested one, else the recorded one, else null),
 `models` (`{<agent>: <model>}`, the defaults of `src/queue/routing.mjs` with the
 project's overrides of `project models` applied; a store that cannot be read answers
-the defaults and says so on stderr), the `phases` (every phase of the one
+the defaults and says so on stderr), `needsSlug` (whether the run still holds the slug the runtime
+derived), `demoRepo` (or `none configured`), `baseRef` (`HEAD` plus a stderr line when no base
+branch resolves), `pluginRoot`, `stages` (the numbered stages of `00-brief.md`), `drafts` (the `commit-message.txt` and `pr-body.md` kept
+for a run that recorded Phase 6 or 7; any other run's are deleted), the `phases` (every phase of the one
 pipeline; there is no `tasks` field), `prTemplate`, `commitConvention` and `commitTemplate`
 (`{source, path, label}`: the commit message template in effect, first match wins - `config`,
 git's own `commit.template` read in the run's checkout when it names an existing file; `repo`,
@@ -125,7 +128,7 @@ run's own draft. A text counts as a failure when it holds a word and is not whol
 `nothing`, the placeholder words (`n/a`, `TBD`, `TODO`) or a `<what>` hint, so `[a.test: 3 failing]`
 or `TODO: flaky e2e` count and `<what>`, `none`, `n/a`, `-` or symbols alone do not.
 
-`run report [--json]` renders the table of Phase 9 from `state.json`, the job log
+`run report [--json] [--facts]` renders the table of Phase 9 from `state.json`, the job log
 and `03-plan.md`: ONE table, `Step | Agent | Result | Note | Time`, one row per execution
 recorded in `state.json` in the order recorded (a re-run of a phase is its own row, its Step
 suffixed `🔁N`), plus one row per planned step with no record at its nominal position
@@ -145,8 +148,8 @@ open, `pull request <url> stays a draft` when gh would not turn it ready,
 one `- <item>` line per `dedicated ticket:
 yes` suggestion of the last QA round (`dedicated ticket: <suggestion>`) and per `OPEN:`
 line `run check 03`/`05`/`07` would print (`03 open: …`, `05 open: …`, `07 open: …`), or `- none`. The layout
-it fills is `plugin/skills/resolve/references/report.md`, rendered by the same template
-engine as `phase_prompt`; the orchestrator never reads that file, it pastes the output. The
+it fills is `plugin/skills/resolve/references/report.md`, rendered by the skill's template
+engine; the orchestrator never reads that file, it pastes the output. The
 command also records the run's telemetry (the row `pipeline_log` used to write), in both
 modes: the phases come from `state.json`, the outcome and the gate stop are derived from
 it (`pr_opened`, `local_commit` or `no_commit`; `user` for a gate, none for a
@@ -159,6 +162,24 @@ and `recorded` (`recorded`, `already recorded`, `queued` when the database is un
 or `not recorded: <reason>`). A failed
 record is the fixed open item `the run was not recorded in the telemetry` (the reason stays
 only in `recorded`), never a non-zero exit.
+
+After the report comes `## Facts for the report`, what the orchestrator would otherwise have to read
+from the run's artifacts, and it is never pasted into the final text. `--json` carries it as `facts`.
+Each list line is clipped to 220 characters and each list holds its own limit, ending in `+N more`,
+so one artifact cannot push another's facts out (at most about 226 lines): the Brief's expected
+outcome and commit type; 6 lines of the validated brief; the triager's diagnosis (the root cause
+first, a long line spanning up to 3 lines); the plan's `not-covered` rows; the QA mode; the last QA
+round's verdict, breaks, risks, PoCs, prevention and `dedicated ticket: yes` items; the last
+verification round's verdict, checks, failures and diff-hygiene finding; the last runtime round's
+verdict, `NOT MET` rows and device script; the plan's decisions; the evidence files; the files changed
+outside `## Modified files`, since Phase 8 decides on each: test files first, at most 30 lines, each
+path whole up to 512 characters, a longer one keeping its file name, and past 30 one more line saying
+how many are held back, which `git status --short` shows; the implementation's files (by name up to 15, past that `Modified files: <area> (<n>
+files)` lines whose counts add up to the whole list); the plan's `**Files to create/modify:**` lines
+and the implementation's `## Left`. A missing artifact is one `<file>: missing` line, and a git that
+cannot answer one `Changed outside the list: unknown, git answered nothing` line: neither fails the
+report nor changes what it records. `--facts` prints that section alone (`--json`: `{facts}`) and
+records nothing, for Phase 8, which runs before the report.
 
 `run check <NN> [--stage analyst|triage]` is the artifact gate of a phase: it reads
 `<RUN_DIR>/<NN-phase>.md` and prints `OK` or `MISSING: <sections>` - the
@@ -235,14 +256,15 @@ on a `skip`, the `qa` phase with the verdict `SKIPPED`, once while it is the pha
 code, the completion rule and the record
 semantics are in [Runtime contract](runtime-contract.md) ("The artifact check answers the gates").
 
-`run append 05 --group <id> --from <file> [--project <name> --slug <slug>]` appends one prover
+`run append 05 --group <id>|--group-label <label> --from <file> [--project <name> --slug <slug>]` appends one prover
 round to `<RUN_DIR>/05-qa.md`: it numbers the round from the file under the run lock, writes it
 atomically and prints `APPENDED: ## Round <n> to <path>`, so provers that append at the same
 time never lose a round nor share a number. The runtime stamps the round's first line
 `source: prover · group: <id>` itself (a `source: prover…` line of the draft is dropped), so the
-group a later round supersedes is never read from what the lane wrote; `<id>` is the
-`GROUP_ID` of the prover's prompt (`^[a-z0-9][a-z0-9-]{0,63}$`). It refuses a check other than
-`05`, a missing or invalid `--group`, a missing `--from`, an empty draft, a draft with a
+group a later round supersedes is never read from what the lane wrote; `<id>` is given
+(`^[a-z0-9][a-z0-9-]{0,63}$`) or derived from `<label>`, the same label always giving the same id.
+It refuses a check other than
+`05`, a missing or invalid `--group`, a blank `--group-label` or both flags together, a missing `--from`, an empty draft, a draft with a
 column-0 `## Round` line (fenced or not), a draft that leaves a code fence or an HTML comment
 open (naming its line), and a consolidated round. When an earlier round left a code fence open,
 it closes that fence first and prints the `REPAIRED:` line before `APPENDED:`. It writes the
@@ -520,8 +542,8 @@ source}}}`. `--set` takes an agent of that list and a model among `opus`, `sonne
 `haiku` - anything else is refused naming the accepted values, and one invalid argument
 changes nothing; `--unset` brings the agent back to its default. The override is stored in
 the project's settings under `agents.<agent>.model`, apart from what `project integrations`
-shows and keeps (a `set`/`unset` of integrations never drops it). `phase_prompt` answers the
-resolved `model` for each agent and `run start` answers them under `models`. `--set` and
+shows and keeps (a `set`/`unset` of integrations never drops it). `run start` answers the
+resolved model of each agent under `models`. `--set` and
 `--unset` are refused from inside a job.
 
 **Project demo repository.** `project demo-repo <project> [--set <path>] [--json]` shows
@@ -825,7 +847,7 @@ missing shortcut only warns), a shim left over from a previous command name (`sh
 the `rm -rf` command; nothing deletes it), the
 MCP registration, the registration in the Claude Desktop app (`claude desktop
 mcp`, which is a `warn` when the app is installed and does not know the server
-and an `ok` when the app is not installed at all), each of the three hooks, the
+and an `ok` when the app is not installed at all), each of the four hooks, the
 plugin, the embedding weights,
 the optional embedding
 library, the schema version of the database, the pause sentinel of the queue,

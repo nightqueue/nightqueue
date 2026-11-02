@@ -5,13 +5,13 @@ the runtime does all of it: never apply this file there.
 
 ## The run
 
-- `request` of the triager's `phase_prompt` = the user's request verbatim (after a gate answer:
-  the request plus the answer).
 - Start the run with `nightqueue run start --project <project> --slug <a short kebab-case slug of the request>`.
   No `RUN_DIR:` line in the prompt → never derive it from the project name (run directories are
   keyed by the project's id): the `runDir` `run start` answers is the `RUN_DIR`
   (`nightqueue run dir` prints it again). Never rename the run by hand: `run check 01` names it
   from the triager's Brief and prints the new `RUN_DIR` (Phase 1).
+- Before the triager's launch, Write the user's request verbatim to `<RUN_DIR>/00-prompt.md`
+  (after a gate answer: the request plus the answer): it is what the triager reads.
 
 ## The worktree
 

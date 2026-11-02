@@ -203,6 +203,25 @@ test("a context call that hands over only an old log's standing decisions yields
   assert.deepEqual(await jobRecalls(log), []);
 });
 
+test("a lane's context_for_phase with `target: qa`, which names no phase, lands on its lane's phase", async () => {
+  const block = `## ${LESSONS_HEADING}\n- [L4] keep it small`;
+  const log = logOf([
+    attemptMarker(1),
+    agentToolUseEvent({ id: "lane1", subagentType: "nightqueue:qa-guardian" }),
+    toolUseEvent({ name: CONTEXT, id: "c1", input: { target: "qa" }, parentToolUseId: "lane1" }),
+    jsonResult("c1", { block }, { parentToolUseId: "lane1" }),
+  ]);
+  const [context] = await jobRecalls(log);
+  assert.deepEqual([context.tool, context.phase, context.agent, context.target], ["context_for_phase", 5, "qa", "qa"]);
+});
+
+test("an orchestrator's context_for_phase with no phase in its target stays on no phase", async () => {
+  const block = `## ${LESSONS_HEADING}\n- [L4] keep it small`;
+  const log = logOf([attemptMarker(1), toolUseEvent({ name: CONTEXT, id: "c1", input: { target: "qa" } }), jsonResult("c1", { block })]);
+  const [context] = await jobRecalls(log);
+  assert.equal(context.phase, null);
+});
+
 test("a context_for_phase recall reads its block and takes its phase and agent from its target, the caller only without one", async () => {
   const block = `## ${LESSONS_HEADING}\n- [L4] keep it small\n## Structural index\n- [L8] not a memory section`;
   const log = logOf([
@@ -216,7 +235,7 @@ test("a context_for_phase recall reads its block and takes its phase and agent f
   const [context, untargeted] = await jobRecalls(log);
   assert.deepEqual([context.tool, context.phase, context.agent, context.target], ["context_for_phase", 2, "explore", "explore"]);
   assert.deepEqual(context.hits, [{ ref: "L4", title: "keep it small", score: null, kind: "lesson" }]);
-  assert.deepEqual([untargeted.phase, untargeted.agent, untargeted.target], [null, "coder", null]);
+  assert.deepEqual([untargeted.phase, untargeted.agent, untargeted.target], [4, "coder", null]);
 });
 
 test("a failed context call stays its own block, and a context call that hands over nothing is dropped", async () => {

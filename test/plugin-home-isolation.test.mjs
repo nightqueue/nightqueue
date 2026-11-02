@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readdirSync, readFileSync } from "node:fs";
 import { test } from "node:test";
 
-const PROMPTS = new URL("../plugin/skills/resolve/references/prompts/", import.meta.url);
+const AGENTS = new URL("../plugin/agents/", import.meta.url);
 
 const RESOLVE = readFileSync(new URL("../plugin/skills/resolve/SKILL.md", import.meta.url), "utf8");
 const VERIFIER = readFileSync(new URL("../plugin/agents/verifier.md", import.meta.url), "utf8");
@@ -64,14 +64,15 @@ test("neither file tells the operator to hand-roll a throwaway home with mktemp 
   assert.equal(VERIFIER.includes("mktemp"), false, "the verifier agent still mentions mktemp");
 });
 
-test("the subagent prompt templates keep the home isolation: no hand-rolled home, and the runtime lane goes through the sandbox", () => {
-  const names = readdirSync(PROMPTS).filter((name) => name.endsWith(".md"));
-  assert.ok(names.length >= 12, "the prompt templates were not found");
-  for (const name of names) {
-    const text = readFileSync(new URL(name, PROMPTS), "utf8");
+test("the agents a run launches and their blocks keep the home isolation: no hand-rolled home, and the runtime lane goes through the sandbox", () => {
+  const names = readdirSync(AGENTS).filter((name) => name.endsWith(".md"));
+  assert.ok(names.length >= 7, "the agent files were not found");
+  const texts = [["SKILL.md", RESOLVE], ...names.map((name) => [name, readFileSync(new URL(name, AGENTS), "utf8")])];
+  for (const [name, text] of texts) {
     assert.equal(text.includes("mktemp"), false, `${name} tells a subagent to hand-roll a throwaway home`);
     assert.equal(/NIGHTQUEUE_HOME=/.test(text), false, `${name} tells a subagent to export a home`);
     assert.equal(/NIGHTQUEUE_JOB_(ID|HOME|CLAUDE_DIR)=/.test(text), false, `${name} tells a subagent to override a nightqueue guard`);
   }
-  assert.ok(readFileSync(new URL("runtime.md", PROMPTS), "utf8").includes("nightqueue sandbox <cmd>"), "the runtime lane lost the sandbox rule");
+  const runtime = VERIFIER.slice(VERIFIER.indexOf("### TARGET: runtime"));
+  assert.ok(runtime.includes("nightqueue sandbox <cmd>"), "the runtime lane lost the sandbox rule");
 });

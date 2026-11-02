@@ -1,7 +1,9 @@
 # Phase 9 — Report
 
 **Open the report with `nightqueue run report`, pasted verbatim** (Bash, inside the job; outside
-one, with `--project <project> --slug <slug>`). It prints the `## 🗂️ Report — <slug>` header, then
+one, with `--project <project> --slug <slug>`), all that sits above its `## Facts for the report`:
+that last section is your material below, never pasted, and no artifact is read.
+It prints the `## 🗂️ Report — <slug>` header, then
 ONE table — one row per recorded execution, in order: every step, a re-run as its own row
 (`🔁N`, N its launch number), `⏭️` only for a step the run legitimately skipped, `⚠️ not
 recorded` for a planned step with no record — with the Time column the runtime measured and
@@ -16,24 +18,23 @@ not happy — the complete detail is the safe behavior, hiding is the risk.
 right after, the section **🎯 Objective met**: repeat the `Expected outcome` of Phase 0
 and the concrete evidence that proves it was met (a without-fix/with-fix proof, a screenshot,
 or the acceptance gate item by item), closing with the PR link (or "local commit,
-no PR" when applicable). Re-read only `01-triage.md` (## Validated brief, ## Diagnosis if a bug)
-and the evidence in `06-verification.md`. Do NOT print the detail sections below. Print also
+no PR" when applicable), both from the Facts. Do NOT print the detail sections below. Print also
 the `🪞 Reflection:` line (Phase 10) and the `## Notice` section; both are mandatory and do not
 enter the ~30-line cap.
 
 **Non-happy path (any ⚠️, ❌, 🔁 or gate_stop):** the table already carries every execution
 with its Time and the `**Total:**`. Never compute a duration and never write a timestamp: the times are the runtime's.
-Re-read via Read for the detail: `01-triage.md`, `05-qa.md` (last round), `06-verification.md` and `03-plan.md` when necessary.
-A missing artifact → a ⚠️ open item on its line, never a reconstruction.
+The detail comes from the Facts and the subagents' returns.
+A Facts line `<file>: missing` of a phase that ran → a ⚠️ open item on its line, never a reconstruction.
 After the table, detail only what needs more than one line:
 
 0. **🎯 Objective met**: the `Expected outcome` of Phase 0 and the evidence item by item; an item
    left NOT MET is said in the first line — never declare success against another criterion.
-1. **🔍 Diagnosis (bug only)**: the triager's `## Diagnosis` — the hypotheses, how each was
-   validated, and the confirmed root cause with its direct evidence.
-2. **QA — proven breaks**: what the qa-guardian broke, its PoCs and each `## Validated risks`
-   item with severity 🔴🟡🟢; reference the `🔁N` rows of the table.
-3. **Verification**: the checks + the QA's PoCs run, the final result, the 🔁 count.
+1. **🔍 Diagnosis (bug only)**: the `Diagnosis:` lines — the hypotheses, how each was
+   validated — and the `Confirmed root cause:` with its direct evidence.
+2. **QA — proven breaks**: what the qa-guardian broke, its PoCs and each validated risk
+   with severity 🔴🟡🟢; reference the `🔁N` rows of the table.
+3. **Verification**: the checks (`Check run:`) + the QA's PoCs run, the final result, the 🔁 count.
 4. **🛡️ Prevention**: the QA's recommendations to avoid recurrence.
 
 A run that ended without a PR leaves its line ❌/⚠️ and explains the block below the table; a
@@ -87,11 +88,10 @@ The writing rules:
 4. **"Still open" is mandatory and never omitted** for every real open item (≤3 bullets); "What
    the review found" is mandatory when the QA ran (≤3 bullets). Omitting an open item to look
    clean is the most expensive mistake of this notice.
-5. **The header and the label are derived from the artifacts:**
+5. **The header and the label are derived from the Facts:**
    - a draft pull request → `⚠️ Draft pull request — N failures remain` + `Still open IN THIS FIX:`;
-   - a `not-covered` vector in `03-plan.md` `## Symptom coverage`, or a `NOT MET` row of the
-     Phase 7 table → `⚠️ Partially fixed — <what was left out>` + `Still open IN THIS FIX:`;
-   - a `dedicated ticket: yes` item → `Still open — a DIFFERENT problem, does not affect this fix:`;
+   - a `Not covered:` or a `Not met:` line → `⚠️ Partially fixed — <what was left out>` + `Still open IN THIS FIX:`;
+   - a `Dedicated ticket:` line → `Still open — a DIFFERENT problem, does not affect this fix:`;
    - otherwise the ✅ family (`✅ Fixed and live`, `✅ Fixed — goes out in the next release`,
      `✅ Delivered — <what changed>`);
    - in doubt, the partial form.

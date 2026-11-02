@@ -61,22 +61,6 @@ export const QA_TRIAGE_STAGE = {
 export const QA_STAGES = { analyst: QA_ANALYST_STAGE, triage: QA_TRIAGE_STAGE };
 
 export const ROUND_HEADING = /^## Round (\d+)\b/i;
-export const FIX_LOOP_HEADING = /^### Fix loop (\d+)\b/;
-
-// The numbers of every line of the text that matches the heading pattern.
-function headingNumbers(text, pattern) {
-  return String(text ?? "")
-    .split("\n")
-    .map((line) => pattern.exec(line.trimEnd()))
-    .filter(Boolean)
-    .map((match) => Number(match[1]))
-    .filter(Number.isFinite);
-}
-
-// The highest heading number of the text plus one, or 1 when it has none.
-function nextNumber(text, pattern) {
-  return Math.max(0, ...headingNumbers(text, pattern)) + 1;
-}
 
 // The number of a column-0 `## Round <n>` line that is no `cat -n` quotation, or null.
 function headingNumberOf(line) {
@@ -228,9 +212,4 @@ export function lastRoundWithSource(text, pattern) {
 export function consolidatedRoundsOf(roundText) {
   const match = /^source:\s*runtime consolidation\s*·\s*rounds\s+(\d+(?:\s*,\s*\d+)*)\s*$/i.exec(roundSourceLine(roundText));
   return match === null ? null : match[1].split(",").map((number) => Number(number.trim()));
-}
-
-// The number the next `### Fix loop` block of the implementation artifact takes.
-export function nextFixLoop(text) {
-  return nextNumber(text, FIX_LOOP_HEADING);
 }
