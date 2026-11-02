@@ -12,6 +12,7 @@ import { callerJobId } from "../queue/retry.mjs";
 import { agentModels, modelTable, phasesFor } from "../queue/routing.mjs";
 import { isProvisionalSlug } from "../queue/run-slug.mjs";
 import { recordPipeline, recordPipelineUnpinned, recordPrTemplate, recordRunFields } from "../queue/run-state.mjs";
+import { briefStageLines } from "../queue/triage-brief.mjs";
 import { openStore } from "../store/open.mjs";
 import { checkArgs, parseCommand } from "./args.mjs";
 import { findCommitTemplate } from "./commit-template.mjs";
@@ -27,7 +28,6 @@ const DELIVERY_DRAFTS = ["commit-message.txt", "pr-body.md"];
 const PHASES_BEFORE_DELIVERY = ["verification", "runtime"];
 const NO_DEMO_REPO = "none configured";
 const BRIEF_FILE = "00-brief.md";
-const STAGES_FIELD = "**Stages:**";
 
 const TIER_REMOVED = "`--tier` was removed: every run executes the one pipeline; run `nightqueue run start` without it";
 
@@ -205,13 +205,7 @@ function briefStages(run, ctx) {
     if (error?.code !== "ENOENT") ctx.err(`nightqueue: the stages of the Brief could not be read: ${error?.message ?? String(error)}`);
     return [];
   }
-  const lines = text.split("\n");
-  const start = lines.findIndex((line) => line.startsWith(STAGES_FIELD));
-  if (start < 0) return [];
-  const rest = lines.slice(start + 1);
-  const end = rest.findIndex((line) => line.trim() === "" || /^(\*\*|#)/.test(line));
-  const field = [lines[start].slice(STAGES_FIELD.length), ...(end < 0 ? rest : rest.slice(0, end))];
-  return field.map((line) => line.trim()).filter((line) => line !== "");
+  return briefStageLines(text);
 }
 
 // A text field of state.json, or null when the run never recorded it.

@@ -1,0 +1,3 @@
+OK
+VERDICT: PASSED (stage 2)
+recorded: phase_done verification PASSED

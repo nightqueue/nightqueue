@@ -27,7 +27,7 @@ const STEPS = [
   { phase: null, step: "9 Report", agent: "🗂️ Report" },
 ];
 
-const OPEN_CHECKS = ["03", "05", "07"];
+const OPEN_CHECKS = ["03", "05", "06", "07"];
 const DEDICATED_TICKET = "dedicated ticket: yes";
 const EMPTY = durationCell(null);
 
@@ -223,7 +223,7 @@ function openLinesOf(check, runDir, state) {
   }
 }
 
-// The `OPEN:` lines the plan, QA and runtime checks answer for their artifacts.
+// The `OPEN:` lines the plan, QA, verification and runtime checks answer for their artifacts.
 function checkOpenLines(runDir, state) {
   return OPEN_CHECKS.flatMap((check) => openLinesOf(check, runDir, state));
 }

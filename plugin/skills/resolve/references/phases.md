@@ -113,12 +113,12 @@ user that the implementation did not complete successfully and terminate.
 **One coder lane per stage:** a brief/plan with numbered stages launches one coder per stage,
 in order, never in parallel, each with its `STAGE:` in the block.
 Run `nightqueue run check 04` after each lane, then the verifier between stages (the Phase 6
-block and its fix loop): a failing stage is fixed before the next lane starts; at the loop's limit
+block and its fix loop; the QA comes later): a failing stage is fixed before the next lane starts; at the loop's limit
 its failures are a ⚠️ open item and the next lane starts. After the last stage, Phase 5 (QA) and
 the final Phase 6 verification run as usual, and that verification alone decides the draft.
 
-**Parallel coders (batches):** concurrent batches run each in its own isolated worktree — never
-two coders in one tree, and no `git stash`/`checkout`/`reset` while a batch is active.
+**Parallel coders (batches):** each in its own isolated worktree — never two coders in one tree,
+and no `git stash`/`checkout`/`reset` while a batch is active.
 
 ### Phase 5 — Adversarial QA (attack)
 
@@ -133,7 +133,7 @@ two coders in one tree, and no `git stash`/`checkout`/`reset` while a batch is a
 
 The `QA-MODE:` line decides, and nothing else.
 
-The QA is **adversarial and fixes nothing**; the fixes happen in the Phase 6 loop.
+The QA is **adversarial and fixes nothing**.
 
 Read `references/qa-phase.md` before launching any qa-guardian: it carries the Stage A gate and
 the consolidation. The blocks are `qa-triage`, `qa-lite`, `qa-analyst` and `qa-prover` with its
@@ -148,14 +148,14 @@ the consolidation. The blocks are `qa-triage`, `qa-lite`, `qa-analyst` and `qa-p
 | `INVALIDATED: …`, the first | relaunch the **architect** once (🔁, `note` = the lines), then Phase 4 with the revised plan |
 | `INVALIDATED: …`, a second on the same assumption or any after two architect rounds | relaunch the architect to record it in `## Decisions taken`, then the `VERDICT:` row, ⚠️ open item |
 | `VERDICT: APPROVED` | Phase 6, with the PoCs as a regression net |
-| `VERDICT: NEEDS FIX` | Phase 6: `## Proven breaks` go to the coder, `## Generated PoCs` to the verifier to confirm the fix |
+| `VERDICT: NEEDS FIX` | Phase 6 opens with `coder-fix` (`## Proven breaks` to fix, `## Generated PoCs` to turn green), then the verifier |
 | `VERDICT: NEEDS DISCUSSION` | ⚠️ mandatory open item of Phase 9, then Phase 6 |
 
 ### Phase 6 — Verification (final gate + correction loop)
 
 Launch 1 verifier agent: the `verifier` block (`STAGE:` between the stages of a staged plan).
 
-The verifier runs **after** the QA, independently: it **reproduces** the QA's proven breaks. Neither the QA nor the coder validates its own work.
+The final verifier runs **after** the QA, independently, and re-runs its PoCs. Neither the QA nor the coder validates its own work.
 
 **Gate and fix loop:** run `nightqueue run check 06` (the artifact gate, step 6).
 
@@ -163,16 +163,17 @@ The verifier runs **after** the QA, independently: it **reproduces** the QA's pr
 | --- | --- |
 | `VERDICT: PASSED` | Phase 8 (Phase 7 first unless the change is purely static) |
 | `VERDICT: PASSED-STATIC` | checks ok, but the bug's runtime path did not execute — never PASSED: run Phase 7 on the bug's exact flow before Phase 8; Phase 7 not viable (no environment) → Phase 8, `Not tested:` in the body, ⚠️ open item — never present it as verified |
-| `VERDICT: FAILED` | a project check OR a QA PoC failing: relaunch the coder (`coder-fix`) passing the verifier's failures + the QA's `## Proven breaks` still open + the validated brief, then relaunch the verifier |
+| `VERDICT: <any> (stage N)` | `FAILED` → the fix loop, else the next lane; never Phase 7 or 8 |
+| `VERDICT: FAILED` | a project check or a QA PoC failing: `coder-fix`, then the verifier |
+| `OPEN: pre-existing-failure — …` | ⚠️ open item of Phase 9 and a `Pre-existing failure:` line in the PR body |
 | `MISSING` still | Phase 8 with `--draft`, `Remaining failure: verification produced no verdict` |
 
-- **Maximum of iterations**: **max 2 fix iterations**.
+- **Maximum of iterations**: **max 2 fix iterations**, a `NEEDS FIX` lane the first.
   If it still fails after the limit, **do not mask it**: Phase 8 with `--draft`, one
   `Remaining failure: <what>` line per failure or break still open.
 
-Prompt of the coder in the fix: the `coder-fix` block with `NOTE:` = what the
-relaunch is about (the iteration and its failures, in one line). After the coder returns, run
-`nightqueue run check 04` before relaunching the verifier.
+`coder-fix` takes `NOTE:` = the iteration and its failures, in one line. After it returns, run
+`nightqueue run check 04`, then the verifier.
 
 ### Phase 7 — Runtime validation (real execution)
 

@@ -1,0 +1,4 @@
+OK
+VERDICT: FAILED
+OPEN: pre-existing-failure — lint: 3 errors — base: 3 errors · diff: 4 errors
+recorded: none (VERDICT: FAILED)

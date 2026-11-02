@@ -344,11 +344,150 @@ test("table cells keep a pipe inside a code span, and a lone backtick is plain t
 });
 
 test("check 03 prints no QA line, whatever always-gate class and 🔴 risks the plan declares", () => {
-  const plan = "## Implementation plan\n- x\n\n**Always-gate class:** yes — rows change\n\n## Assumptions\n- a\n\n## Pre-mortem\n- b\n\n## Identified risks\n- [R1] 🔴 a\n- [R2] 🔴 b\n";
+  const plan = "## Implementation plan\n- x\n\n**Always-gate class:** yes — rows change\n\n## Assumptions\n- a (unverified)\n\n## Pre-mortem\n- b\n\n## Identified risks\n- [R1] 🔴 a\n- [R2] 🔴 b\n";
   const result = evaluateCheck({ check: "03", texts: { "03-plan.md": plan }, state: { type: "feature/refactor" } });
   assert.deepEqual(result.lines, ["OK"]);
   assert.equal(result.qaMode, null);
   assert.equal(result.completes, true);
+});
+
+// The answer of check 03 for a feature plan with the given implementation lines and a cited assumption.
+function planAnswer(body) {
+  const plan = `## Implementation plan\n${body}\n\n## Assumptions\n- [P1] a (\`src/a.mjs:1\`)\n\n## Pre-mortem\n- [PM1] Stage 8 fails\n\n## Identified risks\n- [R1] a\n`;
+  return evaluateCheck({ check: "03", texts: { "03-plan.md": plan }, state: { type: "feature/refactor" } });
+}
+
+test("check 03 counts the stages of a plan only outside a fence and a pre-mortem tag, and an open item never stops the phase", () => {
+  assert.deepEqual(planAnswer("```\nStage 1\nStage 2\n```\n[PM1] Stage 3").lines, ["OK"]);
+  const unjustified = planAnswer("### Stage 1 — a\n- x\n\n### Stage 2 — b\n- y");
+  assert.deepEqual(unjustified.lines, ["OK", "OPEN: stages-unjustified — 2 stages, no reason line"]);
+  assert.equal(unjustified.completes, true);
+  assert.deepEqual(planAnswer("**Stage reason:** because I said so\n\n### Stage 1 — a\n\n### Stage 2 — b").lines, ["OK", "OPEN: stages-unjustified — 2 stages, no reason line"]);
+});
+
+test("check 03 reads an assumption's evidence across its folded lines and asks the rest for it", () => {
+  const assumptions = "- [P1] the list\n  reads src/list.mjs:3\n- [P2] plain\n\n- None of the others";
+  const plan = `## Implementation plan\n- x\n\n## Assumptions\n${assumptions}\n\n## Pre-mortem\n- a\n\n## Identified risks\n- a\n`;
+  const result = evaluateCheck({ check: "03", texts: { "03-plan.md": plan }, state: { type: "feature/refactor" } });
+  assert.deepEqual(result.lines, ["OK", "OPEN: assumption-without-evidence — plain"]);
+  assert.equal(result.completes, true);
+});
+
+// The answer of check 03 for a plan with the given `## Assumptions` body.
+function assumptionsAnswer(assumptions) {
+  const plan = `## Implementation plan\n- x\n\n## Assumptions\n${assumptions}\n\n## Pre-mortem\n- a\n\n## Identified risks\n- a\n`;
+  return evaluateCheck({ check: "03", texts: { "03-plan.md": plan }, state: { type: "feature/refactor" } }).lines;
+}
+
+test("check 03 reads a nested list's evidence under its assumption and a table's rows without its header", () => {
+  assert.deepEqual(assumptionsAnswer("- P1: the list is sorted\n  - evidence: src/a.mjs:3"), ["OK"]);
+  assert.deepEqual(assumptionsAnswer("  - P1: cited src/a.mjs:3\n  - P2: plain"), ["OK", "OPEN: assumption-without-evidence — P2: plain"]);
+  assert.deepEqual(assumptionsAnswer("Assumptions read:\n  - P1: cited src/a.mjs:3\n  - P2: plain"), ["OK", "OPEN: assumption-without-evidence — P2: plain"]);
+  assert.deepEqual(assumptionsAnswer("| ID | Assumption | Evidence |\n|---|---|---|\n| P1 | the list is sorted | src/a.mjs:3 |"), ["OK"]);
+  assert.deepEqual(assumptionsAnswer("| ID | Assumption | Evidence |\n|---|---|---|\n| P1 | the list is sorted | none |"), ["OK", "OPEN: assumption-without-evidence — P1 the list is sorted none"]);
+});
+
+test("check 03 takes a file citation for evidence, never a host, a port or a decimal", () => {
+  for (const cited of ["src/a.mjs:3", "`list.mjs:12`", "(./src/a.mjs:3)", "/abs/src/a.mjs:3", "src/Makefile:9", "01-triage.md:4"]) assert.deepEqual(assumptionsAnswer(`- [P1] reads ${cited}`), ["OK"], cited);
+  for (const fake of ["localhost.local:8080", "db.prod:5432", "api.example.com:443", "12.30:45", "10.0.0.1:8080", "https://example.com:80", "1/2:30"]) assert.deepEqual(assumptionsAnswer(`- [P1] reads ${fake}`), ["OK", `OPEN: assumption-without-evidence — reads ${fake}`], fake);
+});
+
+test("check 03 counts a titled stage of the implementation plan, never a prose line that mentions one", () => {
+  assert.deepEqual(planAnswer("### Stage 1 — a\n- Stage 2 deploy may fail\n- **Stage 3** of the rollout is later").lines, ["OK"]);
+  assert.deepEqual(planAnswer("- Stage 1: a\n- Stage 2 — b").lines, ["OK", "OPEN: stages-unjustified — 2 stages, no reason line"]);
+  const risky = "## Implementation plan\n### Stage 1 — a\n\n## Assumptions\n- a (unverified)\n\n## Pre-mortem\n- a\n\n## Identified risks\n- Stage 2: deploy may fail\n";
+  assert.deepEqual(evaluateCheck({ check: "03", texts: { "03-plan.md": risky }, state: { type: "feature/refactor" } }).lines, ["OK"]);
+});
+
+test("check 03 reads a Brief as numbering stages only when it lists them, never for a decimal", () => {
+  const plan = "## Implementation plan\n### Stage 1 — a\n\n### Stage 2 — b\n\n## Assumptions\n- a (unverified)\n\n## Pre-mortem\n- a\n\n## Identified risks\n- a\n";
+  const withStages = (stages) => evaluateCheck({ check: "03", texts: { "03-plan.md": plan, "01-triage.md": `## Brief\n**Stages:** ${stages}\n\n## Verdict: PROCEED\n` }, state: { type: "feature/refactor" } }).lines;
+  const unjustified = ["OK", "OPEN: stages-unjustified — 2 stages, no reason line"];
+  assert.deepEqual(withStages("see 1.2 and 3.4"), unjustified);
+  assert.deepEqual(withStages("1. a 2. b"), ["OK"]);
+  assert.deepEqual(withStages("(1) a (2) b"), ["OK"]);
+  assert.deepEqual(withStages("stage 1 then stage 2"), ["OK"]);
+});
+
+// The verification round with the given lines of `## Checks run`, `## Failures` and `## Pre-existing failures`, and its verdict.
+function verificationRound({ verdict, checks = ["- test: PASSED"], failures = [], preExisting = [] }) {
+  const section = (heading, lines) => (lines.length === 0 ? [] : [heading, ...lines, ""]);
+  return [...section("## Checks run", checks), ...section("## Failures (if any)", failures), ...section("## Pre-existing failures", preExisting), `## Verification: ${verdict}`, ""].join("\n");
+}
+
+// The verdict line check 06 answers for a round on a run with the given state.
+function verdictLine(round, state = null) {
+  return evaluateCheck({ check: "06", texts: { "06-verification.md": verificationRound(round) }, state }).lines[1];
+}
+
+const QA_DEMAND = "05-qa.md missing, mandatory PoC";
+
+test("check 06 excuses a stage round that only demands the QA, and only before the QA", () => {
+  assert.equal(verdictLine({ verdict: "FAILED (stage 1)", failures: [`- ${QA_DEMAND}`] }), "VERDICT: PASSED (stage 1)");
+  assert.equal(verdictLine({ verdict: "FAILED (stage 1)", checks: ["- poc: FAILED — no PoC to run"] }), "VERDICT: PASSED (stage 1)");
+  assert.equal(verdictLine({ verdict: "FAILED (stage 1)", failures: [`- ${QA_DEMAND}`] }, { phases: [{ phase: "qa" }] }), "VERDICT: FAILED (stage 1)");
+  assert.equal(verdictLine({ verdict: "FAILED (stage 1)", failures: [`- ${QA_DEMAND}`] }, { checks: { "05-triage": {} } }), "VERDICT: FAILED (stage 1)");
+  assert.equal(verdictLine({ verdict: "FAILED", failures: [`- ${QA_DEMAND}`] }), "VERDICT: FAILED");
+  assert.equal(verdictLine({ verdict: "FAILED (stage 1)", failures: [`- ${QA_DEMAND}`, "- test: src/a.mjs:1 — boom"] }), "VERDICT: FAILED (stage 1)");
+});
+
+test("check 06 holds a FAILED no pre-existing item explains", () => {
+  const lint = "- lint: 3 errors — base: 3 · diff: 3";
+  assert.equal(verdictLine({ verdict: "FAILED", checks: ["- test: FAILED", "- lint: FAILED"], preExisting: [lint] }), "VERDICT: FAILED");
+  assert.equal(verdictLine({ verdict: "FAILED", checks: ["- test: **FAILED**"], preExisting: [lint] }), "VERDICT: FAILED");
+  assert.equal(verdictLine({ verdict: "FAILED", checks: ["- FAILED lint 3s"], preExisting: [lint] }), "VERDICT: FAILED");
+  assert.equal(verdictLine({ verdict: "FAILED", checks: ["- lint: FAILED"], preExisting: ["- linter: a — base: b · diff: c"] }), "VERDICT: FAILED");
+  assert.equal(verdictLine({ verdict: "FAILED" }), "VERDICT: FAILED");
+  assert.equal(verdictLine({ verdict: "FAILED", checks: ["- lint (`npm run lint`): **FAILED**"], preExisting: [lint] }), "VERDICT: PASSED-STATIC");
+});
+
+test("check 06 excuses a failed check by its item, never by a shared check name with another file", () => {
+  const failed = "- npm test: FAILED (new failure in foo.test.mjs)";
+  assert.equal(verdictLine({ verdict: "FAILED", checks: [failed], preExisting: ["- npm test fails in retry.test.mjs on the base"] }), "VERDICT: FAILED");
+  assert.equal(verdictLine({ verdict: "FAILED", checks: [failed], preExisting: ["- npm test: retry.test.mjs — base: a · diff: a"] }), "VERDICT: FAILED");
+  assert.equal(verdictLine({ verdict: "FAILED", checks: [failed], preExisting: ["- npm test: foo.test.mjs — base: a · diff: a"] }), "VERDICT: PASSED-STATIC");
+  assert.equal(verdictLine({ verdict: "FAILED", checks: ["- npm test: FAILED (a.test.mjs, b.test.mjs)"], preExisting: ["- npm test: a.test.mjs — base: a · diff: a"] }), "VERDICT: FAILED");
+  assert.equal(verdictLine({ verdict: "FAILED", checks: ["- npm test: FAILED"], preExisting: ["- npm test: environment: no database · attempt: placeholders"] }), "VERDICT: PASSED-STATIC");
+});
+
+test("check 06 reads any status but a clean one as a failure, whatever its wording", () => {
+  const lint = "- lint: 3 errors — base: 3 · diff: 3";
+  for (const status of ["failed (3 tests)", "exit 1", "3 errors", "timed out", "passed 3, failed 2"]) assert.equal(verdictLine({ verdict: "FAILED", checks: [`- test: ${status}`, "- lint: FAILED"], preExisting: [lint] }), "VERDICT: FAILED", status);
+  for (const status of ["PASSED — 12 tests", "SKIPPED — no script", "ok", "not run — uncommitted"]) assert.equal(verdictLine({ verdict: "FAILED", checks: [`- test: ${status}`, "- lint: FAILED"], preExisting: [lint] }), "VERDICT: PASSED-STATIC", status);
+});
+
+test("check 06 keeps a stated FAILED when no pre-existing item names a failed check of the round", () => {
+  assert.equal(verdictLine({ verdict: "FAILED", checks: ["- test: PASSED", "- lint: PASSED"], preExisting: ["- typecheck: 2 errors — base: 2 · diff: 2"] }), "VERDICT: FAILED");
+});
+
+test("check 06 excuses only what demands the QA, never a real error that mentions a PoC or the QA", () => {
+  const stage = (failure) => verdictLine({ verdict: "FAILED (stage 1)", failures: [`- ${failure}`] });
+  for (const real of ["test: PoC helper throws TypeError at poc/helper.mjs:4", "bug path crashes with ReferenceError in parser.mjs:12", "05-qa.md missing because the parser crashed", "test: the PoC runner is slow"]) assert.equal(stage(real), "VERDICT: FAILED (stage 1)", real);
+  for (const demand of ["mandatory PoC missing", "no PoC to run", "no QA report", "runtime evidence is absent", "missing the mandatory 05-qa.md"]) assert.equal(stage(demand), "VERDICT: PASSED (stage 1)", demand);
+});
+
+test("a malformed verification still answers its pre-existing failures, and the report keeps them", async (t) => {
+  const malformed = "## Round 1\n\n## Pre-existing failures\n- lint: 3 errors — base: 3 · diff: 3\n\n## Verification: ???\n";
+  const line = "OPEN: pre-existing-failure — lint: 3 errors — base: 3 · diff: 3";
+  const answer = evaluateCheck({ check: "06", texts: { "06-verification.md": malformed } });
+  assert.deepEqual(answer.lines, ["MISSING: ## Checks run", line]);
+  assert.equal(answer.completes, false);
+  assert.deepEqual(evaluateCheck({ check: "06", texts: { "06-verification.md": "just prose\n" } }).lines.filter((text) => text.startsWith("OPEN: ")), []);
+  const { env } = seedRun(t, "report-malformed-verification", { fixture: { type: "feature/refactor" }, texts: { "06-verification.md": malformed } });
+  const report = [];
+  assert.equal(await run(["run", "report", "--json"], { env, out: (text) => report.push(text), err: () => {}, stdout: { write: () => {} } }), 0);
+  assert.equal(report.join("\n").split("06 open: pre-existing-failure — lint: 3 errors").length - 1, 1);
+});
+
+test("the run report lists a pre-existing failure once and its facts carry it for the PR body", async (t) => {
+  const round = verificationRound({ verdict: "FAILED", checks: ["- lint: FAILED"], preExisting: ["- lint: 3 errors — base: 3 · diff: 3"] });
+  const { env } = seedRun(t, "report-pre-existing", { fixture: { type: "feature/refactor" }, texts: { "06-verification.md": round } });
+  const report = [];
+  assert.equal(await run(["run", "report", "--json"], { env, out: (line) => report.push(line), err: () => {}, stdout: { write: () => {} } }), 0);
+  assert.equal(report.join("\n").split("06 open: pre-existing-failure — lint: 3 errors").length - 1, 1);
+  const facts = [];
+  assert.equal(await run(["run", "report", "--facts"], { env, out: (line) => facts.push(line), err: () => {}, stdout: { write: () => {} } }), 0);
+  assert.ok(facts.join("\n").includes("Pre-existing failure: lint: 3 errors — base: 3 · diff: 3"), facts.join("\n"));
 });
 
 // ---- The QA triage stage: `run check 05 --stage triage`.

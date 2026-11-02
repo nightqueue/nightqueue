@@ -21,7 +21,7 @@
 - export csv · today: all · after: active · changed=yes · source=pipeline
 
 ## Assumptions
-- [P1] the list reads one table — invalidated if: a view joins it.
+- [P1] the list reads one table (`src/queue/list.mjs:12`) — invalidated if: a view joins it.
 
 ## Pre-mortem
 - [PM1] archived rows leak — mitigation: a test.
