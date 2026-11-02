@@ -137,6 +137,21 @@ test("`run publish` commits the list, renames the branch, pushes it, opens the p
   assert.deepEqual(JSON.parse(ghCalls(env)[0]).slice(0, 4), ["pr", "create", "--title", "feat(text): add slugify"], "the title is not the commit subject");
 });
 
+test("a final name another local branch already carries moves the rename to its next free `-<n>`, leaving that branch alone", async (t) => {
+  const { env, id, remote, worktree, projectId } = makeRun(t, "publish-name-taken");
+  git(["-C", worktree, "branch", `feat/${SLUG}`, "main"]);
+  git(["-C", worktree, "branch", `feat/${SLUG}-2`, "main"]);
+  const left = git(["-C", worktree, "rev-parse", `feat/${SLUG}`]);
+
+  const { code, out, errText } = await runCli(env, id, publishArgs(runDir(projectId, SLUG, env)));
+
+  assert.equal(code, 0, `${out.join("\n")}\n${errText}`);
+  assert.ok(out.includes(`BRANCH: feat/${SLUG}-3 (renamed from ${BRANCH})`), out.join("\n"));
+  assert.equal(git(["-C", worktree, "rev-parse", `feat/${SLUG}`]), left, "the branch that carried the name was touched");
+  assert.ok(git(["-C", remote, "for-each-ref", "--format=%(refname:short)", "refs/heads"]).split("\n").includes(`feat/${SLUG}-3`));
+  assert.equal(readRunState({ projectId, slug: SLUG, env }).branch, `feat/${SLUG}-3`);
+});
+
 test("an invalid body commits nothing and pushes nothing", async (t) => {
   const { env, id, worktree, dir } = makeRun(t, "publish-bad-body");
   writeFileSync(join(dir, "pr-body.md"), BODY.replace("## Cause", "## Causes"));

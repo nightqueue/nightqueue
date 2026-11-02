@@ -5,10 +5,11 @@ import { UserError } from "../config/errors.mjs";
 import { PIPELINE_TASK_TYPES } from "../memory/runs.mjs";
 import { COMMIT_TYPES } from "../queue/branch-name.mjs";
 import { jobPromptText } from "../queue/job-prompt.mjs";
-import { isSafeSegment, isStateObject, PRE_RENUMBERING_REFUSAL, preRenumberingArtifact, readRunState } from "../queue/resume.mjs";
+import { DEFAULT_PIPELINE, installedPipelineVersion, pipelineVersionBlock } from "../queue/pipeline-version.mjs";
+import { isSafeSegment, isStateObject, readRunState } from "../queue/resume.mjs";
 import { callerJobId } from "../queue/retry.mjs";
 import { agentModels, modelTable, phasesFor } from "../queue/routing.mjs";
-import { recordPrTemplate, recordRunFields } from "../queue/run-state.mjs";
+import { recordPipeline, recordPipelineUnpinned, recordPrTemplate, recordRunFields } from "../queue/run-state.mjs";
 import { openStore } from "../store/open.mjs";
 import { checkArgs, parseCommand } from "./args.mjs";
 import { findCommitTemplate } from "./commit-template.mjs";
@@ -91,6 +92,24 @@ function recordType(run, type, ctx) {
   if (recorded.status !== "written") ctx.err(`nightqueue: the type was not recorded on the run: ${recorded.reason}`);
 }
 
+// Says on stderr why the run has no pipeline version and marks the state with it, so the run's notice says so too; never fatal.
+function noteUnpinned(run, reason, ctx) {
+  ctx.err(`nightqueue: the pipeline version was not recorded on the run: ${reason}`);
+  const noted = recordPipelineUnpinned({ projectId: run.projectId, slug: run.slug, reason, env: ctx.env });
+  if (noted.status === "kept") ctx.err(`nightqueue: the run's notice will not say it has no pipeline version: ${noted.reason}`);
+}
+
+// Records the pipeline version the run starts under; an unknown version or a refused write leaves the run unpinned and says so, never fatal.
+function recordStartPipeline(run, ctx) {
+  const version = installedPipelineVersion(ctx.env);
+  if (version === null) {
+    noteUnpinned(run, "the plugin manifest could not be read", ctx);
+    return;
+  }
+  const recorded = recordPipeline({ projectId: run.projectId, slug: run.slug, pipeline: { name: DEFAULT_PIPELINE, version }, env: ctx.env });
+  if (recorded.status === "kept") noteUnpinned(run, recorded.reason, ctx);
+}
+
 // Finds and records the pull request template in effect, the one Phase 8 writes the body for.
 function recordTemplate(run, cwd, ctx) {
   const template = findPrTemplate(cwd);
@@ -135,10 +154,12 @@ export async function runStart(argv, ctx) {
   const options = startOptions(argv);
   await awaitDeclaredSlug(options.expected, ctx);
   const run = await resolveRun(options.values, ctx);
-  if (preRenumberingArtifact({ projectId: run.projectId, slug: run.slug, env: ctx.env }) !== null) throw new UserError(PRE_RENUMBERING_REFUSAL);
   const prior = readRunState({ projectId: run.projectId, slug: run.slug, env: ctx.env });
+  const versionBlock = pipelineVersionBlock(prior, ctx.env);
+  if (versionBlock !== null) throw new UserError(versionBlock.message);
   const type = effectiveType(prior, options.type);
   recordType(run, type, ctx);
+  recordStartPipeline(run, ctx);
   const cwd = worktreeOf(run, ctx.env);
   const prTemplate = recordTemplate(run, cwd, ctx);
   const promptFile = await writePromptFile(run, ctx);

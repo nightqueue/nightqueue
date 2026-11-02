@@ -233,6 +233,62 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
   each running job needs `queue retry`. The attempt budget is gone: `queue add --max-attempts` and
   `queue_add`'s `max_attempts` are refused, `queue retry` widens nothing and `queue status` prints
   the plain count.
+- **Placing a job's worktree ends in a worktree or in a refusal, never in a chore for the
+  operator.** A `worktree-<slug>` name left behind no longer gates: the run moves to the next free
+  `worktree-<slug>-<n>`, recorded with one log line, and publishes as `<type>/<slug>-<n>`; only
+  another open job holding the name gates, naming it. A registered worktree at the job's path on
+  another branch is adopted unless that branch is the default or the main checkout's, another open
+  job holds it, or a live session locked it; a job queued on a start branch follows too, and the log
+  names both branches. A stray directory is refused naming what it is and one command that cannot
+  destroy it: `rmdir` when empty, else `mv -n` to a free name. A start branch's first placement on
+  an occupied path prints no command and answers with a fresh retry. A recorded branch gone under
+  several names takes the newest, and a broken worktree link is repaired by itself. A branch lookup
+  git could not answer no longer reads as absent: a slot it cannot read is not free, and placement
+  gates asking for a retry instead of recording a branch it never created.
+- **`queue retry --fresh` really starts fresh.** It now releases the worktree, never forced, before
+  it drops the run directory: a clean one is removed even when its branch was never pushed, and
+  the answer names the branch the worktree really holds (`keptBranch` in `--json` and `queue_retry`).
+  Uncommitted changes refuse the retry with nothing written, and a worktree the release ends up
+  keeping keeps its run directory too, both listed by `nightqueue doctor` with hints that only read,
+  and left alone by `--fix`. A path git does not register as a worktree of the checkout answers the
+  recorded branch, never the branch of a repository around it.
+- **A detached HEAD with commits on no branch keeps its worktree.** A clean worktree whose HEAD holds
+  commits no branch, tag or remote reaches is no longer removed, for any job, recorded pull request
+  included; a cancel keeps it, and `--fresh` refuses naming both ways past it: a plain retry, or the
+  printed `git switch -c` followed by `--fresh`, which keeps that branch.
+- **A job's own worktree on a detached HEAD is placed, not refused.** A plain retry creates the job's
+  branch on that HEAD, the next free `worktree-<slug>-<n>` when the old name still exists, and works
+  there with its changes intact; the old branch stays, and one log line names both. A rebase in
+  progress gates asking to finish or abort it. A worktree the job was queued to start in never gets
+  a branch: the run recreates its recorded branch at the job's path.
+- **A branch name git cannot parse is refused once, quoting the name,** and never as a retry that
+  can never succeed.
+- **Branch names compare under any case, on every filesystem.** `MAIN` is refused as the default
+  branch and `FEAT/X` as the branch another open job holds as `feat/x`, each naming the real spelling.
+  A job queued on another spelling of a branch git lists works under the name git lists, with one log
+  line naming both, so packed refs can no longer leave its worktree on an unborn HEAD. On a
+  case-sensitive filesystem, `Main` beside `main` now counts as `main` for these checks, and a pull
+  request head `FIX/x` attributes to a run on `fix/x`.
+- **A run that could not record its pipeline version says so.** Its notice ends with one
+  `Pipeline version:` line, never told to the origins, until a later `run start` pins it. The runtime
+  recognises that line only whole, and only while the state marks the run, so a run's own paragraph
+  that starts alike is never removed.
+- **Doctor names a lock on a worktree `--fresh` kept.** The row says it is locked, and its hint is the
+  unlock alone: no row of a kept run offers a removal.
+- **`queue cancel` of a `gate` job releases its worktree,** never forced. A clean one is removed, the
+  branch stays and a retry places it again; a dirty one is kept and named, and the job is cancelled
+  anyway. `queue session` on such a job falls back to the checkout.
+- **A recorded pipeline version replaces the checks on artifact names.** `run start` records
+  `state.json.pipeline = { name, version }` on a run with no phase yet, and a run with phases under
+  another version gates as `pipeline-version-changed`, which replaces `pre-renumbering-run`; a plain
+  retry and `run start` refuse it, and `--fresh` starts it over. Every plugin version bump now gates
+  the runs in progress. A pinned run whose installed manifest cannot be read gates as
+  `pipeline-version-unknown`, answered by repairing the plugin and a plain retry. A run started
+  before this change records no version, is never stamped with one and is not gated on any version,
+  so a run from before the phase renumbering is no longer caught at resume.
+- **A rung's refusal explains itself.** When a run on `worktree-<slug>-<n>` meets a pull request on
+  the plain `<type>/<slug>`, `queue close` names the collision and adds that the way out is to fix
+  `pr_url` or cancel the job.
 - **The operator agent disallows `RemoteTrigger`.** Only a claude.ai login exposes it, and it
   reached the operator with no band decision. It is now in `disallowedTools` and in the probed
   built-in list of the plugin test.

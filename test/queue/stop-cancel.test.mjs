@@ -214,7 +214,7 @@ test("a job that is not running follows the plain cancel, with runner null and n
   const home = stopHome(t, "stop-cancel-not-running");
   const kill = fakeKill({ alive: [OWNER_PID] });
   registerRunner(home.env, OWNER_PID);
-  const expected = { pending: { from: "pending", released: false }, gate: { from: "gate", released: false }, done: { from: "done", released: true } };
+  const expected = { pending: { from: "pending", released: false }, gate: { from: "gate", released: true }, done: { from: "done", released: true } };
   for (const [status, { from, released }] of Object.entries(expected)) {
     const job = seedJob(home, { status, slug: `plain-${status}`, prUrl: status === "done" ? PR_URL : null });
     const answer = await stopAndCancelJob({ store: home.store, id: job.id, releaseWorktree: true, env: home.env, killImpl: kill.kill, ...FAST_STOP });

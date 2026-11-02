@@ -257,7 +257,7 @@ when it still carries the `worktree-` prefix (`worktree-feat+login-google` →
 `feat/login-google`; a queued job's `worktree-<slug>`, which carries no `+`, becomes
 `<commit type>/<run slug>` with the type read from the Conventional Commits subject of
 `HEAD` - `worktree-login-google` with `refactor(auth): ...` → `refactor/login-google` -
-falling back to `feat` or `fix` from the `type` in `state.json`), pushes it with `git push -u origin <branch>`, opens the
+falling back to `feat` or `fix` from the `type` in `state.json`; a name that already exists locally moves to its next free `<name>-<n>`), pushes it with `git push -u origin <branch>`, opens the
 pull request with `gh pr create` and records in `state.json` the outcome `done`,
 the pull request URL gh answered and, as the run's `branch`, the name it pushed
 (a record it cannot write is reported on stderr, never fatal: the pull request is
@@ -268,7 +268,7 @@ removes the worktree only when asked with `--remove-worktree`, because the
 session that called it still lives in that directory. That default is unchanged:
 in a queue job the runner itself removes a clean, pushed worktree once the run ends
 `done`, `nightqueue queue close` removes it once the job's pull request is merged, and
-`nightqueue queue cancel` removes it for a `done` or `failed` job the operator gives up on
+`nightqueue queue cancel` removes it for a `done`, `failed` or gated job the operator gives up on
 (see [Queue](queue.md)).
 
 ## Configuration
@@ -523,7 +523,7 @@ nightqueue queue close 42 --force                     # skip the pull request ch
 nightqueue queue close 42 --steps origin,log          # re-run only the post-close steps of a closed job, in this process
 nightqueue queue close 42 --steps log --again         # clear the named steps' done marks first, so they post again (only with --steps)
 nightqueue queue close 42 --steps ota --again         # publish the Expo OTA update of a closed job once more
-nightqueue queue cancel 42 --reason "abandoned"       # cancel a done or failed job and release its worktree
+nightqueue queue cancel 42 --reason "abandoned"       # cancel a done, failed or gated job and release its worktree
 
 nightqueue queue run --watch --from 22:00 --until 04:00   # watch only inside that window, local wall clock, then exit
 nightqueue queue run --watch --until 04:00                # `--from` defaults to now
@@ -583,6 +583,33 @@ it cannot consume refuses the retry with `retry again in a moment` and nothing w
 directory another job stamped refuses it too, naming that job and `queue retry J-<n> --fresh`,
 which starts it over and deletes that directory (see [Queue](queue.md)).
 
+`queue retry --fresh` (and `queue_retry` with `fresh`) starts the job over on a new branch and
+keeps the old work. It clears slug, branch and session, releases the worktree without forcing
+it, then drops the run directory. A clean worktree is removed whether or not its branch was
+pushed; the branch stays with its commits, wip commit included. The command prints
+`worktree removed: <path>` and `New job from it: start_branch: <branch>`, naming the branch the
+worktree really holds, and `--json` and `queue_retry` carry `worktree` and `keptBranch`. A worktree
+with uncommitted changes refuses the retry with ``the worktree has uncommitted changes at <path>;
+commit or stash them, or retry without --fresh``, and one kept for another reason (a live lock) with
+``the worktree at <path> could not be released (<reason>); retry without --fresh``. A detached HEAD
+with commits no branch, tag or remote reaches refuses naming both ways past it: a retry without
+`--fresh`, which puts the run's own branch on that HEAD, or the printed
+`git -C '<path>' switch -c <name>` and then `--fresh`, which keeps that branch. Every refusal writes
+nothing. A worktree the job entered from its queued starting point stays, and the answer reports it
+as kept. A worktree kept by a release that lost a race (locked or dirtied just after the check) keeps
+its run directory too, reported as kept and listed by `nightqueue doctor`.
+
+`run start` records the plugin's version in `state.json` as `pipeline: { name, version }`, only on
+a run with no phase yet. A run with completed phases that recorded another version than the
+installed one is never resumed: the runner gates it with `blocked_code` `pipeline-version-changed`
+before any spawn, and a plain `queue retry` and `run start` refuse it, all with the same line:
+``this run started under resolve@<old>; retry with --fresh to start it over under @<new>``. So each
+new plugin version gates the runs already in progress. When the plugin's manifest cannot be read,
+the same run gates as `pipeline-version-unknown` instead, since nothing is known to have changed:
+``this run started under resolve@<old> and the installed pipeline version cannot be read from
+<manifest>; repair the plugin, then retry``, and a plain `queue retry` resumes it once repaired. A
+state with no recorded version never gates, on any version.
+
 A session that could not reach the nightqueue MCP server - its `init` lists `nightqueue` as
 `failed`, or its first nightqueue tool call fails (`is_error`) with nothing but
 `Connection closed` (optionally prefixed by `MCP error <n>: `) - is not a failed attempt; a
@@ -623,10 +650,12 @@ nightqueue queue close --merged again` when some could not be checked within the
 deadline. A `failed`, `gate` or `cancelled` job is never closed, whatever its pull request
 says: retry it, or cancel it.
 
-`queue cancel <id>` accepts a `pending`, gated, orphaned, `done` or `failed` job. For a `done`
-or `failed` one it also releases the job's worktree, printing `worktree removed: <path>` or
-`worktree kept: <path> - <reason>` after `cancelled J-<id>`; `--json` prints `{ job,
-worktree }`. A job running under a live lease, or being closed under one, is refused by name
+`queue cancel <id>` accepts a `pending`, gated, orphaned, `done` or `failed` job. For a `done`,
+`failed` or gated one it also releases the job's worktree, never forced, printing `worktree
+removed: <path>` or `worktree kept: <path> - <reason>` after `cancelled J-<id>`; `--json` prints
+`{ job, worktree }`. A gated job's clean worktree is removed whether or not its branch was pushed,
+and the branch stays, so a later retry places the worktree again on it; a dirty one is kept and
+the job is cancelled anyway. A job running under a live lease, or being closed under one, is refused by name
 with nothing written. So is a `done` job whose close was interrupted (its lease died mid-close,
 possibly after the merge): resume it with `nightqueue queue close <id>`, which records a merged
 pull request as closed and cancels the job when the pull request was closed without merge.
@@ -880,6 +909,14 @@ worktrees below have their own `--fix`). One row
 - under `.claude/worktrees/`, a directory an open job (any status but `closed`) still records
   as its worktree: an `ok` `legacy-in-use by J-<n> (old location .claude/worktrees): released
   when the job closes`;
+- a worktree `queue retry --fresh` kept with its run directory: a `warn` `kept by \`queue retry
+  --fresh\` of J-<n> with its run directory <dir>: no job works in it now`, with the read-only
+  `git -C '<worktree>' status --short`, no removal offered, and `--fix` leaves it; locked by hand or
+  by a pid that is gone, the detail adds `it is locked (<reason>)` and the hint is
+  `git -C '<checkout>' worktree unlock '<dir>'` alone, after which the row is the unlocked one;
+- a run directory `queue retry --fresh` kept, one `run <project>/<slug>` row naming it and the job: a
+  `warn` while its worktree is on disk, with `ls '<dir>'`, and an `ok` once the worktree is gone or
+  when it recorded none; nothing is offered for removal and `--fix` leaves it;
 - in either place, a directory no open job records as its worktree: a `warn` (prefixed
   `legacy location, ` under `.claude/worktrees/`) with the command that cleans it - the
   diagnosis never runs it, and deletes nothing:
@@ -918,7 +955,7 @@ and an id no registered project has is one `warn` row `operator-qa (legacy) <id>
 `project not registered`. `--fix` never touches them.
 
 A directory a live session holds locked, and the worktree of an open job under the home (its
-cleanup is `nightqueue queue close`, or `nightqueue queue cancel` for a `done` or `failed` job),
+cleanup is `nightqueue queue close`, or `nightqueue queue cancel` for a `done`, `failed` or gated job),
 are not reported. When the queue cannot be read, one `worktrees` row says the owner is unknown
 and nothing is listed; when git cannot list the worktrees of a checkout, one
 `worktrees <project>` row says so. The owners are read through a read-only store.

@@ -6,6 +6,7 @@ import { advisoryLinesFor } from "./advisory.mjs";
 import { isQueueIdle } from "./hints.mjs";
 import { prStateKey } from "./pr-state.mjs";
 import { liveRunnersReport } from "./registry.mjs";
+import { readRunState } from "./resume.mjs";
 import { withoutRuntimeAppendedLines } from "./run-notice.mjs";
 import { closeLines, closeState, closesSummary } from "./close-view.mjs";
 import { jobLogPath } from "../config/paths.mjs";
@@ -209,6 +210,7 @@ export async function jobDetailView(readStore, id, { prStates = null, env = proc
   const live = job.status === "running" ? readLiveOf(job, env).live : null;
   const withState = { ...withPrState(job, prStates), live };
   const runNotice = runNoticeOf(job);
-  const rowNotice = withoutRuntimeAppendedLines(job.notice_md).trim();
+  const state = readRunState({ projectId: job.project_id, slug: job.slug, env });
+  const rowNotice = withoutRuntimeAppendedLines(job.notice_md, state).trim();
   return runNotice && runNotice.trim() !== rowNotice ? { ...withState, run_notice: runNotice } : withState;
 }

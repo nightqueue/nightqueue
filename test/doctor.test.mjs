@@ -336,11 +336,17 @@ test("a claude CLI that cannot run is the only failure of an otherwise clean hos
   assert.match(report.checks.find((check) => check.name === "claude").hint, /NIGHTQUEUE_CLAUDE_BIN/);
 });
 
+// Takes HEAD out of a project's `.git`, which leaves a directory git refuses as a repository.
+function breakGitDir(path) {
+  rmSync(join(path, ".git", "HEAD"));
+}
+
 test("secrets more open than 0600 and a project that moved away are reported as failures", async (t) => {
   const host = makeHostEnv(t, "doctor-fixtures");
   await run(SETUP, { ...defaultContext(), env: host.env, out: () => {}, err: () => {} });
   chmodSync(secretsPath(host.env), 0o644);
   const repo = makeProject(t, host.env, "alpha");
+  breakGitDir(repo);
   const gone = makeProject(t, host.env, "beta");
   rmSync(gone, { recursive: true, force: true });
 
@@ -808,6 +814,7 @@ test("doctor says so when the owner of a worktree cannot be known, or git cannot
 
   const noGit = makeHostEnv(t, "doctor-worktrees-no-git");
   const fake = realpathSync(makeProject(t, noGit.env, "alpha"));
+  breakGitDir(fake);
   mkdirSync(join(fake, ".claude", "worktrees", "some-run"), { recursive: true });
   const { report: gitless } = await diagnose(noGit.env);
   assert.deepEqual(checkOf(gitless, "worktrees alpha"), check("worktrees alpha", "warn", "git could not list the worktrees of the checkout", `inspect ${fake}`));

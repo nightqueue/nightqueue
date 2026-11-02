@@ -33,7 +33,8 @@ import { holdRunnerAwake } from "./keep-awake.mjs";
 import { killProcess, ownRunnerRecord } from "./registry.mjs";
 import { runMaintenance } from "./maintenance.mjs";
 import { appendPendingWrite, PENDING_KEYS, replayPendingWrites } from "./pending-writes.mjs";
-import { claimRunState, claimStamp, decideResume, foreignStampOf, isRunPath, isSafeSegment, isStateObject, PRE_RENUMBERING_REFUSAL, preRenumberingArtifact, readRunState, resumeHandoff, writeRunTerminal } from "./resume.mjs";
+import { pipelineVersionBlock, withoutUnpinnedLine, withUnpinnedLine } from "./pipeline-version.mjs";
+import { claimRunState, claimStamp, decideResume, foreignStampOf, isRunPath, isSafeSegment, isStateObject, readRunState, resumeHandoff, writeRunTerminal } from "./resume.mjs";
 import { adoptRunSlug, followRunSlug, slugRefusal } from "./run-slug.mjs";
 import { JOB_BLOCK_ALREADY_RECORDED, recordJobBlock, recordPrUrl, recordResume, recordRunFields, recordWip } from "./run-state.mjs";
 import { DISABLED_BACKGROUND_ESCAPE_LINE } from "./run-notice.mjs";
@@ -696,11 +697,12 @@ function withDisabledBackgroundEscape(noticeMd, log) {
   return noticeMd ? `${noticeMd}\n\n${DISABLED_BACKGROUND_ESCAPE_LINE}` : DISABLED_BACKGROUND_ESCAPE_LINE;
 }
 
-// The outcome the finish writes: the run's own, with the kept-worktree line and the disabled-background escape appended to whatever notice exists; both lines also go to their own log.
+// The outcome the finish writes: the run's own, with the kept-worktree line, the unpinned line and the disabled-background escape appended to whatever notice exists; the first and the last also go to their own log.
 function outcomeWithWorktree({ job, run, worktree, state, wipOnBranch, env }) {
   if (worktree && !worktree.removable) appendJobLog(job.id, keptWorktreeLine(worktree), env);
-  const runNotice = runNoticeWithWip({ job, run, state, wipOnBranch, env });
-  const noticeMd = finishNotice({ runNotice, rowNotice: rowNoticeToKeep(job, run), worktree });
+  const rowJob = { ...job, notice_md: withoutUnpinnedLine(job.notice_md, state) };
+  const runNotice = runNoticeWithWip({ job: rowJob, run, state, wipOnBranch, env });
+  const noticeMd = withUnpinnedLine(finishNotice({ runNotice, rowNotice: rowNoticeToKeep(rowJob, run), worktree }), state);
   return { ...run.outcome, noticeMd: withDisabledBackgroundEscape(noticeMd, run.result.log) };
 }
 
@@ -914,11 +916,12 @@ async function withRunSlug(job, ctx, checkout) {
   return job;
 }
 
-// Tells whether the worktree slot of a candidate slug is free, logging the slot that is taken; advisory, `git worktree add` refuses an occupied path anyway.
+// Tells whether the worktree slot of a candidate slug is free, logging a slot that is taken or could not be read.
 async function slotIsFree(job, slug, ctx) {
   const path = jobWorktreePath(job.project_id, slug, ctx.env);
-  if (await worktreeSlotFree({ projectId: job.project_id, slug, checkout: ctx.checkout, env: ctx.env })) return true;
-  appendJobLog(job.id, `the worktree slot of \`${slug}\` is taken (${path} or branch ${jobBranchName(slug)} exists): the job does not take it`, ctx.env);
+  const log = (line) => appendJobLog(job.id, line, ctx.env);
+  if (await worktreeSlotFree({ projectId: job.project_id, slug, checkout: ctx.checkout, env: ctx.env, log })) return true;
+  log(`the worktree slot of \`${slug}\` is taken or unreadable (${path} or branch ${jobBranchName(slug)}): the job does not take it`);
   return false;
 }
 
@@ -1093,11 +1096,6 @@ async function preflightJob(job, { store, env, deps }) {
   return preflight({ job, env, gitImpl: deps.gitImpl, existsImpl: deps.existsImpl, resolveBinImpl: deps.resolveBinImpl, openWorktrees });
 }
 
-// The block of a job whose run directory was written under the old phase numbering: only a fresh retry starts it over.
-function preRenumberingBlock(file) {
-  return { ok: false, code: BLOCK_CODES.PRE_RENUMBERING_RUN, message: `${PRE_RENUMBERING_REFUSAL} (${file} is in the run directory)`, fresh: true };
-}
-
 // The block of a job whose run directory another job stamped: no attempt starts reading a state that does not speak for it, and only a fresh retry moves it.
 function foreignRunBlock(job, stampedBy) {
   const message = `the run directory \`${job.slug}\` is stamped by ${jobRef(stampedBy)}; \`nightqueue queue retry ${jobRef(job.id)} --fresh\` starts it over and deletes that directory`;
@@ -1113,9 +1111,10 @@ async function prepareJob(claimed, ctx) {
   const openPrs = await openPrsForJob(claimed, { env, deps });
   const job = await withRunSlug(claimed, ctx, check.cwd);
   if (job === OUTAGE_STOPPED) return { report: stoppedInOutage(claimed, env) };
-  const stale = preRenumberingArtifact({ projectId: job.project_id, slug: job.slug, env });
-  if (stale !== null) return { report: await gateJob(job, preRenumberingBlock(stale), ctx) };
-  const stampedBy = foreignStampOf(readRunState({ projectId: job.project_id, slug: job.slug, env }), job.id);
+  const state = readRunState({ projectId: job.project_id, slug: job.slug, env });
+  const versionBlock = pipelineVersionBlock(state, env);
+  if (versionBlock !== null) return { report: await gateJob(job, versionBlock, ctx) };
+  const stampedBy = foreignStampOf(state, job.id);
   if (stampedBy !== null) return { report: await gateJob(job, foreignRunBlock(job, stampedBy), ctx) };
   ensureRunDir(job, env);
   if ((await recordJob(job, ctx)) === OUTAGE_STOPPED) return { report: stoppedInOutage(job, env) };

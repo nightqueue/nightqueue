@@ -15,6 +15,11 @@ const CASE_EXPORT_RE = /^ {2}\*\) export PATH="[^"]*:\$PATH" ;;$/;
 const CASE_END = "esac";
 const FISH_BODY_RE = /^fish_add_path \S.*$/;
 
+// Quotes a value for a POSIX shell, so a printed command can be pasted as is whatever the value holds.
+export function shellQuote(value) {
+  return `'${String(value).replaceAll("'", "'\\''")}'`;
+}
+
 // One rc line ready to be compared: the carriage return of a CRLF file never decides whether a region is ours.
 function lineAt(lines, index) {
   return String(lines[index] ?? "").replace(/\r$/, "");

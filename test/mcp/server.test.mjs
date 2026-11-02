@@ -1637,6 +1637,8 @@ test("queue_retry answers a gate, refuses one without a note and only starts a r
   assert.equal(retried.job.operator_note, "rename it");
   assert.equal(retried.job.slug, "fix-the-worker", "a retry without `fresh` gave up the slug of the run");
   assert.equal(retried.runDir, null);
+  assert.equal(retried.worktree, null, "a retry without `fresh` touched the worktree");
+  assert.equal(retried.keptBranch, null, "a retry without `fresh` left no branch behind");
   assert.equal(retried.runner, null, "the tool started a runner nobody asked for");
   assert.match(retried.hint, /^0 runners online - pending jobs will wait until `nightqueue queue run` starts one\.$/);
   assert.equal(getJob(gated, env).finished_at, null);

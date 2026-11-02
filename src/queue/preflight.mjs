@@ -14,7 +14,8 @@ export const BLOCK_CODES = {
   DIRTY_CHECKOUT: "dirty-checkout",
   WRONG_BRANCH: "wrong-branch",
   STORE_UNAVAILABLE: "store-unavailable",
-  PRE_RENUMBERING_RUN: "pre-renumbering-run",
+  PIPELINE_VERSION_CHANGED: "pipeline-version-changed",
+  PIPELINE_VERSION_UNKNOWN: "pipeline-version-unknown",
   FOREIGN_RUN: "foreign-run",
 };
 

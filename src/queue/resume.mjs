@@ -23,9 +23,6 @@ export const RESUME_PHASE_ORDER = [
 export const RESUME_SCHEMA_VERSION = 1;
 export const TERMINAL_VERDICT_LABELS = ["NO-CHANGE-NEEDED", "NOT-REPRODUCIBLE", "NEEDS-CLARIFICATION", "PROPOSE-ALTERNATIVE"];
 export const DEFAULT_MAX_RESUMES = 1;
-// The artifacts only a run started under the old phase numbering holds, and the one answer a resume of such a run gets.
-export const PRE_RENUMBERING_ARTIFACTS = ["06-runtime.md", "05a-qa-analyst.md"];
-export const PRE_RENUMBERING_REFUSAL = "run started before the renumbering; retry with `fresh`";
 
 const SEGMENT_RE = /^[A-Za-z0-9][A-Za-z0-9._+-]{0,79}$/;
 // The one artifact a QA stage A marker may name: the analyst's round lives in the QA's own artifact.
@@ -229,13 +226,6 @@ export function isRunPath(projectId, slug) {
   return isId(projectId) && isSafeSegment(slug);
 }
 
-// The first artifact of the old phase numbering present in a run directory, or null (an unsafe path included); it never throws.
-export function preRenumberingArtifact({ projectId, slug, env = process.env } = {}) {
-  if (!isRunPath(projectId, slug)) return null;
-  const dir = runDir(projectId, slug, env);
-  return PRE_RENUMBERING_ARTIFACTS.find((file) => existsSync(join(dir, file))) ?? null;
-}
-
 // Reads the state.json of a run; an unsafe segment, a missing file or broken JSON all return null.
 export function readRunState({ projectId, slug, env = process.env } = {}) {
   if (!isRunPath(projectId, slug)) return null;
@@ -400,7 +390,7 @@ function realPathOrNull(path) {
 }
 
 // Refusal to delete, always with the same shape as a deletion.
-function keptRunDir(dir, reason) {
+export function keptRunDir(dir, reason) {
   return { dir, status: "kept", reason };
 }
 

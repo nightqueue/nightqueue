@@ -15,6 +15,7 @@ import {
   sameDir,
   withKeptWorktree,
 } from "../../src/queue/worktree.mjs";
+import { initGitRepo } from "../../test-support/git.mjs";
 import { makeDir } from "../../test-support/memory.mjs";
 import { addWorktree, deadPid, git, gitVars, localBranches, lockWorktree, makeDirty, publishedCheckout, registeredWorktrees } from "../../test-support/worktrees.mjs";
 
@@ -235,9 +236,20 @@ test("runGitAsync never rejects: a refusal and a timeout come back as results", 
   assert.equal(refused.ok, false);
   assert.match(refused.stderr, /not a git repository/);
   const hung = await runGitAsync({ args: ["status"], cwd: dir, env: ENV, timeoutMs: 1, execFileImpl: (file, args, options, done) => done(Object.assign(new Error("killed"), { killed: true, signal: "SIGTERM" }), "", "") });
-  assert.deepEqual(hung, { ok: false, stdout: "", stderr: "git did not answer within 1 ms", missing: false });
+  assert.deepEqual(hung, { ok: false, stdout: "", stderr: "git did not answer within 1 ms", missing: false, exitCode: null });
   const thrown = await runGitAsync({ args: ["status"], execFileImpl: () => { throw Object.assign(new Error("spawn git ENOENT"), { code: "ENOENT" }); } });
-  assert.deepEqual(thrown, { ok: false, stdout: "", stderr: "spawn git ENOENT", missing: true });
+  assert.deepEqual(thrown, { ok: false, stdout: "", stderr: "spawn git ENOENT", missing: true, exitCode: null });
+});
+
+test("runGitAsync answers git's exit code: 1 for a missing ref, another for a failure, 0 when it worked", async (t) => {
+  const checkout = initGitRepo(makeDir(t, "git-async-exit-repo"));
+  const lookup = (ref, cwd) => runGitAsync({ args: ["rev-parse", "--verify", "--quiet", ref], cwd, env: ENV });
+  assert.equal((await lookup("refs/heads/main", checkout)).exitCode, 0);
+  assert.equal((await lookup("refs/heads/none", checkout)).exitCode, 1);
+  const outside = await lookup("refs/heads/main", makeDir(t, "git-async-exit-outside"));
+  assert.equal(outside.ok, false);
+  assert.notEqual(outside.exitCode, 1);
+  assert.equal(typeof outside.exitCode, "number");
 });
 
 test("keptWorktreeLine names the path and the reason", () => {

@@ -325,6 +325,22 @@ test("the wip never lands on the default branch, the main checkout's branch, a d
   assert.match(git(env, worktree, "status", "--porcelain"), /new\.txt/);
 });
 
+test("the wip never lands on a protected branch under another case", (t) => {
+  const { env, main, worktree } = makeRepo(t);
+  const head = git(env, main, "rev-parse", "HEAD").trim();
+  const onSpelling = (spelling) => {
+    git(env, main, "update-ref", `refs/heads/${spelling}`, head);
+    git(env, worktree, "symbolic-ref", "HEAD", `refs/heads/${spelling}`);
+    return commit(env, worktree);
+  };
+  put(worktree, "new.txt");
+  for (const spelling of ["MAIN", "Master"]) {
+    assert.deepEqual(onSpelling(spelling), { status: "skipped", branch: spelling, reason: WIP_SKIP_REASONS.defaultBranch });
+  }
+  git(env, main, "checkout", "-q", "-b", "dev");
+  assert.deepEqual(onSpelling("DEV"), { status: "skipped", branch: "DEV", reason: WIP_SKIP_REASONS.mainCheckout });
+});
+
 test("a worktree that is not a git checkout answers failed and never throws", (t) => {
   const { worktree, env } = makeRepo(t);
   const wip = commit(env, join(worktree, "..", "missing"));
@@ -421,7 +437,12 @@ test("a git that cannot list the branch refuses with what it said", (t) => {
   assert.throws(() => reading(env, worktree, { base: "no-such-ref" }), /git could not list the commits the branch adds/);
 });
 
-const RETRY = "Retry: nightqueue queue retry J-7 (the next attempt starts on the wip commit in the same worktree; add --fresh to start over on a new branch)";
+// The retry line of a notice, naming the branch a fresh start keeps when one is known.
+function retryLine(branch) {
+  const keeping = branch ? `, keeping ${branch}` : "";
+  return `Retry: nightqueue queue retry J-7 (the next attempt starts on the wip commit in the same worktree; add --fresh to start over on a new branch${keeping})`;
+}
+
 const NOTICE_FORMS = [
   { wip: { status: "committed", short: "abc1234", branch: "fix/x" }, first: "Terminated run: wip commit abc1234 kept on fix/x, local, never pushed, not reviewed." },
   { wip: { status: "committed", short: "abc1234", branch: "fix/x", ref: "refs/nightqueue/wip/s" }, first: "Terminated run: wip commit abc1234 kept on fix/x (ref refs/nightqueue/wip/s), local, never pushed, not reviewed." },
@@ -444,7 +465,7 @@ for (const { wip, first } of NOTICE_FORMS) {
   test(`the notice of a ${wip.status} wip (${wip.reason ?? "no reason"}) carries its exact lines, with and without a job id`, () => {
     const tail = newJobLine(wip);
     const withJob = wipNoticeLine({ wip, jobId: 7, branch: wip.branch, worktree: "/w" });
-    assert.deepEqual(withJob.split("\n"), [first, RETRY, ...(tail ? [tail] : [])]);
+    assert.deepEqual(withJob.split("\n"), [first, retryLine(wip.branch), ...(tail ? [tail] : [])]);
     assert.equal(parseJobRef(/queue retry (J-\d+) /.exec(withJob)[1]), 7);
     const withoutJob = wipNoticeLine({ wip, jobId: null, branch: wip.branch, worktree: "/w" });
     assert.deepEqual(withoutJob.split("\n"), [first, ...(tail ? [tail] : [])]);

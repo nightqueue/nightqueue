@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, realpathSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { jobWorktreePath, startPointsLockPath } from "../../src/config/paths.mjs";
@@ -197,6 +197,127 @@ test("a start worktree is reused in place when it is a linked worktree on a bran
 
   const again = await prepare(env, checkout, { job: jobOf({ worktree: held }) });
   assert.equal(again.reused, true, "the retry did not resume in the recorded start worktree");
+});
+
+test("a start branch whose job path is a stray directory is refused as stray, naming the command that frees it", async (t) => {
+  const env = homeEnv(t, "start-occupied-stray");
+  const checkout = initGitRepo(makeDir(t, "start-occupied-stray-repo"));
+  branchWithCommit(checkout, "feat/x");
+  const target = jobWorktreePath(FIXED_PROJECT_ID, SLUG, env);
+  mkdirSync(target, { recursive: true });
+
+  const prepared = await prepare(env, checkout, { job: jobOf({ branch: "feat/x" }) });
+
+  assert.equal(prepared.code, WORKTREE_FAILED);
+  assert.match(prepared.message, /stray directory/);
+  assert.ok(prepared.message.includes(`rmdir '${target}'`), prepared.message);
+  assert.doesNotMatch(prepared.message, /rm -rf/);
+  assert.equal(existsSync(target), true);
+});
+
+test("a start branch whose job path is a linked worktree on another branch never adopts it, prints no command and asks for a fresh retry, clean or dirty", async (t) => {
+  for (const dirty of [false, true]) {
+    const name = `start-occupied-linked-${dirty ? "dirty" : "clean"}`;
+    const env = homeEnv(t, name);
+    const checkout = initGitRepo(makeDir(t, `${name}-repo`));
+    branchWithCommit(checkout, "feat/x");
+    const target = jobWorktreePath(FIXED_PROJECT_ID, SLUG, env);
+    git(["-C", checkout, "worktree", "add", "-q", "-b", "somebody-else", target, "main"]);
+    if (dirty) makeDirty(target);
+
+    const prepared = await prepare(env, checkout, { job: jobOf({ branch: "feat/x" }) });
+
+    assert.equal(prepared.code, WORKTREE_FAILED);
+    assert.equal(prepared.fresh, true);
+    assert.match(prepared.message, /on `somebody-else`, and this job was queued on `feat\/x`.*nothing was changed/);
+    assert.doesNotMatch(prepared.message, /worktree remove|rm -rf|doctor/);
+    assert.equal(recordedPlace(env).branch, null);
+    assert.equal(existsSync(join(target, "uncommitted.txt")), dirty);
+  }
+});
+
+test("a start branch whose job path another open job holds is refused naming that job, with no fresh retry to offer", async (t) => {
+  const env = homeEnv(t, "start-occupied-owned");
+  const checkout = initGitRepo(makeDir(t, "start-occupied-owned-repo"));
+  branchWithCommit(checkout, "feat/x");
+  const target = jobWorktreePath(FIXED_PROJECT_ID, SLUG, env);
+  git(["-C", checkout, "worktree", "add", "-q", "-b", "somebody-else", target, "main"]);
+
+  const prepared = await prepare(env, checkout, { job: jobOf({ branch: "feat/x" }), holds: [otherHold({ worktree: target })] });
+
+  assert.equal(prepared.code, WORKTREE_FAILED);
+  assert.match(prepared.message, /belongs to J-9, which is not closed/);
+  assert.equal(prepared.fresh, undefined);
+});
+
+test("a start branch whose branch lookup goes unanswered gates on that read and records nothing", async (t) => {
+  const env = homeEnv(t, "start-branch-lookup");
+  const checkout = initGitRepo(makeDir(t, "start-branch-lookup-repo"));
+  branchWithCommit(checkout, "feat/x");
+  let spent = false;
+  const gitImpl = async (call) => {
+    if (!spent && call.args[0] === "rev-parse" && call.args[3] === "refs/heads/feat/x") {
+      spent = true;
+      return { ok: false, stdout: "", stderr: "fatal: timed out", missing: false, exitCode: null };
+    }
+    return await runGitAsync(call);
+  };
+
+  const prepared = await prepareJobWorktree({ job: jobOf({ branch: "feat/x" }), checkout, baseBranch: "main", env, gitImpl, openHolds: async () => [] });
+
+  assert.equal(prepared.code, WORKTREE_FAILED);
+  assert.match(prepared.message, /git could not read refs\/heads\/feat\/x/);
+  assert.deepEqual(recordedPlace(env), { branch: null, worktree: null });
+});
+
+// A job placed on its start branch whose worktree was then switched to the given branch, as a session can leave it.
+async function startRunSwitchedTo(t, { name, branch }) {
+  const env = homeEnv(t, name);
+  const checkout = initGitRepo(makeDir(t, `${name}-repo`));
+  const work = branchWithCommit(checkout, "feat/x");
+  const job = jobOf({ branch: "feat/x" });
+  const placed = await prepare(env, checkout, { job });
+  assert.equal(placed.ok, true, placed.message);
+  git(["-C", placed.path, "checkout", "-q", "-b", branch]);
+  return { env, checkout, job, work, target: placed.path };
+}
+
+test("a start branch job that already recorded its branch and whose path now holds another adopts it, with one log line, still removable", async (t) => {
+  const { env, checkout, job, work, target } = await startRunSwitchedTo(t, { name: "start-recorded-adopt", branch: "somebody-else" });
+
+  const prepared = await prepare(env, checkout, { job });
+
+  assert.deepEqual({ ok: prepared.ok, path: prepared.path, branch: prepared.branch, reused: prepared.reused }, { ok: true, path: target, branch: "somebody-else", reused: true }, prepared.message);
+  assert.deepEqual(recordedPlace(env), { branch: "somebody-else", worktree: target });
+  assert.equal(prepared.logged.filter((line) => line.includes("the state now follows git")).length, 1, prepared.logged.join("\n"));
+  assert.ok(prepared.logged.includes("the job was queued on `feat/x` and its worktree now holds `somebody-else`: the run follows the worktree"), prepared.logged.join("\n"));
+  assert.equal("adoptedWorktree" in readRunState({ projectId: FIXED_PROJECT_ID, slug: SLUG, env }), false);
+  assert.equal(sha(checkout, "feat/x"), work, "the queued branch moved");
+});
+
+test("a start branch job that already recorded its branch is refused the branch its path now holds when another open job owns it", async (t) => {
+  const { env, checkout, job, target } = await startRunSwitchedTo(t, { name: "start-recorded-owned", branch: "somebody-else" });
+
+  const refused = await prepare(env, checkout, { job, holds: [otherHold({ branch: "somebody-else" })] });
+
+  assert.equal(refused.code, WORKTREE_FAILED);
+  assert.match(refused.message, /belongs to J-9, which is not closed/);
+  assert.deepEqual(recordedPlace(env), { branch: "feat/x", worktree: target });
+});
+
+test("a start worktree whose link was lost is repaired by itself, its contents unchanged", async (t) => {
+  const env = homeEnv(t, "start-repair");
+  const checkout = initGitRepo(makeDir(t, "start-repair-repo"));
+  const path = linkedWorktree(t, checkout, { name: "start-repair", branch: "feat/x" });
+  makeDirty(path);
+  const moved = join(makeDir(t, "start-repair-new"), "checkout");
+  renameSync(checkout, moved);
+
+  const prepared = await prepare(env, moved, { job: jobOf({ worktree: path }) });
+
+  assert.deepEqual({ ok: prepared.ok, branch: prepared.branch, reused: prepared.reused }, { ok: true, branch: "feat/x", reused: true }, prepared.message);
+  assert.equal(existsSync(join(path, "uncommitted.txt")), true);
+  assert.equal(headBranch(path), "feat/x");
 });
 
 test("a start branch that exists nowhere gates and creates nothing", async (t) => {

@@ -1,6 +1,7 @@
 import { UserError } from "../config/errors.mjs";
 import { runGit, runGitAsync } from "../host/git.mjs";
 import { jobRef } from "../memory/refs.mjs";
+import { sameRefName } from "./branch-name.mjs";
 import { neverCommittedReason } from "./never-committed.mjs";
 import { isAdoptedWorktree, parseWorktreeList } from "./worktree.mjs";
 
@@ -86,8 +87,8 @@ function* skipReason({ state, branch }) {
   if (isAdoptedWorktree(state)) return WIP_SKIP_REASONS.adopted;
   if (branch === null) return WIP_SKIP_REASONS.detached;
   const { defaults, mainCheckout } = yield* protectedBranches();
-  if (defaults.includes(branch)) return WIP_SKIP_REASONS.defaultBranch;
-  return branch === mainCheckout ? WIP_SKIP_REASONS.mainCheckout : null;
+  if (defaults.some((name) => sameRefName(name, branch))) return WIP_SKIP_REASONS.defaultBranch;
+  return sameRefName(branch, mainCheckout) ? WIP_SKIP_REASONS.mainCheckout : null;
 }
 
 // The entries of `git status --porcelain -z` (v1): each with its columns, its path and, for a rename or copy in either column, its source path.
@@ -397,7 +398,8 @@ function wipStatusLine(wip, worktree) {
 export function wipNoticeLine({ wip, jobId = null, branch = null, worktree = null } = {}) {
   const lines = [wipStatusLine(wip, worktree)];
   if (Number.isSafeInteger(jobId) && jobId > 0) {
-    lines.push(`${WIP_RETRY_PREFIX} ${jobRef(jobId)} (the next attempt starts on the wip commit in the same worktree; add --fresh to start over on a new branch)`);
+    const keeping = branch ? `, keeping ${branch}` : "";
+    lines.push(`${WIP_RETRY_PREFIX} ${jobRef(jobId)} (the next attempt starts on the wip commit in the same worktree; add --fresh to start over on a new branch${keeping})`);
   }
   if (branch) lines.push(`${WIP_NEW_JOB_PREFIX} start_branch: ${branch}`);
   else if (wip?.reason === WIP_SKIP_REASONS.detached) lines.push(`${WIP_NEW_JOB_PREFIX} no branch (detached HEAD)`);
