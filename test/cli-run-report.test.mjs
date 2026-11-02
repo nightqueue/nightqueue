@@ -39,7 +39,7 @@ function recordDelivery(run) {
   recordPrUrl({ ...run, prUrl: PR });
 }
 
-// Runs `run report` as the job and answers its lines.
+// Runs `run report` as the job and answers its lines above the facts section, which test/cli-run-report-facts.test.mjs covers.
 async function report(env, id, argv = []) {
   const out = [];
   const err = [];
@@ -50,7 +50,8 @@ async function report(env, id, argv = []) {
     stdout: { write: () => {} },
   });
   assert.equal(code, 0, err.join("\n"));
-  return out;
+  const facts = out.indexOf("## Facts for the report");
+  return facts < 0 ? out : out.slice(0, facts - 1);
 }
 
 const COMPLEX_CLEAN = [
@@ -398,7 +399,7 @@ test("the json report carries the rows and the verdict of the one table, nothing
 
   const json = JSON.parse((await report(env, id, ["--json"]))[0]);
 
-  assert.deepEqual(Object.keys(json), ["slug", "rows", "happy", "reason", "durationS", "openItems", "recorded"]);
+  assert.deepEqual(Object.keys(json), ["slug", "rows", "happy", "reason", "durationS", "openItems", "recorded", "facts"]);
   assert.deepEqual(Object.keys(json.rows[0]), ["phase", "step", "agent", "launch", "icon", "word", "note", "durationS"]);
 });
 

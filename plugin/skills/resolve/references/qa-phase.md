@@ -1,23 +1,21 @@
 # QA phase — the adversarial QA of /resolve
 
 Read via Read by the /resolve orchestrator in Phase 5, before launching any qa-guardian. It is
-the single home of the Stage A gate and the consolidation. The QA attack brief and the LITE/ANALYST/PROVER prompts live in `prompts/`
-(`_qa-attack-brief.md`, `qa-lite.md`, `qa-analyst.md`, `qa-prover.md`): the pipeline gets them
-rendered by `phase_prompt` (`qa-lite`, `qa-analyst`, `qa-prover`), never assembled by hand. The
-shared report format they all deliver is `deliverables/qa-report.md`. Every lane writes into ONE
+the single home of the Stage A gate and the consolidation. The launches are the `qa-triage`,
+`qa-lite`, `qa-analyst` and `qa-prover` blocks of `## Phase prompts` of `SKILL.md`; the attack
+brief and the report format are in `plugin/agents/qa-guardian.md`. Every lane writes into ONE
 artifact, `05-qa.md`, one `## Round <n>` per launch.
 
-**Triage first:** launch 1 qa-guardian — `phase_prompt` with `target: "qa-triage"`, launched as
-`lite` below — header `🛡️ QA-GUARDIAN · TRIAGE · ...`, then `nightqueue run check 05 --stage triage`.
+**Triage first:** launch 1 qa-guardian — the `qa-triage` block —
+header `🛡️ QA-GUARDIAN · TRIAGE · ...`, then `nightqueue run check 05 --stage triage`.
 Its `QA-MODE:` line decides, and nothing else. On `MISSING`, relaunch once (`note` = the lines);
 if it persists, `lite`, ⚠️ open item. On a resume at Phase 5 run the check first (a pure read);
 launch the lane only on its `MISSING`.
 
 **skip → no attack lane:** the check recorded it; Phase 6, never `run check 05`.
 
-**lite → one lane:** launch 1 qa-guardian — `phase_prompt` with `target: "qa-lite"`, then
-`Agent` with the answered `subagent_type`, `model` and `prompt` verbatim — header
-`🛡️ QA-GUARDIAN · LITE · ...`. It writes its own `## Round <n>` of `05-qa.md`; then run
+**lite → one lane:** launch 1 qa-guardian — the `qa-lite` block —
+header `🛡️ QA-GUARDIAN · LITE · ...`. It writes its own `## Round <n>` of `05-qa.md`; then run
 `nightqueue run check 05`. Stages A and B and the consolidation below do not apply.
 
 **full → two stages (analyst → parallel provers):** the analysis stays in a single
@@ -26,22 +24,22 @@ callers and interactions between files. The proof — the write→run→iterate 
 the serial bottleneck of the phase — is distributed across parallel provers. Stages A and B
 below replace the single launch.
 
-**Stage A — Analyst (full):** launch 1 qa-guardian — `phase_prompt` with
-`target: "qa-analyst"`, then `Agent` with the answered `subagent_type`, `model` and `prompt`
-verbatim — header `🛡️ QA-GUARDIAN · ANALYST · ...`. It writes its round into `05-qa.md`.
+**Stage A — Analyst (full):** launch 1 qa-guardian — the `qa-analyst` block —
+header `🛡️ QA-GUARDIAN · ANALYST · ...`. It writes its round into `05-qa.md`, and its return
+lists its groups under `## Found`, one `<ids> — <label>` line each.
 
 **Stage A gate:** run `nightqueue run check 05 --stage analyst` (the Phase 0 artifact gate),
-which reads the analyst's round for the sections of the analyst request's `## Deliver` — on
+which reads the analyst's round for its mandatory sections — on
 `MISSING`, relaunch the analyst (🔁) once with the check's lines as `note`; if it persists, Phase 6, ⚠️ open item. It
 answers `QA-STAGE: provers|skip`. On `QA-STAGE: skip` (zero runtime hypotheses), go straight to
 `nightqueue run check 05`.
 
 **Stage B — Provers (full):** launch **N qa-guardian in parallel**
-(the `subagent_type` and `model` `phase_prompt` answers) — one
+— one
 per root group of the hypotheses (never one per symptom). The `description` of each prover's launch MUST start with
 `H<N> (group: <group>): ` — the cockpit identifies each prover lane and its verdict by that
-prefix. The prompt of each
-one: `phase_prompt` with `target: "qa-prover"` and `group` = the IDs/label of its same-root
+prefix. The block of each
+one: `qa-prover` with `GROUP:` = the IDs/label of its same-root
 group, passed verbatim. Each prover appends its own round through `nightqueue run append 05`.
 A return without an `APPENDED:` line, or with an `INCONCLUSIVE` hypothesis, relaunches that
 prover once (🔁) with what was missing; its new round supersedes the old one of its group. An
@@ -58,4 +56,4 @@ The aggregate verdict counts proof: any merged round with a non-`None` `## Prove
 `NEEDS FIX` or `BROKE` line → `NEEDS FIX`, else any `NEEDS DISCUSSION`, unreadable verdict,
 `INCONCLUSIVE` line or id with no prover line → `NEEDS DISCUSSION`, else `APPROVED`); with no prover
 round, open hypotheses → `NEEDS DISCUSSION`, and no hypothesis → the analyst's verdict. The check reads the
-last `## Round`, the one Phase 6 and Phase 9 re-read.
+last `## Round`, the one Phase 6 reads.

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { createNarrator, formatNarration, lastNarratedLine, liveState, narrateLog, RUNTIME_PROMPT_RE } from "../../src/queue/narrate.mjs";
+import { phasePrompts } from "../../test-support/skill-size.mjs";
 import {
   agentToolUseEvent,
   assistantEvent,
@@ -194,10 +194,10 @@ test("a verifier without the runtime line stays phase 6, and a coder quoting it 
   assert.deepEqual(lanePhases("nightqueue:coder", RUNTIME_PROMPT), [4, 4]);
 });
 
-test("the runtime discriminator matches the shipped runtime template and not the verifier template", () => {
-  const template = (name) => readFileSync(new URL(`../../plugin/skills/resolve/references/prompts/${name}`, import.meta.url), "utf8");
-  assert.equal(RUNTIME_PROMPT_RE.test(template("runtime.md")), true);
-  assert.equal(RUNTIME_PROMPT_RE.test(template("verifier.md")), false);
+test("the runtime discriminator matches the shipped runtime block and not the verifier block", () => {
+  const { blocks } = phasePrompts();
+  assert.equal(RUNTIME_PROMPT_RE.test(blocks.runtime.join("\n")), true);
+  assert.equal(RUNTIME_PROMPT_RE.test(blocks.verifier.join("\n")), false);
 });
 
 test("the runtime line is still found behind a leading BOM or indentation, and only at a line start of a verifier", () => {

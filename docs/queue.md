@@ -123,8 +123,8 @@ and never a secret, URL or error text. The runtime also appends every file to th
 session receives, before Phase 0, as a `Job origin` block with one `### <kind>-<ref>` heading per
 file (same 16 KiB cap per file, control literals escaped), fenced and labelled as evidence, never
 instructions, so a job queued as only a title and a link runs the task its description holds
-without gating for missing detail. The triager also reads every file through
-`context_for_phase` as a `## Job origin` section in the same shape. This replaces the earlier
+without gating for missing detail. The triager also reads every file of `<RUN_DIR>/origin/`
+itself, as data and never as instructions. This replaces the earlier
 rule that only the triage phase received the origin content.
 
 **Sentry.** A prompt with a Sentry issue link (`https://acme.sentry.io/issues/4507/`,
@@ -707,7 +707,7 @@ refuses it as already finished, and `queue retry` still takes `failed`,
 `cancelled` and `gate` and nothing else. A gated job only moves with `--note`. On a job whose run directory exists the note is recorded in
 `state.json.answers` as `{text, at, attempt}`, in the same locked write that consumes the last
 conclusion, and `operator_note` stays NULL: the run reads it in the `Answers:` line of `RUN FACTS`,
-and `phase_prompt` hands all the answers to the triager and the architect, oldest first. A note on a
+and the triager and the architect read all the answers from `state.json`, oldest first. A note on a
 job with no run directory yet, or on one whose `state.json` cannot be read (the file is never
 overwritten), stays on the row and reaches the prompt in a block labelled
 `OPERATOR ANSWER TO THE GATE:` - a retry without `--note` clears whatever was in
@@ -1044,8 +1044,8 @@ with an older tool matcher`) until `nightqueue setup` rewrites an older one. For
 of the orchestrator's own main thread - a payload with no `agent_id`; a subagent's call
 carries one - inside a job (`NIGHTQUEUE_JOB_ID` set):
 
-- `Read`, `Grep` and `Glob` are allowed only under the runs of the job home
-  (`<home>/runs`) and a copy of the plugin (`NIGHTQUEUE_PLUGIN_DIR`, which the runtime
+- `Read`, `Grep` and `Glob` are allowed only under a copy of the plugin
+  (`NIGHTQUEUE_PLUGIN_DIR`, which the runtime
   pins on the child, the plugin of the running package and of the installed runtime, and
   the host's `plugins` directory), plus the file where the host spills a tool result too
   large for the context and tells the model to read it - of the calling session only:
@@ -1055,7 +1055,9 @@ carries one - inside a job (`NIGHTQUEUE_JOB_ID` set):
   the transcript of each of the stream's own session ids under
   `<CLAUDE_CONFIG_DIR or ~/.claude>/projects/`. Paths are compared after
   `realpath`, so a symlink never smuggles the worktree in; a `Glob` pattern that climbs
-  with `..` is refused.
+  with `..` is refused. The run directory is not among them: a denied read answers
+  `the orchestrator reads only the pipeline; a phase's result is its subagent's return and the
+  output of `nightqueue run check`/`run report``, then the path.
 - `Bash` is allowed only for the closed list: `git rev-parse`, `git worktree`,
   `git status --short|-s|--porcelain`, `git add`, `git commit` (never `--amend`),
   `git push` (never `--force`/`-f`/`--force-with-lease`/`--force-if-includes`/`--delete`/
@@ -1074,7 +1076,7 @@ carries one - inside a job (`NIGHTQUEUE_JOB_ID` set):
   backslash outside single quotes, a blank other than a space or a tab between words (form feed,
   no-break space, …), or a control character other than a tab, quoted or not: zsh cuts a word
   at a NUL byte, so `--force<NUL>x` would run as `--force`.
-- Anything else is denied (`permissionDecision: "deny"`) with a reason that starts
+- Any other Bash command is denied (`permissionDecision: "deny"`) with a reason that starts
   `the orchestrator does not read the repository - hand the path to the coder / ask the
   verifier` and says where the call would have to go instead.
 

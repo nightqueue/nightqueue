@@ -2,6 +2,7 @@ import { UserError } from "../config/errors.mjs";
 import { runAgentForeground } from "../hooks/agent-foreground.mjs";
 import { MERGER_DENY_ALL, runMergerGuard } from "../hooks/merger-guard.mjs";
 import { runPromptContext } from "../hooks/prompt-context.mjs";
+import { runReturnSyntax } from "../hooks/return-syntax.mjs";
 import { runSessionStart } from "../hooks/session-start.mjs";
 import { checkArgs, parseCommand } from "./args.mjs";
 
@@ -12,6 +13,7 @@ const HOOKS = new Map([
   ["prompt-context", { handler: runPromptContext, fallback: "" }],
   ["agent-foreground", { handler: runAgentForeground, fallback: "" }],
   ["merger-guard", { handler: runMergerGuard, fallback: MERGER_DENY_ALL }],
+  ["return-syntax", { handler: runReturnSyntax, fallback: "" }],
 ]);
 
 // Consumes the whole stdin, giving up on the wait when the host keeps the stream open.

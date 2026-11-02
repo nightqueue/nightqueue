@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { UserError } from "../config/errors.mjs";
@@ -10,7 +11,7 @@ import { scanMarkdown } from "../queue/stream.mjs";
 import { checkArgs, parseCommand } from "./args.mjs";
 import { readRequiredFile, resolveRun, RUN_OPTIONS } from "./run-context.mjs";
 
-export const APPEND_USAGE = "nightqueue run append 05 --group <id> --from <file> [--project <name> --slug <slug>]";
+export const APPEND_USAGE = "nightqueue run append 05 (--group <id> | --group-label <label>) --from <file> [--project <name> --slug <slug>]";
 
 const APPENDABLE = "05";
 const GROUP_ID = /^[a-z0-9][a-z0-9-]{0,63}$/;
@@ -76,6 +77,23 @@ function groupIdOf(value) {
   return value;
 }
 
+// The id the runtime stamps on a prover's round: the group's slug plus a hash of the group, so two groups never share it.
+export function groupIdFromLabel(label) {
+  const group = String(label ?? "");
+  const slug = group.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40);
+  const hash = createHash("sha256").update(group).digest("hex").slice(0, 8);
+  return slug === "" ? hash : `${slug}-${hash}`;
+}
+
+// The group id of a call: `--group` as given, or derived from `--group-label`, refusing both together and a blank label.
+function groupOfCall(values) {
+  const label = values["group-label"];
+  if (label === undefined) return groupIdOf(values.group);
+  if (values.group !== undefined) throw new UserError("`--group` and `--group-label` name the same thing: pass one");
+  if (label.trim() === "") throw new UserError("`--group-label <label>` is blank (the GROUP of your request)");
+  return groupIdFromLabel(label.trim());
+}
+
 // The artifact as it is on disk, or an empty text when no round was written yet.
 function readRounds(path) {
   try {
@@ -111,10 +129,10 @@ function appendUnderLock(run, path, round, env) {
 
 // Runs `run append 05`, which appends one prover round to `05-qa.md` of THIS run, safe against provers appending at the same time.
 export async function runAppend(argv, ctx) {
-  const { values, positionals } = parseCommand(argv, { ...RUN_OPTIONS, from: { type: "string" }, group: { type: "string" } });
+  const { values, positionals } = parseCommand(argv, { ...RUN_OPTIONS, from: { type: "string" }, group: { type: "string" }, "group-label": { type: "string" } });
   const [check] = checkArgs(positionals, { min: 1, max: 1, usage: APPEND_USAGE });
   if (check.trim() !== APPENDABLE) throw new UserError("`run append` only takes `05` (the QA rounds)");
-  const group = groupIdOf(values.group);
+  const group = groupOfCall(values);
   if (!values.from) throw new UserError(`\`--from <file>\` is required; usage: ${APPEND_USAGE}`);
   const round = proverRound(readRequiredFile(resolve(ctx.cwd, values.from), "--from"), group);
   const run = await resolveRun(values, ctx);

@@ -365,7 +365,7 @@ function diffApplies(text) {
 }
 
 // The device script of a NEEDS-DEVICE verdict: the lines after the verdict line up to `Diff applies plan:`, verbatim.
-function deviceScript(text) {
+export function deviceScript(text) {
   const lines = (sectionOf(text, "## Runtime verdict") ?? "").split("\n").slice(1);
   const verdictAt = lines.findIndex((line) => line.trim() !== "");
   const rest = lines.slice(verdictAt + 1);

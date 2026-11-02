@@ -104,7 +104,7 @@ commands:
   mcp                                       start the stdio MCP server that exposes the thirty-three memory and queue tools
   mcp --http [--port <n>] [--token <t>]     serve the same tools over Streamable HTTP on 127.0.0.1
   studio [--port <n>] [--api-only] [--no-open]  serve nightqueue studio, the local web cockpit, on 127.0.0.1
-  hook <name>                               run a hook (session-start, prompt-context, agent-foreground, merger-guard), reading the event JSON from stdin
+  hook <name>                               run a hook (session-start, prompt-context, agent-foreground, merger-guard, return-syntax), reading the event JSON from stdin
   embed install                             install the embedding library into the home and download its weights
   embed download                            download the embedding weights into the home (the only network path)
   embed backfill                            compute the embeddings of the lessons that still have none
@@ -140,7 +140,7 @@ inside a job — each acts on the run of the job it is called from, never on the
   run pr --body-file <path>                 check the body, push THIS run's branch under its final name and open the PR
   run start --type --commit-type            record THIS run's type; print its agent models, phases and PR template as JSON
   run publish --message-file --body-file    check the body, commit the list once, push THIS run's branch and open the PR (--draft: as a draft)
-  run report [--json]                       the tables of THIS run's final report: steps, happy or not
+  run report [--json] [--facts]             the tables of THIS run's final report: steps, happy or not; --facts prints only its facts section, recording nothing
 
 options:
   -h, --help                                show this help

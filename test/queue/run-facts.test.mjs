@@ -4,10 +4,10 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { run } from "../../src/cli/index.mjs";
 import { runDir } from "../../src/config/paths.mjs";
-import { phasePrompt } from "../../src/mcp/phase-prompt.mjs";
 import { openDb } from "../../src/memory/db.mjs";
 import { addJob, getJob } from "../../src/memory/jobs.mjs";
 import { questionDigest } from "../../src/queue/gate-question.mjs";
+import { jobPromptText } from "../../src/queue/job-prompt.mjs";
 import { readRunState } from "../../src/queue/resume.mjs";
 import { applyRetry } from "../../src/queue/retry.mjs";
 import { recordClaim, recordOutcome, recordPhaseDone, recordRunFields, stalledPhases } from "../../src/queue/run-state.mjs";
@@ -25,6 +25,12 @@ const PARKED = { stdout: toNdjson([systemInitEvent(), slugEvent(SLUG), rateLimit
 const QUESTION = "Approve C1?";
 const PLAN = `## Implementation plan\n- x\n\n## Requires user confirmation\n**Question:** ${QUESTION}\n\n## Assumptions\n- [P1] a.\n\n## Pre-mortem\n- [PM1] a.\n\n## Identified risks\n- [R1] a.\n`;
 const PRS = [{ title: "Fix the worker", url: "https://github.com/acme/app/pull/7", branch: "fix/worker" }];
+
+// The run section of one agent definition, on one line.
+function agentText(agent) {
+  const text = readFileSync(new URL(`../../plugin/agents/${agent}.md`, import.meta.url), "utf8");
+  return text.slice(text.indexOf("## Inside a run")).replace(/\s+/g, " ");
+}
 
 // A git double for the preflight: a clean checkout of the default branch.
 function fakeGit() {
@@ -156,20 +162,17 @@ test("2: a Phase 3 answer lands in the state and leaves the row empty; the block
   assert.ok((await check03(home)).includes(`CONFIRM: answered (${answers[1].at})`));
 });
 
-test("every answer reaches the triager and the architect, oldest first", async (t) => {
-  const home = pausedAtPhase3(t, "facts-answers-phase-prompt");
+test("every answer reaches the triager and the architect through state.json, oldest first", async (t) => {
+  const home = pausedAtPhase3(t, "facts-answers-state");
   await applyRetry({ id: home.id, note: "first answer", env: home.env });
   recordGate(home);
   openDb(home.env).prepare("UPDATE jobs SET status = 'gate', attempts = 1 WHERE id = ?").run(home.id);
   await applyRetry({ id: home.id, note: "second answer", env: home.env });
-  const target = { run: { project: "alpha", projectId: home.projectId, slug: SLUG }, env: { ...home.env, NIGHTQUEUE_JOB_ID: String(home.id) } };
 
-  const triager = (await phasePrompt({ target: "triager" }, target)).prompt;
-  assert.ok(triager.includes("Operator answer to the gate: first answer\n\nOperator answer to the gate: second answer"), triager);
-  const architect = (await phasePrompt({ target: "architect" }, target)).prompt;
-  assert.ok(architect.includes("Operator answers to the gate, oldest first:\n1. first answer\n2. second answer\n"), architect);
-  const coder = (await phasePrompt({ target: "coder" }, target)).prompt;
-  assert.equal(coder.includes("first answer"), false, "the coder got the answers");
+  assert.deepEqual(readRunState(runOf(home)).answers.map((entry) => entry.text), ["first answer", "second answer"]);
+  assert.ok(agentText("triager").includes("every entry of `answers` of `<RUN_DIR>/state.json`, oldest first"));
+  assert.ok(agentText("architect").includes("Read `type` and `answers` of `<RUN_DIR>/state.json`"));
+  assert.equal(agentText("coder").includes("`answers`"), false, "the coder reads the answers");
 });
 
 test("3: a note on a job with no run directory stays on the row and reaches the prompt and the triager", async (t) => {
@@ -183,9 +186,7 @@ test("3: a note on a job with no run directory stays on the row and reaches the 
   const prompt = promptOfSpawn(home, 0);
   assert.ok(prompt.includes("OPERATOR ANSWER TO THE GATE: pick A"), prompt);
   assert.equal(prompt.includes("RUN FACTS"), false, prompt);
-  const { slug } = runOf(home);
-  const triager = (await phasePrompt({ target: "triager" }, { run: { project: "alpha", projectId: home.projectId, slug }, env: { ...home.env, NIGHTQUEUE_JOB_ID: String(home.id) } })).prompt;
-  assert.ok(triager.includes("Operator answer to the gate: pick A"), triager);
+  assert.ok((await jobPromptText({ jobId: home.id }, home.env)).endsWith("pick A"), "the note does not reach 00-prompt.md, where the triager reads it");
 });
 
 test("a run directory with no state.json yet takes the answer in a state of its own", async (t) => {
@@ -263,11 +264,9 @@ test("an answer or a row note that is a piece of the job's prompt still reaches 
   gatedByPreflight(home);
   await applyRetry({ id: home.id, note: "fix", env: home.env });
   openDb(home.env).prepare("UPDATE jobs SET operator_note = 'worker' WHERE id = ?").run(home.id);
-  const target = { run: { project: "alpha", projectId: home.projectId, slug: SLUG }, env: { ...home.env, NIGHTQUEUE_JOB_ID: String(home.id) } };
 
-  const { prompt } = await phasePrompt({ target: "triager" }, target);
-
-  assert.ok(prompt.includes("fix the worker\n\nOperator answer to the gate: fix\n\nOperator answer to the gate: fix\n\nOperator answer to the gate: worker\n"), prompt);
+  assert.deepEqual(readRunState(runOf(home)).answers.map((entry) => entry.text), ["fix", "fix"]);
+  assert.equal(await jobPromptText({ jobId: home.id }, home.env), "fix the worker\n\nworker");
 });
 
 test("a pending row from before the upgrade keeps its note in the prompt, and the check still asks: no second mechanism", async (t) => {
@@ -404,10 +403,7 @@ test("7: open pull requests found at claim are in origin/open-prs.md and the tri
   assert.equal(prompt.includes("open-prs"), false, prompt);
   const file = join(origin, "open-prs.md");
   assert.ok(readFileSync(file, "utf8").includes("- Fix the worker · https://github.com/acme/app/pull/7 · fix/worker"));
-  const target = { run: { project: "alpha", projectId: home.projectId, slug: SLUG }, env: { ...home.env, NIGHTQUEUE_JOB_ID: String(home.id) } };
-  const triager = (await phasePrompt({ target: "triager" }, target)).prompt;
-  assert.ok(triager.includes("### open-prs"), triager);
-  assert.ok(triager.includes("- Fix the worker · https://github.com/acme/app/pull/7 · fix/worker"), triager);
+  assert.ok(agentText("triager").includes("Read every file of `<RUN_DIR>/origin/`, when the directory exists, `open-prs.md` included"), "the triager no longer reads the open pull requests");
 
   await applyRetry({ id: home.id, env: home.env });
   await runJob(home, { prListImpl: () => null });

@@ -101,6 +101,7 @@ const BASH_TABLE = [
   ["nightqueue run pr", true],
   ["nightqueue run start --type bug/error --commit-type fix --expect-slug fix-x", true],
   ["nightqueue run publish --message-file /runs/p/s/commit-message.txt --body-file /runs/p/s/pr-body.md", true],
+  ["nightqueue run report --facts", true],
   ["nightqueue run report", true],
   ["nightqueue run start --routing", true],
   ["nightqueue run start; rm -rf x", false],
@@ -422,8 +423,8 @@ test("a path is inside the roots only once both sides are canonical", (t) => {
   assert.equal(insideRoots(join(runs, "x"), null), false);
 });
 
-test("the roots are the job's runs and every copy of the plugin, canonical and without duplicates", (t) => {
-  const { base } = scopeFixture(t);
+test("the roots are every copy of the plugin, canonical and without duplicates, and never a run", (t) => {
+  const { base, runs } = scopeFixture(t);
   const plugin = join(base, "plugin");
   mkdirSync(plugin);
   const env = {
@@ -434,15 +435,16 @@ test("the roots are the job's runs and every copy of the plugin, canonical and w
     CLAUDE_CONFIG_DIR: join(base, "claude-config"),
   };
   const roots = orchestratorRoots(env);
-  assert.equal(roots[0], join(base, "home", "runs"));
   assert.ok(roots.includes(plugin), roots.join("\n"));
   assert.ok(roots.includes(join(realpathSync(packageRoot()), "plugin")), roots.join("\n"));
   assert.ok(roots.includes(join(base, "claude-config", "plugins")), roots.join("\n"));
-  assert.equal(roots.some((root) => root.startsWith(join(base, "other-home", "runs"))), false, "the runs of the job home lost to NIGHTQUEUE_HOME");
   assert.equal(new Set(roots).size, roots.length);
 
   const { [JOB_HOME_ENV]: _pinned, [PLUGIN_DIR_ENV]: _plugin, ...unpinned } = env;
-  assert.equal(orchestratorRoots(unpinned)[0], join(base, "other-home", "runs"));
+  for (const scope of [env, unpinned]) {
+    assert.equal(insideRoots(join(runs, "p", "s", "05-qa.md"), orchestratorRoots(scope)), false, "a run artifact is readable");
+    assert.equal(insideRoots(join(base, "other-home", "runs", "p", "s", "05-qa.md"), orchestratorRoots(scope)), false, "a run artifact is readable");
+  }
 });
 
 test("the skill's references channel is readable by the orchestrator", (t) => {

@@ -226,7 +226,7 @@ rest. When a query matched nothing, the same recent list comes back marked
   ignoring prompts too short to carry a request.
 
 `nightqueue setup` registers the two of them at user scope (next to the `PreToolUse`
-agent-foreground guard), and `nightqueue setup --remove` takes them out again (see
+agent-foreground guard and the `SubagentStop` return-syntax check), and `nightqueue setup --remove` takes them out again (see
 [Install](install.md)). Both answer with nothing when the working directory is outside a
 project registered with `nightqueue init`. No hook writes a lesson or a memory: there is no
 `SessionEnd` hook any more, and `setup`, `setup --remove` and `update` drop a leftover

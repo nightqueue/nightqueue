@@ -1031,7 +1031,7 @@ function countOrchestratorToolUse(counts, block, scope) {
   if (!orchestratorBashAllowed(block.input?.command)) counts.bashExplore += 1;
 }
 
-// Counts of one attempt's orchestrator (never a subagent): its turns, its reads outside the run and the plugin, its Bash
+// Counts of one attempt's orchestrator (never a subagent): its turns, its reads outside the plugin, its Bash
 // calls and those outside the closed list, and the context of its last turn. Respects the fence/marker discipline of the
 // sibling extractors, so a line quoted inside a code fence is never read as an event.
 export function extractOrchestratorCounts(log, { roots = [], cwd = null } = {}) {

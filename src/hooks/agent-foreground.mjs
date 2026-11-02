@@ -72,14 +72,10 @@ function rootScanReason(ruleName) {
   return `${DENY_REASON_PREFIX} (${ruleName}); ${DENY_REASON_SUFFIX}`;
 }
 
-// Reason of an orchestrator read outside its run, the plugin and its own session's spilled tool results.
-function orchestratorReadReason(path, roots) {
+// Reason of an orchestrator read outside the plugin and its own session's spilled tool results.
+function orchestratorReadReason(path) {
   const shown = path ?? "a path that cannot be resolved";
-  return (
-    `the orchestrator does not read the repository - hand the path to the coder / ask the verifier: ` +
-    `the orchestrator of a queued job reads only its run's handoff files and the plugin (${roots.join(", ")}), ` +
-    `and ${shown} is outside them; the subagent of this phase writes what you need into a handoff file under RUN_DIR`
-  );
+  return `the orchestrator reads only the pipeline; a phase's result is its subagent's return and the output of \`nightqueue run check\`/\`run report\` (denied: ${shown})`;
 }
 
 // Reason of an orchestrator Bash command outside its closed list.
@@ -89,7 +85,7 @@ function orchestratorBashReason() {
     `the orchestrator of a queued job runs only its closed command list (${describeOrchestratorBashRules()}), ` +
     "each as the bare program name followed by its subcommand (no binary path, no `git -C`/`-c`/`--git-dir`/`--work-tree`; " +
     "no unquoted `( ) * ? [ ] { } # ^`: quote it; no backslash outside single quotes, no control character but a tab, and only plain spaces or tabs between words); " +
-    "hand this to the subagent of the phase and read its handoff file, or use `git diff --stat`"
+    "hand this to the subagent of the phase, or use `git diff --stat`"
   );
 }
 
@@ -121,7 +117,7 @@ function orchestratorScopeReason({ input, toolName, toolInput, env }) {
   if (READ_TOOLS.has(toolName)) {
     const roots = orchestratorRoots(env, [{ transcriptPath: input.transcript_path, sessionId: input.session_id }]);
     const target = readTarget(toolName, toolInput, input.cwd);
-    return insideRoots(target, roots) ? null : orchestratorReadReason(target, roots);
+    return insideRoots(target, roots) ? null : orchestratorReadReason(target);
   }
   if (toolName === "Bash") return orchestratorBashAllowed(toolInput.command) ? null : orchestratorBashReason();
   return null;

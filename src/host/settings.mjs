@@ -10,6 +10,7 @@ const HOOK_EVENTS = [
   { event: "SessionStart", hook: "session-start", timeout: 10 },
   { event: "UserPromptSubmit", hook: "prompt-context", timeout: 10 },
   { event: "PreToolUse", hook: "agent-foreground", timeout: 5, matcher: "Agent|Task|Bash|Read|Grep|Glob" },
+  { event: "SubagentStop", hook: "return-syntax", timeout: 5 },
 ];
 
 const RETIRED_HOOK_EVENTS = ["SessionEnd"];
@@ -30,7 +31,7 @@ export function spacedRootWarning(root) {
   return `nightqueue: warning: the package path contains a space (${root}); the host may fail to run the hook command`;
 }
 
-// The three hook entries this package wants in the host settings, each with the timeout its work needs and, when it applies, the matcher restricting it.
+// The hook entries this package wants in the host settings, each with the timeout its work needs and, when it applies, the matcher restricting it.
 export function desiredHooks(env = process.env) {
   return HOOK_EVENTS.map(({ event, hook, timeout, matcher }) => ({
     event,
@@ -137,7 +138,7 @@ function dropRetiredHooks(data) {
   );
 }
 
-// Brings the three hook entries of this package into the settings object, in place, dropping a retired one left behind.
+// Brings the hook entries of this package into the settings object, in place, dropping a retired one left behind.
 export function mergeHooks(data, env = process.env) {
   const merged = desiredHooks(env).map((hook) => ({ event: hook.event, status: mergeEvent(data, hook) }));
   return [...merged, ...dropRetiredHooks(data)];
@@ -169,13 +170,14 @@ export function jobSettings(env = process.env) {
   return { hooks: data.hooks, claudeMdExcludes: [join(claudeConfigDir(env), "CLAUDE.md")] };
 }
 
-// The `--settings` payload of an operator session: the jobs' settings with the guard also fencing the edit tools, plus the nightqueue tools and the two web reads (WebFetch, WebSearch) pre-approved.
+// The `--settings` payload of an operator session: the jobs' settings without the pipeline's return check, with the guard also fencing the edit tools, plus the nightqueue tools and the two web reads (WebFetch, WebSearch) pre-approved.
 export function operatorSettings(env = process.env) {
   const settings = jobSettings(env);
+  const { SubagentStop: _pipelineOnly, ...hooks } = settings.hooks;
   const preToolUse = eventGroups(settings, "PreToolUse").map((group) => ({ ...group, matcher: OPERATOR_TOOL_MATCHER }));
   return {
     ...settings,
-    hooks: { ...settings.hooks, PreToolUse: preToolUse },
+    hooks: { ...hooks, PreToolUse: preToolUse },
     permissions: { allow: [...OPERATOR_ALLOWED_TOOLS] },
   };
 }

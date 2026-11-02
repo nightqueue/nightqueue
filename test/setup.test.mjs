@@ -65,7 +65,7 @@ function callsMatching(calls, prefix) {
   return calls.filter((call) => prefix.every((value, index) => call[index] === value));
 }
 
-test("setup creates the three hook entries when settings.json does not exist, none on SessionEnd", async (t) => {
+test("setup creates the four hook entries when settings.json does not exist, none on SessionEnd", async (t) => {
   const host = makeHostEnv(t, "setup-fresh");
   const { ctx, out } = makeCtx(host.env);
 
@@ -81,7 +81,10 @@ test("setup creates the three hook entries when settings.json does not exist, no
   assert.deepEqual(settings.hooks.PreToolUse, [
     { matcher: "Agent|Task|Bash|Read|Grep|Glob", hooks: [{ type: "command", command: hookCommandOf(host, "agent-foreground"), timeout: 5 }] },
   ]);
-  for (const event of ["SessionStart", "UserPromptSubmit", "PreToolUse"]) {
+  assert.deepEqual(settings.hooks.SubagentStop, [
+    { hooks: [{ type: "command", command: hookCommandOf(host, "return-syntax"), timeout: 5 }] },
+  ]);
+  for (const event of ["SessionStart", "UserPromptSubmit", "PreToolUse", "SubagentStop"]) {
     assert.ok(out.includes(`hook ${event}: created`), out.join("\n"));
   }
   assert.equal(out.some((line) => line.startsWith("hook SessionEnd")), false, out.join("\n"));

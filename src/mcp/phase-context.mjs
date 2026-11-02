@@ -1,22 +1,22 @@
-import { join } from "node:path";
-import { runDir } from "../config/paths.mjs";
 import { resolveProjectRef } from "../config/projects.mjs";
 import { clip, section } from "../hooks/block.mjs";
 import { lessonIdsFromRefs, recordInjected, seenRefs } from "../hooks/state.mjs";
-import { originEntry, readOriginFiles } from "../integrations/enrich.mjs";
 import { LESSON_TARGETS } from "../memory/lessons.mjs";
 import { resolveCitations } from "../queue/job-citations.mjs";
-import { isRunPath } from "../queue/resume.mjs";
+import { readRunState } from "../queue/resume.mjs";
 import { callerJobId } from "../queue/retry.mjs";
 import { openStore } from "../store/open.mjs";
+import { runTimelineLines } from "./run-timeline.mjs";
 
-export const PHASE_TARGETS = [...LESSON_TARGETS, "explore"];
+export const PHASE_TARGETS = [...LESSON_TARGETS, "explore", "reflector"];
 
 const WHOLE_RUN = { reinjectAfter: Number.MAX_SAFE_INTEGER };
 const PHASE_LIMIT = 4;
 const INDEX_LIMIT = 40;
 const LINE_MAX = 300;
 const NOTICE_MAX = 200;
+const INJECTED_LIMIT = 40;
+const NONE_RECORDED = "none recorded";
 
 // What the caller's own job row says about this run: the session whose injections are already spent, and the project every recall reads.
 export async function callerContext(env) {
@@ -150,10 +150,33 @@ async function jobSection({ target, projectId, query, prompt, excludeJobId }, en
   }
 }
 
-// What the runtime fetched about the service the job came from, for the triager of a job only (the session already got it in its request); every other phase gets nothing.
-function originSection({ target, caller }, env) {
-  if (target !== "triager" || !caller.projectId || !isRunPath(caller.projectId, caller.slug)) return "";
-  return section("Job origin", readOriginFiles(join(runDir(caller.projectId, caller.slug, env), "origin")), originEntry);
+// The lessons this job's session was given, one `- [L<id>] <title>` line each; none outside a job.
+export async function injectedLessonLines(env) {
+  const { sessionId } = await callerContext(env);
+  const ids = runInjectedLessonIds(sessionId, env).slice(0, INJECTED_LIMIT);
+  const store = openStore(env);
+  const lessons = await Promise.all(ids.map((id) => store.lessons.getLesson(id)));
+  const lines = lessons.filter(Boolean).map((lesson) => `- [L${lesson.id}] ${lesson.title}`);
+  return lines.length ? lines.join("\n") : NONE_RECORDED;
+}
+
+// The given lessons of the reflector's block; a failed read answers `none recorded` and an open item.
+async function givenLessonsOf(env, openItems) {
+  try {
+    return await injectedLessonLines(env);
+  } catch (error) {
+    openItems.push(`the lessons given to this run failed: ${error?.message ?? String(error)}`);
+    return NONE_RECORDED;
+  }
+}
+
+// The reflector's block: what the run went through and the lessons it was given; it recalls nothing, so it marks no lesson as seen.
+async function reflectorBlock(run, env) {
+  const openItems = [];
+  const state = readRunState({ projectId: run.projectId, slug: run.slug, env });
+  const timeline = await runTimelineLines({ run, state, env, openItems });
+  const given = await givenLessonsOf(env, openItems);
+  return { project: run.project, block: `## Run timeline\n${timeline}\n\n## Lessons given to this run\n${given}`, open_items: openItems };
 }
 
 // The project a phase block reads: the caller's own job's, else the one the call names (a name, or a path inside a checkout); an unknown name is refused.
@@ -163,8 +186,9 @@ async function phaseOwner(caller, project, env) {
   return { id: found?.id ?? null, name: found?.name ?? null };
 }
 
-// The context block of one phase, ready to paste into the subagent's prompt: the lessons it has not seen, the project memory and, for the explore, the known map.
-export async function phaseContextBlock({ target, query, project, repoRoot, excludeIds, origin = true }, env = process.env) {
+// The context block one subagent fetches for its phase: the lessons it has not seen, the project memory and, for the explore, the known map; the reflector gets its run's timeline instead.
+export async function phaseContextBlock({ target, query, project, repoRoot, excludeIds, run }, env = process.env) {
+  if (target === "reflector") return reflectorBlock(run, env);
   const caller = await callerContext(env);
   const owner = await phaseOwner(caller, project, env);
   const lessons = await recallFreshLessons(
@@ -177,7 +201,6 @@ export async function phaseContextBlock({ target, query, project, repoRoot, excl
     section("Project memory", memories, memoryLine),
     await indexSection({ target, projectId: owner.id, repoRoot, query }, env),
     await jobSection({ target, projectId: owner.id, query, prompt: caller.prompt, excludeJobId: callerJobId(env) }, env),
-    origin === false ? "" : originSection({ target, caller }, env),
   ].filter(Boolean);
   return { project: owner.name, block: sections.join("\n\n") };
 }

@@ -39,12 +39,17 @@ function thirdPartySettings() {
   };
 }
 
-test("three hooks are wanted, each with its own timeout, and none on SessionEnd", () => {
+test("four hooks are wanted, each with its own timeout, and none on SessionEnd", () => {
   assert.deepEqual(desiredHooks(ENV), [
     { event: "SessionStart", command: hookCommand("session-start", ENV), timeout: 10 },
     { event: "UserPromptSubmit", command: hookCommand("prompt-context", ENV), timeout: 10 },
     { event: "PreToolUse", command: hookCommand("agent-foreground", ENV), timeout: 5, matcher: "Agent|Task|Bash|Read|Grep|Glob" },
+    { event: "SubagentStop", command: hookCommand("return-syntax", ENV), timeout: 5 },
   ]);
+});
+
+test("the return check reaches a job with no matcher, so every subagent type is covered", () => {
+  assert.deepEqual(jobSettings(ENV).hooks.SubagentStop, [{ hooks: [{ type: "command", command: hookCommand("return-syntax", ENV), timeout: 5 }] }]);
 });
 
 test("the merge appends one group per event and says so", () => {
@@ -53,6 +58,7 @@ test("the merge appends one group per event and says so", () => {
     { event: "SessionStart", status: "created" },
     { event: "UserPromptSubmit", status: "created" },
     { event: "PreToolUse", status: "created" },
+    { event: "SubagentStop", status: "created" },
   ]);
   assert.deepEqual(data.hooks.SessionStart, [
     { hooks: [{ type: "command", command: SESSION_START.command, timeout: SESSION_START.timeout }] },
@@ -74,6 +80,7 @@ test("a second merge changes nothing and reports every event as already present"
     { event: "SessionStart", status: "already present" },
     { event: "UserPromptSubmit", status: "already present" },
     { event: "PreToolUse", status: "already present" },
+    { event: "SubagentStop", status: "already present" },
   ]);
   assert.deepEqual(data, snapshot);
 });
@@ -139,6 +146,7 @@ test("the removal drops the event key only when nothing else is left in it", () 
     { event: "SessionStart", status: "removed" },
     { event: "UserPromptSubmit", status: "removed" },
     { event: "PreToolUse", status: "removed" },
+    { event: "SubagentStop", status: "removed" },
   ]);
   assert.deepEqual(data, thirdPartySettings());
   assert.equal(data.hooks.PreToolUse, undefined, "the group PreToolUse held nothing but our own entry");
@@ -149,6 +157,7 @@ test("the removal drops the event key only when nothing else is left in it", () 
     { event: "SessionStart", status: "not present" },
     { event: "UserPromptSubmit", status: "not present" },
     { event: "PreToolUse", status: "not present" },
+    { event: "SubagentStop", status: "not present" },
   ]);
 });
 
@@ -156,7 +165,7 @@ test("the status of the hooks compares the registered command with the wanted on
   const data = thirdPartySettings();
   data.hooks.UserPromptSubmit[0].hooks.push({ type: "command", command: "node /old/bin/nightqueue.mjs hook prompt-context" });
   const status = hookStatus(data, ENV);
-  assert.equal(status.length, 3);
+  assert.equal(status.length, 4);
   assert.deepEqual(status[0], { event: "SessionStart", expected: SESSION_START.command, current: null, matcherCurrent: true });
   assert.deepEqual(status[1], {
     event: "UserPromptSubmit",
@@ -263,7 +272,7 @@ test("operatorSettings fences the edit tools and wires no SubagentStop hook, lea
   assert.equal(settings.hooks.SubagentStop, undefined);
   assert.deepEqual(settings.permissions, { allow: ["mcp__nightqueue__*", "WebFetch", "WebSearch"] });
   assert.deepEqual(desiredHooks(ENV), before);
-  assert.equal(desiredHooks(ENV).some((hook) => hook.event === "SubagentStop"), false, "the host settings would run the qa sweep in every session");
+  assert.deepEqual(desiredHooks(ENV).filter((hook) => hook.event === "SubagentStop").map((hook) => hook.command), [hookCommand("return-syntax", ENV)], "the host settings run something on a subagent stop other than the return check");
   assert.equal(jobSettings(ENV).hooks.PreToolUse[0].matcher, "Agent|Task|Bash|Read|Grep|Glob", "a job's guard now fences the edit tools");
 });
 

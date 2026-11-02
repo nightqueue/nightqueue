@@ -462,6 +462,65 @@ test("inside a job the recall drops what the run already saw, and gives it back 
   assert.equal(exhausted.length, 8, "the exclusion emptied the recall instead of retrying without it");
 });
 
+test("context_for_phase `reflector` reads the job's own run whatever the call names, and outside a job the pair it names", async (t) => {
+  const { env, job } = makeRunningJob(t, "mcp-context-reflector");
+  recordRunFields({ projectId: projectIdOf(env, "alpha"), slug: SLUG, fields: { type: "bug/error" }, env });
+  recordPhaseDone({ projectId: projectIdOf(env, "alpha"), slug: SLUG, phase: "triage", env });
+  const ask = { target: "reflector", project: "alpha", slug: SLUG };
+
+  const inside = await connect(t, { ...env, NIGHTQUEUE_JOB_ID: String(job.id) });
+  const own = payloadOf(await inside.callTool({ name: "context_for_phase", arguments: { ...ask, slug: "another-slug" } }));
+  assert.match(own.block, /## Run timeline\n1\. triage/);
+  assert.match(own.block, /## Lessons given to this run\nnone recorded/);
+  assert.ok(Array.isArray(own.open_items));
+
+  const outside = await connect(t, env);
+  assert.match(payloadOf(await outside.callTool({ name: "context_for_phase", arguments: ask })).block, /## Run timeline\n1\. triage/);
+  const unnamed = await outside.callTool({ name: "context_for_phase", arguments: { target: "reflector", project: "alpha" } });
+  assert.equal(unnamed.isError, true);
+  assert.match(textOf(unnamed), /`slug`/);
+});
+
+test("context_for_phase `reflector` outside a job refuses an unsafe slug and an unknown project, and a run never recorded has an empty timeline", async (t) => {
+  const { env } = makeRunningJob(t, "mcp-context-reflector-refusals");
+  const client = await connect(t, env);
+  const ask = (args) => client.callTool({ name: "context_for_phase", arguments: { target: "reflector", ...args } });
+
+  const unsafe = await ask({ project: "alpha", slug: "../../etc" });
+  assert.equal(unsafe.isError, true);
+  assert.match(textOf(unsafe), /invalid slug/);
+
+  const unknown = await ask({ project: "ghost", slug: SLUG });
+  assert.equal(unknown.isError, true);
+  assert.match(textOf(unknown), /ghost/);
+
+  const unrecorded = payloadOf(await ask({ project: "alpha", slug: "never-ran" }));
+  assert.match(unrecorded.block, /^## Run timeline\n[^\n]*\n\n## Lessons given to this run\nnone recorded$/);
+  assert.equal(unrecorded.block.includes("1. triage"), false);
+});
+
+test("context_for_phase `reflector` inside a job answers for the job's project even when the call names another", async (t) => {
+  const { env, job } = makeRunningJob(t, "mcp-context-reflector-foreign");
+  makeProject(t, env, "beta");
+  ensureProject(env, "beta");
+  const inside = await connect(t, { ...env, NIGHTQUEUE_JOB_ID: String(job.id) });
+
+  const answer = payloadOf(await inside.callTool({ name: "context_for_phase", arguments: { target: "reflector", project: "beta", slug: "of-beta" } }));
+
+  assert.equal(answer.project, "alpha");
+  assert.match(answer.block, /^## Run timeline\n/);
+});
+
+test("context_for_phase accepts `slug` on any other target and answers that target's block, with no timeline", async (t) => {
+  const { env } = makeRunningJob(t, "mcp-context-slug-other-target");
+  const client = await connect(t, env);
+
+  const answer = payloadOf(await client.callTool({ name: "context_for_phase", arguments: { target: "coder", project: "alpha", slug: "../../etc" } }));
+
+  assert.equal(answer.block.includes("## Run timeline"), false);
+  assert.equal(answer.project, "alpha");
+});
+
 // A real worktree on a branch of its own with one uncommitted file, recorded as the run's worktree.
 function dirtyRecordedWorktree(t, env, name) {
   const { checkout } = publishedCheckout(t, name);

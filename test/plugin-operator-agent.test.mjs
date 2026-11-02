@@ -234,14 +234,11 @@ test("PIPELINE_AGENTS is the plugin's agents but the operator, every agent name 
 });
 
 test("the triager's request opens its verdict with `Evidence level: <1-4>`, and the 0-4 scale is gone", () => {
-  const request = readFileSync(join(pluginDir(), "skills/resolve/references/prompts/triager.md"), "utf8");
-  const lines = request.split("\n");
+  const lines = TRIAGER.slice(TRIAGER.indexOf("## Inside a run")).split("\n");
   const verdict = lines.findIndex((line) => line.startsWith("## Verdict:"));
-  assert.notEqual(verdict, -1, "the triager request has no `## Verdict:` template");
+  assert.notEqual(verdict, -1, "the triager's run section has no `## Verdict:` template");
   const firstLine = lines.slice(verdict + 1).find((line) => line.trim() !== "");
   assert.equal(firstLine, "Evidence level: <1-4>");
-  for (const text of [TRIAGER, request]) {
-    assert.equal(text.includes("0-4"), false);
-    assert.equal(/evidence level 0\b/i.test(text), false);
-  }
+  assert.equal(TRIAGER.includes("0-4"), false);
+  assert.equal(/evidence level 0\b/i.test(TRIAGER), false);
 });
