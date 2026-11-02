@@ -22,7 +22,7 @@ function operatorRunLine(field) {
 }
 
 export const TIER_REMOVED_LINE =
-  "`tier` was removed: every job runs the one /resolve pipeline (one model per agent, QA mode chosen by `run check 03`); drop it - a client still sending it is an older nightqueue plugin, update it";
+  "`tier` was removed: every job runs the one /resolve pipeline (one model per agent, QA mode chosen by `run check 05 --stage triage`); drop it - a client still sending it is an older nightqueue plugin, update it";
 
 const MAX_ATTEMPTS_REMOVED_LINE =
   "`max_attempts` was removed: a job has no attempt budget, a failed job goes back with `queue_retry`; drop it - a client still sending it is an older nightqueue plugin, update it";

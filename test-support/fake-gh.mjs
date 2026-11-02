@@ -86,6 +86,7 @@ function prView() {
 
 // Answers `gh pr create` with the URL the test asked for; without one the fake refuses to invent it.
 function prCreate() {
+  if (process.env.NIGHTQUEUE_FAKE_GH_DRAFT_REFUSED === "1" && args.includes("--draft")) fail("Draft pull requests are not supported in this repository");
   if (process.env.NIGHTQUEUE_FAKE_GH_PR_EXISTS === "1") fail('a pull request for branch "feat/add-slugify" into branch "main" already exists:');
   const url = process.env.NIGHTQUEUE_FAKE_GH_PR_URL;
   if (!url) fail("fake gh: NIGHTQUEUE_FAKE_GH_PR_URL is not set; refusing to invent a pull request URL", 2);
@@ -97,6 +98,15 @@ function prList() {
   const raw = process.env.NIGHTQUEUE_FAKE_GH_PR_LIST;
   if (!raw) fail("fake gh: NIGHTQUEUE_FAKE_GH_PR_LIST is not set; refusing to invent a pull request list", 2);
   process.stdout.write(`${raw}\n`);
+}
+
+// Answers `gh pr ready`, refusing `--undo` when the test asked for a repository without drafts and the plain form when it asked for a refused ready.
+function prReady() {
+  if (args.includes("--undo")) {
+    if (process.env.NIGHTQUEUE_FAKE_GH_UNDO_REFUSED === "1") fail("Draft pull requests are not supported in this repository");
+    return;
+  }
+  if (process.env.NIGHTQUEUE_FAKE_GH_READY_REFUSED === "1") fail("Resource not accessible by integration");
 }
 
 // Holds the process for as long as the test asked, the way a slow network makes the real CLI hang.
@@ -118,6 +128,7 @@ function main() {
   if (command === "pr" && sub === "create") return prCreate();
   if (command === "pr" && sub === "list") return prList();
   if (command === "pr" && sub === "edit") return undefined;
+  if (command === "pr" && sub === "ready") return prReady();
   return fail(`fake gh: unknown command \`${args.join(" ")}\``);
 }
 

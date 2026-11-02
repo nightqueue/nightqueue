@@ -5,6 +5,9 @@ Step 0 — BEFORE reading 03-plan.md: read
 plan is a rubber stamp, not an enumeration.
 
 {{/HAS_USAGE_COVERAGE}}
+A triage round precedes this lane in `05-qa.md`: its `## New risk` is input to attack. A `skip`
+is a recorded decision the reflector audits when a defect appears in the skipped area.
+
 What `03-plan.md` (once open) demands: ## Identified risks (MANDATORY to attack each one),
 ## Assumptions (attack each one with real evidence), ## Pre-mortem (validate each declared
 mitigation AND attack each "accepted because" justification).
@@ -25,17 +28,16 @@ plan and absent from the diff = a break. (2) Is the list COMPLETE? Do NOT trust 
 the command declared in `**How I enumerated:**` and widen it on your own (writers of the
 state, entry points, handlers/listeners, jobs, error paths). A path that
 produces the ticket's symptom and is NOT in the table is an **omitted vector** = a break in
-## Proven breaks, with the command used and `file:line`. Record it on the `Symptom coverage:`
-line of ## Deliver.
+## Proven breaks, with the command used and `file:line`. List it on the `omitted:` line of
+## Deliver.
 
 {{/IS_BUG}}
 {{#HAS_USAGE_COVERAGE}}
 ## Usage coverage — with YOUR
 ## Access map (QA) of step 0 already written, only then read 02-explore.md and that section
-of the plan and diff the two against it. Every prohibition of ## What to avoid and every
-`source=pipeline` line is a hypothesis to attack: a named consumer (file:line + entry point) →
-a proven break; without one → the label `the decision remains unconfirmed by the operator`,
-and `HELD` is FORBIDDEN on those items. ## Access map (QA) is mandatory whenever this front
-applies. Record it on the `Usage coverage:` line of ## Deliver (its two counts are defined
-there).
+of the plan and diff the two against it. Every prohibition of ## What to avoid and every item
+of ## Decisions taken is a hypothesis to attack: a named consumer (file:line + entry point) →
+a proven break; without one → the `unconfirmed decisions:` line of ## Deliver, with neither
+`HELD` nor `BROKE`. ## Access map (QA) is the method of this front, and each difference goes on
+the `divergences:` line. You never ask the operator: what stays open is an open item.
 {{/HAS_USAGE_COVERAGE}}

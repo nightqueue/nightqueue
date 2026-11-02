@@ -9,19 +9,24 @@ const EVIDENCE_FIRST_LINE = {
   label: "Evidence level: <1|2|3|4> as the first line under ## Verdict",
 };
 
-// Where a phase's verdict is read: the suffix of its heading or the first line under it, and the values it may take.
-function verdictSpec({ heading, from, values }) {
+// Where a phase's verdict is read: the suffix of its heading or the first line under it, the values it may take and the value each retired word reads as.
+function verdictSpec({ heading, from, values, legacy = {} }) {
   const suffix = from === "heading-suffix" ? "" : " as the first line";
-  return { heading, from, values, label: `${heading}: <${values.join("|")}>${suffix}` };
+  return { heading, from, values, legacy, label: `${heading}: <${values.join("|")}>${suffix}` };
 }
 
-const TRIAGE_VERDICT = verdictSpec({ heading: "## Verdict", from: "heading-suffix", values: ["PROCEED", "NO-CHANGE-NEEDED", "NOT-REPRODUCIBLE", "NEEDS-CLARIFICATION", "PROPOSE-ALTERNATIVE"] });
+const TRIAGE_VERDICT = verdictSpec({
+  heading: "## Verdict",
+  from: "heading-suffix",
+  values: ["PROCEED", "NO-CHANGE-NEEDED", "NOT-REPRODUCIBLE"],
+  legacy: { "NEEDS-CLARIFICATION": "PROCEED", "PROPOSE-ALTERNATIVE": "PROCEED" },
+});
 export const QA_VERDICT = verdictSpec({ heading: "## Verdict", from: "first-line", values: ["APPROVED", "NEEDS FIX", "NEEDS DISCUSSION"] });
 const VERIFICATION_VERDICT = verdictSpec({ heading: "## Verification", from: "heading-suffix", values: ["PASSED", "PASSED-STATIC", "FAILED"] });
 const RUNTIME_VERDICT = verdictSpec({ heading: "## Runtime verdict", from: "first-line", values: ["CONFIRMED", "NOT-MET", "SYMPTOM-PERSISTS", "NEEDS-DEVICE", "UNAVAILABLE"] });
 
 // The sections a triage verdict's next step reads, so the check requires them filled on that verdict alone.
-const TRIAGE_SECTIONS_BY_VERDICT = { "NEEDS-CLARIFICATION": ["## Open items"], "NOT-REPRODUCIBLE": ["## Open items"], "PROPOSE-ALTERNATIVE": ["## Open items"] };
+const TRIAGE_SECTIONS_BY_VERDICT = { "NOT-REPRODUCIBLE": ["## Open items"] };
 
 // The artifact of each phase, the canonical phase it completes, the sections its gate requires (some only on a verdict) and where its verdict is read; a phase with no required section is checked for existence alone.
 export const PHASE_ARTIFACTS = new Map([
@@ -43,6 +48,17 @@ export const QA_ANALYST_STAGE = {
   rounds: true,
   verdict: QA_VERDICT,
 };
+
+// The triage stage of the QA (`run check 05 --stage triage`): its own named round of `05-qa.md`, which decides the QA mode and carries no verdict.
+export const QA_TRIAGE_STAGE = {
+  file: "05-qa.md",
+  phase: null,
+  sections: ["## Diff classification", "## New risk", "## QA mode"],
+  rounds: true,
+  source: /^source:\s*qa-triage\s*$/i,
+};
+
+export const QA_STAGES = { analyst: QA_ANALYST_STAGE, triage: QA_TRIAGE_STAGE };
 
 export const ROUND_HEADING = /^## Round (\d+)\b/i;
 export const FIX_LOOP_HEADING = /^### Fix loop (\d+)\b/;
@@ -201,6 +217,11 @@ export function roundSourceLine(roundText) {
     .slice(1)
     .find((candidate) => candidate.trim() !== "");
   return (line ?? "").replace(/[*`]/g, "").trim();
+}
+
+// The last round whose source line matches the pattern, as its number and text, or null when no round does.
+export function lastRoundWithSource(text, pattern) {
+  return roundsOf(text).findLast((round) => pattern.test(roundSourceLine(round.text))) ?? null;
 }
 
 // The round numbers a consolidated round lists on its `source: runtime consolidation · rounds …` line, or null when the round is no consolidation.

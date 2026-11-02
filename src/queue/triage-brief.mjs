@@ -11,7 +11,11 @@ const BRIEF_HEADING = "## Brief";
 // The fields a PROCEED triage must fill, in the order the gate names them.
 export const REQUIRED_FIELDS = ["Affected area", "Context", "Objective", "Expected outcome", "Commit type"];
 // The closed list of words that stand for "nothing" in a field, compared lower-cased.
-const PLACEHOLDER_WORDS = ["n/a", "na", "not applicable", "tbd", "todo", "-", "—", "...", "…"];
+export const PLACEHOLDER_WORDS = ["n/a", "na", "not applicable", "tbd", "todo", "-", "—", "...", "…"];
+// The values each closed field accepts.
+const ACCEPTED_VALUES = { Type: PIPELINE_TASK_TYPES, "Commit type": COMMIT_TYPES };
+// What sits between two options of a list copied undecided.
+const OPTION_SEPARATOR_RE = /^\s*(?:[|/,]|or\b|vs\b\.?)\s*/;
 
 // The `## Brief` section of the triage, heading included, matched as a whole unfenced heading line; null when absent.
 export function briefSection(text) {
@@ -81,21 +85,35 @@ function isUnfilled(field, value) {
   return templateHints().get(field)?.test(plain) === true;
 }
 
-// The plain, lower-cased value of a field, or null when it is absent or unfilled.
-function loweredField(text, field) {
+// The lower-cased run of type characters a value opens with, so a suffix such as ` (security)` or `(queue)` never decides it; empty when it opens with anything else.
+function leadingToken(value) {
+  return /^[a-z/_-]*/.exec(plainValue(value).toLowerCase())[0];
+}
+
+// The token a value decides on: its leading token, or empty, which no accepted list holds, when a list separator and another accepted value follow it.
+function decidedToken(value, accepted) {
+  const token = leadingToken(value);
+  const rest = plainValue(value).toLowerCase().slice(token.length);
+  const separator = OPTION_SEPARATOR_RE.exec(rest);
+  if (separator === null) return token;
+  return accepted.includes(leadingToken(rest.slice(separator[0].length))) ? "" : token;
+}
+
+// The decided token of a field, or null when it is absent or unfilled.
+function fieldToken(text, field) {
   const value = briefFieldOf(briefSection(text), field);
-  return value === null || isUnfilled(field, value) ? null : plainValue(value).toLowerCase();
+  return value === null || isUnfilled(field, value) ? null : decidedToken(value, ACCEPTED_VALUES[field]);
 }
 
 // The Type the Brief states, only when it is one the pipeline runs; null otherwise.
 export function briefType(text) {
-  const type = loweredField(text, "Type");
+  const type = fieldToken(text, "Type");
   return PIPELINE_TASK_TYPES.includes(type) ? type : null;
 }
 
 // The commit type the Brief states, only when it is an accepted one; null otherwise.
 export function briefCommitType(text) {
-  const commitType = loweredField(text, "Commit type");
+  const commitType = fieldToken(text, "Commit type");
   return COMMIT_TYPES.includes(commitType) ? commitType : null;
 }
 
@@ -114,10 +132,11 @@ function emptyFields(section) {
 }
 
 // The gate of a stated field whose value is outside the accepted list, or none when it is absent, unfilled or accepted.
-function invalidValueGates(section, { field, code, accepted }) {
+function invalidValueGates(section, { field, code }) {
   const value = briefFieldOf(section, field);
   if (value === null || isUnfilled(field, value)) return [];
-  return accepted.includes(plainValue(value).toLowerCase()) ? [] : [{ code, evidence: plainValue(value) }];
+  const accepted = ACCEPTED_VALUES[field];
+  return accepted.includes(decidedToken(value, accepted)) ? [] : [{ code, evidence: plainValue(value) }];
 }
 
 // The gates of the triage's Brief: absent on any verdict; on PROCEED, a required field left empty or a Type or commit type outside its list.
@@ -127,7 +146,7 @@ export function briefGates(text, verdict) {
   if (verdict !== "PROCEED") return [];
   return [
     ...emptyFields(section).map((field) => ({ code: "brief-field-empty", evidence: field })),
-    ...invalidValueGates(section, { field: "Type", code: "brief-type-invalid", accepted: PIPELINE_TASK_TYPES }),
-    ...invalidValueGates(section, { field: "Commit type", code: "brief-commit-type-invalid", accepted: COMMIT_TYPES }),
+    ...invalidValueGates(section, { field: "Type", code: "brief-type-invalid" }),
+    ...invalidValueGates(section, { field: "Commit type", code: "brief-commit-type-invalid" }),
   ];
 }

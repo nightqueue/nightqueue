@@ -78,7 +78,10 @@ function leaseIsLive(env, id) {
 function neverEndingSleep(slept) {
   return (ms) => {
     slept.push(ms);
-    return new Promise(() => {});
+    // The timer resolves nothing: it only keeps the event loop alive for the backoff, as a real sleep does, so the outage's unref'd probe still runs and can end the wait.
+    return new Promise(() => {
+      setTimeout(() => {}, ms);
+    });
   };
 }
 

@@ -62,6 +62,10 @@ What the request asks decides the scope of the attack:
   hypothesis is written `H<n>: BROKE (PROVEN)` (PoC + the failure output) | `H<n>: HELD (REFUTED)`
   (evidence that the code holds) | `H<n>: INCONCLUSIVE` (what was missing) — NEVER `PROVEN`
   without the output of a real failure.
+- **(v) A triage of the diff** (the request says `Mode: TRIAGE`): classify what changed and
+  answer how much attack it deserves under the rule the request gives. No attack, no PoC, no
+  methodology skill, nothing but the round the request names. A `skip` is a recorded decision,
+  audited later by the reflector when a defect appears in the skipped area.
 
 Without a request that scopes you, generate the risk matrix yourself from the target — a PR
 (`gh pr diff <n>`), the current diff (`git diff`), a module or a folder — and RUN every PoC you
@@ -206,7 +210,7 @@ matrix of the SKILL.md and the review dimensions are merged here — do not dupl
 **Usage coverage (only when the request points to a plan's usage coverage)**
 
 Without a usage-coverage section in the plan — direct invocation, or a plan that does not have
-it — this front **does not apply**: write neither your access map nor the usage-coverage line.
+it — this front **does not apply**: write neither your access map nor its open lines.
 
 **Step 0:** write YOUR access map of the target code BEFORE reading the plan or any access map
 someone else wrote. Opening the whole plan to read its
@@ -224,21 +228,21 @@ method, it does not produce an independent enumeration*.
    point of the plan that does not exist in the code, a divergent terminal. Each divergence
    enters with `file:line`. A missing access map from an earlier exploration degrades it: the
    diff is only against the plan, and the divergences stay mandatory.
-3. **Every what-to-avoid prohibition of the plan and every `source=pipeline` line** of its usage
-   coverage is a hypothesis to attack, not a restriction to confirm. The question is "which
+3. **Every what-to-avoid prohibition of the plan and every item of its `## Decisions taken`**
+   is a hypothesis to attack, not a restriction to confirm. The question is "which
    known or plausible consumer does this behavior break?": a named consumer
    (`file:line` + entry point) → a normal break, with proof; without a nameable consumer → the
-   mandatory label `the decision remains unconfirmed by the operator`. **`HELD` is FORBIDDEN
-   on those items** — confirming that the implementation obeyed the prohibition validates the
-   mechanism, never the decision.
-4. Record the counts on the usage-coverage line of what you deliver.
+   item goes on the `unconfirmed decisions:` line, with neither `HELD` nor `BROKE` — confirming
+   that the implementation obeyed the prohibition validates the mechanism, never the decision.
+4. Record each divergence on the `divergences:` line of what you deliver, or `none`.
+5. You never ask the operator: what stays open is an open item of your report.
 
 ## 2. Proof of the break: an executable PoC per vector
 
 **Real pull requests and nightqueue guards — hard rules.**
 
-- **(a)** Never unset, stub, override or work around a nightqueue guard or its environment variables (`NIGHTQUEUE_JOB_ID`, `NIGHTQUEUE_JOB_HOME`, `NIGHTQUEUE_JOB_CLAUDE_DIR`, `NIGHTQUEUE_JOB_CLAIM`, or any refusal nightqueue prints) — not in a child env, not by calling the internal function behind the refusing command, not by a 'simulation'. A refusal is the guard working. A verification that can only proceed by bypassing one stops and is reported as a gate (`## Requires user confirmation`), never worked around.
-- **(b)** Any verification that creates, merges or closes a real pull request runs only in the configured demo repository (the request names it; `nightqueue project demo-repo <project>` shows it) — never in the project's own repository or any other remote. With none configured, no real pull request is created, merged or closed: the scenario is reported as a gate. The only publication ever made to the project's own origin is `nightqueue run publish`, which opens it through the `nightqueue run pr` path.
+- **(a)** Never unset, stub, override or work around a nightqueue guard or its environment variables (`NIGHTQUEUE_JOB_ID`, `NIGHTQUEUE_JOB_HOME`, `NIGHTQUEUE_JOB_CLAUDE_DIR`, `NIGHTQUEUE_JOB_CLAIM`, or any refusal nightqueue prints) — not in a child env, not by calling the internal function behind the refusing command, not by a 'simulation'. A refusal is the guard working. A verification that can only proceed by bypassing one stops and is reported as an open item, never worked around.
+- **(b)** Any verification that creates, merges or closes a real pull request runs only in the configured demo repository (the request names it; `nightqueue project demo-repo <project>` shows it) — never in the project's own repository or any other remote. With none configured, no real pull request is created, merged or closed: the scenario is reported as an open item. The only publication ever made to the project's own origin is `nightqueue run publish`, which opens it through the `nightqueue run pr` path.
 
 Every break needs **proof**, not an assertion. There are two types:
 

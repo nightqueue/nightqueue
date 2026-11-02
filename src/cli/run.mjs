@@ -4,8 +4,8 @@ import { UserError } from "../config/errors.mjs";
 import { writeFileAtomic } from "../config/store.mjs";
 import { FILE_LIST } from "../queue/file-list.mjs";
 import { CHECK_CONTEXT_FILES, evaluateCheck, fileListResult, repairedLine, roundDefectParts } from "../queue/check-contract.mjs";
-import { PHASE_ARTIFACTS, withClosedFence } from "../queue/phase-artifacts.mjs";
-import { jobPromptText } from "../queue/job-prompt.mjs";
+import { PHASE_ARTIFACTS, QA_STAGES, withClosedFence } from "../queue/phase-artifacts.mjs";
+import { jobOperatorNote } from "../queue/job-prompt.mjs";
 import { defaultGitImpl } from "../queue/preflight.mjs";
 import { consolidationNumbersOf, consolidationOf } from "../queue/qa-rounds.mjs";
 import { readRunState } from "../queue/resume.mjs";
@@ -17,6 +17,7 @@ import { APPEND_USAGE, appendedText, runAppend } from "./run-append.mjs";
 import { saveIndexFromText } from "./index-save.mjs";
 import { realPath } from "./paths.mjs";
 import { findPrTemplate } from "./pr-template.mjs";
+import { citedTestGaps } from "./qa-skip-tests.mjs";
 import { durationCell, phaseRows, readJobLog, readRequiredFile, requireRunState, resolveRun, resolveWritableRun, RUN_OPTIONS, worktreeOf } from "./run-context.mjs";
 import {
   bodyProblemLines,
@@ -39,7 +40,7 @@ import { START_USAGE, runStart } from "./run-start.mjs";
 import { SECRETS_SWEEP_USAGE, runSecretsSweep } from "./secrets-sweep.mjs";
 
 const USAGE = {
-  check: "nightqueue run check <NN> [--stage analyst] [--project <name> --slug <slug>]",
+  check: "nightqueue run check <NN> [--stage analyst|triage] [--project <name> --slug <slug>]",
   append: APPEND_USAGE,
   commit: "nightqueue run commit --message-file <path> [--files-from <path>] [--extra <pathspec>]",
   dir: "nightqueue run dir [--project <name> --slug <slug>]",
@@ -182,8 +183,8 @@ export function validConsolidatedText(file, raw, consolidation) {
   return text;
 }
 
-// The gate of one phase, evaluated against the check contract on the artifact, the run files its rules read and the job's prompt; a round artifact gets its open fence closed first.
-function checkArtifact({ run, check, stage, state, prompt, ctx }) {
+// The gate of one phase, evaluated against the check contract on the artifact, the run files its rules read and the job's operator note; a round artifact gets its open fence closed first.
+function checkArtifact({ run, check, stage, state, operatorNote, ctx }) {
   const artifact = PHASE_ARTIFACTS.get(check);
   const path = join(run.runDir, artifact.file);
   if (artifact.sections[0] === FILE_LIST) {
@@ -191,16 +192,17 @@ function checkArtifact({ run, check, stage, state, prompt, ctx }) {
     return fileListResult(first, readArtifact(path));
   }
   const repaired = artifact.rounds ? repairRoundArtifact(run, path, ctx.env) : null;
-  const gaps = check === "05" && stage === null ? consolidateQa(run, path, ctx.env) : [];
+  const consolidationGaps = check === "05" && stage === null ? consolidateQa(run, path, ctx.env) : [];
   const files = [...new Set([...CHECK_CONTEXT_FILES, artifact.file])];
   const texts = Object.fromEntries(files.map((file) => [file, readArtifact(join(run.runDir, file))]));
-  return { ...evaluateCheck({ check, stage, texts, state, gaps, prompt }), repaired };
+  const gaps = stage === "triage" ? citedTestGaps(run, texts[artifact.file], ctx.env) : consolidationGaps;
+  return { ...evaluateCheck({ check, stage, texts, state, gaps, operatorNote }), repaired };
 }
 
-// The stage a check names, refused unless it is `analyst` on check `05`; null without one.
+// The stage a check names, refused unless it is a QA stage on check `05`; null without one.
 function checkStage(check, value) {
   if (value === undefined) return null;
-  if (value !== "analyst" || check !== "05") throw new UserError(`unknown stage \`${value}\` of check \`${check}\`; the only stage is \`05 --stage analyst\``);
+  if (!Object.hasOwn(QA_STAGES, value) || check !== "05") throw new UserError(`unknown stage \`${value}\` of check \`${check}\`; the stages are \`05 --stage ${Object.keys(QA_STAGES).join("|")}\``);
   return value;
 }
 
@@ -235,8 +237,8 @@ async function runCheck(argv, ctx) {
   const stage = checkStage(check, values.stage);
   const run = await resolveWritableRun(values, ctx);
   const state = readRunState({ projectId: run.projectId, slug: run.slug, env: ctx.env });
-  const prompt = check === "03" ? await jobPromptText(run, ctx.env) : null;
-  const result = checkArtifact({ run, check, stage, state, prompt, ctx });
+  const operatorNote = check === "03" ? await jobOperatorNote(run, ctx.env) : null;
+  const result = checkArtifact({ run, check, stage, state, operatorNote, ctx });
   printCheck(result, await checkEffectLines({ run, check, stage, result, state, ctx }), ctx);
   return 0;
 }

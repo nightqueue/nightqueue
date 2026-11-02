@@ -76,7 +76,8 @@ What a runtime has to provide, and what it can rely on:
     read but to name the attempts in the notice.
   - `phases[{phase, at, artifact?, verdict?, note?, reason?, by?, claim?}]`: `nightqueue run check` on
     a complete phase and `run publish`/`run pr` for `commit` (both `by: "runtime"`), and
-    `run_phase_done`; append-only, so a phase recorded twice never erases the first record.
+    `run_phase_done`; append-only, so a phase recorded twice never erases the first record. The
+    one removal is the runtime's own `qa` `SKIPPED`, dropped when a `lite` or `full` triage replaces it.
     One merge keeps an older plugin from doubling a row: a `run_phase_done` with no `reason`
     whose phase is the one of the LAST entry, written `by: "runtime"` with the same artifact
     (or the call sent none), merges its `verdict`/`note` into that entry instead of appending.
@@ -106,7 +107,7 @@ What a runtime has to provide, and what it can rely on:
     telemetry only: it is written by `nightqueue run report` (or an older plugin's
     `pipeline_log`) from `state.json` after the run and is never a
     source of the live track.
-  - `outcome{status, at, notice?, prUrl?, files?}`: `run_outcome` (`status`, and `notice` or, for a
+  - `outcome{status, at, notice?, prUrl?, files?, draft?, draftFailures?, staysDraft?}`: `run_outcome` (`status`, and `notice` or, for a
     gate, the notice it composes from `question`/`from_artifact`),
     `nightqueue run pr` (`status: "done"`) and the runner, which writes `prUrl` at
     finalize from what the session really published - it is never a parameter.
@@ -117,6 +118,30 @@ What a runtime has to provide, and what it can rely on:
     conclusion its origins are told when the job is closed. An attempt's start erases nothing
     here; a retry without `fresh` removes `status` and `notice`, whatever the status, and keeps
     `prUrl` and `prTitle`, so a retried job is `done` only if it records `done` again.
+    `draftFailures: <n>`: `nightqueue run publish --draft`, or a publish without the flag that leaves
+    the run's own draft a draft because its body still lists a failure, with `n` the
+    `Remaining failure:` lines of the body outside fences and HTML comments; `draft: true` joins it
+    only when the pull request really is a draft, so `draftFailures` alone means gh refused the
+    draft. `staysDraft: true`: a publish without the flag that gh would not let turn the run's own
+    draft ready. Any other outcome written later drops all three, and writing `prUrl` keeps them.
+  - `gateQuestionDigest`: `run_outcome` with `status: "gate"` whose composed or sent notice shows
+    the plan's filled question; any other gate clears it, and a `done` leaves it. It is the sha256
+    of the question's words: NFKC, format characters (`\p{Cf}`) removed, lowercased, and every run
+    of anything but letters, marks and digits collapsed to one space. It lives at the top level so it survives the outcome a
+    retry consumes. `run check 03` reads it to print `CONFIRM: answered`, and
+    `run report` reads it so an answered pause never counts against Happy. It is not a `run_set`
+    field.
+  - `draftPrUrl`: `nightqueue run publish`, the URL of the draft this run opened or converted. It
+    lives at the top level for the same reason. It lets a later publish without the flag turn that
+    draft ready, and only that one. A plain create or a turned-ready draft drops it. It is not a
+    `run_set` field.
+  - `qaMode{mode, reason, at}`: `nightqueue run check 05 --stage triage` only, the QA mode the
+    triage decided (`skip`, `lite` or `full`) and its sentence. A repeated check with the same mode
+    leaves it untouched, however the sentence is worded. A `qa` entry `SKIPPED` counts as a skip only
+    beside a `qaMode` of `skip`: otherwise `run report` reads it `⚠️` and a resume owes the QA. A
+    `lite` or `full` decision removes the runtime's own `qa` `SKIPPED` in the same write, so the real
+    QA after it is its first launch, and a resume owes the QA while no `qa` entry is newer than
+    `qaMode.at`, even past a later verification. It is not a `run_set` field.
   - `prTemplate{source, path?, headings, at}`: `nightqueue run pr` (both the
     `--template` query and the publishing call), the template the body is checked
     against - `repo` with its path, or `nightqueue`.
@@ -597,7 +622,7 @@ dropped is answered with the older-definitions line):
 |---|---|
 | `lesson_recall` | `query?`, `project?`, `target?`, `exclude_ids?` |
 | `context_for_phase` | `target` (`triager`, `architect`, `coder`, `qa`, `verifier`, `explore`), `query?`, `project?`, `repo_root?`, `exclude_ids?` |
-| `phase_prompt` | `target` (`triager`, `explore`, `architect`, `coder`, `coder-fix`, `verifier`, `runtime`, `qa-lite`, `qa-analyst`, `qa-prover`, `reflector` - no artifact, `check` null), `query?`, `stage?`, `delivery_constraints?`, `request?` (`triager` only, required outside a job), `raw_evidence?` (accepted and ignored), `group?` (required for `qa-prover`), `note?`, `artifact?` (accepted and ignored: an older plugin still sends it; `runtime` always answers `07-runtime.md`), `project?`, `slug?` |
+| `phase_prompt` | `target` (`triager`, `explore`, `architect`, `coder`, `coder-fix`, `verifier`, `runtime`, `qa-triage`, `qa-lite`, `qa-analyst`, `qa-prover`, `reflector` - no artifact, `check` null), `query?`, `stage?`, `delivery_constraints?`, `request?` (`triager` only, required outside a job), `raw_evidence?` (accepted and ignored), `group?` (required for `qa-prover`), `note?`, `artifact?` (accepted and ignored: an older plugin still sends it; `runtime` always answers `07-runtime.md`), `project?`, `slug?` |
 | `lesson_save` | `title`, `root_cause`, `solution`, `prevention`, `attempts?`, `project?`, `target?` (a title the owner already has bumps its `attempts`; answers `deduped` and `violated` - `true` only inside a queue job, on a dedup onto a lesson this run was given, which also bumps the lesson's `violated`) |
 | `memory_recall` | `query?`, `project?` |
 | `lesson_delete` | `id` (`L344` or the plain number), `project` (name or key): deletes one lesson and its search entry; an unknown id or another project's is refused; refused inside a queue job; answers `{id, ref, title, project}` |
@@ -712,7 +737,7 @@ before: the resume cap and the `Re-run:` lines read them, nothing writes them.
 
 `queue_add` `tier` is retired the same way (there is no risk tier: every job runs the one
 pipeline): a value is refused before validation with ``\`tier\` was removed: every job
-runs the one /resolve pipeline (one model per agent, QA mode chosen by `run check 03`);
+runs the one /resolve pipeline (one model per agent, QA mode chosen by `run check 05 --stage triage`);
 drop it - a client still sending it is an older nightqueue plugin, update it``, nothing is
 registered or queued, and a `null` or blank `tier` is ignored. `nightqueue queue add
 --tier <t>` is refused with the same line. `run_set` no longer takes `tier` or
@@ -756,11 +781,14 @@ carries no `## Job origin`, so the origin is never twice in the prompt); `NEEDS_
 for a `**Slug:**` field only while the run holds the provisional slug the runtime derived.
 `request` on any other target is refused. Every target renders its own template (there
 is no fast-track variant). On `qa-lite`, `qa-analyst` and `qa-prover` it reads the
-plan's QA mode (`QA: lite|full` of `run check 03`) and, when the target contradicts it,
-adds the `open_items` line ``the plan's QA mode is <mode> (`run check 03`); <target> was
-rendered anyway`` - it never refuses. The three QA targets all answer the artifact
-`05-qa.md`: `qa-lite` with `check` `05`, `qa-analyst` with `check` `05 --stage analyst`, and
-`qa-prover` with `check` null; the prover's prompt carries its own round draft path
+run's recorded QA mode (`state.qaMode.mode`, written by `run check 05 --stage triage`; with no
+record there is no item) and, when the target contradicts it,
+adds the `open_items` line ``the run's QA mode is <mode> (`run check 05 --stage triage`); <target> was
+rendered anyway`` - it never refuses. The four QA targets all answer the artifact
+`05-qa.md`: `qa-triage` with `check` `05 --stage triage`, `qa-lite` with `check` `05`,
+`qa-analyst` with `check` `05 --stage analyst`, and
+`qa-prover` with `check` null; the triage's prompt carries `BASE_REF`, the branch its diff is read
+against (`HEAD` with an `open_items` line when none resolves), and the prover's prompt carries its own round draft path
 (`DRAFT_PATH`, `<RUN_DIR>/poc/qa-round-<GROUP_ID>.md`) and its group id (`GROUP_ID`, the
 group's slug plus `-` and 8 hex of the group's sha256, empty for every other target), which it
 appends with `nightqueue run append 05 --group <GROUP_ID>`. A placeholder the run cannot
@@ -769,7 +797,7 @@ fill is an error, never a half prompt. Its `model` is the model of the target's 
 `qa-analyst` and `qa-prover` prompts carry `Demo repository: {{DEMO_REPO}}` (the
 `_demo-repo.md` partial): the project's `verification.demoRepo` setting (`nightqueue project
 demo-repo`), or `none configured` without one or outside a project, in which case no real
-pull request is created, merged or closed and that scenario is reported as a gate; a store
+pull request is created, merged or closed and that scenario is reported as an open item; a store
 that cannot read the setting answers `none configured` with an `open_items` line.
 
 ### The skill's references
@@ -798,6 +826,7 @@ lines and every `### Phase N` section within 40 (Phase 0 within 70).
 | explore | haiku |
 | architect | opus |
 | coder | opus |
+| qa-triage | sonnet |
 | qa-analyst | sonnet |
 | qa-prover | haiku |
 | verifier | haiku |
@@ -810,7 +839,7 @@ A project overrides any agent but the merger with
 `agents.<agent>.model` in the project's settings JSON (the `projects.integrations` column,
 under the reserved `agents` key that `project integrations` never shows nor drops).
 `phase_prompt` answers the resolved `model`: `coder` and `coder-fix` take the coder's,
-`verifier` and `runtime` the verifier's, `qa-lite` and `qa-analyst` the qa-analyst's,
+`verifier` and `runtime` the verifier's, `qa-triage` its own, `qa-lite` and `qa-analyst` the qa-analyst's,
 `qa-prover` the qa-prover's, `reflector` the reflector's; a store that cannot read the
 override answers the default with an `open_items` line. `run start` answers the same
 models as `models`.
@@ -1026,42 +1055,75 @@ ended stays the runtime's call),
 `user`), the phase `status` (`ok`, `failed`, `skipped`). A value outside them comes back as an error message, never as a stack.
 
 **The artifact check answers the gates.** `nightqueue run check <NN>` reads the phase's
-artifact (and, where a rule needs them, `00-brief.md`, `01-triage.md`, `02-explore.md`,
-`03-plan.md` and `state.json`) and prints one fact per line, in this fixed order:
+artifact (and, where a rule needs them, `01-triage.md`, `03-plan.md`, `state.json` and the job's
+operator note) and prints one fact per line, in this fixed order:
 
 1. `OK` | `MISSING: <sections>` | `GENERATED` (`04`), unchanged. After `MISSING:` nothing
    else is printed but a `REPAIRED:` line: no gate is evaluated and nothing is recorded but the
    check memo. On a round artifact (`05`, `06`, `07`) whose open code fence the check closed, the
    `REPAIRED: …` line follows the first line, before `VERDICT:`; it never changes the memo nor
    completion. `01`
-   with `NEEDS-CLARIFICATION`, `NOT-REPRODUCIBLE` or `PROPOSE-ALTERNATIVE` also requires `## Open items` with an item
+   with `NOT-REPRODUCIBLE` also requires `## Open items` with an item
    (`MISSING: ## Open items`, or `## Open items (empty)` when it holds only blank lines or
    `None`), because the next step reads it.
 2. `VERDICT: <value>`: `01` the suffix of `## Verdict:` (`PROCEED`, `NO-CHANGE-NEEDED`,
-   `NOT-REPRODUCIBLE`, `NEEDS-CLARIFICATION`, `PROPOSE-ALTERNATIVE`); `05` and `05 --stage analyst` the first non-blank line of
+   `NOT-REPRODUCIBLE`; a retired `NEEDS-CLARIFICATION` or `PROPOSE-ALTERNATIVE` still parses and
+   reads as `PROCEED`, its Brief gates applied); `05` and `05 --stage analyst` the first non-blank line of
    `## Verdict` (`APPROVED`, `NEEDS FIX`, `NEEDS DISCUSSION`); `06` the suffix of
    `## Verification:` (`PASSED`, `PASSED-STATIC`, `FAILED`); `07` the first non-blank line of
    `## Runtime verdict` (`CONFIRMED`, `NOT-MET`, `SYMPTOM-PERSISTS`, `NEEDS-DEVICE`,
    `UNAVAILABLE`). A verdict outside the values is a `MISSING:` naming the expected line.
 3. `GATE: <code> — <evidence>`, one per firing item, the evidence one trimmed line of at most
    160 code points.
-4. `OPEN: <text>`: `05` `unconfirmed decisions — <value>` when the QA's value is not `none`;
+4. `OPEN: <text>`: `03` the coverage items below, `## Requires user confirmation has no filled
+   **Question:**` and `type mismatch — <evidence> — kept <bug/error|feature/refactor>` (`bug/error`
+   with `## Diagnosis` filled, else `feature/refactor`); `05` `<label> — <value>` per filled
+   `omitted:`, `divergences:` or `unconfirmed decisions:` line other than `none`;
    `07` `<scenario> — to confirm` per `NOT MET / to confirm` row. Never a gate.
 5. `TYPE-MISMATCH: <evidence> — triage: <bug/error|feature/refactor> (<## Diagnosis filled|## Diagnosis absent or empty>)` (`03`).
-6. `CONFIRM: requires-user-confirmation` (`03`, the plan has a `## Requires user confirmation`
-   heading).
-7. `QA: lite|full` (`03`, always printed on a complete plan): `full` when an unfenced line of
-   the plan opens with `**Always-gate class:** yes`, or when `## Identified risks` holds two or
-   more risk items carrying 🔴 (a list item `- `/`* `/`+ `/`<n>. `, or a table body row; fenced
-   code, the table header and prose lines are not counted); `lite` otherwise. The orchestrator's
-   Phase 5 reads this line and nothing else to pick the QA mode (a resume re-runs the check).
-   It never changes the gates, the memo line nor the exit status.
+6. `CONFIRM:` (`03`, only with a filled question, the one human stop of a run):
+   `CONFIRM: requires-user-confirmation — <question>`, or `CONFIRM: answered` when the job has a
+   non-blank operator note and `state.gateQuestionDigest` is this question's digest, so re-typing
+   the same question (markup, quotes, punctuation) still reads as answered and one with other words
+   pauses again. The question is the block under the label of the confirmation section, at any
+   heading level, with HTML comments and fenced lines ignored. The label is `**Question:**`,
+   `**Question**:`, `**Question :**` or `__Question:__` anywhere in a line, `Question:` at a line's
+   start, a heading titled `Question` (a level-2 one stays in the section), or a table row
+   `| Question | text |` with a filled second cell (that cell alone; under a header row whose cell
+   has no `?`, the first cell of the row below). The block ends at the next bold label or heading.
+   One reader (`src/queue/gate-question.mjs`) serves the check, the pause and the report. A question
+   is a value with a `?` and at least one word; nothing else ever pauses a run. A label left unfilled
+   (empty, one single `<…>` or `[…]` hint, or a placeholder word, `none`, `no question` or `nothing`
+   that goes on to say nothing, such as `None needed`, `(none)`, `N/A - decided above`) is an `OPEN:`
+   line. Any other labelled value with no `?` is a `MISSING:`, and so is a section with a `?` and no
+   label, so the architect is relaunched once. A section with no label and no `?` asks nothing: an
+   `OPEN:` line.
+7. `QA-MODE: skip|lite|full — <why>` (`05 --stage triage` only, on a complete round): the first
+   line of the `## QA mode` section of the last `source: qa-triage` round. The lane decides under
+   the written rule of its prompt, from the real diff, the plan's risks and the Brief; the plan's
+   `**Always-gate class:**` field and its 🔴 count are not read here. The check answers `MISSING:`
+   for an empty section, a first line that is not a mode and a real sentence, a `skip` with a listed
+   `## New risk`, a `skip` or `lite` with a filled `data/migration`, `route/endpoint`,
+   `auth/permission`, `payment`, `concurrency`, `external-input parsing` or `personal data` line,
+   a `skip` or `lite` with a line off the list of kinds (`copy/docs`, `config`, `test-only`, `rename`,
+   `logic` and those), read in any case, and a `skip` with a `logic` line whose sentence names no
+   test path: a path under a test directory or a file named as a test. Every test path such a
+   sentence names must also be a regular file inside the run's worktree once `..` and links are
+   resolved, and still read as a test there, with an extension on the closed list of code files
+   (so `docs/spec/overview.md` or `test/data.json` is refused) and no vendored directory
+   (`node_modules/`, `vendor/`, `third_party/`, `site-packages/` and the like, at any depth, in any
+   case) on its path; an absolute path does not count, and a worktree the
+   check cannot read answers `MISSING:` too, so none of these records a mode or a phase. This is the
+   gate's one disk read: `run check` (`src/cli/qa-skip-tests.mjs`) passes what it finds to
+   `evaluateCheck` as gaps, and `evaluateCheck` itself reads no disk. The orchestrator's Phase 5
+   reads this line and nothing else to pick the QA mode; a resume re-runs the check and launches
+   the lane only on its `MISSING:`.
 8. `QA-STAGE: provers|skip` (`05 --stage analyst` only): `skip` when the analyst's
    `## Break hypotheses` holds no item other than `None`, so the orchestrator goes straight to
    `run check 05`; `provers` otherwise.
 9. `INVALIDATED: <item>`, one per item of `## Invalidated assumptions` other than `None` (`05`).
-   It is a pause: `05` does not record `qa` and, when no `GATE:` fired, the memo line is the
-   first `INVALIDATED:` line, so the answer to the orchestrator's gate resumes at `qa`.
+   It sends the plan back to the architect, never to the operator: `05` does not record `qa`,
+   and the memo line is the first `INVALIDATED:` line.
 10. `DIFF-APPLIES: yes|no` (`07`, from `Diff applies plan:`; omitted on `n/a` or absent).
 11. `NEEDS-DEVICE` (`07`).
 12. `index: saved N files, M libs` | `index: not saved (<reason>)` (`02`).
@@ -1069,7 +1131,7 @@ artifact (and, where a rule needs them, `00-brief.md`, `01-triage.md`, `02-explo
 14. `SCRIPT:` and the device script verbatim to the end of the output (`07` `NEEDS-DEVICE`:
     the lines of `## Runtime verdict` after the verdict, up to `Diff applies plan:`).
 
-The check ids are `00` to `07`; `--stage analyst` is accepted only with `05` (any other stage,
+The check ids are `00` to `07`; `--stage analyst` and `--stage triage` are accepted only with `05` (any other stage,
 or a stage on another check, is refused). A retired id of the old numbering is refused with
 the one line `renumbered: use <NN>` (exit 1), and nothing is evaluated.
 
@@ -1078,7 +1140,7 @@ HTML comments are stripped first, also mid-line, by one scanner that keeps fence
 spans byte for byte (a `<!--` inside inline code or a fence opens nothing; a comment never
 closed stays visible); a section ends at the next `## ` outside a fence. Round artifacts (`05`,
 `06`, `07`) are split into rounds first, left to right with no lookahead, and read on their last
-`## Round` (its HTML comments stripped inside that round only): a `## Round` heading inside fenced
+`## Round`, or on the last `source: qa-triage` round for `05 --stage triage` (its HTML comments stripped inside that round only): a `## Round` heading inside fenced
 code is never a round; a column-0 `## Round <n>` whose number is the highest so far plus one is a
 round even inside an open HTML comment, and closes the comment only; any other `## Round` heading
 counts only outside fenced code and HTML comments (also one opened mid-line), for the check and
@@ -1117,72 +1179,37 @@ codes, in output order per phase:
     on a terminated run);
   - only on `PROCEED`: `brief-field-empty` — `<field>`, for `Affected area`, `Context`,
     `Objective`, `Expected outcome` and `Commit type`, in that order, when the field is absent,
-    blank, `n/a` or wholly a `<…>`/`[…]` placeholder; `brief-type-invalid` — `<value>` when a
-    `**Type:**` is present but not `bug/error`/`feature/refactor` (an absent Type is no gate:
-    the `## Diagnosis` rule below applies); `brief-commit-type-invalid` — `<value>` when the
-    Commit type is not one of the accepted commit types.
+    blank, `n/a` or wholly a `<…>`/`[…]` placeholder; `brief-type-invalid` — `<value>` when the
+    leading token of a present `**Type:**` is not `bug/error`/`feature/refactor`, so `bug/error
+    (security)` passes (an absent Type is no gate: the `## Diagnosis` rule below applies);
+    `brief-commit-type-invalid` — `<value>` when the leading token of the Commit type is not one
+    of the accepted commit types, so `fix(queue)` passes. The leading token is the lower-cased run
+    of `[a-z/_-]` the plain value opens with.
 - `01` `symptom-proof-missing` — a `PROCEED` on a `bug/error` run whose `## Diagnosis` is
   absent, has no `Symptom proof:` line, or leaves it empty, `n/a` or a `<…>` placeholder.
-- `03`, `bug/error` only and only when the plan has no `**Type mismatch:**` line with evidence
-  (such a line prints `TYPE-MISMATCH` instead and skips these three); the plan must then also
-  carry `## Symptom coverage` (`MISSING: ## Symptom coverage`, or `(empty)` with no table row):
-  - `coverage-vector-no-reason` — a row whose Status is not `covered`/`not-covered`, or whose
-    Reason is empty, `-`, `n/a` or `not applicable`;
-  - `coverage-enumeration-no-method` — `**How I enumerated:**` absent from the section, or its
-    value names no re-runnable search;
-  - `coverage-not-covered-without-confirmation` — a `not-covered` row in a plan without
-    `## Requires user confirmation`.
-- `03`, any Type, only while the plan has no `## Requires user confirmation`:
-  - `usage-coverage-cond-1` — a `- ` line of `## Usage coverage` containing
-    `changed=yes · source=pipeline`;
-  - `usage-coverage-cond-2` — a `**Always-gate class:** yes` line in that section;
-  - `usage-coverage-cond-3` — a line of `02-explore.md` matching
-    `unimplemented intent: <param> · governs <axis>` whose axis is the first word of the plan's
-    `**Diff axis:**`, EXCEPT when `<param>` is the ticket's own deliverable: its code token
-    (the first backtick span, else the first code-shaped identifier: a path holding `/`,
-    dotted, camelCase or PascalCase with an inner capital, snake_case, or a `name()` call)
-    is found as a whole token, case-sensitive (not preceded by `[\w$.]`, not followed by
-    `[\w$]`), in the `## Validated brief` of `01-triage.md` or the `**Objective:**` line of
-    `00-brief.md`. A prose-only `<param>` never holds the exception: the gate fires and the
-    user answers it. Without `02-explore.md` it never fires;
-  - `usage-coverage-cond-4` — a line of `00-brief.md` or `01-triage.md` starting `- `, with
-    ` · ` fields, one of which is exactly `to confirm`.
-- `05`, read on the last round's `## Validated risks`; the symptom codes only for a
-  `bug/error` plan without a Type mismatch:
-  - `symptom-coverage-n-mismatch` — no `Symptom coverage: <N> · <method> · omitted: <value>`
-    line, or `N` is not the number of rows of the plan's `## Symptom coverage` table;
-  - `symptom-coverage-omitted-empty` — the `omitted:` field absent or empty;
-  - `symptom-coverage-method-generic` — the method names no re-runnable search, or reads
-    `reviewed|read|analyzed the plan`;
-  - the usage codes only when the plan has `## Usage coverage` or `**Always-gate class:** yes`:
-    `usage-coverage-nm-mismatch` — no `Usage coverage: <N> · <M> · divergences: … · unconfirmed decisions: …`
-    line, no `## Access map (QA)`, or `N` differs from the plan's `- ` scenario lines or `M`
-    from the access map's `- ` lines other than `partial:` and `unimplemented intent:`;
-    `usage-coverage-divergences-empty` — `divergences:` or `unconfirmed decisions:` absent or
-    empty; `usage-coverage-held-on-pipeline` — a risk line with a `HELD` verdict that names
-    `source=pipeline`, `What to avoid`, the scenario name of a plan scenario carrying
-    `source=pipeline`, or an item of the plan's `What to avoid` (the marker match is
-    case-insensitive and reads the whole line). A `HELD` verdict is the standalone, uppercase word
-    `HELD` (`UPHELD` never counts) set off from the prose: no word right before it (an item id
-    such as `R2` or `PM1` is not prose) or no word right after it, with spaces and emoji skipped.
-    Examples: `R2 HELD by reading:`, `item: HELD.`, `item (source=pipeline) HELD.`, `→ HELD (…)`,
-    `— 🟢 HELD`, `…, HELD as low impact.`. A `HELD` with a prose word on both sides (`is HELD by
-    the guard`, `was HELD in round 1`) is mid-prose and does not count. It never counts when
-    negated (`not`, `no`, `never`, `non-`, `un-` or `…n't` right before it), inside backticks or
-    double quotes, or on a line carrying the label `unconfirmed by the operator`. On a
-    consolidated round it reads only the `## Validated risks` of the
-    analyst's round (the first number its `source: runtime consolidation · rounds …` line lists),
-    never a prover's `H<n>: HELD` line; the other usage and symptom gates read the consolidated
-    round.
 - `07`, on the first table of the last round with a `Result` column:
   `runtime-not-met` — a row whose Result starts `NOT MET` without `to confirm`;
   `runtime-no-attempt` — a row whose Result is none of `MET`/`NOT MET…`, or whose Evidence is
   empty, `-`, `none` or `not run`.
 
+`03` and `05` have no gate code. A `bug/error` plan with no `**Type mismatch:**` line with
+evidence must still carry `## Symptom coverage` (`MISSING: ## Symptom coverage`, or `(empty)` with
+no table row), and two findings on it print as `OPEN:`, never as a gate:
+- `coverage-vector-no-reason` — a row whose Status is not `covered`/`not-covered`, or whose
+  Reason is empty, `-`, `n/a` or `not applicable`;
+- `coverage-enumeration-no-method` — `**How I enumerated:**` absent from the section, or its
+  block (from the label to the first table row or the next bold label, bullets and fenced
+  commands included) names no re-runnable search.
+
+A `not-covered` row, a `**Always-gate class:** yes` line (no gate and no QA mode read it) and an
+item the plan or triage leaves unconfirmed force no question. `05` reads the last round's
+`## Validated risks` only for its `OPEN:` lines; a report's old `Usage coverage:` or
+`Symptom coverage:` line opens nothing.
+
 The check then acts on what it found, and no effect ever changes the first line or the exit
 code. A check **completes** its phase when the first line is `OK` or `GENERATED`, no `GATE:`
 fired and the verdict does not loop back (`06` `FAILED`, `07` `NOT-MET` and
-`SYMPTOM-PERSISTS`); a pause (`CONFIRM`, `TYPE-MISMATCH`, `NEEDS-DEVICE`, `UNAVAILABLE`)
+`SYMPTOM-PERSISTS`); a `CONFIRM`, `TYPE-MISMATCH`, `NEEDS-DEVICE` or `UNAVAILABLE` line
 completes, except `INVALIDATED:` on `05`, which never does. On completion it records the phase (`recorded: phase_done <phase> <verdict>`, plus
 ` — reason: <reason>` on a re-run: the line the same check failed with, else
 `re-run after <check> <line>` of the newest failure, else `re-run`; ` (already)` when the same
@@ -1193,7 +1220,7 @@ gate: the Brief's valid `**Type:**` wins over a recorded one (`recorded: type <t
 `state.type` has none. On completion `01` also writes the triage's `## Brief` section
 verbatim into `<RUN_DIR>/00-brief.md` (`recorded: brief 00-brief.md`), records the
 `commitType` (`recorded: commit type <c>`), on a terminal verdict (`NOT-REPRODUCIBLE`,
-`NEEDS-CLARIFICATION`, `PROPOSE-ALTERNATIVE`, `NO-CHANGE-NEEDED`) the termination
+`NO-CHANGE-NEEDED`) the termination
 (`recorded: run_terminate triage <VERDICT>`, reason
 `<VERDICT>: <first item of ## Open items, else of ## Validated brief>`, `by: "runtime"`), and
 on a `PROCEED` lifts a triage termination the runtime wrote (`recorded: termination
@@ -1210,7 +1237,13 @@ File map and the libraries into the project index, the same as `run index-save`;
 is unavailable inside a job queues the write (`index: not saved (store unavailable; queued at <path>)`)
 and any failure prints `index: not saved (<first line of the error>)`. `05 --stage analyst`
 records `qaStageA` (`recorded: qa_stage_a <verdict>`, artifact `05-qa.md`) and no phase; its
-check memo is kept apart from the memo of `05`. `run_phase_done` and
+check memo is kept apart from the memo of `05`. `05 --stage triage` records `qaMode`
+(`recorded: qa_mode <mode>`, `(already)` when the same mode stands), with a memo of its
+own; only a `skip` records a phase, `qa` with the verdict `SKIPPED`, its sentence as the `note` and
+`QA skipped: <why>` as the `reason`, which puts it on the reflector's timeline. A reworded `skip`
+answers `(already)` while the runtime's `SKIPPED` is the last `qa` entry, so a relaunch is no re-run. A `lite` or `full`
+removes that `SKIPPED` from `phases`, and records its `qa` phase through `05`; `05` is never called on a skip, whose round carries no
+`## Verdict`. `run_phase_done` and
 `run_terminate` still work for an older plugin.
 
 **The QA consolidation is the check's own.** `05-qa.md` holds three kinds of `## Round`, told
@@ -1260,7 +1293,8 @@ hypotheses with no `H<n>` id keep the provers' verdict and add the note `the ana
 hypotheses carry no H<n> id; coverage not checked`. The check then answers over that round, and a second check writes nothing
 (the last round is already a consolidation) until a later prover round arrives. Stage A
 (`05 --stage analyst`) requires every section check `05` reads, so an analyst-only skip round
-always passes the final check.
+always passes the final check. A `source: qa-triage` round precedes the analyst's and is never
+consolidated.
 
 **`nightqueue run append 05 --group <id> --from <file>`** is the one path a prover writes its
 round by. `<id>` is the `GROUP_ID` value of the prover's `phase_prompt` (the group's slug plus
@@ -1293,6 +1327,9 @@ a path, `question`/`from_artifact` with another status, or either one together w
 is refused, and nothing is recorded. The answer echoes the composed `notice`. The pipeline
 then ends its turn with one plain line: the job ends at `gate` with the recorded notice, and a
 `## Notice` in the text never replaces it.
+The shipped pipeline's one pause is Phase 3's, with `from_artifact.file` `03-plan.md`. A gate whose
+notice shows the plan's filled question, however it was sent, records `gateQuestionDigest` in the
+same locked write, and any other gate clears it.
 
 **A job is self-contained, and a finished job does not resume.** `queue_add` refuses, before
 anything is registered or queued, a prompt that conditions the work on another job or pull
@@ -1317,6 +1354,14 @@ checks the message before staging anything and prints one
 a body whose line 2 is not blank, a `Co-Authored-By:` line (any case, at line start) or a
 `Refs:` line; under the fallback, a subject that is not Conventional Commits. Once the pull
 request is open, `run publish` and `run pr` record the `commit` phase (`by: "runtime"`).
+
+**A recorded QA skip is told in the pull request.** When `state.qaMode.mode` is `skip`,
+`run publish` refuses, before it commits anything, a body without the plain line
+`QA: skipped — <state.qaMode.reason>`. The comparison is exact and against the state, never against
+agent text, so another reason is refused too, and a fenced or commented copy does not count. The
+template's rules read the body without that line, so a `#<number>`, a placeholder shape or the run
+slug in the reason cannot make it unpublishable; that text reaches the pull request as recorded.
+`lite`, `full` and no `qaMode` owe no line. `run pr` does not enforce it.
 
 **A lockfile is published only when it is proved reproducible.** `run publish` (and
 `run commit`) refuse every lockfile (`package-lock.json`, `yarn.lock`, `pnpm-lock.yaml`,

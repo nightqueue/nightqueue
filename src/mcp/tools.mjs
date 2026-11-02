@@ -33,7 +33,7 @@ import { liveRunnersReport, unreadableRegistry } from "../queue/registry.mjs";
 import { failedCoreSection, jobDetailView, prUrlsOf, queueView } from "../queue/view.mjs";
 import { isSafeSegment, readRunState, RESUME_PHASE_ORDER } from "../queue/resume.mjs";
 import { resolveJobRun } from "../queue/job-run.mjs";
-import { composeGateNotice } from "../queue/gate-notice.mjs";
+import { composeGateNotice, gateDigestOf } from "../queue/gate-notice.mjs";
 import { runDir as runDirOf } from "../config/paths.mjs";
 import { attemptSince, recordPipelineRun, statePipelinePhases } from "../queue/pipeline-record.mjs";
 import { applyRetry, callerJobId } from "../queue/retry.mjs";
@@ -282,6 +282,12 @@ function composedGateNotice(args, run, env) {
     question: args.question,
     fromArtifact: args.from_artifact ?? null,
   });
+}
+
+// The digest one `run_outcome` records: at a gate, the plan's question it shows or null to clear an earlier one; undefined leaves the record alone.
+function pausedDigest(status, { run, notice, env }) {
+  if (status !== "gate" || typeof run.projectId !== "string" || run.projectId === "") return undefined;
+  return gateDigestOf({ runDir: runDirOf(run.projectId, run.slug, env), notice: notice ?? "" });
 }
 
 // The fields of state.json `run_set` writes, in the argument names the plugin sends.
@@ -1424,6 +1430,7 @@ function toolDefinitions(env, state) {
         description:
           "Records how the run ended: `done` when the pull request exists, `gate` with the `notice` the operator has to answer, `no_change` with the run's conclusion as `notice` when the run concluded on purpose that no code change is needed (the job ends `done` with no pull request). " +
           "A `gate` may instead send `question` and/or `from_artifact: {file, section}` (a run artifact such as `03-plan.md` and a heading such as `## Requires user confirmation`): the runtime composes the whole `## Notice` body - the section verbatim under `## Requires user confirmation`, the question, and the answer line - and returns it as `notice`; then end the turn, with no `## Notice` in the final text. `notice` together with either is refused. " +
+          "A `gate` whose text carries the plan's question records its digest as `gateQuestionDigest`, which lets the resumed `run check 03` print `CONFIRM: answered` for that question; any other gate clears it. " +
           "The pull request URL is NOT a parameter: the runtime writes it from what the session really published. " +
           "Inside a job the run is resolved from the job's own row — passing `project` or `slug` there is refused; outside a job both are required.",
         inputSchema: {
@@ -1437,9 +1444,10 @@ function toolDefinitions(env, state) {
       },
       handler: async (args) => {
         const run = await callerRun(args, env);
-        if (!wantsComposedNotice(args)) return runAnswer(recordOutcome({ ...run, status: args.status, notice: args.notice, env }), run);
-        const notice = composedGateNotice(args, run, env);
-        return { ...runAnswer(recordOutcome({ ...run, status: args.status, notice, env }), run), notice };
+        const composed = wantsComposedNotice(args);
+        const notice = composed ? composedGateNotice(args, run, env) : args.notice;
+        const answer = runAnswer(recordOutcome({ ...run, status: args.status, notice, questionDigest: pausedDigest(args.status, { run, notice, env }), env }), run);
+        return composed ? { ...answer, notice } : answer;
       },
     },
     {

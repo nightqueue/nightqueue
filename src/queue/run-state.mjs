@@ -29,10 +29,10 @@ export const RUN_OUTCOME_STATUSES = ["done", "gate", "no_change"];
 export const NO_CHANGE_OUTCOME = "no_change";
 
 // The keys of `state.json` only the runtime writes: no pipeline writer may set them, whole or by a dotted name.
-export const RUNTIME_ONLY_KEYS = ["job", "usageCoverageCleared", "pipeline", "freshRetry", "pipelineUnpinned"];
+export const RUNTIME_ONLY_KEYS = ["job", "gateQuestionDigest", "draftPrUrl", "qaMode", "pipeline", "freshRetry", "pipelineUnpinned"];
 
-// The record of an always-gate class `yes` that `run check 03` cleared by quotes the job prompt holds.
-const USAGE_COVERAGE_CLEARED = "usageCoverageCleared";
+// The QA modes a triage may decide.
+const QA_MODES = ["skip", "lite", "full"];
 
 // Why a second record of the same job's block is kept: the block is written once, and a retry keeps the first one.
 export const JOB_BLOCK_ALREADY_RECORDED = "already recorded";
@@ -165,8 +165,18 @@ function setLateRecordAside({ projectId, slug, env, state, claim, late, at }) {
   return kept(saved.status === "written" ? refusal : `${refusal} (it could not be kept either: ${saved.reason})`);
 }
 
-// Writes one change into the state.json of a run: the runtime stamps the time, an `updatedAt` written by an agent is overwritten, never trusted, and a `late` record of a claim that is over is set aside instead.
-function record({ projectId, slug, env, change, claim = null, late = null }) {
+// The state with the runtime's own fields applied: a null drops the key and an undefined leaves it alone.
+function withRuntimeFields(state, runtimeFields) {
+  const next = { ...state };
+  for (const [name, value] of Object.entries(runtimeFields)) {
+    if (value === null) delete next[name];
+    else if (value !== undefined) next[name] = value;
+  }
+  return next;
+}
+
+// Writes one change into the state.json of a run, with the runtime's own fields in the same write: the runtime stamps the time, an `updatedAt` written by an agent is overwritten, never trusted, and a `late` record of a claim that is over is set aside instead.
+function record({ projectId, slug, env, change, runtimeFields = {}, claim = null, late = null }) {
   return underRunLock({
     projectId,
     slug,
@@ -177,7 +187,7 @@ function record({ projectId, slug, env, change, claim = null, late = null }) {
       if (late !== null && (claim?.over === true || newerClaimHolds(state[late.kind], claim))) {
         return setLateRecordAside({ projectId, slug, env, state, claim, late, at });
       }
-      return saveRunState({ projectId, slug, env, state: { ...state, ...withoutRuntimeKeys(change(state, at)), updatedAt: at } });
+      return saveRunState({ projectId, slug, env, state: { ...withRuntimeFields({ ...state, ...withoutRuntimeKeys(change(state, at)) }, runtimeFields), updatedAt: at } });
     },
   });
 }
@@ -242,15 +252,21 @@ function reRunReason({ previous, phases, phase, lastFailure }) {
   return failedSince ? `re-run after ${lastFailure.check} ${lastFailure.line}` : "re-run";
 }
 
-// The phases after a completed check, and what was decided: `already` when the runtime recorded this same artifact last, else `appended` with its reason.
+// Whether a completed check repeats the runtime's last entry of the phase: a decision while that entry states it, any other check on the same artifact.
+function repeatsRuntimeEntry({ previous, memo, done, last }) {
+  if (last?.by !== RUNTIME_AUTHOR) return false;
+  if (done.decision === true) return last.verdict === done.verdict;
+  return isStateObject(previous) && previous.completed === true && previous.digest === memo.digest;
+}
+
+// The phases after a completed check, and what was decided: `already` when it repeats the runtime's last entry, else `appended` with its reason.
 function phasesAfterCheck({ state, check, memo, done, claim, at }) {
   const phases = phaseEntries(state);
   const checks = checkMemos(state);
   const previous = checks[check];
-  const same = isStateObject(previous) && previous.completed === true && previous.digest === memo.digest;
-  if (same && lastEntryOf(phases, done.phase)?.by === RUNTIME_AUTHOR) return { phases, decided: { status: "already", reason: null } };
-  const reason = reRunReason({ previous, phases, phase: done.phase, lastFailure: checks.lastFailure });
-  const entry = withStamp(withText({ phase: done.phase, at }, { artifact: done.artifact, verdict: done.verdict, reason, by: RUNTIME_AUTHOR }), claim);
+  if (repeatsRuntimeEntry({ previous, memo, done, last: lastEntryOf(phases, done.phase) })) return { phases, decided: { status: "already", reason: null } };
+  const reason = trimmedText(done.reason) ?? reRunReason({ previous, phases, phase: done.phase, lastFailure: checks.lastFailure });
+  const entry = withStamp(withText({ phase: done.phase, at }, { artifact: done.artifact, verdict: done.verdict, note: done.note, reason, by: RUNTIME_AUTHOR }), claim);
   return { phases: [...phases, entry], decided: { status: "appended", reason } };
 }
 
@@ -274,6 +290,25 @@ export function recordCheck({ projectId, slug, check, memo, done = null, claim =
     },
   });
   return { ...written, phase: written.status === "written" ? decided : null };
+}
+
+// Whether a phase entry is the runtime's record of a QA skip.
+function isRuntimeQaSkip(entry) {
+  return isStateObject(entry) && entry.phase === "qa" && entry.by === RUNTIME_AUTHOR && entry.verdict === "SKIPPED";
+}
+
+// Whether a QA mode leaves a recorded skip behind: a lite or full decision on a state that still holds one.
+export function leavesStaleQaSkip(state, mode) {
+  return mode !== "skip" && phaseEntries(state).some(isRuntimeQaSkip);
+}
+
+// Records the QA mode the triage decided and its reason, a key only the runtime writes; in the same write a lite or full decision drops the skip it supersedes.
+export function recordQaMode({ projectId, slug, mode, reason, env = process.env } = {}) {
+  if (!QA_MODES.includes(mode)) return refuseEnum("QA mode", mode, QA_MODES);
+  const why = trimmedText(reason);
+  if (why === null) return kept("a QA mode needs its reason");
+  const change = (state) => (leavesStaleQaSkip(state, mode) ? { phases: phaseEntries(state).filter((entry) => !isRuntimeQaSkip(entry)) } : {});
+  return record({ projectId, slug, env, change, runtimeFields: { qaMode: { mode, reason: why, at: new Date().toISOString() } } });
 }
 
 // Records that the run stopped on purpose at a phase; a retry consumes the stop, and whether the run resumes is `decideResume`'s call.
@@ -337,12 +372,44 @@ function outcomeToKeep(state, claim) {
   return held;
 }
 
-// Records how the run ended, with the files it delivered when known; the pull request URL is the runtime's to write, so an outcome already carrying one keeps it.
-export function recordOutcome({ projectId, slug, status, notice, files, claim = null, env = process.env } = {}) {
+// How many failures a delivery leaves open, in the words of the sentence that names them.
+function failuresRemain(failures) {
+  return failures === 1 ? "1 failure remains" : `${failures} failures remain`;
+}
+
+// The line naming a draft delivery and the failures it leaves open, with the pull request's URL when the caller has it.
+export function draftLine(failures, url = "") {
+  return `draft pull request ${url ? `${url} ` : ""}— ${failuresRemain(failures)}`;
+}
+
+// The line naming a normal pull request opened because gh refused the draft, and the failures it leaves open.
+export function refusedDraftLine(failures, url = "") {
+  return `pull request ${url ? `${url} ` : ""}— ${failuresRemain(failures)} (gh refused the draft)`;
+}
+
+// Whether a value is a count of failures a delivery can record.
+function isFailureCount(failures) {
+  return Number.isInteger(failures) && failures > 0;
+}
+
+// An outcome without any earlier draft record, carrying this call's own: the failures whenever they remain, the draft only when the pull request really is one.
+function withDraftRecord(outcome, { draft, failures, staysDraft }) {
+  const { draft: _draft, draftFailures: _draftFailures, staysDraft: _staysDraft, ...rest } = outcome;
+  return {
+    ...rest,
+    ...(draft === true ? { draft: true } : {}),
+    ...(isFailureCount(failures) ? { draftFailures: failures } : {}),
+    ...(staysDraft === true ? { staysDraft: true } : {}),
+  };
+}
+
+// Records how the run ended (with the files it delivered when known) and, at the top level of the state where they outlive the outcome the next attempt clears, the digest of the question a pause showed and the draft the run opened (each dropped by a null, left alone when not sent); the pull request URL is the runtime's to write, so an outcome already carrying one keeps it.
+export function recordOutcome({ projectId, slug, status, notice, files, questionDigest, draft = false, failures = 0, draftPrUrl, staysDraft = false, claim = null, env = process.env } = {}) {
   if (!RUN_OUTCOME_STATUSES.includes(status)) return refuseEnum("status", status, RUN_OUTCOME_STATUSES);
   if (status === NO_CHANGE_OUTCOME && trimmedText(notice) === null) {
     return kept("a no_change outcome needs the run's conclusion as its notice: it is what the origins are told on close");
   }
+  if (draft === true && !isFailureCount(failures)) return kept(`a draft outcome needs a positive failure count, not \`${String(failures)}\``);
   return record({
     projectId,
     slug,
@@ -350,9 +417,10 @@ export function recordOutcome({ projectId, slug, status, notice, files, claim = 
     claim,
     late: { kind: "outcome", record: withText({ status }, { notice }) },
     change: (state, at) => ({
-      outcome: withStamp(withText({ ...outcomeToKeep(state, claim), status, at, ...(Array.isArray(files) ? { files } : {}) }, { notice }), claim),
+      outcome: withStamp(withText(withDraftRecord({ ...outcomeToKeep(state, claim), status, at, ...(Array.isArray(files) ? { files } : {}) }, { draft, failures, staysDraft }), { notice }), claim),
       ...displacedSlot(state, "outcome", claim, at),
     }),
+    runtimeFields: { gateQuestionDigest: questionDigest, draftPrUrl },
   });
 }
 
@@ -573,29 +641,6 @@ function saveJobBlock({ projectId, slug, block, env }) {
   if (held !== null && held.id === block.id) return kept(JOB_BLOCK_ALREADY_RECORDED);
   if (held !== null) return kept(`the run directory belongs to ${jobRef(held.id)}`);
   return saveRunState({ projectId, slug, env, state: { ...state, job: jobBlockRecord(block), updatedAt: new Date().toISOString() } });
-}
-
-// The state with the cleared-coverage record set to the quotes, or dropped when there are none; null when nothing changes.
-function withCoverageRecord(state, quotes) {
-  const { [USAGE_COVERAGE_CLEARED]: held, ...rest } = state;
-  if (quotes.length > 0) return { ...rest, [USAGE_COVERAGE_CLEARED]: { quotes, at: new Date().toISOString() } };
-  return held === undefined ? null : rest;
-}
-
-// Records the quotes that cleared the always-gate class of the plan, or drops the record when `quotes` is null; answers `absent` when there was nothing to drop.
-export function recordUsageCoverageCleared({ projectId, slug, quotes, env = process.env } = {}) {
-  const list = Array.isArray(quotes) ? quotes.filter((quote) => typeof quote === "string" && quote.trim() !== "") : [];
-  if (quotes !== null && list.length === 0) return kept("a cleared usage coverage needs its quotes");
-  return underRunLock({
-    projectId,
-    slug,
-    env,
-    write: () => {
-      const next = withCoverageRecord(withFixedFields(readRunState({ projectId, slug, env }), { projectId, slug }), list);
-      if (next === null) return { status: "absent", path: null, reason: null };
-      return saveRunState({ projectId, slug, env, state: { ...next, updatedAt: new Date().toISOString() } });
-    },
-  });
 }
 
 // The pipeline a run with recorded phases started under, its name null when it recorded none; null when no version is recorded or no phase ran yet.
