@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import { test } from "node:test";
 import { registerCheckout, ensureProject } from "../../test-support/memory.mjs";
 import { loadConfig, saveConfig } from "../../src/config/store.mjs";
-import { decideResume, readRunState, resumeHandoff } from "../../src/queue/resume.mjs";
+import { readRunState, runFacts } from "../../src/queue/resume.mjs";
 import { recordPhaseDone, recordRunFields } from "../../src/queue/run-state.mjs";
 import { buildPrompt } from "../../src/queue/spawn.mjs";
 import { releaseJobWorktree } from "../../src/queue/worktree.mjs";
@@ -29,17 +29,14 @@ function publishedRun(t, name) {
   return { env, worktree: worktree.path };
 }
 
-test("a run whose branch was recorded under its published name still resumes in its worktree, and the handoff names the real branch", (t) => {
+test("a run whose branch was recorded under its published name hands the real branch and its worktree over in the facts", (t) => {
   const { env, worktree } = publishedRun(t, "resume-branch-handoff");
   const job = { id: 7, project: "alpha", project_id: ensureProject(env, "alpha"), slug: SLUG, prompt: "do the thing" };
-  const state = readRunState({ projectId: ensureProject(env, "alpha"), slug: SLUG, env });
-  const resume = decideResume({ state });
+  const facts = runFacts(readRunState({ projectId: ensureProject(env, "alpha"), slug: SLUG, env }));
 
-  assert.equal(resume.reuseWorktree, true);
-  const handoff = resumeHandoff({ job, resume, state, env });
-  assert.equal(handoff.branch, PUBLISHED);
-  assert.equal(handoff.worktree, worktree);
-  assert.match(buildPrompt({ job, handoff, openPrs: [], env }), new RegExp(`\\nBranch: ${PUBLISHED}\\n`));
+  assert.equal(facts.branch, PUBLISHED);
+  assert.equal(facts.worktree, worktree);
+  assert.ok(buildPrompt({ job, facts, env }).includes(`\nBranch: ${PUBLISHED}   Worktree: ${worktree}\n`));
 });
 
 test("releasing the worktree of a job whose branch was renamed finds it by its path, never by the pre-rename name", async (t) => {

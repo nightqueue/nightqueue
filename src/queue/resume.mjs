@@ -8,8 +8,8 @@ import { writeFileAtomic } from "../config/store.mjs";
 // The lock of one run's state.json: a holder only ever keeps it for a single read and write, so a lock this old can only have been left behind by a dead process.
 export const RUN_LOCK = { timeoutMs: 5000, staleAfterMs: 15000 };
 
-// Canonical phase order written by the plugin into state.json; "next phase" derives from the highest one completed.
-export const RESUME_PHASE_ORDER = [
+// The phase names `state.json` validates with, and nothing more: nothing derives a next phase from this list.
+export const PHASE_NAMES = [
   "triage",
   "explore",
   "architecture",
@@ -21,221 +21,48 @@ export const RESUME_PHASE_ORDER = [
 ];
 
 export const RESUME_SCHEMA_VERSION = 1;
-export const TERMINAL_VERDICT_LABELS = ["NO-CHANGE-NEEDED", "NOT-REPRODUCIBLE", "NEEDS-CLARIFICATION", "PROPOSE-ALTERNATIVE"];
-export const DEFAULT_MAX_RESUMES = 1;
 
 const SEGMENT_RE = /^[A-Za-z0-9][A-Za-z0-9._+-]{0,79}$/;
-// The one artifact a QA stage A marker may name: the analyst's round lives in the QA's own artifact.
-const QA_ARTIFACT = "05-qa.md";
-const QA_SKIPPED_VERDICT_RE = /(?:^|-)SKIPPED$/;
 
 // Tells whether a value coming from the database is safe as a single path segment.
 export function isSafeSegment(value) {
   return typeof value === "string" && SEGMENT_RE.test(value);
 }
 
-// Tells whether the state declared a deliberate termination; any usable value counts as terminated.
-function closedByTermination(parsed) {
-  const marker = parsed?.termination;
-  if (marker === null || marker === undefined) return false;
-  if (typeof marker === "string") return Boolean(marker.trim());
-  if (typeof marker === "object") return true;
-  return marker === true;
-}
-
-// Normalizes a verdict for comparison: uppercase, every non-alphanumeric run collapsed into a dash.
-function normalizeVerdict(text) {
-  return String(text)
-    .toUpperCase()
-    .replace(/[^A-Z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-}
-
-// Tells whether a phase entry ended on a verdict that closes the pipeline on purpose.
-function hasTerminalVerdict(entry) {
-  const verdict = entry?.verdict;
-  if (typeof verdict !== "string" || !verdict.trim()) return false;
-  const normalized = normalizeVerdict(verdict);
-  return TERMINAL_VERDICT_LABELS.some((label) => normalized === label || normalized.startsWith(`${label}-`));
-}
-
-// The `at` of the last recorded entry of a phase, or an empty text when it has none.
-function lastPhaseAt(phases, phase) {
-  const entry = (Array.isArray(phases) ? phases : []).findLast((candidate) => candidate?.phase === phase);
-  return typeof entry?.at === "string" ? entry.at : "";
-}
-
-// Whether the QA stage A marker still holds: on `05-qa.md` and newer than the last implementation; an invalid shape or a missing `at` never does.
-function qaStageAHolds(parsed) {
-  const marker = parsed?.qaStageA;
-  if (!marker || typeof marker !== "object" || Array.isArray(marker)) return false;
-  if (marker.artifact !== QA_ARTIFACT || typeof marker.at !== "string" || marker.at === "") return false;
-  const implementedAt = lastPhaseAt(parsed.phases, "implementation");
-  return implementedAt !== "" && marker.at > implementedAt;
-}
-
-// Refusal to resume, always with the same shape as an acceptance.
-function stop(reason, { resumeCount = 0, lastPhase = null } = {}) {
-  return { resume: false, fromPhase: null, fromStage: null, reuseWorktree: false, reason, resumeCount, lastPhase };
-}
-
-// Index of the last completed phase and its entry; a phase name outside the contract discards the state.
-function lastCompletedPhase(phases) {
-  let index = -1;
-  let entry = null;
-  for (const candidate of phases) {
-    const position = RESUME_PHASE_ORDER.indexOf(candidate?.phase);
-    if (position < 0) return null;
-    if (position >= index) {
-      index = position;
-      entry = candidate;
-    }
-  }
-  return { index, entry };
-}
-
-// Tells whether the parsed state has the fixed fields the resume decision needs.
-function hasRequiredFields(parsed) {
-  return typeof parsed.schemaVersion === "number" && typeof parsed.slug === "string" && Array.isArray(parsed.phases);
-}
-
-// Tells whether a state was recorded by an operator session rather than by a job.
-function isOperatorRun(parsed) {
-  return parsed?.origin === "operator";
-}
-
-// Tells whether the state recorded a completed entry of the phase.
-function hasPhase(parsed, phase) {
-  return Array.isArray(parsed?.phases) && parsed.phases.some((entry) => entry?.phase === phase);
-}
-
-// The earliest recorded phase of an operator run the runtime refuses to skip, with its reason, as a one-item list; empty for any other run.
-export function operatorReruns(state) {
-  if (!isOperatorRun(state)) return [];
-  const level = state.evidenceLevel;
-  if (hasPhase(state, "triage") && state.type !== "feature/refactor" && !(Number.isInteger(level) && level >= 3)) {
-    return [{ phase: "triage", reason: `evidence level ${Number.isInteger(level) ? level : "not recorded"} is below 3 on a bug (operator run)` }];
-  }
-  if (hasPhase(state, "architecture") && state.planStatus !== "approved") {
-    return [{ phase: "architecture", reason: `plan status ${state.planStatus === "draft" ? "draft" : "not recorded"}, not approved (operator run)` }];
-  }
-  return [];
-}
-
-// One prompt line per recorded phase of an operator run the runtime refuses to skip.
-export function rerunLines(reruns) {
-  return (Array.isArray(reruns) ? reruns : []).map((rerun) => `Re-run: ${rerun.phase} — ${rerun.reason}`);
-}
-
-// Position of the earliest phase that must re-run, or the end of the order when none does.
-function firstRerunIndex(reruns) {
-  return Math.min(RESUME_PHASE_ORDER.length, ...reruns.map((rerun) => RESUME_PHASE_ORDER.indexOf(rerun.phase)));
-}
-
-// The phases the resume may count: every entry before the first re-run phase, unknown names kept so they still discard the state.
-function phasesBeforeRerun(phases, reruns) {
-  if (reruns.length === 0) return phases;
-  const firstTrap = firstRerunIndex(reruns);
-  return phases.filter((entry) => RESUME_PHASE_ORDER.indexOf(entry?.phase) < firstTrap);
-}
-
-// Whether the QA is still owed: the last QA entry is a skip the recorded QA mode does not back, or a lite or full decision stands with no QA recorded since it.
-function owesQa(state) {
-  const decided = state.qaMode;
-  if (decided?.mode === "skip") return false;
-  const lastQa = state.phases.findLast((entry) => entry?.phase === "qa");
-  if (QA_SKIPPED_VERDICT_RE.test(normalizeVerdict(lastQa?.verdict))) return true;
-  return typeof decided?.at === "string" && lastPhaseAt(state.phases, "qa") < decided.at;
-}
-
-// The phases the resume may count once the QA is owed: every entry before the QA, unknown names kept so they still discard the state.
-function phasesBeforeOwedQa(phases, state) {
-  if (!owesQa(state)) return phases;
-  const qaIndex = RESUME_PHASE_ORDER.indexOf("qa");
-  return phases.filter((entry) => RESUME_PHASE_ORDER.indexOf(entry?.phase) < qaIndex);
-}
-
-// Parses the state handed to the decision, or returns the refusal of a state that cannot be read.
-function parseState(state) {
-  if (state === null || state === undefined || state === "") return { refusal: stop("no-state") };
-  let parsed = state;
-  if (typeof state === "string") {
-    try {
-      parsed = JSON.parse(state);
-    } catch {
-      return { refusal: stop("corrupt-state") };
-    }
-  }
-  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return { refusal: stop("invalid-state") };
-  if (!hasRequiredFields(parsed)) return { refusal: stop("invalid-state") };
-  if (parsed.schemaVersion !== RESUME_SCHEMA_VERSION) return { refusal: stop("unknown-schema") };
-  return { parsed };
-}
-
-// The decision with the re-runs of an operator run attached, and the key absent when there is none.
-function withReruns(decision, reruns) {
-  return reruns.length === 0 ? decision : { ...decision, reruns };
-}
-
-// Decides whether a run resumes from an already read state.json; it never reads disk and never throws.
-export function decideResume({ state, maxResumes = DEFAULT_MAX_RESUMES } = {}) {
-  const { parsed, refusal } = parseState(state);
-  if (refusal) return refusal;
-  if (closedByTermination(parsed)) return stop("terminated-by-verdict");
-
-  const cap = isOperatorRun(parsed) ? maxResumes + 1 : maxResumes;
-  const resumeCount = parsed.resumeCount;
-  if (!Number.isInteger(resumeCount) || resumeCount < 0 || resumeCount >= cap) return stop("resume-cap");
-
-  const reruns = operatorReruns(parsed);
-  const last = lastCompletedPhase(phasesBeforeOwedQa(phasesBeforeRerun(parsed.phases, reruns), parsed));
-  if (!last) return stop("unknown-phase");
-  if (last.index < 0 && reruns.length > 0) {
-    const fromPhase = RESUME_PHASE_ORDER[firstRerunIndex(reruns)];
-    return { resume: true, fromPhase, fromStage: null, reuseWorktree: false, reason: "operator-rerun", resumeCount: resumeCount + 1, lastPhase: null, reruns };
-  }
-  if (last.index < 0) return stop("no-completed-phase");
-
-  const lastPhase = RESUME_PHASE_ORDER[last.index];
-  if (hasTerminalVerdict(last.entry)) return stop("terminated-by-verdict", { resumeCount, lastPhase });
-  if (last.index >= RESUME_PHASE_ORDER.length - 1) return stop("run-already-done", { resumeCount, lastPhase });
-
-  const fromPhase = RESUME_PHASE_ORDER[last.index + 1];
-  return withReruns(
-    {
-      resume: true,
-      fromPhase,
-      fromStage: fromPhase === "qa" && qaStageAHolds(parsed) ? "qa-stage-b" : null,
-      reuseWorktree: Boolean(parsed.branch || parsed.worktree),
-      reason: "resume",
-      resumeCount: resumeCount + 1,
-      lastPhase,
-    },
-    reruns,
-  );
-}
-
-// A fixed field of the state as the agent may read it back: a non-empty trimmed string, or null.
-function fixedField(value) {
+// A text field of a record as the facts carry it: a non-empty trimmed string, or null.
+function factText(value) {
   const text = typeof value === "string" ? value.trim() : "";
   return text || null;
 }
 
-// Everything the agent needs to resume a run - where it lives, what it kept and which phase comes next - or null when the decision refuses it.
-export function resumeHandoff({ job, resume, state, env = process.env } = {}) {
-  const slug = job?.slug;
-  if (resume?.resume !== true || !isRunPath(job?.project_id, slug)) return null;
-  const parsed = isStateObject(state) ? state : {};
-  return {
-    slug,
-    runDir: runDir(job.project_id, slug, env),
-    branch: fixedField(parsed.branch),
-    worktree: fixedField(parsed.worktree),
-    lastPhase: fixedField(resume.lastPhase),
-    fromPhase: fixedField(resume.fromPhase),
-    fromStage: fixedField(resume.fromStage),
-    ...(Array.isArray(resume.reruns) && resume.reruns.length > 0 ? { reruns: resume.reruns } : {}),
-  };
+// The entries a state's key holds, as a list of records.
+function recordsOf(entries) {
+  return (Array.isArray(entries) ? entries : []).filter(isStateObject);
+}
+
+// The phases a state recorded, in the order it recorded them; an entry with no phase name is dropped.
+function phaseFacts(state) {
+  const named = recordsOf(state.phases).filter((entry) => factText(entry.phase) !== null);
+  return named.map((entry) => ({ phase: factText(entry.phase), verdict: factText(entry.verdict), artifact: factText(entry.artifact), at: factText(entry.at) }));
+}
+
+// The operator's recorded answers, oldest first; an entry with no text is dropped.
+function answerFacts(state) {
+  const answered = recordsOf(state.answers).filter((entry) => factText(entry.text) !== null);
+  return answered.map((entry) => ({ text: factText(entry.text), at: factText(entry.at), attempt: Number.isInteger(entry.attempt) ? entry.attempt : null }));
+}
+
+// The wip commit a state recorded, or null when it holds none.
+function wipFact(state) {
+  const commit = isStateObject(state.wip) ? factText(state.wip.commit) : null;
+  if (commit === null) return null;
+  return { commit, short: factText(state.wip.short) ?? commit.slice(0, 7), files: Array.isArray(state.wip.files) ? state.wip.files : [] };
+}
+
+// The records of an already read state as data, with no order and no conclusion; null when the state cannot be read as one. It never reads disk and never throws.
+export function runFacts(state, { runDir: dir = null } = {}) {
+  if (!isStateObject(state)) return null;
+  return { runDir: dir, branch: factText(state.branch), worktree: factText(state.worktree), phases: phaseFacts(state), answers: answerFacts(state), wip: wipFact(state) };
 }
 
 // Tells whether a run can be addressed on disk at all: a project that is an id and a slug that is one safe segment.

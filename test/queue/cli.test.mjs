@@ -857,7 +857,7 @@ test("queue retry answers the gate, sends the job back to the queue and keeps wh
 
   const row = getJob(1, env);
   assert.equal(row.status, "pending");
-  assert.equal(row.operator_note, "rename the column");
+  assert.equal(row.operator_note, null, "the answer stayed on the row of a job with a run directory");
   assert.equal(row.slug, gated.slug);
   assert.equal(row.finished_at, null);
   assert.equal(JSON.parse(row.result).retriedFrom, "gate");

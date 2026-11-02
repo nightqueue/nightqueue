@@ -88,7 +88,7 @@ test("the reflector agent is granted exactly Read and the three lesson/memory to
 test("the reflector reads every round and fix loop, never the job's stream or log, and saves on its own", () => {
   assert.ok(AGENT.includes("Never read the job's raw stream or log file"));
   assert.ok(AGENT.includes("every `## Round`") && AGENT.includes("every `### Fix loop` block"));
-  assert.ok(AGENT.includes("`termination`") && AGENT.includes("`resumeCount`"));
+  assert.ok(AGENT.includes("`termination`") && AGENT.includes("`answers`") && AGENT.includes("`lastClaim.attempt`"));
   assert.ok(AGENT.includes("Save on your own, without asking for confirmation"));
   assert.ok(AGENT.includes("EXACT `title`"));
   assert.equal(AGENT.includes("decision_save"), false);
@@ -107,7 +107,7 @@ test("the reflector template has no artifact handoff and names the rubric, state
 
 test("the reflector template reads qaMode and points a QA skip to the rubric's rule", () => {
   const folded = TEMPLATE.replace(/\s+/g, " ");
-  assert.ok(folded.includes("`state.json` (`termination`, `resumeCount`, `qaMode`)"), folded);
+  assert.ok(folded.includes("`state.json` (`termination`, `answers`, `lastClaim.attempt`, `qaMode`)"), folded);
   assert.ok(folded.includes("a QA skip follows the rubric's `## A QA skip`"), folded);
   assert.match(folded, /later defect in the skipped area is a lesson with `target: qa`, a skip that held saves nothing/);
 });

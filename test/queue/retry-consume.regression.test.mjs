@@ -7,7 +7,7 @@ import { runDir } from "../../src/config/paths.mjs";
 import { openDb } from "../../src/memory/db.mjs";
 import { addJob, getJob, RECOVERED_PROMPT, retryJob, retryRefusalOf } from "../../src/memory/jobs.mjs";
 import { SILENT_STOP_NOTICE } from "../../src/queue/classify.mjs";
-import { decideResume, readRunState, writeRunTerminal } from "../../src/queue/resume.mjs";
+import { readRunState, writeRunTerminal } from "../../src/queue/resume.mjs";
 import { applyRetry } from "../../src/queue/retry.mjs";
 import { recordOutcome, recordPhaseDone, recordPrUrl, recordRunFields, recordTermination, recordWip } from "../../src/queue/run-state.mjs";
 import { runCycle } from "../../src/queue/runner.mjs";
@@ -144,7 +144,7 @@ test("a termination the run wrote is consumed by a retry: a clean exit with no r
   assert.equal(readRunState({ projectId: home.projectId, slug: SLUG, env: home.env }).termination, undefined);
 });
 
-test("a consumed termination no longer stops the resume, and what the run built stays: phases, wip and the pull request", async (t) => {
+test("a retry consumes a termination, and what the run built stays: phases, wip and the pull request", async (t) => {
   const home = retryHome(t, "consume-termination-resume");
   seedRow(home, { status: "cancelled" });
   const run = { projectId: home.projectId, slug: SLUG, env: home.env };
@@ -152,12 +152,11 @@ test("a consumed termination no longer stops the resume, and what the run built 
   recordPhaseDone({ ...run, phase: "triage", verdict: "PROCEED" });
   recordTermination({ ...run, phase: "qa", reason: "The ticket no longer applies.", by: "qa-guardian" });
   recordWip({ ...run, wip: { sha: "abc", at: "2026-10-31T00:00:00Z" } });
-  assert.equal(decideResume({ state: readRunState(run) }).reason, "terminated-by-verdict", "the fixture must stop the resume before the retry");
+  assert.equal(readRunState(run).termination.phase, "qa", "the fixture must hold the stop before the retry");
 
   await applyRetry({ id: home.id, env: home.env });
 
   const state = readRunState(run);
-  assert.notEqual(decideResume({ state }).reason, "terminated-by-verdict");
   assert.equal(state.termination, undefined);
   assert.equal(state.wip.sha, "abc", "the retry consumed the wip record");
   assert.equal(state.outcome.prUrl, PR_URL);

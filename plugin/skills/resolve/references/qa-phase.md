@@ -33,9 +33,7 @@ verbatim — header `🛡️ QA-GUARDIAN · ANALYST · ...`. It writes its round
 **Stage A gate:** run `nightqueue run check 05 --stage analyst` (the Phase 0 artifact gate),
 which reads the analyst's round for the sections of the analyst request's `## Deliver` — on
 `MISSING`, relaunch the analyst (🔁) once with the check's lines as `note`; if it persists, Phase 6, ⚠️ open item. It
-answers `QA-STAGE: provers|skip` and records the marker itself (`recorded: qa_stage_a <verdict>`)
-BEFORE stage B — never by writing a file: this is what makes a resume skip the analyst if the
-provers die halfway. On `QA-STAGE: skip` (zero runtime hypotheses), go straight to
+answers `QA-STAGE: provers|skip`. On `QA-STAGE: skip` (zero runtime hypotheses), go straight to
 `nightqueue run check 05`.
 
 **Stage B — Provers (full):** launch **N qa-guardian in parallel**
@@ -51,9 +49,6 @@ prover once (🔁) with what was missing; its new round supersedes the old one o
 that every `H<n>` of the analyst has a prover `H<n>:` line: a missing id or an `INCONCLUSIVE`
 gives `NEEDS DISCUSSION` (the note names the ids), a `BROKE` gives `NEEDS FIX`. A prover still
 without `APPENDED:` after its relaunch is an ⚠️ open item.
-
-On a resume with `From stage: qa-stage-b`, follow `resume.md`: Stage B over the analyst's round
-already in `05-qa.md`, never stage A.
 
 **Consolidation — by the runtime:** `nightqueue run check 05` merges every round since the
 analyst's (the later round of a prover group wins), writes `## Round <n+1>` marked

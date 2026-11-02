@@ -18,7 +18,7 @@
 
 import { UserError } from "../config/errors.mjs";
 import { PIPELINE_TASK_TYPES } from "../memory/runs.mjs";
-import { RESUME_PHASE_ORDER } from "./resume.mjs";
+import { PHASE_NAMES } from "./resume.mjs";
 
 // The model aliases an agent may run on.
 export const MODEL_NAMES = Object.freeze(["opus", "sonnet", "haiku"]);
@@ -101,7 +101,7 @@ export function modelTable(projectAgents = null) {
 // The canonical phases every run goes through, in order; a type, when given, must be one of the pipeline's.
 export function phasesFor(type) {
   if (type !== undefined && type !== null && type !== "") requireType(type);
-  return [...RESUME_PHASE_ORDER];
+  return [...PHASE_NAMES];
 }
 
 // The nine slots of the studio track, in order: the number, the label, the agent, the agent whose model it shows and the canonical phase of each.

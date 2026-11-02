@@ -6,8 +6,8 @@ import { ghPrViewAsync } from "../host/gh.mjs";
 import { openStore } from "../store/open.mjs";
 import { flattenPrState } from "./pr-state.mjs";
 import { pipelineVersionBlock } from "./pipeline-version.mjs";
-import { discardRunDir, keptRunDir, readRunState, rowClaimOrdinal } from "./resume.mjs";
-import { consumeRunConclusion, recordFreshRetry } from "./run-state.mjs";
+import { discardRunDir, keptRunDir, ownRunState, readRunState, rowClaimOrdinal } from "./resume.mjs";
+import { consumeRunConclusion, recordFreshRetry, stalledPhases } from "./run-state.mjs";
 import { ADOPTED_WORKTREE_REASON, DETACHED_WORK_PREFIX, heldBranchOf, inspectJobWorktree, releaseJobWorktree, UNCOMMITTED_WORKTREE_REASON } from "./worktree.mjs";
 import { shellQuote } from "../host/shell.mjs";
 import { jobRef } from "../memory/refs.mjs";
@@ -75,14 +75,29 @@ function sameTurn(before, now) {
   return now?.status === before?.status && now?.attempts === before?.attempts && now?.finished_at === before?.finished_at;
 }
 
-// Consumes the last attempt's conclusion before the commit; a row that moved, a record that cannot be written or a run another job stamped refuses the retry with nothing written.
-async function consumeLastConclusion({ id, before, run, store }) {
+// The note as the answer the run records, under the attempt that paused; null when the retry carries none.
+function answerOf(note, attempt) {
+  const text = typeof note === "string" ? note.trim() : "";
+  return text === "" ? null : { text, attempt };
+}
+
+// Refuses a plain retry of a run whose last two attempts recorded nothing new, before anything is written; a note, `fresh` or a preflight gate, whose fixed cause is all it asks, always passes.
+function refuseStalledRun({ id, before, run, note }) {
+  if (answerOf(note, null) !== null || typeof before?.blocked_code === "string") return;
+  const phases = stalledPhases(ownRunState({ ...run, jobId: id }));
+  if (phases === null) return;
+  throw new UserError(`${jobRef(id)} made no progress in its last two attempts (same ${phases} phases, no new answer): answer with a note, or retry --fresh`);
+}
+
+// Consumes the last attempt's conclusion and records the note before the commit; a row that moved, a record that cannot be written or a run another job stamped refuses the retry with nothing written.
+async function consumeLastConclusion({ id, before, run, note, store }) {
   let now = before;
   const stillCurrent = async () => {
     now = await store.jobs.getJob(id);
     return sameTurn(before, now);
   };
-  const consumed = await consumeRunConclusion({ ...run, jobId: id, attempt: before?.attempts, ordinal: rowClaimOrdinal(before), stillCurrent });
+  const answer = answerOf(note, before?.attempts);
+  const consumed = await consumeRunConclusion({ ...run, jobId: id, attempt: before?.attempts, ordinal: rowClaimOrdinal(before), answer, stillCurrent });
   if (consumed.status === "moved") {
     throw new UserError(`${jobRef(id)} changed while this retry was applied (it is now \`${now?.status}\`): nothing was written; read it with nightqueue queue status ${jobRef(id)}`);
   }
@@ -108,7 +123,7 @@ async function consumedLine(id, store) {
 // Commits a plain retry; a commit that throws after a consumption says what was consumed and keeps its error class.
 async function commitAfterConsumption({ id, note, store, consumed }) {
   try {
-    return await store.jobs.retryJob(id, { note, fresh: false });
+    return await store.jobs.retryJob(id, { note, fresh: false, noteRecorded: consumed.answerRecorded === true });
   } catch (err) {
     if (consumed.status === "written") err.message += await consumedLine(id, store);
     throw err;
@@ -171,7 +186,8 @@ export async function applyRetry({ id, note, fresh = false, env = process.env, p
   if (fresh !== true) refuseVersionChangedRun(run);
   await refuseUnretryableRow(id, note, store);
   if (fresh !== true) {
-    const consumed = await consumeLastConclusion({ id, before, run, store });
+    refuseStalledRun({ id, before, run, note });
+    const consumed = await consumeLastConclusion({ id, before, run, note, store });
     return { job: await commitAfterConsumption({ id, note, store, consumed }), runDir: null, worktree: null, keptBranch: null };
   }
   const inspected = await refuseUnreleasableWorktree(before, env);

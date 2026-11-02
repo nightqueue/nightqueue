@@ -564,7 +564,7 @@ is a runtime line the origins are not told. Readers compare the claim's ordinal 
 holds one, else the attempt, never the session, so a re-spawn reads its first spawn's records, and a
 run parked by a rate limit, re-claimed at the attempt it gave back, no longer reads the `outcome`,
 `termination` or `terminal` written before the park, naming that attempt in its notice. `phases[]` is read
-whole, so that run still resumes after its last completed phase. A stamp with no ordinal compares
+whole, so that run's facts still list its completed phases. A stamp with no ordinal compares
 the attempt alone, and a record with no stamp reads as current: every run from before this rule, and
 every write from outside a job.
 
@@ -704,8 +704,12 @@ close whose merge may already have happened; resume it with nightqueue queue clo
 the resumed close reads the pull request, records a merge as `closed` and cancels the job for
 one closed without merge, so a merge is never lost from the record by a cancel. A `closed` job is terminal for both: `queue cancel`
 refuses it as already finished, and `queue retry` still takes `failed`,
-`cancelled` and `gate` and nothing else. A gated job only moves with `--note`, and that note is
-the only thing that ever reaches the prompt of the run, in a block labelled
+`cancelled` and `gate` and nothing else. A gated job only moves with `--note`. On a job whose run directory exists the note is recorded in
+`state.json.answers` as `{text, at, attempt}`, in the same locked write that consumes the last
+conclusion, and `operator_note` stays NULL: the run reads it in the `Answers:` line of `RUN FACTS`,
+and `phase_prompt` hands all the answers to the triager and the architect, oldest first. A note on a
+job with no run directory yet, or on one whose `state.json` cannot be read (the file is never
+overwritten), stays on the row and reaches the prompt in a block labelled
 `OPERATOR ANSWER TO THE GATE:` - a retry without `--note` clears whatever was in
 `operator_note`, so the label never lies about where the text came from. The one
 exception is a gate the preflight wrote (its `blocked_code` is set): there is no
@@ -716,7 +720,7 @@ allowance of attempts: a retry never rewrites the attempts already spent, and no
 refuses one.
 
 Without `--fresh` the retry keeps slug, branch, session and run directory, and
-the pipeline resumes from the last completed phase. It also consumes what the last attempt
+the next session gets the facts the run recorded and decides where to continue. It also consumes what the last attempt
 concluded, in one write under the run lock before the job goes back: `status` and `notice` leave
 the run's `outcome`, whatever the status, and the `termination` (any author) and the `terminal`
 witness go with them, while `prUrl`, `prTitle`, `wip` and `phases` stay. A record stamped with a
@@ -726,19 +730,24 @@ the claim that wrote it, so a retried run that exits cleanly with no new record 
 with the no-outcome notice and the old pull request on the row, never `gate`, `cancelled` with
 the old reason, or `done`. A retried job that already published is `done` only if the new attempt
 records it again, and `run publish` can: it edits the existing pull request. A retried terminated
-run resumes after its last completed phase, as an answered gate does; a terminal verdict on a
-phase entry still stops the resume. A refused retry changes nothing. A record that cannot be
+run is handed its recorded phases, as an answered gate is. A refused retry changes nothing.
+
+**The progress guard.** At each claim that reaches a spawn the runner records `lastClaim: {attempt,
+phases, answers}`. A retry with neither `--note` nor `--fresh` of a run whose state shows the same
+counts as its last two claims is refused with ``J-<n> made no progress in its last two attempts (same
+<n> phases, no new answer): answer with a note, or retry --fresh``, nothing written. Progress is a new
+recorded phase or a new answer and nothing else: a wip commit is none. A note, `--fresh` or a preflight
+gate (`blocked_code` set, whose fixed cause is all it asks) always passes.
+
+ A record that cannot be
 consumed (the run directory read-only, the lock held past its timeout) refuses the retry with
 `retry again in a moment` and writes nothing, and so does a row that moved after the retry checked
 it. A run directory another job's witness stamped refuses the retry too, naming that job and
 `queue retry <ref> --fresh`, which starts it over and deletes that directory; nothing is written.
 A claim over such a directory gates as `foreign-run` before the spawn and gives the attempt back,
 so no attempt starts reading a state that does not speak for it. A commit that throws after the consumption says so in its error, with the
-job's status: the question stays on the row, so retry again. The ceiling of those resumes
-lives in the `state.json` of the run (`resumeCount` against `maxResumes`, default
-`1`), not in the database: a SECOND retry without `--fresh` starts the run from
-scratch because the runtime decided so, which is the intended behaviour and not a
-bug of the retry. `--fresh` asks for that from the start, on a new branch: it clears slug,
+job's status: the question stays on the row, so retry again, and the same note of the same attempt
+is recorded once. `--fresh` starts the run over on a new branch: it clears slug,
 branch and session, releases the worktree and drops the run directory - and only a plain
 directory of this home, never a symlink, never a path outside `<home>/runs/`; anything else is
 kept, with the reason printed, and the retry goes on.
@@ -780,7 +789,7 @@ The ref stays on the old commit, which is the way back to it. A `wip(` commit th
 run's own, or any commit above an own one, is refused. To clean up, list the refs with
 `git for-each-ref refs/nightqueue/wip` and drop one with `git update-ref -d <ref>` once its work
 is delivered or abandoned.
-A retry without `--fresh` consumes the termination, so the retried run resumes after its last completed phase, on the kept wip commit.
+A retry without `--fresh` consumes the termination, so the retried run is handed the phases it recorded, on the kept wip commit.
 
 `queue repair <id>` re-classifies a job that ended `gate` or `failed` by the same table: the
 exit its row recorded, the `outcome` and `termination` in the `state.json` of its run, and the
@@ -1192,26 +1201,25 @@ directory with the artifacts already inside it. Everything the run records lands
 the `state.json` of that directory, written by the runtime alone (see
 [Runtime contract](runtime-contract.md)).
 
-On a new run of the same job the runner takes the resume decision itself, before
-spawning anything, and hands the result over in the prompt as one block:
+On a new run of the same job the runner hands over the facts the run recorded, re-read at each
+spawn, as one block of data; the pipeline's orchestrator decides where to continue (`## Resume` of
+the resolve skill):
 
 ```
-RESUME CANDIDATE (slug `fix-the-worker`)
+RUN FACTS (slug `fix-the-worker`)
 RUN_DIR: /Users/me/.nightqueue/runs/01J9Z3K8QW4X2V7N5M6B1C0D9E/fix-the-worker
-Branch: worktree-fix-the-worker
-Worktree: /Users/me/.nightqueue/worktrees/01J9Z3K8QW4X2V7N5M6B1C0D9E/fix-the-worker
-Last completed phase: triage
-Resume from phase: explore
-From stage: none
-Trust this block: skip every phase already listed in the state and read its artifact.
-Run `git status --short` in the worktree first.
+Branch: worktree-fix-the-worker   Worktree: /Users/me/.nightqueue/worktrees/01J9Z3K8QW4X2V7N5M6B1C0D9E/fix-the-worker
+Recorded phases: triage · PROCEED · 01-triage.md · 2026-09-06T10:00:00.000Z
+Wip commit: none
+Answers: none
 ```
 
-`Branch`, `Worktree` and `From stage` read `none` when the run recorded none;
-`From stage: qa-stage-b` is the one sub-phase with a marker of its own, so a run
-that died in the QA does not pay the analyst twice: it is given only while the stage A marker
-names `05-qa.md` and is newer than the last `implementation` record, so a re-implemented run
-never re-enters with the analyst round of its old implementation. A run with completed phases
+`Branch`, `Worktree`, `Wip commit` and `Answers` read `none` when the run recorded none, and a field
+of a phase it did not record prints `-`. The block is printed whenever the run directory holds a
+readable state with at least one phase or one answer, and otherwise nothing: a first claim has no
+block. The format is documented once, in [Runtime contract](runtime-contract.md). It carries records
+only: no phase order and no conclusion, so a resumed QA re-runs Phase 5 whole and a state's
+`schemaVersion` refuses nothing. A run with completed phases
 whose `state.json` records a `pipeline.version` other than the installed one is never resumed,
 on any path: a retry is refused with
 ``this run started under <name>@<old>; retry with --fresh to start it over under @<new>``
@@ -1230,10 +1238,7 @@ carries the mark, so a run's own paragraph that starts alike stays. A recorded v
 cannot be read gates as `pipeline-version-unknown` on those same paths, with its own line (``this
 run started under <name>@<old> and the installed pipeline version cannot be read from <manifest>;
 repair the plugin, then retry``): nothing is known to have changed, so it asks for no fresh start,
-and a plain retry resumes once the manifest is back. A run the decision refuses -
-no state, a deliberate termination, a resume budget already spent - gets no block
-at all and starts clean, and the runtime counts the resume in `state.json` itself:
-the pipeline never touches that file. With `queue.resumeSession: true` in
+and a plain retry resumes once the manifest is back. With `queue.resumeSession: true` in
 `config.json` the runner also passes `--resume <session id>` once the job has a
 session of its own. The default is `false`.
 
@@ -1258,7 +1263,8 @@ agent's gate needs the operator's answer with `queue retry --note`; a preflight 
 needs the operator to fix the cause (clean the checkout, register the project, put
 `claude` back on the `PATH`) and then `queue retry J-n` (the MCP `queue_retry` with
 no `note`), which clears `blocked_code` and puts the job back in the queue, keeping an
-`operator_note` an earlier `--note` left for the agent (an explicit note replaces it). A runner
+`operator_note` an earlier `--note` left for the agent (an explicit note replaces it, or lands in
+`state.json.answers` on a job with a run directory). A runner
 started before this behaviour was installed keeps releasing a blocked job to
 `pending` and waiting on it until it is restarted, so restart the runners after an
 update; a `pending` row an older runner left with a `blocked_code` is claimed like any

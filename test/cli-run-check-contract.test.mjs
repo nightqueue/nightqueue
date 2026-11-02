@@ -11,9 +11,9 @@ import { addJob, getJob } from "../src/memory/jobs.mjs";
 import { evaluateCheck } from "../src/queue/check-contract.mjs";
 import { composeGateNotice, gateDigestOf } from "../src/queue/gate-notice.mjs";
 import { questionDigest } from "../src/queue/gate-question.mjs";
-import { jobOperatorNote, jobPromptText } from "../src/queue/job-prompt.mjs";
+import { jobPromptText } from "../src/queue/job-prompt.mjs";
 import { nextRound } from "../src/queue/phase-artifacts.mjs";
-import { decideResume, readRunState } from "../src/queue/resume.mjs";
+import { readRunState, saveRunState } from "../src/queue/resume.mjs";
 import { applyRetry } from "../src/queue/retry.mjs";
 import { provisionalSlug } from "../src/queue/run-slug.mjs";
 import { recordOutcome, recordPhaseDone, recordRunFields, recordTermination, RUNTIME_AUTHOR } from "../src/queue/run-state.mjs";
@@ -50,6 +50,7 @@ function seedRun(t, name, { fixture, texts }) {
   if (fixture.operatorNote) openDb(env).prepare("UPDATE jobs SET operator_note = ? WHERE id = ?").run(fixture.operatorNote, id);
   if (fixture.type) recordRunFields({ projectId, slug: SLUG, fields: { type: fixture.type }, env });
   if (fixture.gateQuestionDigest) recordOutcome({ projectId, slug: SLUG, status: "gate", questionDigest: fixture.gateQuestionDigest, env });
+  if (fixture.answers) saveRunState({ projectId, slug: SLUG, env, state: { ...readRunState({ projectId, slug: SLUG, env }), answers: fixture.answers } });
   const dir = runDir(projectId, SLUG, env);
   mkdirSync(dir, { recursive: true });
   for (const [file, body] of Object.entries(texts)) writeFileSync(join(dir, file), body);
@@ -225,13 +226,12 @@ test("a phase checked again after another check failed names that failure as the
   assert.deepEqual(stateOf(seeded).phases.map((entry) => entry.reason ?? null), [null, "re-run after 06 VERDICT: FAILED"]);
 });
 
-test("a terminal triage verdict records the termination, so the run is never resumed", async (t) => {
+test("a terminal triage verdict records the termination", async (t) => {
   const seeded = seedRun(t, "effects-terminal", readFixture("triage-terminal-verdict"));
   await runCheck(seeded.env, "01");
   const state = stateOf(seeded);
   const reason = "NOT-REPRODUCIBLE: The listing never showed archived jobs on the reported build.";
   assert.deepEqual({ ...state.termination, at: null }, { phase: "triage", reason, at: null, by: "runtime", claim: { attempt: 0, session: null } });
-  assert.equal(decideResume({ state }).reason, "terminated-by-verdict");
 });
 
 test("a triage with no recorded Type writes the Type it implies", async (t) => {
@@ -240,13 +240,12 @@ test("a triage with no recorded Type writes the Type it implies", async (t) => {
   assert.equal(stateOf(seeded).type, "feature/refactor");
 });
 
-test("a completed check 05 --stage analyst records the QA stage A marker and no phase", async (t) => {
+test("a completed check 05 --stage analyst answers its stage and records no marker and no phase", async (t) => {
   const report = "## Round 1\n## Proven breaks\nNone\n\n## Break hypotheses\n- H1\n\n## Test recipe\nnode --test\n\n## Validated risks\n- R1\n\n## Invalidated assumptions\nNone\n\n## Generated PoCs\nNone — the provers write them\n\n## Verdict\nAPPROVED\n";
   const seeded = seedRun(t, "effects-qa-stage-a", { fixture: {}, texts: { "05-qa.md": report } });
   const { out } = await runCheck(seeded.env, "05", ["--stage", "analyst"]);
-  assert.deepEqual(out, ["OK", "VERDICT: APPROVED", "QA-STAGE: provers", "recorded: qa_stage_a APPROVED"]);
+  assert.deepEqual(out, ["OK", "VERDICT: APPROVED", "QA-STAGE: provers"]);
   const state = stateOf(seeded);
-  assert.deepEqual([state.qaStageA.artifact, state.qaStageA.verdict], ["05-qa.md", "APPROVED"]);
   assert.equal(state.phases, undefined);
 });
 
@@ -324,16 +323,13 @@ test("an open item written as prose counts, and a deeper `### Open items` headin
   assert.equal(deeper.first, "MISSING: ## Open items");
 });
 
-test("a PROCEED re-triage lifts the runtime's triage stop, and the run resumes", async (t) => {
+test("a PROCEED re-triage lifts the runtime's triage stop", async (t) => {
   const seeded = seedRun(t, "lift-termination", { fixture: { type: "bug/error" }, texts: { "01-triage.md": triageWith("NOT-REPRODUCIBLE") } });
   assert.equal((await runCheck(seeded.env, "01")).out.at(-2), "recorded: run_terminate triage NOT-REPRODUCIBLE");
   assert.equal(stateOf(seeded).termination.by, "runtime");
   writeFileSync(join(seeded.dir, "01-triage.md"), triageWith("PROCEED"));
   assert.deepEqual((await runCheck(seeded.env, "01")).out.slice(-2), ["recorded: termination cleared", `recorded: slug ${SLUG}`]);
-  recordPhaseDone({ projectId: seeded.projectId, slug: SLUG, phase: "explore", env: seeded.env });
-  recordPhaseDone({ projectId: seeded.projectId, slug: SLUG, phase: "architecture", env: seeded.env });
-  const decision = decideResume({ state: stateOf(seeded) });
-  assert.deepEqual([decision.resume, decision.fromPhase], [true, "implementation"]);
+  assert.equal(stateOf(seeded).termination, undefined);
 });
 
 test("a termination written by hand is never lifted by a PROCEED re-triage", async (t) => {
@@ -613,24 +609,20 @@ test("a skip after a QA that ran is a new entry: only the runtime's own last SKI
   assert.deepEqual(stateOf(seeded).phases.map((entry) => entry.verdict), ["SKIPPED", "APPROVED", "SKIPPED"]);
 });
 
-test("a skip moved to lite or full owes the QA on a resume, even past a later verification, and a skip that stands does not", async (t) => {
+test("a skip moved to lite or full drops the runtime's skip from the facts, so the orchestrator owes the QA; a skip that stands stays", async (t) => {
   const seeded = seedRun(t, "triage-owed", { fixture: {}, texts: { "05-qa.md": triageRound(1) } });
   await runCheck(seeded.env, "05", TRIAGE_ARGS);
   const target = { projectId: seeded.projectId, slug: SLUG, env: seeded.env };
   assert.equal(recordPhaseDone({ ...target, phase: "implementation", verdict: "fixed" }).status, "written");
-  assert.equal(decideResume({ state: stateOf(seeded) }).fromPhase, "verification");
+  assert.deepEqual(stateOf(seeded).phases.map((entry) => entry.verdict), ["SKIPPED", "fixed"]);
   for (const mode of ["lite — one small file.", "full — the retry path changed."]) {
     writeFileSync(join(seeded.dir, "05-qa.md"), triageRound(1, { kinds: "- logic: src/a.mjs", risk: "- the retry path", mode }));
     await runCheck(seeded.env, "05", TRIAGE_ARGS);
-    assert.equal(decideResume({ state: stateOf(seeded) }).fromPhase, "qa", mode);
+    assert.deepEqual(stateOf(seeded).phases.map((entry) => entry.phase), ["implementation"], mode);
   }
-  assert.equal(recordPhaseDone({ ...target, phase: "verification", verdict: "FAILED" }).status, "written");
-  assert.equal(decideResume({ state: stateOf(seeded) }).fromPhase, "qa");
-  assert.equal(recordPhaseDone({ ...target, phase: "qa", verdict: "APPROVED" }).status, "written");
-  assert.equal(decideResume({ state: stateOf(seeded) }).fromPhase, "runtime", "the QA that ran pays what was owed");
 });
 
-test("a lite or full decision drops the skip and still owes the QA past a verification recorded before it", async (t) => {
+test("a lite or full decision drops the skip past a verification recorded before it", async (t) => {
   for (const mode of ["lite — one small file.", "full — the retry path changed."]) {
     const seeded = seedRun(t, `triage-owed-past-${mode.slice(0, 4)}`, { fixture: {}, texts: { "05-qa.md": triageRound(1) } });
     await runCheck(seeded.env, "05", TRIAGE_ARGS);
@@ -641,21 +633,18 @@ test("a lite or full decision drops the skip and still owes the QA past a verifi
     writeFileSync(join(seeded.dir, "05-qa.md"), triageRound(1, { kinds: "- logic: src/a.mjs", risk: "- the retry path", mode }));
     await runCheck(seeded.env, "05", TRIAGE_ARGS);
     assert.deepEqual(stateOf(seeded).phases.map((entry) => entry.phase), ["implementation", "verification"], mode);
-    assert.equal(decideResume({ state: stateOf(seeded) }).fromPhase, "qa", mode);
   }
 });
 
-test("a mode decided after a QA that ran owes a new QA and keeps that QA's entry, only the runtime's skip goes", async (t) => {
+test("a mode decided after a QA that ran keeps that QA's entry, only the runtime's skip goes", async (t) => {
   const seeded = seedRun(t, "triage-after-real-qa", { fixture: {}, texts: { "05-qa.md": triageRound(1, { kinds: "- logic: src/a.mjs", mode: "lite — one small file." }) } });
   await runCheck(seeded.env, "05", TRIAGE_ARGS);
   const target = { projectId: seeded.projectId, slug: SLUG, env: seeded.env };
   assert.equal(recordPhaseDone({ ...target, phase: "qa", verdict: "APPROVED", by: "orchestrator" }).status, "written");
-  assert.equal(decideResume({ state: stateOf(seeded) }).fromPhase, "verification", "the QA ran after the decision");
   await nextMillisecond();
   writeFileSync(join(seeded.dir, "05-qa.md"), triageRound(1, { kinds: "- logic: src/a.mjs", risk: "- the retry path", mode: "full — the retry path changed." }));
   await runCheck(seeded.env, "05", TRIAGE_ARGS);
   assert.deepEqual(stateOf(seeded).phases.map((entry) => entry.verdict), ["APPROVED"]);
-  assert.equal(decideResume({ state: stateOf(seeded) }).resume, false, "no phase before the QA is left to resume after");
 });
 
 test("a qa SKIPPED nobody decided stays on the state when a lite or full decision lands", async (t) => {
@@ -722,12 +711,12 @@ test("a triage round before the analyst stays out of the consolidation of a full
   assert.equal(consolidated.includes("## Diff classification"), false, consolidated);
 });
 
-test("a skipped QA resumes at the verification and never re-enters Phase 5", async (t) => {
+test("a skipped QA is recorded as a qa entry the facts list last", async (t) => {
   const seeded = seedRun(t, "triage-skip-resume", readFixture("qa-triage-skip"));
   for (const phase of ["triage", "explore", "architecture", "implementation"]) recordPhaseDone({ projectId: seeded.projectId, slug: SLUG, phase, env: seeded.env });
   await runCheck(seeded.env, "05", TRIAGE_ARGS);
-  const decision = decideResume({ state: stateOf(seeded) });
-  assert.deepEqual([decision.resume, decision.fromPhase, decision.lastPhase], [true, "verification", "qa"]);
+  const last = stateOf(seeded).phases.at(-1);
+  assert.deepEqual([last.phase, last.verdict], ["qa", "SKIPPED"]);
 });
 
 test("`run_set` refuses the QA mode, whole or dotted, and `--stage` accepts no inherited name", async (t) => {
@@ -795,8 +784,7 @@ test("a retired triage verdict reads as PROCEED: no stop, the phase recorded, an
     assert.ok(out.includes("recorded: phase_done triage PROCEED"), out.join("\n"));
     assert.ok(out.includes("recorded: termination cleared"), out.join("\n"));
     assert.equal(stateOf(seeded).termination, undefined);
-    const decision = decideResume({ state: stateOf(seeded) });
-    assert.deepEqual([decision.resume, decision.fromPhase], [true, "explore"]);
+    assert.equal(stateOf(seeded).phases.at(-1).phase, "triage");
   }
 });
 
@@ -807,7 +795,7 @@ test("a retired triage verdict still answers the Brief gates of a PROCEED", () =
   assert.equal(completes, false);
 });
 
-test("a second-round INVALIDATED withholds qa, pauses at a gate from `## Validated risks`, and the answered run resumes at qa", async (t) => {
+test("a second-round INVALIDATED withholds qa, pauses at a gate from `## Validated risks`, and the answer is recorded with no qa entry", async (t) => {
   const seeded = seedRun(t, "invalidated-gate", readFixture("invalidated-second-round"));
   for (const phase of ["triage", "explore", "architecture", "implementation"]) recordPhaseDone({ projectId: seeded.projectId, slug: SLUG, phase, env: seeded.env });
   const { out } = await runCheck(seeded.env, "05");
@@ -819,11 +807,11 @@ test("a second-round INVALIDATED withholds qa, pauses at a gate from `## Validat
   assert.match(notice, /R1 UPHELD by test\/list\.test\.mjs/);
   openDb(seeded.env).prepare("UPDATE jobs SET status = 'gate' WHERE id = ?").run(jobIdOf(seeded));
   await applyRetry({ id: jobIdOf(seeded), note: "(b) ship as is", env: seeded.env });
-  const decision = decideResume({ state: stateOf(seeded) });
-  assert.deepEqual([decision.resume, decision.fromPhase], [true, "qa"]);
+  assert.deepEqual(stateOf(seeded).answers.map((entry) => entry.text), ["(b) ship as is"]);
+  assert.equal(stateOf(seeded).phases.at(-1).phase, "implementation");
 });
 
-test("a J-258 plan with open coverage and a filled question records its phase and no termination, composes its notice, and the answered run resumes at implementation", async (t) => {
+test("a J-258 plan with open coverage and a filled question records its phase and no termination, composes its notice, and the answer is recorded after the architecture", async (t) => {
   const seeded = seedRun(t, "coverage-gate-pause", readFixture("coverage-split-status-confirm"));
   for (const phase of ["triage", "explore"]) recordPhaseDone({ projectId: seeded.projectId, slug: SLUG, phase, env: seeded.env });
   const { out } = await runCheck(seeded.env, "03");
@@ -838,8 +826,8 @@ test("a J-258 plan with open coverage and a filled question records its phase an
   assert.match(coverage, /covered under \(A\) · not-covered under \(B\)/);
   openDb(seeded.env).prepare("UPDATE jobs SET status = 'gate' WHERE id = ?").run(jobIdOf(seeded));
   await applyRetry({ id: jobIdOf(seeded), note: "(A) every git read", env: seeded.env });
-  const decision = decideResume({ state: stateOf(seeded) });
-  assert.deepEqual([decision.resume, decision.fromPhase], [true, "implementation"]);
+  assert.deepEqual(stateOf(seeded).answers.map((entry) => entry.text), ["(A) every git read"]);
+  assert.equal(stateOf(seeded).phases.at(-1).phase, "architecture");
 });
 
 test("a terminal triage with a partial Brief fires no field gate and still terminates", async (t) => {
@@ -927,17 +915,13 @@ test("`run_set` refuses the digest of the paused question", async (t) => {
   assert.deepEqual(refused, { status: "kept", path: null, reason: "`gateQuestionDigest` is written by the runtime only" });
 });
 
-test("the job prompt text and the operator note read the job's row, and answer null outside a job or for an unknown job", async (t) => {
+test("the job prompt text reads the job's row, and answers null outside a job or for an unknown job", async (t) => {
   const seeded = seedRun(t, "job-prompt", { fixture: { prompt: "list the active jobs", operatorNote: "keep  the \"raw\" note" }, texts: {} });
   const own = { jobId: Number(seeded.env.NIGHTQUEUE_JOB_ID) };
   assert.equal(await jobPromptText(own, seeded.env), 'list the active jobs\n\nkeep  the "raw" note');
-  assert.equal(await jobOperatorNote(own, seeded.env), 'keep  the "raw" note');
   for (const other of [{ jobId: null }, { jobId: 99999 }]) {
     assert.equal(await jobPromptText(other, seeded.env), null);
-    assert.equal(await jobOperatorNote(other, seeded.env), null);
   }
-  const noNote = seedRun(t, "job-no-note", { fixture: {}, texts: {} });
-  assert.equal(await jobOperatorNote({ jobId: Number(noNote.env.NIGHTQUEUE_JOB_ID) }, noNote.env), null);
 });
 
 test("a paused question reads as answered on the resumed check, reformatted too, and a new question pauses again", async (t) => {
@@ -954,12 +938,14 @@ test("a paused question reads as answered on the resumed check, reformatted too,
   assert.equal(stateOf(seeded).gateQuestionDigest, questionDigest);
 
   const answered = await runCheck(env, "03");
-  assert.ok(answered.out.includes("CONFIRM: answered"), answered.out.join("\n"));
+  const answer = stateOf(seeded).answers.at(-1);
+  assert.equal(answer.text, "go ahead");
+  assert.ok(answered.out.includes(`CONFIRM: answered (${answer.at})`), answered.out.join("\n"));
   assert.ok(!answered.out.includes(pause), answered.out.join("\n"));
   assert.equal(stateOf(seeded).checks["03"].line, "OK");
 
   writeFileSync(planPath, plan.replace("approve fixing the retry path only?", "**Approve**  fixing   the `retry` path only?"));
-  assert.ok((await runCheck(env, "03")).out.includes("CONFIRM: answered"));
+  assert.ok((await runCheck(env, "03")).out.includes(`CONFIRM: answered (${answer.at})`));
 
   writeFileSync(planPath, plan.replace("approve fixing the retry path only?", "approve fixing every path?"));
   assert.ok((await runCheck(env, "03")).out.includes("CONFIRM: requires-user-confirmation — approve fixing every path?"));

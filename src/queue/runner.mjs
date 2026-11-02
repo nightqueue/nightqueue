@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, rmdirSync } from "node:fs";
+import { appendFileSync, closeSync, existsSync, mkdirSync, openSync, readFileSync, rmdirSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { STORE_UNAVAILABLE_HINT, StoreUnavailableError, UserError, isStoreOutage } from "../config/errors.mjs";
 import { jobLogPath, jobWorktreePath, logsDir, runDir } from "../config/paths.mjs";
@@ -34,14 +34,14 @@ import { killProcess, ownRunnerRecord } from "./registry.mjs";
 import { runMaintenance } from "./maintenance.mjs";
 import { appendPendingWrite, PENDING_KEYS, replayPendingWrites } from "./pending-writes.mjs";
 import { pipelineVersionBlock, withoutUnpinnedLine, withUnpinnedLine } from "./pipeline-version.mjs";
-import { claimRunState, claimStamp, decideResume, foreignStampOf, isRunPath, isSafeSegment, isStateObject, readRunState, resumeHandoff, writeRunTerminal } from "./resume.mjs";
+import { claimRunState, claimStamp, foreignStampOf, isRunPath, isSafeSegment, isStateObject, readRunState, runFacts, writeRunTerminal } from "./resume.mjs";
 import { adoptRunSlug, followRunSlug, slugRefusal } from "./run-slug.mjs";
-import { JOB_BLOCK_ALREADY_RECORDED, recordJobBlock, recordPrUrl, recordResume, recordRunFields, recordWip } from "./run-state.mjs";
+import { JOB_BLOCK_ALREADY_RECORDED, recordClaim, recordJobBlock, recordPrUrl, recordRunFields, recordWip } from "./run-state.mjs";
 import { DISABLED_BACKGROUND_ESCAPE_LINE } from "./run-notice.mjs";
 import { commitWipAsync, WIP_SKIP_REASONS, wipAtHead, wipKeptLine, wipNoticeLine, withWipLine } from "./wip-commit.mjs";
 
 export { DISABLED_BACKGROUND_ESCAPE_LINE } from "./run-notice.mjs";
-import { buildPrompt, IDLE_TIMEOUT_S, provisionalSlug, slugCandidates, spawnClaude } from "./spawn.mjs";
+import { buildPrompt, IDLE_TIMEOUT_S, openPrsMarkdown, provisionalSlug, slugCandidates, spawnClaude } from "./spawn.mjs";
 import { orchestratorRoots, sessionTranscriptPath } from "./orchestrator-scope.mjs";
 import {
   extractBaselineCtx,
@@ -65,7 +65,7 @@ import { phaseTelemetry, runDurationS } from "./telemetry.mjs";
 import { resolveWindow, windowPhase } from "./window.mjs";
 import { ADOPTED_WORKTREE_REASON, finishNotice, inspectRunWorktree, isAdoptedWorktree, keptWorktreeLine, openJobHolds, openJobWorktrees, removeRunWorktree, withoutKeptLine } from "./worktree.mjs";
 import { jobRef } from "../memory/refs.mjs";
-import { enrichJobOrigins } from "../integrations/enrich.mjs";
+import { enrichJobOrigins, OPEN_PRS_KIND } from "../integrations/enrich.mjs";
 import { parseOriginsColumn } from "../integrations/origin.mjs";
 
 // Interval between two cycles of `queue run --watch` when the operator gives no number.
@@ -892,17 +892,6 @@ async function parkRun(job, run, ctx) {
   return { id: job.id, status: "rate-limited", attempts: run.attempt, notBefore };
 }
 
-// Counts this resume in the state of the run, so the cap bites on the next retry; a state that refuses the write is said out loud and never costs the run.
-function persistResume(job, resumeCount, env) {
-  const written = recordResume({ projectId: job.project_id, slug: job.slug, resumeCount, env });
-  if (written.status !== "written") appendJobLog(job.id, `the resume could not be counted in the state of the run: ${written.reason}`, env);
-}
-
-// Says in the job log each recorded phase of an operator run the runtime refused to skip.
-function logOperatorReruns(job, handoff, env) {
-  for (const rerun of handoff?.reruns ?? []) appendJobLog(job.id, `operator run: ${rerun.phase} re-runs: ${rerun.reason}`, env);
-}
-
 // The job with the run it writes into already named: the slug of its row, or a provisional one derived from its prompt and
 // claimed before the spawn, so the run directory exists from the first attempt and a retry finds it again. A slug another
 // job holds, or whose directory or worktree slot is already taken, is never taken: the claim moves on to the next free variant.
@@ -1057,7 +1046,7 @@ export function prSearchKey(job) {
   return (words ?? []).slice(0, PR_SEARCH_WORDS).join(" ").slice(0, PR_SEARCH_MAX_CHARS);
 }
 
-// Open pull requests to attach to the prompt of this job: disabled by NIGHTQUEUE_NO_PR_CHECK with no subprocess at all, and
+// Open pull requests to hand to the triager of this job: disabled by NIGHTQUEUE_NO_PR_CHECK with no subprocess at all, and
 // undetermined whenever gh could not answer. The lookup is awaited, never run synchronously: it is the only network call of a
 // run, and a blocking one here would stall the dispatch loop and the I/O of every job already in flight.
 export async function openPrsForJob(job, { env = process.env, deps = {} } = {}) {
@@ -1070,6 +1059,23 @@ export async function openPrsForJob(job, { env = process.env, deps = {} } = {}) 
     return Array.isArray(found) ? found : undefined;
   } catch {
     return undefined;
+  }
+}
+
+// Replaces what the claim found about open pull requests in `origin/open-prs.md`, which the triager reads; an undetermined lookup leaves no file, and a failure is one job-log line.
+function writeOpenPrs(job, openPrs, env) {
+  if (!isRunPath(job.project_id, job.slug)) return;
+  const dir = join(runDir(job.project_id, job.slug, env), "origin");
+  const file = join(dir, `${OPEN_PRS_KIND}.md`);
+  try {
+    if (Array.isArray(openPrs)) {
+      mkdirSync(dir, { recursive: true, mode: 0o700 });
+      writeFileSync(file, openPrsMarkdown(openPrs), { mode: 0o600 });
+    } else {
+      rmSync(file, { force: true });
+    }
+  } catch (err) {
+    appendJobLog(job.id, `the open pull requests could not be written: ${err?.message ?? String(err)}`, env);
   }
 }
 
@@ -1119,11 +1125,12 @@ async function prepareJob(claimed, ctx) {
   ensureRunDir(job, env);
   if ((await recordJob(job, ctx)) === OUTAGE_STOPPED) return { report: stoppedInOutage(job, env) };
   if ((await enrichOrigin(job, ctx)) === OUTAGE_STOPPED) return { report: stoppedInOutage(job, env) };
+  writeOpenPrs(job, openPrs, env);
   const openHolds = () => openJobHolds({ store: ctx.store, env });
   const prepared = await deps.worktreeImpl({ job, checkout: check.cwd, baseBranch: check.branch, env, log: (line) => appendJobLog(job.id, line, env), openHolds });
   if (!prepared.ok) return { report: await gateJob(job, prepared, ctx) };
   await persistBranch(job, job.slug, ctx);
-  return { job, check, prepared, openPrs };
+  return { job, check, prepared };
 }
 
 // Runs one claimed job end to end, its lease renewed the moment an unavailable database answers again.
@@ -1165,10 +1172,18 @@ function queueMeasures(job, run, env) {
   if (record) queueRecord(job, run.facts.slug, record, env);
 }
 
-// The resume handoff re-pointed at the slug the run lives under now; the same handoff when the run never moved.
-function handoffAt(handoff, { projectId, slug, env }) {
-  if (!handoff || slug === handoff.slug) return handoff;
-  return { ...handoff, slug, runDir: runDir(projectId, slug, env) };
+// The prompt of one spawn of a job under the slug its run lives in now, with the facts the run holds at that moment.
+function promptOfSpawn(job, slug, env) {
+  const state = claimRunState({ projectId: job.project_id, slug, jobId: job.id, attempt: job.attempts, ordinal: job.claim_attempt, env });
+  const dir = isRunPath(job.project_id, slug) ? runDir(job.project_id, slug, env) : null;
+  return buildPrompt({ job: { ...job, slug }, facts: runFacts(state, { runDir: dir }), env });
+}
+
+// Records what this claim found in the run, which the retry's progress guard reads; a state that refuses the write is one job-log line and never costs the run.
+function noteClaim(job, env) {
+  if (!isRunPath(job.project_id, job.slug)) return;
+  const written = recordClaim({ projectId: job.project_id, slug: job.slug, attempt: job.attempts, env });
+  if (written.status !== "written") appendJobLog(job.id, `the claim could not be recorded in the state of the run: ${written.reason}`, env);
 }
 
 // Runs one held job: what comes before the spawn, its attempts and the single write of the outcome.
@@ -1176,13 +1191,9 @@ async function runHeldJob(claimed, ctx) {
   const { env } = ctx;
   const ready = await prepareJob(claimed, ctx);
   if (ready.report) return ready.report;
-  const { job, check, prepared, openPrs } = ready;
-  const state = claimRunState({ projectId: job.project_id, slug: job.slug, jobId: job.id, attempt: job.attempts, ordinal: job.claim_attempt, env });
-  const resume = decideResume({ state });
-  const handoff = resumeHandoff({ job, resume, state, env });
-  if (handoff) persistResume(job, resume.resumeCount, env);
-  logOperatorReruns(job, handoff, env);
-  const promptFor = (slug) => buildPrompt({ job: { ...job, slug }, handoff: handoffAt(handoff, { projectId: job.project_id, slug, env }), openPrs, env });
+  const { job, check, prepared } = ready;
+  noteClaim(job, env);
+  const promptFor = (slug) => promptOfSpawn(job, slug, env);
   const run = await runAttempts(job, { ...ctx, cwd: prepared.path, sessionResumable: prepared.reused && !prepared.legacy, promptFor });
   if (run.lost) {
     noteOwnershipLost(job, env);

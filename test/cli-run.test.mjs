@@ -381,7 +381,7 @@ test("`run check 01` requires `Evidence level: <1-4>` as the first line under ##
 test("`run check 05 --stage analyst` outside a job answers for an operator run named by project and slug", async (t) => {
   const env = makeQueue(t, "cli-run-check-operator-analyst");
   const slug = "hunt-the-notice";
-  recordRunFields({ projectId: ensureProject(env, "alpha"), slug, fields: { origin: "operator" }, env });
+  recordRunFields({ projectId: ensureProject(env, "alpha"), slug, fields: { type: "bug/error" }, env });
   writeArtifact(env, "05-qa.md", "# QA\n\n## Round 1\n\n## Proven breaks\n\nNone\n\n## Break hypotheses\n\n- H1\n\n## Test recipe\n\nnode --test\n\n## Validated risks\n\n- R1 → hypothesis H1\n\n## Invalidated assumptions\n\nNone\n\n## Generated PoCs\n\nNone — the provers write them\n\n## Verdict\n\nNEEDS FIX\n", { slug });
   const qa = await runCli(env, ["run", "check", "05", "--stage", "analyst", "--project", "alpha", "--slug", slug]);
   assert.equal(qa.code, 0);

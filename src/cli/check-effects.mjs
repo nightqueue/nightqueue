@@ -3,8 +3,8 @@ import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { PIPELINE_TASK_TYPES } from "../memory/runs.mjs";
 import { derivedType, firstItem } from "../queue/check-contract.mjs";
-import { PHASE_ARTIFACTS, QA_ANALYST_STAGE, QA_STAGES } from "../queue/phase-artifacts.mjs";
-import { isSafeSegment, TERMINAL_VERDICT_LABELS } from "../queue/resume.mjs";
+import { PHASE_ARTIFACTS, QA_STAGES } from "../queue/phase-artifacts.mjs";
+import { isSafeSegment } from "../queue/resume.mjs";
 import { adoptRunSlug, isProvisionalSlug } from "../queue/run-slug.mjs";
 import { clearTermination, leavesStaleQaSkip, recordCheck, recordQaMode, recordRunFields, recordTermination, RUNTIME_AUTHOR } from "../queue/run-state.mjs";
 import { briefCommitType, briefSection, briefSlug, briefType } from "../queue/triage-brief.mjs";
@@ -13,9 +13,11 @@ import { saveIndexFromText } from "./index-save.mjs";
 import { worktreeOf } from "./run-context.mjs";
 
 // The effects `run check` chains after printing its contract lines: the index of 02; the Type, the Brief, the commit type,
-// the termination and the slug of 01; the QA stage A marker of the analyst stage; the QA mode of the triage stage; the phase record of a completed check and the check memo.
+// the termination and the slug of 01; the QA mode of the triage stage; the phase record of a completed check and the check memo.
 // None of them changes the first line.
 
+// The triage verdicts that close the run on purpose.
+const TERMINAL_VERDICT_LABELS = ["NO-CHANGE-NEEDED", "NOT-REPRODUCIBLE", "NEEDS-CLARIFICATION", "PROPOSE-ALTERNATIVE"];
 const TERMINATION_MAX = 200;
 const BRIEF_FILE = PHASE_ARTIFACTS.get("00").file;
 const PASSING_LINES = new Set(["OK", "GENERATED"]);
@@ -144,13 +146,6 @@ function liftedTerminationLines({ run, result, ctx }) {
   return [cleared.status === "written" ? "recorded: termination cleared" : notRecorded(cleared)];
 }
 
-// The `recorded: qa_stage_a` line of a completed `check 05 --stage analyst`: the marker that lets a resume re-enter the QA at stage B.
-function qaStageALines({ run, result, ctx }) {
-  const fields = { qaStageA: { artifact: QA_ANALYST_STAGE.file, verdict: result.verdict } };
-  const written = recordRunFields({ projectId: run.projectId, slug: run.slug, fields, claim: run.claim, env: ctx.env });
-  return [written.status === "written" ? `recorded: qa_stage_a ${result.verdict}` : notRecorded(written)];
-}
-
 // The `recorded: qa_mode` line of a completed `check 05 --stage triage`: the decision on the run, left untouched when the same mode already stands with no stale skip beside it, however the reason is worded.
 function qaModeLines({ run, result, state, ctx }) {
   const { mode, why } = result.qaMode;
@@ -198,10 +193,9 @@ export async function checkEffectLines({ run, check, stage = null, result, state
   const brief = triageDone ? briefLines(args) : [];
   const commitType = triageDone ? commitTypeLines(args) : [];
   const recorded = memoAndPhaseLines(args);
-  const qaStageA = check === "05" && stage === "analyst" && result.completes ? qaStageALines(args) : [];
   const qaMode = result.completes && result.qaMode !== null ? qaModeLines(args) : [];
   const termination = triageDone ? terminationLines(args) : [];
   const lifted = triageDone ? liftedTerminationLines(args) : [];
   const slug = triageDone ? await slugLines(args) : [];
-  return [...index, ...type, ...brief, ...commitType, ...recorded, ...qaStageA, ...qaMode, ...termination, ...lifted, ...slug];
+  return [...index, ...type, ...brief, ...commitType, ...recorded, ...qaMode, ...termination, ...lifted, ...slug];
 }

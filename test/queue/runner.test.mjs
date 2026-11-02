@@ -515,7 +515,7 @@ test("the branch of the run comes from the state file the pipeline wrote", async
   assert.equal(getJob(id, env).branch, "fix/the-worker");
 });
 
-test("a retried job resumes on its own slug and run directory, and the runtime counts the resume in the state", async (t) => {
+test("a retried job goes on under its own slug and run directory, and the runtime hands its recorded facts over", async (t) => {
   const { env, planPath } = makeRunnerHome(t, "runner-resume-handoff", [{ stdout: "", exitCode: 0 }]);
   const id = enqueue(env);
   mkdirSync(runDir(ensureProject(env, "alpha"), SLUG, env), { recursive: true });
@@ -527,7 +527,6 @@ test("a retried job resumes on its own slug and run directory, and the runtime c
       project: "alpha",
       branch: "fix/the-worker",
       worktree: "/tmp/worktrees/fix-the-worker",
-      resumeCount: 0,
       phases: [{ phase: "triage", artifact: "01-triage.md", verdict: "ok" }],
     }),
   );
@@ -536,19 +535,19 @@ test("a retried job resumes on its own slug and run directory, and the runtime c
   await runJobCycle(env, id);
 
   const prompt = argValue(fakeCalls(planPath)[0].argv, "-p");
-  assert.ok(prompt.includes(`RESUME CANDIDATE (slug \`${SLUG}\`)`), prompt);
+  assert.ok(prompt.includes(`RUN FACTS (slug \`${SLUG}\`)`), prompt);
   assert.ok(prompt.includes(`RUN_DIR: ${runDir(ensureProject(env, "alpha"), SLUG, env)}`), prompt);
   assert.ok(prompt.includes("Branch: fix/the-worker"), prompt);
-  assert.ok(prompt.includes("Resume from phase: explore"), prompt);
+  assert.ok(prompt.includes("Recorded phases: triage · ok · 01-triage.md · -"), prompt);
+  assert.equal(/resume from/i.test(prompt), false, prompt);
   assert.equal(getJob(id, env).slug, SLUG, "the retry lost the slug of the run it was resuming");
   assert.deepEqual(readdirSync(dirname(runDir(ensureProject(env, "alpha"), SLUG, env))), [SLUG], "the retry opened a second run directory");
   const state = JSON.parse(readFileSync(join(runDir(ensureProject(env, "alpha"), SLUG, env), "state.json"), "utf8"));
-  assert.equal(state.resumeCount, 1, "the resume was not counted in the state of the run");
-  assert.equal(state.phases.length, 1, "counting the resume rewrote the run instead of merging into it");
+  assert.equal(state.phases.length, 1, "recording the claim rewrote the run instead of merging into it");
 });
 
-test("a job queued from an operator run whose bug triage stayed below level 3 re-runs it, and says so in its prompt and its log", async (t) => {
-  const { env, planPath } = makeRunnerHome(t, "runner-operator-rerun", [{ stdout: "", exitCode: 0 }]);
+test("a state an operator session recorded takes no branch of its own: its records are facts like any other", async (t) => {
+  const { env, planPath } = makeRunnerHome(t, "runner-operator-state", [{ stdout: "", exitCode: 0 }]);
   const id = enqueue(env);
   mkdirSync(runDir(ensureProject(env, "alpha"), SLUG, env), { recursive: true });
   writeFileSync(
@@ -560,7 +559,6 @@ test("a job queued from an operator run whose bug triage stayed below level 3 re
       origin: "operator",
       type: "bug/error",
       evidenceLevel: 2,
-      resumeCount: 0,
       phases: [{ phase: "triage", artifact: "01-triage.md", verdict: "PROCEED" }],
     }),
   );
@@ -569,9 +567,8 @@ test("a job queued from an operator run whose bug triage stayed below level 3 re
   await runJobCycle(env, id);
 
   const prompt = argValue(fakeCalls(planPath)[0].argv, "-p");
-  assert.ok(prompt.includes("Resume from phase: triage"), prompt);
-  assert.ok(prompt.includes("Re-run: triage — evidence level 2 is below 3 on a bug (operator run)"), prompt);
-  assert.match(readFileSync(jobLogPath(id, env), "utf8"), /operator run: triage re-runs: evidence level 2 is below 3 on a bug/);
+  assert.ok(prompt.includes("Recorded phases: triage · PROCEED · 01-triage.md · -"), prompt);
+  assert.equal(prompt.includes("Re-run"), false, prompt);
 });
 
 test("a job that stops belonging to this runner is killed and closed as cancelled", async (t) => {

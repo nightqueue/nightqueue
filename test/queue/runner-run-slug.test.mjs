@@ -105,7 +105,7 @@ test("the retry attempt after an in-session rename is prompted with the NEW run 
   assert.equal(existsSync(oldDir), false, "ghost dir at the old slug");
 });
 
-test("a run the check never renamed prompts its retry with exactly the first attempt's prompt", async (t) => {
+test("a run the check never renamed prompts its respawn with the first attempt's prompt, plus what it recorded since", async (t) => {
   const { env, signal, exec, projectId } = sessionHome(t, "retry-same", triageText({ slugLine: "" }));
   writeFileSync(join(signal, "go"), "1");
   const planPath = useFakeClaude(env, makeDir(t, "retry-same-plan"), [
@@ -120,7 +120,8 @@ test("a run the check never renamed prompts its retry with exactly the first att
   assert.equal(calls.length, 2, "expected two attempts");
   const prompt = (call) => call.argv.find((arg) => arg.includes("RUN_DIR:"));
   assert.ok(prompt(calls[0]), "the first attempt carries no RUN_DIR line");
-  assert.equal(prompt(calls[1]), prompt(calls[0]));
+  const request = (text) => text.split("\n\nRUN FACTS")[0];
+  assert.equal(request(prompt(calls[1])), request(prompt(calls[0])));
 });
 
 test("a store outage after the in-session rename leaves no directory at the old slug", async (t) => {

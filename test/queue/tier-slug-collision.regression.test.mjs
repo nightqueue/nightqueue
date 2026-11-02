@@ -58,7 +58,7 @@ function runJobCycle(env, jobId) {
 function writeTerminal(env, slug, terminal) {
   const dir = runDir(ensureProject(env, "alpha"), slug, env);
   mkdirSync(dir, { recursive: true });
-  const text = `${JSON.stringify({ schemaVersion: 1, slug, project: "alpha", resumeCount: 0, phases: [], terminal }, null, 2)}\n`;
+  const text = `${JSON.stringify({ schemaVersion: 1, slug, project: "alpha", phases: [], terminal }, null, 2)}\n`;
   writeFileSync(join(dir, "state.json"), text);
   return text;
 }

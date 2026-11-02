@@ -3,7 +3,7 @@ RUBRIC: {{PLUGIN_ROOT}}/skills/reflect/references/rubric.md
 Run directory: {{RUN_DIR}}
 Read via Read, each one that exists (a missing file is skipped): `00-brief.md`, `01-triage.md`,
 `02-explore.md`, `03-plan.md`, `04-implementation.md`, `05-qa.md`,
-`06-verification.md`, `07-runtime.md` and `state.json` (`termination`, `resumeCount`, `qaMode`).
+`06-verification.md`, `07-runtime.md` and `state.json` (`termination`, `answers`, `lastClaim.attempt`, `qaMode`).
 Read every round and every fix-loop block; never the job's stream/log.
 
 Type: {{TYPE}}

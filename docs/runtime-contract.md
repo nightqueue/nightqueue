@@ -88,7 +88,7 @@ What a runtime has to provide, and what it can rely on:
   - `termination{phase, reason, at, by?, claim?}`: `run_terminate`, and `nightqueue run check 01` on a
     terminal triage verdict (`by: "runtime"`). A termination speaks only for the claim that wrote
     it: a retry without `fresh` consumes it, whoever wrote it, unless its stamp names a claim
-    older than the row's last, and the retried run resumes after its last completed phase. A completed `run check 01` that proceeds also lifts one the runtime
+    older than the row's last, and the retried run is handed the phases it recorded. A completed `run check 01` that proceeds also lifts one the runtime
     wrote (`recorded: termination cleared`).
   - `wip{status, phase, at, commit?, short?, branch?, files?, amended?, reason?, ref?, parent?}`:
     `run_terminate` (in the same write as `termination`) and the runner at the finish
@@ -128,9 +128,22 @@ What a runtime has to provide, and what it can rely on:
     the plan's filled question; any other gate clears it, and a `done` leaves it. It is the sha256
     of the question's words: NFKC, format characters (`\p{Cf}`) removed, lowercased, and every run
     of anything but letters, marks and digits collapsed to one space. It lives at the top level so it survives the outcome a
-    retry consumes. `run check 03` reads it to print `CONFIRM: answered`, and
+    retry consumes. `run check 03` reads it, with `gateAnswersSeen`, to print `CONFIRM: answered (<at>)`, and
     `run report` reads it so an answered pause never counts against Happy. It is not a `run_set`
     field.
+  - `gateAnswersSeen`: written with `gateQuestionDigest` and dropped with it, how many `answers`
+    existed when that question paused. A later count is what "answered after this pause" means: a
+    count and not a clock, because the retry consumes `outcome.status` and two stamps can tie. An
+    absent key reads 0. It is not a `run_set` field.
+  - `answers[{text, at, attempt}]`: `queue retry` and `queue_retry` with a note on a job whose run
+    directory exists, in the same locked write that consumes the last conclusion, with `attempt` the
+    attempt that paused; the row's `operator_note` stays NULL. A note on a job with no run directory
+    yet stays on the row. A state.json that cannot be read is never overwritten: the note stays on
+    the row. It is not a `run_set` field.
+  - `lastClaim{attempt, phases, answers}`, `previousClaim`: the runner, at each claim that reaches a
+    spawn, what it found recorded. Another attempt moves `lastClaim` to `previousClaim`, and an
+    attempt given back and claimed again replaces `lastClaim` alone. `queue retry` reads them for the
+    progress guard (see [Queue](queue.md)). Neither is a `run_set` field.
   - `draftPrUrl`: `nightqueue run publish`, the URL of the draft this run opened or converted. It
     lives at the top level for the same reason. It lets a later publish without the flag turn that
     draft ready, and only that one. A plain create or a turned-ready draft drops it. It is not a
@@ -138,25 +151,20 @@ What a runtime has to provide, and what it can rely on:
   - `qaMode{mode, reason, at}`: `nightqueue run check 05 --stage triage` only, the QA mode the
     triage decided (`skip`, `lite` or `full`) and its sentence. A repeated check with the same mode
     leaves it untouched, however the sentence is worded. A `qa` entry `SKIPPED` counts as a skip only
-    beside a `qaMode` of `skip`: otherwise `run report` reads it `⚠️` and a resume owes the QA. A
+    beside a `qaMode` of `skip`: otherwise `run report` reads it `⚠️`. A
     `lite` or `full` decision removes the runtime's own `qa` `SKIPPED` in the same write, so the real
-    QA after it is its first launch, and a resume owes the QA while no `qa` entry is newer than
-    `qaMode.at`, even past a later verification. It is not a `run_set` field.
+    QA after it is its first launch. It is not a `run_set` field.
   - `prTemplate{source, path?, headings, at}`: `nightqueue run pr` (both the
     `--template` query and the publishing call), the template the body is checked
     against - `repo` with its path, or `nightqueue`.
   - `commitType`: `nightqueue run check 01` only, from the Brief's `**Commit type:**`
     (`run_set` does not take it).
-  - `type`, `branch`, `worktree` and
-    `qaStageA{artifact, verdict?, at}`: `run_set`; `nightqueue run check 01` also records
-    the `type` (the Brief's, else derived from the triage when missing) and `run check 05 --stage analyst` the `qaStageA` marker
-    (artifact `05-qa.md`); a resume re-enters at stage B only while that marker is newer than the
-    last `implementation` record; the runner also records
+  - `type`, `branch` and `worktree`: `run_set`; `nightqueue run check 01` also records
+    the `type` (the Brief's, else derived from the triage when missing); the runner also records
     `type` from the `TYPE:` half of the slug declaration. A `tier`/`tierRaiseReason` an
     older runtime wrote stays in the file and is never read. Inside a queued job the runner records `branch` and
     `worktree` itself, before the spawn, when it creates the job's worktree; the pipeline
     sends them only in an interactive `/resolve`.
-  - `resumeCount`: the runner alone, when it hands a resume over to the pipeline.
   - `terminal{status, prUrl, finishedAt, writtenBy, pid}`: the runner, once it has
     closed the job - the witness of the outcome, read only by the reconciliation.
   - `job{id, ref, projectKey, createdAt}`: the runner alone, ONCE,
@@ -234,12 +242,29 @@ What a runtime has to provide, and what it can rely on:
     echoes an earlier one never wins. It is shown as `run_notice` and recovers a lost row
     (`queue repair --from-disk`); it never decides an ending and never fills `notice_md` of an
     attempt the runner classified.
-- The prompt is the other direction of the same contract: the runtime names the run
-  before the first phase with `Project: <name>` and `RUN_DIR: <absolute path>`, and a
-  run that can be resumed also carries the block ``RESUME CANDIDATE (slug `<slug>`)``
-  with `RUN_DIR:`, `Branch:`, `Worktree:`, `Last completed phase:`, `Resume from
-  phase:` and `From stage:` - the decision is already taken when the prompt is built,
-  and the pipeline reads it instead of re-deriving it (see [Queue](queue.md)).
+- The prompt is the other direction of the same contract: `/nightqueue:<pipeline> <prompt>`
+  (`jobs.pipeline`, a value outside `[a-z][a-z0-9-]{0,39}` refused at the prompt), the unattended
+  line, then the runtime names the run before the first phase with `Project: <name>` and
+  `RUN_DIR: <absolute path>` (the `QUEUE_SLUG` line on a first claim with no run), the job's origin
+  block, the RUN FACTS block below and the `OPERATOR ANSWER TO THE GATE:` line of a note a job with
+  no run directory holds. The open pull requests go to `<RUN_DIR>/origin/open-prs.md`, which the
+  triager reads through `phase_prompt` and the root prompt leaves out.
+- **RUN FACTS block.** Printed whenever the job's run directory holds a readable state with at least
+  one phase or one answer, re-read at each spawn, and the same for every pipeline:
+
+  ```
+  RUN FACTS (slug `<slug>`)
+  RUN_DIR: <dir>
+  Branch: <branch|none>   Worktree: <path|none>
+  Recorded phases: triage · <verdict> · 01-triage.md · <at> | explore · … (or `none`)
+  Wip commit: <short> (<n> files) | none
+  Answers: 1. <at> — <text> | 2. … (or `none`)
+  ```
+
+  It carries records only, never a phase order, a next phase, a conclusion or an instruction: a
+  field a phase did not record prints `-`. The decision of where to continue is the pipeline's own
+  (`## Resume` of the resolve skill). Each text field is one line, capped like the operator note,
+  with its markers escaped; the block has no total cap, since the runners run on macOS.
 - The pull request of the run has two sources, in this order: the `outcome.prUrl` the runtime
   itself recorded in `state.json`, then the
   `{"type":"system","subtype":"code_change_published","url":…,"branch":…}` event the HOST emits
@@ -614,7 +639,7 @@ Job mode is unchanged and still fails open.
 In an operator session the MCP server's instructions replace the tools-only line with the
 three-band line and add one line on `connection-write`; any other client sees them unchanged.
 
-The thirty-three MCP tools of tool contract 11, with the parameters `nightqueue mcp` actually
+The thirty-three MCP tools of tool contract 12, with the parameters `nightqueue mcp` actually
 accepts (every answer carries `contract: 10`; a call to a tool an older contract had and this one
 dropped is answered with the older-definitions line):
 
@@ -647,12 +672,12 @@ dropped is answered with the older-definitions line):
 | `queue_session` | `job_id` |
 | `queue_cancel` | `job_id`, `reason?`, `stop?`, `release_worktree?` |
 | `queue_close` | `job_id`, `force?` |
-| `queue_retry` | `job_id`, `note?`, `fresh?`, `run?` (a `closed` job, or a `done` job whose pull request is merged, is refused: a finished job does not resume) |
+| `queue_retry` | `job_id`, `note?`, `fresh?`, `run?` (a `closed` job, or a `done` job whose pull request is merged, is refused: a finished job does not resume; with neither `note` nor `fresh`, a run with no new phase and no new answer in its last two attempts is refused too) |
 | `run_phase_done` | `phase`, `artifact?`, `verdict?`, `note?`, `reason?` (why the phase ran again; omitted on its first run), `project?`, `slug?` |
 | `run_terminate` | `phase`, `reason`, `project?`, `slug?` (commits the recorded worktree's changes as the wip commit unless the worktree is adopted or on the default branch, the main checkout's branch or a detached HEAD; answers the record plus `wip{status, commit, branch, files, reason}` and `notice`, the paragraph that opens with `Terminated run: ` and carries `Retry: nightqueue queue retry J-<id>` inside a job and `New job from it: start_branch: <branch>`; a repeated call keeps the same wip commit, adopted through its `refs/nightqueue/wip/<slug>` ref even when the first call's record was refused; a refused phase or empty reason commits nothing) |
 | `run_skip` | `phase`, `by`, `reason`, `project?`, `slug?` |
 | `run_outcome` | `status` (`done`, `gate`, `no_change`), `notice?` (required with `no_change`), `question?` and `from_artifact?{file, section}` (`gate` only, never with `notice`: the runtime composes the whole `## Notice`; see "A gate notice is composed from the record" below), `project?`, `slug?` |
-| `run_set` | `type?`, `branch?`, `worktree?`, `qa_stage_a?{artifact, verdict?}`, `project?`, `slug?` |
+| `run_set` | `type?`, `branch?`, `worktree?`, `project?`, `slug?`; a `qa_stage_a` with a value is refused as an older client, contract 12, and `answers` or `lastClaim` as written by the runtime only |
 
 The five `run_*` tools are the only way the pipeline records its run (see the
 `state.json` list above). Inside a job each of them resolves the run from the job's
@@ -689,7 +714,7 @@ starts on the branch as it is: the runner resets nothing, records nothing about 
 nothing to the prompt. The runtime never
 creates a wip commit in an adopted worktree, which may hold the person's own uncommitted work. A
 `--fresh` retry drops the run and leaves the old branch at its wip commit.
-A retry without `fresh` consumes the termination, so the retried run resumes after its last completed phase, on the kept wip commit.
+A retry without `fresh` consumes the termination, so the retried run is handed the phases it recorded, on the kept wip commit.
 
 `run publish` and `run commit` read `<base>..HEAD` before anything changes. A commit is the run's
 own when its subject is `wip(<slug>): ...`, `refs/nightqueue/wip/<slug>` exists and reaches it,
@@ -733,7 +758,7 @@ or blank value is ignored, so an older cached client that sends `run_dir: null` 
 The CLI `nightqueue queue add --run-dir <dir>` is
 refused with the same reason. A legacy pending job whose stored prompt or `state.json`
 still carries the operator-run markers (`## PRIOR RUN (operator)`, `origin: operator`) runs as
-before: the resume cap and the `Re-run:` lines read them, nothing writes them.
+any other job: nothing reads them.
 
 `queue_add` `tier` is retired the same way (there is no risk tier: every job runs the one
 pipeline): a value is refused before validation with ``\`tier\` was removed: every job
@@ -774,8 +799,8 @@ every value from it: the type `run check 01` recorded, the `## Brief` of `<RUN_D
 `run check 01`, when it is missing), the pipeline constants of `src/queue/routing.mjs`, the same
 context block `context_for_phase` answers (with the same per-run lesson exclusion). The
 `triager` is the one target rendered without the Brief and without a type: `RAW_REQUEST` is
-the job's own prompt inside a job (plus `Operator answer to the gate: <note>` when the row
-carries one; a `request` sent there is ignored with an `open_items` line), and the `request`
+the job's own prompt inside a job (plus one `Operator answer to the gate: <text>` paragraph per
+answer the run recorded, oldest first, and one for a note the row carries; a `request` sent there is ignored with an `open_items` line), and the `request`
 input outside a job; `ORIGIN` is the run's `origin/*.md` files (its context block then
 carries no `## Job origin`, so the origin is never twice in the prompt); `NEEDS_SLUG` asks
 for a `**Slug:**` field only while the run holds the provisional slug the runtime derived.
@@ -805,7 +830,7 @@ that cannot read the setting answers `none configured` with an `open_items` line
 `plugin/skills/resolve/SKILL.md` is the orchestrator's skeleton: the contract, Phase 0 and,
 per phase, the launch, the `run check`, the answer table and its judgment rules. What only
 one phase or one mode needs lives in `references/` and is read when the phase says so:
-`resume.md` (Phase 0, with a `RESUME CANDIDATE` block), `interactive-worktree.md` (Phase 0
+`interactive-worktree.md` (Phase 0
 and Phase 8 outside a job; the only file of the skill that names the host's worktree tool),
 `qa-phase.md` (Phase 5), `phase-8.md` with `commit-template.md` and `pr-template.md`
 (Phase 8), `phase-9.md` (Phase 9: the report, the `## Notice` writing rules and the icon
@@ -1082,8 +1107,9 @@ operator note) and prints one fact per line, in this fixed order:
    `07` `<scenario> — to confirm` per `NOT MET / to confirm` row. Never a gate.
 5. `TYPE-MISMATCH: <evidence> — triage: <bug/error|feature/refactor> (<## Diagnosis filled|## Diagnosis absent or empty>)` (`03`).
 6. `CONFIRM:` (`03`, only with a filled question, the one human stop of a run):
-   `CONFIRM: requires-user-confirmation — <question>`, or `CONFIRM: answered` when the job has a
-   non-blank operator note and `state.gateQuestionDigest` is this question's digest, so re-typing
+   `CONFIRM: requires-user-confirmation — <question>`, or `CONFIRM: answered (<at>)`, the time of the
+   last answer, when `state.answers` holds more entries than `state.gateAnswersSeen` and
+   `state.gateQuestionDigest` is this question's digest, so re-typing
    the same question (markup, quotes, punctuation) still reads as answered and one with other words
    pauses again. The question is the block under the label of the confirmation section, at any
    heading level, with HTML comments and fenced lines ignored. The label is `**Question:**`,
@@ -1236,7 +1262,7 @@ run_terminate, termination cleared, slug. `02` on `OK` saves the
 File map and the libraries into the project index, the same as `run index-save`; a store that
 is unavailable inside a job queues the write (`index: not saved (store unavailable; queued at <path>)`)
 and any failure prints `index: not saved (<first line of the error>)`. `05 --stage analyst`
-records `qaStageA` (`recorded: qa_stage_a <verdict>`, artifact `05-qa.md`) and no phase; its
+records no phase; its
 check memo is kept apart from the memo of `05`. `05 --stage triage` records `qaMode`
 (`recorded: qa_mode <mode>`, `(already)` when the same mode stands), with a memo of its
 own; only a `skip` records a phase, `qa` with the verdict `SKIPPED`, its sentence as the `note` and
@@ -1328,8 +1354,9 @@ is refused, and nothing is recorded. The answer echoes the composed `notice`. Th
 then ends its turn with one plain line: the job ends at `gate` with the recorded notice, and a
 `## Notice` in the text never replaces it.
 The shipped pipeline's one pause is Phase 3's, with `from_artifact.file` `03-plan.md`. A gate whose
-notice shows the plan's filled question, however it was sent, records `gateQuestionDigest` in the
-same locked write, and any other gate clears it.
+notice shows the plan's filled question, however it was sent, records `gateQuestionDigest` and
+`gateAnswersSeen` in the same locked write, and any other gate clears both; an answer recorded after
+that pause is what the next `run check 03` reads as `CONFIRM: answered (<at>)`.
 
 **A job is self-contained, and a finished job does not resume.** `queue_add` refuses, before
 anything is registered or queued, a prompt that conditions the work on another job or pull
@@ -1342,7 +1369,10 @@ blocks: `after [job] J-<n>`, `once PR|pull request #<n> is|has been|gets merged`
 studio do not apply it. `queue_retry` and `queue retry` refuse a `closed` job
 (``J-<n> is closed: a finished job does not resume; queue a new one``) and a `done` job whose
 pull request gh reads as merged (``J-<n> is done and its pull request is merged: …``), before
-writing anything; an unreadable answer or `NIGHTQUEUE_NO_PR_CHECK=1` proves no merge.
+writing anything; an unreadable answer or `NIGHTQUEUE_NO_PR_CHECK=1` proves no merge. With neither
+`note` nor `fresh` they also refuse a run whose last two attempts recorded no new phase and no new
+answer (``J-<n> made no progress in its last two attempts (same <n> phases, no new answer): answer
+with a note, or retry --fresh``), nothing written.
 
 **The commit message follows the template in effect.** `run start` answers
 `commitTemplate{source, path, label}`, first match wins: `config` (git's `commit.template` read

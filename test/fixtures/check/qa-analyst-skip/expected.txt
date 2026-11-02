@@ -1,4 +1,3 @@
 OK
 VERDICT: APPROVED
 QA-STAGE: skip
-recorded: qa_stage_a APPROVED

@@ -102,8 +102,8 @@ test("a v25 home migrates to v26: every decisions object and row gone, lessons, 
   const before = keptRows(dbPath(env));
 
   const db = migrateTestHome(env);
-  assert.equal(db.prepare("PRAGMA user_version").get().user_version, 27);
-  assert.equal(DB_USER_VERSION, 27);
+  assert.equal(db.prepare("PRAGMA user_version").get().user_version, 28);
+  assert.equal(DB_USER_VERSION, 28);
   assert.deepEqual(db.prepare(DECISION_OBJECTS_SQL).all(), []);
   assert.equal(db.prepare("SELECT COUNT(*) AS n FROM sqlite_sequence WHERE name = 'decisions'").get().n, 0, "the decisions counter survived");
   assert.deepEqual(keptRows(dbPath(env)), before, "a lesson, memory or job changed");
@@ -149,7 +149,7 @@ test("a runner holding a live lease refuses the v26 migration and nothing is wri
 test("a read-only open of a v25 home refuses with the update message and writes nothing, and reads the lessons once it is migrated", (t) => {
   const { env } = buildV25Home(t, "v26-read-only");
   const fixture = readFileSync(dbPath(env));
-  assert.throws(() => openDbReadOnly(env), (err) => err.code === "SCHEMA_OUTDATED" && /database at v25, this nightqueue expects v27/.test(err.message));
+  assert.throws(() => openDbReadOnly(env), (err) => err.code === "SCHEMA_OUTDATED" && /database at v25, this nightqueue expects v28/.test(err.message));
   assert.ok(readFileSync(dbPath(env)).equals(fixture), "a read-only open wrote to the database");
 
   migrateTestHome(env);
@@ -163,7 +163,7 @@ test("a v25 home that never had the decisions table still migrates to v26", (t) 
   const { env } = buildV25Home(t, "v26-no-decisions", { decisions: false });
   const before = keptRows(dbPath(env));
   const db = migrateTestHome(env);
-  assert.equal(db.prepare("PRAGMA user_version").get().user_version, 27);
+  assert.equal(db.prepare("PRAGMA user_version").get().user_version, 28);
   assert.deepEqual(keptRows(dbPath(env)), before);
 });
 
@@ -172,7 +172,7 @@ test("a v23 home with no decisions table migrates through v24, v25 and v26 witho
   withRaw(dbPath(env), (raw) => raw.exec("PRAGMA user_version = 23"));
   const before = keptRows(dbPath(env));
   const db = migrateTestHome(env);
-  assert.equal(db.prepare("PRAGMA user_version").get().user_version, 27);
+  assert.equal(db.prepare("PRAGMA user_version").get().user_version, 28);
   assert.deepEqual(keptRows(dbPath(env)), before);
   for (const version of [24, 25, 26]) assert.ok(existsSync(preVersionBackupPath(env, version)), `no pre-v${version} copy`);
 });
@@ -186,7 +186,7 @@ test("a v18 home carrying decisions migrates through the whole chain to v26: the
   assert.equal(withRaw(dbPath(env), (raw) => raw.prepare("SELECT COUNT(*) AS n FROM decisions").get().n, { readOnly: true }), 4);
 
   const db = migrateTestHome(env);
-  assert.equal(db.prepare("PRAGMA user_version").get().user_version, 27);
+  assert.equal(db.prepare("PRAGMA user_version").get().user_version, 28);
   assert.deepEqual(db.prepare(DECISION_OBJECTS_SQL).all(), []);
   assert.deepEqual(counts(dbPath(env)), before, "a lesson, memory or job was lost on the way");
   assert.deepEqual(db.prepare("PRAGMA foreign_key_check").all(), []);

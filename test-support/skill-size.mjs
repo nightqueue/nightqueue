@@ -7,7 +7,6 @@ export const SKILL_DIR = join(resolve(dirname(fileURLToPath(import.meta.url)), "
 export const LAZY_REFERENCES = Object.freeze([
   "phase-8.md",
   "phase-9.md",
-  "resume.md",
   "interactive-worktree.md",
   "qa-phase.md",
   "pr-template.md",

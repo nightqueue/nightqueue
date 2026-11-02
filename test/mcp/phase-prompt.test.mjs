@@ -50,6 +50,7 @@ const FULL = {
   COMMIT_TYPES: "feat, fix, refactor, docs, style, build, chore, test",
   DEPENDENT_REFUSAL: "This brief depends on another job's pull request.",
   DELIVERY_CONSTRAINTS: "it must not touch native code",
+  OPERATOR_ANSWERS: "1. approve the plan",
   STAGE: "2 — the report",
   GROUP: "H1, H2 (group: parsing)",
   NOTE: "the verifier failed on the empty title",
@@ -331,7 +332,7 @@ test("the lesson target of each context block is the one the old placeholder ord
 
 test("no render leaves a placeholder behind, whatever the type, the coverage and the optional values", () => {
   const empty = Object.fromEntries(Object.entries(FULL).map(([key, value]) => [key, typeof value === "boolean" ? false : value]));
-  for (const optional of ["CLAUDE_MD", "CONTEXT_BLOCK", "INDEX_MAP", "ORIGIN", "DELIVERY_CONSTRAINTS", "STAGE", "NOTE", "DRAFT_PATH", "GROUP_ID", "ROUND", "FIX_LOOP"]) empty[optional] = "";
+  for (const optional of ["CLAUDE_MD", "CONTEXT_BLOCK", "INDEX_MAP", "ORIGIN", "DELIVERY_CONSTRAINTS", "OPERATOR_ANSWERS", "STAGE", "NOTE", "DRAFT_PATH", "GROUP_ID", "ROUND", "FIX_LOOP"]) empty[optional] = "";
   for (const template of TEMPLATES) {
     for (const base of [FULL, empty]) {
       for (const IS_BUG of [true, false]) {

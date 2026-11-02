@@ -37,7 +37,7 @@
  * @property {() => Promise<object[]>} listCloseCandidates done jobs that carry a pull request url, the candidates `queue close --merged` may confirm and close
  * @property {(number: number) => Promise<{id: number, pr_url: string}[]>} jobsWithPrNumber the jobs whose pull request URL carries `/pull/<number>`; the caller compares the whole URL
  * @property {(id: number, options?: {note?: string}) => Promise<string|null>} retryRefusalOf the refusal `retryJob` would throw for this job and note, or null when it would go back to the queue; writes nothing
- * @property {(id: number, options?: object) => Promise<object>} retryJob
+ * @property {(id: number, options?: {note?: string, fresh?: boolean, noteRecorded?: boolean}) => Promise<object>} retryJob `noteRecorded` says the run's state already holds the note, so the row keeps none
  * @property {(id: number) => Promise<object|null>} getJob
  * @property {(id: number) => Promise<{projectKey: string|null}>} jobSpawnRefs the facts the runtime records in a run's job block before the spawn
  * @property {(options?: object) => Promise<object[]>} listJobs

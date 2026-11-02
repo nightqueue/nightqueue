@@ -31,7 +31,7 @@ import { jobIdOfPrUrl } from "../queue/pr-lookup.mjs";
 import { createPrStateCache } from "../queue/pr-state.mjs";
 import { liveRunnersReport, unreadableRegistry } from "../queue/registry.mjs";
 import { failedCoreSection, jobDetailView, prUrlsOf, queueView } from "../queue/view.mjs";
-import { isSafeSegment, readRunState, RESUME_PHASE_ORDER } from "../queue/resume.mjs";
+import { isSafeSegment, readRunState, PHASE_NAMES } from "../queue/resume.mjs";
 import { resolveJobRun } from "../queue/job-run.mjs";
 import { composeGateNotice, gateDigestOf } from "../queue/gate-notice.mjs";
 import { runDir as runDirOf } from "../config/paths.mjs";
@@ -102,7 +102,7 @@ const SERVER_INSTRUCTION_LINES = [
   "nightqueue is a backlog of unattended coding jobs, not a synchronous executor: `queue_add` records work, it never runs it.",
   "Never queue a job on your own initiative: present the brief first (title and detail) and call `queue_add` only after the person gives an explicit go.",
   "One job is one self-contained deliverable, and a large plan is ONE job with numbered stages written in the prompt, never several jobs that depend on each other.",
-  "`queue_add` refuses a prompt that conditions the work on another job or pull request (`after J-<n>`, `once PR #<n> is merged`, `depends on J-<n>`/`depends on job`, `when #<n> lands`), and `queue_retry` refuses a closed job or a done job whose pull request merged: queue a new one.",
+  "`queue_add` refuses a prompt that conditions the work on another job or pull request (`after J-<n>`, `once PR #<n> is merged`, `depends on J-<n>`/`depends on job`, `when #<n> lands`), and `queue_retry` refuses a closed job or a done job whose pull request merged: queue a new one. A `queue_retry` with neither `note` nor `fresh` of a run with no progress in its last two attempts is refused too, a preflight-gated job excepted: answer with a `note`, or use `fresh`.",
   OPERATE_THROUGH_TOOLS,
   "Start a single job now, with `queue_run` and its `job_id`, only when the person asks for that one job now; the whole batch starts with `queue_run` without `job_id`.",
   "Every job ends as an open pull request (`done`), as `done` with no pull request when the run concluded on purpose that no code change is needed (its conclusion in `notice_md`), or stopped at a gate with its reason in `notice_md`.",
@@ -300,8 +300,7 @@ const RUN_SET_FIELDS = {
 // The fields `run_set` was asked to change, under the names state.json uses; an absent or empty one is not a change.
 function runSetFields(args) {
   const asked = Object.entries(RUN_SET_FIELDS).filter(([arg]) => typeof args[arg] === "string" && args[arg].trim() !== "");
-  const fields = Object.fromEntries(asked.map(([arg, field]) => [field, args[arg].trim()]));
-  return args.qa_stage_a ? { ...fields, qaStageA: args.qa_stage_a } : fields;
+  return Object.fromEntries(asked.map(([arg, field]) => [field, args[arg].trim()]));
 }
 
 // Requires the absolute working directory of the caller, because the directory of this server is never the user's.
@@ -1354,7 +1353,9 @@ function toolDefinitions(env, state) {
       config: {
         description:
           "Sends a gated, failed or cancelled job back to the queue. A gated job only moves with `note`, which reaches the run as the answer to its gate - except a job the preflight gated (its `blocked_code` is set: dirty checkout, wrong branch, missing checkout or `claude`, or `store-unavailable`: the session could not reach this server), which moves without one once its cause is fixed. A finished job never resumes: a `closed` job, or a `done` job whose pull request is merged, is refused with \"a finished job does not resume; queue a new one\". " +
-          "Without `fresh` the run resumes from the last phase, keeping slug, branch, session and run directory; with `fresh` it starts from phase 0, the clean worktree is removed (never forced) and the run directory is dropped. These refuse `fresh` and delete nothing: a worktree with uncommitted changes (commit or stash them, or retry without `fresh`); a detached HEAD holding commits on no branch (retry without `fresh`, and the run puts its own branch on that HEAD, or put a branch on it by hand and retry `fresh`); a locked or unreadable worktree (retry without `fresh`). A worktree that a lock taken after the row moved kept keeps its run directory too, answered in `runDir` with status `kept` and listed by `nightqueue doctor`. " +
+          "A retry with neither `note` nor `fresh` of a run whose last two attempts recorded no new phase and no new answer, a preflight-gated job excepted, is refused with \"made no progress in its last two attempts\" and writes nothing: answer with a `note` or use `fresh`. " +
+          "A `note` on a job whose run directory exists is recorded in the run's `state.json` as an answer and leaves the row's `operator_note` empty; with no run directory it stays on the row. " +
+          "Without `fresh` the next session gets the facts the run recorded and decides where to continue, keeping slug, branch, session and run directory; with `fresh` it starts from phase 0, the clean worktree is removed (never forced) and the run directory is dropped. These refuse `fresh` and delete nothing: a worktree with uncommitted changes (commit or stash them, or retry without `fresh`); a detached HEAD holding commits on no branch (retry without `fresh`, and the run puts its own branch on that HEAD, or put a branch on it by hand and retry `fresh`); a locked or unreadable worktree (retry without `fresh`). A worktree that a lock taken after the row moved kept keeps its run directory too, answered in `runDir` with status `kept` and listed by `nightqueue doctor`. " +
           "A run whose branch carries a terminated run's wip commit starts on it, and `run publish` folds it into the delivery commit; `fresh` starts on a new branch and leaves that one untouched, answering it as `keptBranch` beside the released `worktree`. " +
           "`run` starts a DETACHED runner, the same one `queue_run` starts - and the same one the `--run` of the CLI starts, unless it is asked for `--foreground`; a job that cannot be claimed right now answers `waiting` and starts nothing. " +
           "Inside an unattended run this tool only accepts the id of the job it is running: retrying another job is refused, because the note is delivered as a human answer in that job's next prompt.",
@@ -1376,11 +1377,11 @@ function toolDefinitions(env, state) {
       name: "run_phase_done",
       config: {
         description:
-          "Records one completed phase of the run in `state.json`, so a retry resumes from the next one. The runtime stamps the time and owns the file: never hand-write `state.json`. " +
+          "Records one completed phase of the run in `state.json`, which a retry's `RUN FACTS` block lists. The runtime stamps the time and owns the file: never hand-write `state.json`. " +
           "Inside a job the run is resolved from the job's own row — passing `project` or `slug` there is refused; outside a job both are required. " +
           "`reason` = why this phase ran again (a fix loop, a relaunch after `MISSING`, a re-architect, a re-triage); omit it on the first run of a phase.",
         inputSchema: {
-          phase: z.enum(RESUME_PHASE_ORDER),
+          phase: z.enum(PHASE_NAMES),
           artifact: optionalText,
           verdict: optionalText,
           note: optionalText,
@@ -1399,10 +1400,10 @@ function toolDefinitions(env, state) {
       name: "run_terminate",
       config: {
         description:
-          "Records that the run stopped on purpose at a phase, with the reason; a retry consumes the stop and resumes after the last completed phase, on the kept wip commit. A retry past the resume cap (one resume per run), of a run with no completed phase, of one whose last completed phase carries a terminal verdict, or of one already done does not resume: it starts from the ordinary prompt. " +
+          "Records that the run stopped on purpose at a phase, with the reason; a retry consumes the stop and hands the next session the facts the run recorded, on the kept wip commit: the pipeline decides where to continue. " +
           "The runtime commits the worktree's changes on the job's branch as `wip(<slug>): terminated at <phase> — <reason>` (local, never pushed) and answers `wip` and the `notice` to report verbatim; a repeated call keeps the same wip commit; a retry starts on that commit. " +
           "Inside a job the run is resolved from the job's own row — passing `project` or `slug` there is refused; outside a job both are required.",
-        inputSchema: { phase: z.enum(RESUME_PHASE_ORDER), reason: z.string(), project: optionalText, slug: optionalText },
+        inputSchema: { phase: z.enum(PHASE_NAMES), reason: z.string(), project: optionalText, slug: optionalText },
       },
       handler: async (args) => {
         const run = await callerRun(args, env);
@@ -1417,7 +1418,7 @@ function toolDefinitions(env, state) {
           "Records that an agent skips a later phase of the run, with who decided it and why, so the studio track shows the slot as skipped. " +
           "It only records: it changes no routing and no resume, and a phase that still runs shows as run. A phase that already ran is refused. " +
           "Inside a job the run is resolved from the job's own row — passing `project` or `slug` there is refused; outside a job both are required.",
-        inputSchema: { phase: z.enum(RESUME_PHASE_ORDER), by: z.enum(SKIP_AGENTS), reason: z.string(), project: optionalText, slug: optionalText },
+        inputSchema: { phase: z.enum(PHASE_NAMES), by: z.enum(SKIP_AGENTS), reason: z.string(), project: optionalText, slug: optionalText },
       },
       handler: async (args) => {
         const run = await callerRun(args, env);
@@ -1430,7 +1431,7 @@ function toolDefinitions(env, state) {
         description:
           "Records how the run ended: `done` when the pull request exists, `gate` with the `notice` the operator has to answer, `no_change` with the run's conclusion as `notice` when the run concluded on purpose that no code change is needed (the job ends `done` with no pull request). " +
           "A `gate` may instead send `question` and/or `from_artifact: {file, section}` (a run artifact such as `03-plan.md` and a heading such as `## Requires user confirmation`): the runtime composes the whole `## Notice` body - the section verbatim under `## Requires user confirmation`, the question, and the answer line - and returns it as `notice`; then end the turn, with no `## Notice` in the final text. `notice` together with either is refused. " +
-          "A `gate` whose text carries the plan's question records its digest as `gateQuestionDigest`, which lets the resumed `run check 03` print `CONFIRM: answered` for that question; any other gate clears it. " +
+          "A `gate` whose text carries the plan's question records its digest as `gateQuestionDigest`, which lets the resumed `run check 03` print `CONFIRM: answered (<at>)` for that question once an answer was recorded after this pause; any other gate clears it. " +
           "The pull request URL is NOT a parameter: the runtime writes it from what the session really published. " +
           "Inside a job the run is resolved from the job's own row — passing `project` or `slug` there is refused; outside a job both are required.",
         inputSchema: {
@@ -1455,13 +1456,12 @@ function toolDefinitions(env, state) {
       config: {
         description:
           "Records the fields of the run itself in `state.json` as the pipeline discovers them: its `type` and the branch and worktree the code lives in. Only the fields sent are touched. " +
-          "`qa_stage_a` records the one sub-phase with a marker of its own — sent when the QA stage A gate closes, it is what makes a resume re-enter the QA phase straight at stage B instead of paying the analyst again. " +
+          "Refused: `qa_stage_a` (removed: a resumed QA re-runs Phase 5 whole); `answers` and `lastClaim` (written by the runtime only). " +
           "Inside a job the run is resolved from the job's own row — passing `project` or `slug` there is refused; outside a job both are required.",
         inputSchema: {
           type: z.enum(PIPELINE_TASK_TYPES).nullable().optional(),
           branch: optionalText,
           worktree: optionalText,
-          qa_stage_a: z.object({ artifact: z.string(), verdict: optionalText }).optional(),
           project: optionalText,
           slug: optionalText,
         },

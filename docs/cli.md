@@ -205,7 +205,8 @@ The first line keeps that meaning; the check also answers the phase's verdict an
 fact per line under a stable prefix, in this order: `VERDICT: <value>` (`01`, `05`,
 `05 --stage analyst`, `06`, `07`; a verdict outside the phase's values is a `MISSING:` of the verdict line),
 `GATE: <code> — <evidence>`, `OPEN: <text>`, `TYPE-MISMATCH: …`,
-`CONFIRM: requires-user-confirmation — <question>` or `CONFIRM: answered` (`03`, only with a
+`CONFIRM: requires-user-confirmation — <question>` or `CONFIRM: answered (<at>)`, once an answer was
+recorded after the pause on that question (`03`, only with a
 filled question, one with a `?`; a confirmation section with a `?` no label shape places, or a
 filled label with no `?`, is a `MISSING:`),
 `QA-MODE: skip|lite|full — <why>` (`05 --stage triage`; a `skip` with a `logic` line must name a
@@ -225,8 +226,7 @@ into `<RUN_DIR>/00-brief.md` (`recorded: brief 00-brief.md`), records the commit
 (`recorded: commit type <c>`), the termination of a terminal verdict
 (`recorded: run_terminate triage <VERDICT>`), and, last, the slug
 (`recorded: slug <slug>`, or `(renamed from <old>; run dir <path>)` when a job run still on
-its provisional slug takes the Brief's `**Slug:**`), and `05 --stage analyst` records the stage A marker
-(`recorded: qa_stage_a <verdict>`) and no phase. `05 --stage triage` records the decision
+its provisional slug takes the Brief's `**Slug:**`), and `05 --stage analyst` records no phase. `05 --stage triage` records the decision
 (`recorded: qa_mode <mode>`, `(already)` when the same mode stands, however it is worded) and, only
 on a `skip`, the `qa` phase with the verdict `SKIPPED`, once while it is the phase's last entry; a `lite` or `full` decision removes that `SKIPPED`, and its QA records its phase through
 `05`. `05` with `INVALIDATED:` lines records no
@@ -633,6 +633,13 @@ attempt concluded, a `done` and a termination included, and keeps the pull reque
 it cannot consume refuses the retry with `retry again in a moment` and nothing written. A run
 directory another job stamped refuses it too, naming that job and `queue retry J-<n> --fresh`,
 which starts it over and deletes that directory (see [Queue](queue.md)).
+
+A `--note` on a job whose run directory exists is recorded in `state.json.answers`, in the same
+write that consumes the conclusion, and leaves `operator_note` empty; with no run directory yet it
+stays on the row. A retry with neither `--note` nor `--fresh` of a run whose last two attempts
+recorded no new phase and no new answer is refused with ``J-<n> made no progress in its last two
+attempts (same <n> phases, no new answer): answer with a note, or retry --fresh``, nothing written;
+a preflight gate (`blocked_code` set) is never refused this way.
 
 `queue retry --fresh` (and `queue_retry` with `fresh`) starts the job over on a new branch and
 keeps the old work. It clears slug, branch and session, releases the worktree without forcing

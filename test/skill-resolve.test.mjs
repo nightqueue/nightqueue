@@ -4,17 +4,16 @@ import { test } from "node:test";
 import { PHASE_TARGETS } from "../src/mcp/phase-context.mjs";
 import { LESSON_TARGET_OF, PROMPT_TARGETS } from "../src/mcp/phase-prompt.mjs";
 import { evaluateCheck } from "../src/queue/check-contract.mjs";
-import { RESUME_PHASE_ORDER } from "../src/queue/resume.mjs";
+import { PHASE_NAMES } from "../src/queue/resume.mjs";
 import { AGENT_MODELS, PIPELINE_CONSTANTS } from "../src/queue/routing.mjs";
 import { RUN_OUTCOME_STATUSES } from "../src/queue/run-state.mjs";
 import { buildPrompt } from "../src/queue/spawn.mjs";
 
 const SKILL = readFileSync(new URL("../plugin/skills/resolve/SKILL.md", import.meta.url), "utf8");
-const RESUME = readFileSync(new URL("../plugin/skills/resolve/references/resume.md", import.meta.url), "utf8");
 const INTERACTIVE = readFileSync(new URL("../plugin/skills/resolve/references/interactive-worktree.md", import.meta.url), "utf8");
 const PHASE_8 = readFileSync(new URL("../plugin/skills/resolve/references/phase-8.md", import.meta.url), "utf8");
 const PHASE_9 = readFileSync(new URL("../plugin/skills/resolve/references/phase-9.md", import.meta.url), "utf8");
-const FLOW = [SKILL, PHASE_8, PHASE_9, RESUME, INTERACTIVE].join("\n");
+const FLOW = [SKILL, PHASE_8, PHASE_9, INTERACTIVE].join("\n");
 const QA_PHASE = readFileSync(new URL("../plugin/skills/resolve/references/qa-phase.md", import.meta.url), "utf8");
 const OPERATOR = readFileSync(new URL("../plugin/agents/operator.md", import.meta.url), "utf8");
 const CLASSIFY = readFileSync(new URL("../src/queue/classify.mjs", import.meta.url), "utf8");
@@ -26,7 +25,7 @@ const QA_AGENT = readFileSync(new URL("../plugin/agents/qa-guardian.md", import.
 // The arguments the skill tells the pipeline to send to each run tool, checked against the real schemas.
 const RUN_TOOL_ARGS = {
   run_outcome: ["status", "notice", "question", "from_artifact"],
-  run_set: ["type", "branch", "worktree", "qa_stage_a"],
+  run_set: ["type", "branch", "worktree"],
 };
 
 // The places the skill tells the pipeline to record the outcome: the records of Phase 0 and its two call points.
@@ -35,6 +34,11 @@ const OUTCOME_ANCHORS = [
   "`run publish` records the delivery itself.",
   "**A run terminated by `NO-CHANGE-NEEDED`.**",
 ];
+
+// The Resume section of SKILL.md, on one line per paragraph as a run reads it.
+function resumeSection() {
+  return SKILL.slice(SKILL.indexOf("## Resume\n"), SKILL.indexOf("## Pipeline (execute"));
+}
 
 // The target every per-phase placeholder of a plugin text names, in the order the prompts appear.
 function contextTargets(text) {
@@ -164,8 +168,7 @@ test("a resume at Phase 5 re-runs the triage check and launches the lane only wh
   const resumeRule = /On a resume at Phase 5 run the check first \(a pure read\); launch the lane only on its `MISSING`\./;
   assert.match(phase5Text(), resumeRule, "SKILL.md may relaunch the triage on a resume");
   assert.match(folded(QA_PHASE), resumeRule, "qa-phase.md may relaunch the triage on a resume");
-  assert.ok(phase5Text().includes("Stage B of a resume skips this."), "a resume at Stage B would run the triage");
-  assert.ok(folded(RESUME).includes("the whole of Phase 5, whose first step on a resume is `run check 05 --stage triage`"), "resume.md does not name the first step of Phase 5");
+  assert.ok(resumeSection().includes("Phase 5 re-runs whole; a `qa` `SKIPPED` has no artifact, so its triage check decides."), "the Resume section does not name how Phase 5 resumes");
 });
 
 test("a QA skip leaves the verifier's launch and its gate unconditional", () => {
@@ -192,12 +195,13 @@ test("Phase 3 pauses once, on a filled question, and its answer runs the check b
   assert.ok(phase3.includes("| `OPEN: …` | ⚠️ open item of Phase 9 |"), "an OPEN line of check 03 is no longer an open item");
   assert.ok(phase3.includes("| `TYPE-MISMATCH: … — triage: bug/error …` | stays bug/error, Phase 4"), "a Type divergence on a bug still pauses");
   assert.ok(phase3.includes('the one pause: `run_outcome` with `status: "gate"`'), "the CONFIRM row no longer pauses");
-  assert.ok(phase3.includes("| `CONFIRM: answered` | Phase 4 |"), "an answered question has no row");
+  assert.ok(phase3.includes("| `CONFIRM: answered (<at>)` | the answer below, then Phase 4 |"), "an answered question has no row");
+  assert.ok(phase3.includes("the last entry of `Answers:` in `RUN FACTS` (a job with no run directory yet: the `OPERATOR ANSWER TO THE GATE:` line)"), "the answer paragraph no longer names where the answer arrives");
   assert.equal(phase3.includes("`GATE:"), false, "Phase 3 still routes a gate check 03 no longer prints");
   assert.ok(phase3.includes("run `run check 03` first, before Phase 4, whatever the block says"), "the answer may skip the check, so it never reaches the coder");
   assert.ok(phase3.includes("Any other answer → relaunch the architect once (🔁, `note` = the answer), then `run check 03` again"), "an answer that changes the plan no longer reaches the architect");
   assert.ok(phase3.includes("an interactive run's chat answer counts as `CONFIRM: answered`"), "an interactive answer never prints the answered line, so it would pause forever");
-  assert.ok(folded(RESUME).includes("at `implementation` with an `OPERATOR ANSWER TO THE GATE:` line, run Phase 3's answer rule first"), "a resumed block skips the Phase 3 answer rule");
+  assert.ok(resumeSection().includes("An answer at Phase 3: `run check 03` first, then its table and answer rule"), "a resumed run skips the Phase 3 answer rule");
   const architect = folded(promptTemplate("architect"));
   assert.ok(architect.includes("Each row carries ONE status, `covered` or `not-covered`: the one the plan ships."), "the architect prompt lost the single-status rule");
   assert.ok(architect.includes("An either/or decision is taken by you and recorded in `## Decisions taken`, never left in a row's Status or Reason."), "the architect prompt lets an either/or land in a coverage row");
@@ -209,12 +213,12 @@ test("the only literal pause of the skill is the Phase 3 row, and from Phase 5 o
   assert.equal(pauses.length, 1, pauses.join("\n"));
   assert.ok(pauses[0].startsWith("| `CONFIRM: requires-user-confirmation` |"), pauses[0]);
   assert.ok(SKILL.slice(SKILL.indexOf("### Phase 3 —"), SKILL.indexOf("### Phase 4 —")).includes(pauses[0]), "the pause left Phase 3");
-  const tail = [SKILL.slice(SKILL.indexOf("### Phase 5 —")), RESUME, QA_PHASE, PHASE_8, PHASE_9.replace(/a\s+terminated run carries `run_terminate`'s `notice` verbatim/, "")].join("\n");
+  const tail = [SKILL.slice(SKILL.indexOf("### Phase 5 —")), QA_PHASE, PHASE_8, PHASE_9.replace(/a\s+terminated run carries `run_terminate`'s `notice` verbatim/, "")].join("\n");
   for (const gone of ["run_terminate", "→ terminate", "never pause twice", "Never pause twice", "same gate code", '"gate"', "ask the user"]) {
     assert.equal(tail.includes(gone), false, `Phases 5-10 or a reference still carry ${gone}`);
   }
   assert.ok(passageAt("9. **Autonomy.**").includes("only at the Phase 3 pause"), "the autonomy step no longer names the one stop");
-  assert.ok(buildPrompt({ job: { prompt: "x" } }).includes("The only human stop is Phase 3"), "the runtime prompt still invites a stop at any gate");
+  assert.equal(buildPrompt({ job: { prompt: "x" } }).includes("Requires user confirmation"), false, "the runtime prompt still speaks of a stop");
 });
 
 test("a fix limit, a re-triage stop and an unprovable runtime deliver a pull request, never a cancellation", () => {
@@ -236,11 +240,10 @@ test("a second INVALIDATED is recorded as a decision, and a further one is bound
   const phase5 = folded(SKILL.slice(SKILL.indexOf("### Phase 5 —"), SKILL.indexOf("### Phase 6 —")));
   assert.ok(phase5.includes("| `INVALIDATED: …`, the first | relaunch the **architect** once (🔁, `note` = the lines), then Phase 4 with the revised plan |"), "Phase 5 lost the one architect relaunch on INVALIDATED");
   assert.ok(phase5.includes("| `INVALIDATED: …`, a second on the same assumption or any after two architect rounds | relaunch the architect to record it in `## Decisions taken`, then the `VERDICT:` row, ⚠️ open item |"), "a further INVALIDATED no longer ends in a recorded decision");
-  assert.equal(RESUME.split("\n").filter((line) => line.startsWith("- ")).length, 3, "resume.md is no longer the three rules");
-  assert.equal(RESUME.includes("RESTORED WIP"), false, "resume.md still reads a RESTORED WIP line nothing prints");
+  assert.equal(resumeSection().includes("RESTORED WIP"), false, "the Resume section still reads a RESTORED WIP line nothing prints");
   assert.equal(buildPrompt({ job: { prompt: "x" } }).includes("RESTORED WIP"), false, "the prompt still carries a RESTORED WIP line");
-  assert.ok(RESUME.includes("A `wip(<slug>)` commit on the branch is the previous attempt's"), "resume.md no longer tells the run to start on the kept wip commit");
-  assert.ok(RESUME.includes("never reset or rewrite it; `run publish` folds it into the delivery commit"), "resume.md no longer says the wip is folded on publish");
+  assert.ok(resumeSection().includes("A `wip(<slug>)` commit on the branch is the previous attempt's"), "the Resume section no longer tells the run to start on the kept wip commit");
+  assert.ok(resumeSection().includes("never reset or rewrite it; `run publish` folds it into the delivery commit"), "the Resume section no longer says the wip is folded on publish");
   const pluginDir = new URL("../plugin/", import.meta.url);
   const files = readdirSync(pluginDir, { recursive: true }).map(String).filter((name) => name.endsWith(".md"));
   assert.deepEqual(files.filter((name) => folded(readFileSync(new URL(name, pluginDir), "utf8")).includes("without a commit")), [], "a plugin text still says to terminate without a commit");
@@ -292,7 +295,7 @@ test("the run is recorded with the run_* tools, under the argument names the han
       assert.ok(source.includes(`${arg}:`), `the skill sends \`${arg}\` to \`${tool}\`, whose schema has no such argument`);
     }
   }
-  assert.ok(RESUME_PHASE_ORDER.includes("implementation"), "the resume order lost a canonical phase");
+  assert.ok(PHASE_NAMES.includes("implementation"), "the resume order lost a canonical phase");
   assert.ok(SKILL.includes("`run check` records each phase and `run publish` the delivery"), "the skill no longer leaves the phase records to the runtime");
 });
 
@@ -337,13 +340,10 @@ test("the QA echo is gone, and the pair that replaces it is really in the flow",
   );
 });
 
-test("the QA stage A gate reads the marker the check records, before stage B is launched", () => {
+test("the QA stage A gate reads whether stage B runs, and records no marker", () => {
   const gate = passageAt("**Stage A gate:**", QA_PHASE);
-  assert.ok(gate.includes("`recorded: qa_stage_a <verdict>`"), "the stage A gate no longer reads the marker the check records");
-  assert.equal(gate.includes("`run_set` with `qa_stage_a`"), false, "the stage A gate still records the marker by hand");
+  assert.equal(gate.includes("recorded:"), false, "the stage A gate still reads a marker no check records");
   assert.ok(gate.includes("`QA-STAGE: provers|skip`"), "the stage A gate no longer reads whether stage B runs");
-  assert.ok(gate.includes("BEFORE stage B"), "the marker is no longer recorded before the provers start");
-  assert.ok(gate.includes("never by writing a file"), "the stage A gate no longer forbids hand-writing the marker");
 });
 
 test("the outcome record is documented at its three points and the NO-CHANGE-NEEDED report, with the enum the runtime really accepts", () => {
@@ -367,35 +367,29 @@ test("the outcome record is documented at its three points and the NO-CHANGE-NEE
   assert.ok(CLASSIFY.includes("RUN_OUTCOME_STATUSES.includes(record.status)"), "classify.mjs no longer reads the shared status enum");
 });
 
-// The run resume of references/resume.md, once Phase 0 sends a resumed run there.
-function resumeStep() {
-  assert.ok(SKILL.includes("read\n   `references/resume.md` now and follow it before step 2"), "Phase 0 no longer sends a resumed run to references/resume.md");
-  assert.equal(SKILL.includes("Post-merge resume"), false, "the post-merge block survived in Phase 0");
-  return RESUME;
-}
+test("the facts block the runtime prints carries every field the Resume section reads, and the runtime decides nothing", () => {
+  const facts = { runDir: "/runs/demo/demo-slug", branch: "worktree-demo", worktree: "/worktrees/demo", phases: [{ phase: "triage", verdict: "PROCEED", artifact: "01-triage.md", at: "t" }], answers: [], wip: null };
+  const prompt = buildPrompt({ job: { id: 1, prompt: "p", slug: "demo-slug" }, facts });
 
-test("step 2 trusts the resume block the runtime emits and re-validates nothing", () => {
-  const handoff = {
-    slug: "demo-slug",
-    runDir: "/runs/demo/demo-slug",
-    branch: "worktree-demo",
-    worktree: "/worktrees/demo",
-    lastPhase: "plan",
-    fromPhase: "code",
-    fromStage: "qa-stage-b",
-  };
-  const prompt = buildPrompt({ job: { id: 1, prompt: "p" }, handoff });
-  const step = resumeStep();
-
-  assert.ok(prompt.includes("RESUME CANDIDATE (slug `demo-slug`)"), prompt);
-  assert.ok(step.includes("RESUME CANDIDATE (slug `<slug>`)"), "step 2 no longer names the block the runtime emits");
-  for (const field of ["RUN_DIR:", "Branch:", "Worktree:", "Last completed phase:", "Resume from phase:", "From stage:"]) {
-    assert.ok(prompt.includes(`\n${field} `), `the runtime stopped emitting \`${field}\` in the resume block`);
-    assert.ok(step.includes(field), `step 2 no longer reads \`${field}\` from the block`);
+  assert.ok(prompt.includes("RUN FACTS (slug `demo-slug`)"), prompt);
+  assert.ok(SKILL.includes("When the prompt carries a `RUN FACTS` block, read `## Resume` and follow it before step 2."), "Phase 0 no longer sends a resumed run to the Resume section");
+  for (const field of ["RUN_DIR:", "Branch:", "Worktree:", "Recorded phases:", "Wip commit:", "Answers:"]) {
+    assert.ok(prompt.includes(`\n${field} `) || prompt.includes(`  ${field} `), `the runtime stopped emitting \`${field}\` in the facts block`);
   }
-  assert.ok(step.includes("From stage: qa-stage-b"), "step 2 lost the QA stage B re-entry");
-  assert.equal(SKILL.includes("schemaVersion == 1"), false, "the agent still re-validates the state the runtime already validated");
-  assert.equal(SKILL.includes("increment `resumeCount`"), false, "the agent is still told to write `resumeCount`");
+  for (const gone of ["Last completed phase", "Resume from phase", "From stage", "Trust this block"]) assert.equal(prompt.includes(gone), false, gone);
+  assert.equal(SKILL.includes("schemaVersion == 1"), false, "the agent still re-validates the state the runtime holds");
+  assert.equal(SKILL.includes("Post-merge resume"), false, "the post-merge block survived in Phase 0");
+});
+
+test("SKILL.md has the Resume section with its generic marker and resolve's exceptions, within its size, and references/resume.md is gone", () => {
+  const section = SKILL.slice(SKILL.indexOf("## Resume\n"), SKILL.indexOf("## Pipeline (execute"));
+  assert.ok(section.includes("<!-- generic: moves to the pipeline template in R6 -->"), "the generic part is no longer marked");
+  assert.ok(section.includes("**Resolve's exceptions:**"), "the exceptions are no longer marked");
+  assert.ok(Buffer.byteLength(section) <= 1331, `the Resume section is ${Buffer.byteLength(section)} bytes`);
+  assert.equal(existsSync(new URL("../plugin/skills/resolve/references/resume.md", import.meta.url)), false, "references/resume.md is back");
+  assert.ok(resumeSection().includes("Continue after the last recorded phase whose artifact exists in `RUN_DIR`"), "the general rule is gone");
+  assert.ok(resumeSection().includes("A recorded phase whose artifact is missing → redo from that phase"), "the missing artifact rule is gone");
+  assert.ok(resumeSection().includes("A retried `NOT-REPRODUCIBLE`/`NO-CHANGE-NEEDED` triage → relaunch the triager"), "a retried terminal triage has no rule");
 });
 
 test("the telemetry of Phase 9 is one line naming `run report`, and the skill never calls pipeline_log", () => {
@@ -580,15 +574,12 @@ test("the resolve skill directory holds only SKILL.md and references/", () => {
   assert.deepEqual(entries, ["SKILL.md", "references"], "a new top-level entry appeared under plugin/skills/resolve/");
 });
 
-test("step 2 reads the re-run lines of a legacy job queued from an operator run, and no longer names the prior-run block", () => {
-  const step = resumeStep();
-  assert.ok(step.includes("Re-run:"), "step 2 no longer reads the phases the runtime refused to skip");
-  assert.equal(step.includes("## PRIOR RUN (operator)"), false, "step 2 still names the prior-run block the operator guard removed");
-  const prompt = buildPrompt({
-    job: { id: 1, prompt: "p" },
-    handoff: { slug: "demo-slug", runDir: "/runs/demo/demo-slug", lastPhase: null, fromPhase: "triage", reruns: [{ phase: "triage", reason: "evidence level 2 is below 3 on a bug (operator run)" }] },
-  });
-  assert.ok(prompt.includes("\nRe-run: triage — evidence level 2 is below 3 on a bug (operator run)\n"), prompt);
+test("no plugin text names a block or a line the runtime no longer prints", () => {
+  const pluginDir = new URL("../plugin/", import.meta.url);
+  const files = readdirSync(pluginDir, { recursive: true }).map(String).filter((name) => name.endsWith(".md"));
+  for (const gone of ["RESUME CANDIDATE", "From stage", "Re-run:", "resume.md", "## PRIOR RUN (operator)", "qa_stage_a"]) {
+    assert.deepEqual(files.filter((name) => readFileSync(new URL(name, pluginDir), "utf8").includes(gone)), [], gone);
+  }
 });
 
 test("the round artifacts are append-only and read by their last round, and no template or agent still says `iteration N`", () => {
