@@ -123,6 +123,7 @@ const JOB_COLUMNS = [
   "pr_title",
   "start_branch",
   "start_worktree",
+  "pipeline",
 ];
 
 // Everything a database written by the schema version before the merge sweep does NOT have yet.
@@ -510,7 +511,7 @@ test("an open of an older read-only database names `nightqueue update`, the fix 
   t.after(() => chmodSync(dbPath(env), 0o644));
 
   assert.throws(() => openDb(env), (err) => {
-    assert.match(err.message, /database at v5, this nightqueue expects v27: run `nightqueue update`/);
+    assert.match(err.message, /database at v5, this nightqueue expects v28: run `nightqueue update`/);
     assert.doesNotMatch(err.message, /nightqueue doctor/);
     return true;
   });

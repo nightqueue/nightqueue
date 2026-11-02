@@ -55,7 +55,7 @@ function incident(t, name, { pipeline = OLD, phases = phaseEntries(), orphan = f
   const id = addJob({ projectId, prompt: "fix the worker" }, env).id;
   const dir = runDir(projectId, SLUG, env);
   mkdirSync(dir, { recursive: true });
-  const held = { schemaVersion: 1, slug: SLUG, project: "alpha", resumeCount: 0, phases };
+  const held = { schemaVersion: 1, slug: SLUG, project: "alpha", phases };
   writeFileSync(join(dir, "state.json"), JSON.stringify(pipeline === null ? held : { ...held, pipeline }));
   const db = openDb(env);
   db.prepare("UPDATE jobs SET slug = ? WHERE id = ?").run(SLUG, id);
@@ -109,7 +109,7 @@ test("a queued job started under the installed version resumes as before", async
   const { env, id, planPath } = incident(t, "pipeline-version-same", { pipeline: { name: "resolve", version: "0.7.0" } });
   await cycle(env, id);
   assert.equal(fakeCalls(planPath).length, 1);
-  assert.match(argValue(fakeCalls(planPath)[0].argv, "-p"), /Resume from phase: qa/);
+  assert.match(argValue(fakeCalls(planPath)[0].argv, "-p"), /RUN FACTS/);
   assert.notEqual(getJob(id, env).blocked_code, "pipeline-version-changed");
 });
 

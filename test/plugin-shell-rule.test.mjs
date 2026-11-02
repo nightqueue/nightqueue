@@ -10,8 +10,8 @@ const AGENTS_DIR = join(ROOT, "plugin/agents");
 const REFUSAL = "too complex to verify that it stays inside the worktree";
 const PROMPTS = join(ROOT, "plugin/skills/resolve/references/prompts");
 
-// The host refuses Bash it cannot prove stays inside the worktree; the skill points at the rule every prompt carries, the unattended prompt says it, and an agent gets the rule from its request, never its own file.
-test("the worktree shell rule reaches the skill and the unattended prompt, and no agent file carries it", () => {
+// The host refuses Bash it cannot prove stays inside the worktree; the skill points at the rule every prompt carries, the guard answers each refusal with its reason, and an agent gets the rule from its request, never its own file.
+test("the worktree shell rule reaches the skill, stays out of the root prompt, and no agent file carries it", () => {
   const skill = readFileSync(join(ROOT, "plugin/skills/resolve/SKILL.md"), "utf8");
   assert.ok(skill.includes("Every prompt carries the shell rule (`references/prompts/_shell-rule.md`)"), "the skill does not point at the shell rule of the prompts");
   assert.match(skill, /every test command a phase runs goes under an explicit `timeout`/);
@@ -23,8 +23,7 @@ test("the worktree shell rule reaches the skill and the unattended prompt, and n
     assert.equal(text.includes("## Shell inside the worktree"), false, `${name} still carries the shell rule`);
   }
   const prompt = buildPrompt({ job: { id: 1, prompt: "fix it" } });
-  assert.match(prompt, /Shell rule: .*one simple command per Bash call, no heredocs/);
-  assert.ok(!prompt.includes("Open pull requests"), "a caller that brings no pull request answer gets the prompt it has today");
+  assert.equal(prompt.includes("Shell rule"), false, "the root prompt still carries the shell rule");
 });
 
 // The subagent prompts are rendered from templates now, so the one-line rule the skill asked every brief to repeat lives in them.

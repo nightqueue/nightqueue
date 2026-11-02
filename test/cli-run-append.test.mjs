@@ -21,7 +21,7 @@ function seededRun(t, name) {
   const env = makeHome(t, name);
   makeProject(t, env, "alpha");
   const projectId = ensureProject(env, "alpha");
-  recordRunFields({ projectId, slug: SLUG, fields: { origin: "operator" }, env });
+  recordRunFields({ projectId, slug: SLUG, fields: { type: "bug/error" }, env });
   const dir = runDir(projectId, SLUG, env);
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, "05-qa.md"), ANALYST);
@@ -74,9 +74,8 @@ test("`run check 05 --stage analyst` records stage A only, and `run check 05` wr
   const { env, path, drafts } = seededRun(t, "cli-run-append-check");
   const target = ["--project", "alpha", "--slug", SLUG];
   const stageA = await runCli(env, ["run", "check", "05", "--stage", "analyst", ...target]);
-  assert.deepEqual(stageA.out, ["OK", "VERDICT: APPROVED", "QA-STAGE: provers", "recorded: qa_stage_a APPROVED"]);
+  assert.deepEqual(stageA.out, ["OK", "VERDICT: APPROVED", "QA-STAGE: provers"]);
   const state = JSON.parse(readFileSync(join(runDir(ensureProject(env, "alpha"), SLUG, env), "state.json"), "utf8"));
-  assert.equal(state.qaStageA.artifact, "05-qa.md");
   assert.ok(!(state.phases ?? []).some((entry) => entry.phase === "qa"));
   assert.equal((await spawnAppend(env, draft(drafts, "g1"), "g1")).code, 0);
   const full = await runCli(env, ["run", "check", "05", ...target]);
@@ -215,7 +214,7 @@ test("`run append` over a round that leaves a fence open closes it first, then a
 const OPEN_COMMENT_ANALYST = ANALYST.replace("## Test recipe\nnode --test", "## Test recipe\nnode --test\n- payload fragment <!-- img onerror");
 
 test("D3: `run check 05 --stage analyst` refuses an analyst round that leaves a `<!--` open and records nothing", async (t) => {
-  const passed = ["OK", "VERDICT: APPROVED", "QA-STAGE: provers", "recorded: qa_stage_a APPROVED"];
+  const passed = ["OK", "VERDICT: APPROVED", "QA-STAGE: provers"];
   const cases = [
     ["open", OPEN_COMMENT_ANALYST, ["MISSING: round 1 of 05-qa.md leaves the HTML comment opened at line 10 open: append a new `## Round 2` with your whole round, closing every `<!--` with `-->` or writing a literal `<!--` in backticks"]],
     ["literal", OPEN_COMMENT_ANALYST.replace("<!-- img", "`<!--` img"), passed],

@@ -21,6 +21,11 @@ Delivery constraints (the limit of what may be delivered — NEVER design; omit 
 {{DELIVERY_CONSTRAINTS}}
 
 {{/DELIVERY_CONSTRAINTS}}
+{{#OPERATOR_ANSWERS}}
+Operator answers to the gate, oldest first:
+{{OPERATOR_ANSWERS}}
+
+{{/OPERATOR_ANSWERS}}
 {{>_context}}
 
 ## Deliver

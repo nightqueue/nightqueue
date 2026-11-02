@@ -20,9 +20,3 @@ async function jobRowOf(run, env) {
 export async function jobPromptText(run, env) {
   return promptOfRow(await jobRowOf(run, env));
 }
-
-// The job's current operator note, read from the store; null outside a job, without a note or when the row cannot be read.
-export async function jobOperatorNote(run, env) {
-  const note = (await jobRowOf(run, env))?.operator_note;
-  return typeof note === "string" && note.trim() !== "" ? note.trim() : null;
-}

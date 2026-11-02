@@ -11,7 +11,6 @@ import { openDb } from "../../src/memory/db.mjs";
 import { addJob, claimJobById, persistRunFacts } from "../../src/memory/jobs.mjs";
 import { saveLesson } from "../../src/memory/lessons.mjs";
 import { openQuestion, questionDigest } from "../../src/queue/gate-question.mjs";
-import { decideResume } from "../../src/queue/resume.mjs";
 import { applyRetry } from "../../src/queue/retry.mjs";
 import { recordOutcome, recordPhaseDone, recordPrUrl, recordRunFields } from "../../src/queue/run-state.mjs";
 import { ensureProject, makeHome, makeProject, projectIdOf } from "../../test-support/memory.mjs";
@@ -72,8 +71,8 @@ test("inside a job the run tools resolve the run from the job's own row", async 
 
   const state = readState(env, "alpha", SLUG);
   assert.deepEqual(
-    { schemaVersion: state.schemaVersion, projectId: state.projectId, slug: state.slug, resumeCount: state.resumeCount },
-    { schemaVersion: 1, projectId: projectIdOf(env, "alpha"), slug: SLUG, resumeCount: 0 },
+    { schemaVersion: state.schemaVersion, projectId: state.projectId, slug: state.slug },
+    { schemaVersion: 1, projectId: projectIdOf(env, "alpha"), slug: SLUG },
   );
   assert.deepEqual(state.phases.map((entry) => entry.phase), ["triage"]);
   assert.equal(state.type, "bug/error");
@@ -149,29 +148,29 @@ test("outside a job the project and the slug are both required, and a registered
   assert.deepEqual(readState(env, "alpha", SLUG).phases.map((entry) => entry.phase), ["triage"]);
 });
 
-test("`run_set` records the QA stage A marker, and the resume decision reads it back as the stage B re-entry", async (t) => {
-  const { env, job } = makeRunningJob(t, "mcp-run-tools-qa-stage-a");
+test("`run_set` refuses `qa_stage_a` with the removed-input line, and `answers` and `lastClaim` as the runtime's, with nothing written", async (t) => {
+  const { env, job } = makeRunningJob(t, "mcp-run-tools-retired-state-keys");
   const client = await connect(t, { ...env, NIGHTQUEUE_JOB_ID: String(job.id) });
-  for (const phase of ["triage", "explore", "architecture", "implementation"]) {
-    payloadOf(await client.callTool({ name: "run_phase_done", arguments: { phase, artifact: `0-${phase}.md`, verdict: "ok" } }));
+  payloadOf(await client.callTool({ name: "run_set", arguments: { type: "bug/error" } }));
+  const before = readState(env, "alpha", SLUG);
+
+  const cases = [
+    ["qa_stage_a", { artifact: "05-qa.md" }, /`qa_stage_a` was removed: a resumed QA re-runs Phase 5 whole/],
+    ["answers", [{ text: "forged" }], /`answers` is written by the runtime only/],
+    ["lastClaim", { attempt: 1, phases: 9, answers: 9 }, /`lastClaim` is written by the runtime only/],
+  ];
+  for (const [field, value, line] of cases) {
+    for (const args of [{ [field]: value }, { type: "feature/refactor", [field]: value }]) {
+      const refused = await client.callTool({ name: "run_set", arguments: args });
+      assert.equal(refused.isError, true, field);
+      assert.match(textOf(refused), line);
+    }
   }
-
-  await new Promise((done) => setTimeout(done, 5));
-  const marker = { artifact: "05-qa.md", verdict: "BREAKS-FOUND" };
-  payloadOf(await client.callTool({ name: "run_set", arguments: { qa_stage_a: marker } }));
-
-  const state = readState(env, "alpha", SLUG);
-  assert.deepEqual({ artifact: state.qaStageA.artifact, verdict: state.qaStageA.verdict }, marker);
-  assert.match(state.qaStageA.at, UTC_ISO);
-  assert.equal(state.phases.some((entry) => entry.phase.startsWith("qa-")), false, "a sub-phase was written into `phases`");
-  assert.deepEqual(
-    { fromPhase: decideResume({ state }).fromPhase, fromStage: decideResume({ state }).fromStage },
-    { fromPhase: "qa", fromStage: "qa-stage-b" },
-  );
-
-  const refused = await client.callTool({ name: "run_set", arguments: { qa_stage_a: { verdict: "BREAKS-FOUND" } } });
-  assert.equal(refused.isError, true);
-  assert.match(textOf(refused), /artifact/);
+  assert.deepEqual(readState(env, "alpha", SLUG), before);
+  for (const key of ["answers", "lastClaim", "previousClaim", "gateAnswersSeen"]) {
+    const refused = recordRunFields({ projectId: ensureProject(env, "alpha"), slug: SLUG, fields: { [key]: 1 }, env });
+    assert.equal(refused.reason, `\`${key}\` is written by the runtime only`);
+  }
 });
 
 test("inside a job `pipeline_log` records the run of its own row and the fields the run already recorded", async (t) => {
@@ -404,7 +403,7 @@ test("a question-only pause, answered, reads as answered on the resumed check an
   openDb(env).prepare("UPDATE jobs SET status = 'gate' WHERE id = ?").run(job.id);
   await applyRetry({ id: job.id, note: "go ahead", env });
 
-  assert.ok((await check()).includes("CONFIRM: answered"));
+  assert.ok((await check()).some((line) => /^CONFIRM: answered \(.+\)$/.test(line)));
   recordOutcome({ projectId, slug: SLUG, status: "done", env });
   assert.equal(openQuestion(plan, readState(env, "alpha", SLUG)), false, "the delivery lost the answered pause");
 });

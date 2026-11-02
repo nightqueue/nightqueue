@@ -5,7 +5,6 @@ import { writeFileAtomic } from "../config/store.mjs";
 import { FILE_LIST } from "../queue/file-list.mjs";
 import { CHECK_CONTEXT_FILES, evaluateCheck, fileListResult, repairedLine, roundDefectParts } from "../queue/check-contract.mjs";
 import { PHASE_ARTIFACTS, QA_STAGES, withClosedFence } from "../queue/phase-artifacts.mjs";
-import { jobOperatorNote } from "../queue/job-prompt.mjs";
 import { defaultGitImpl } from "../queue/preflight.mjs";
 import { consolidationNumbersOf, consolidationOf } from "../queue/qa-rounds.mjs";
 import { readRunState } from "../queue/resume.mjs";
@@ -183,8 +182,8 @@ export function validConsolidatedText(file, raw, consolidation) {
   return text;
 }
 
-// The gate of one phase, evaluated against the check contract on the artifact, the run files its rules read and the job's operator note; a round artifact gets its open fence closed first.
-function checkArtifact({ run, check, stage, state, operatorNote, ctx }) {
+// The gate of one phase, evaluated against the check contract on the artifact and the run files its rules read; a round artifact gets its open fence closed first.
+function checkArtifact({ run, check, stage, state, ctx }) {
   const artifact = PHASE_ARTIFACTS.get(check);
   const path = join(run.runDir, artifact.file);
   if (artifact.sections[0] === FILE_LIST) {
@@ -196,7 +195,7 @@ function checkArtifact({ run, check, stage, state, operatorNote, ctx }) {
   const files = [...new Set([...CHECK_CONTEXT_FILES, artifact.file])];
   const texts = Object.fromEntries(files.map((file) => [file, readArtifact(join(run.runDir, file))]));
   const gaps = stage === "triage" ? citedTestGaps(run, texts[artifact.file], ctx.env) : consolidationGaps;
-  return { ...evaluateCheck({ check, stage, texts, state, gaps, operatorNote }), repaired };
+  return { ...evaluateCheck({ check, stage, texts, state, gaps }), repaired };
 }
 
 // The stage a check names, refused unless it is a QA stage on check `05`; null without one.
@@ -237,8 +236,7 @@ async function runCheck(argv, ctx) {
   const stage = checkStage(check, values.stage);
   const run = await resolveWritableRun(values, ctx);
   const state = readRunState({ projectId: run.projectId, slug: run.slug, env: ctx.env });
-  const operatorNote = check === "03" ? await jobOperatorNote(run, ctx.env) : null;
-  const result = checkArtifact({ run, check, stage, state, operatorNote, ctx });
+  const result = checkArtifact({ run, check, stage, state, ctx });
   printCheck(result, await checkEffectLines({ run, check, stage, result, state, ctx }), ctx);
   return 0;
 }

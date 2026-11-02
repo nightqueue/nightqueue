@@ -237,19 +237,33 @@ async function ownJobRow(env, openItems) {
   return tolerant(openItems, "reading this job's row", null, () => openStore(env).jobs.getJob(id));
 }
 
-// The operator's answer to the gate, appended to the request unless the prompt already carries it.
-function operatorAnswer(note, prompt) {
-  const answer = typeof note === "string" ? note.trim() : "";
-  return answer && !prompt.includes(answer) ? `\n\nOperator answer to the gate: ${answer}` : "";
+// The texts of the answers a run recorded, oldest first.
+function recordedAnswers(state) {
+  const answers = isStateObject(state) && Array.isArray(state.answers) ? state.answers : [];
+  return answers.map((answer) => text(answer?.text)).filter((answer) => answer !== "");
+}
+
+// The operator's answers to the gate appended to the request: the run's, oldest first, then the row's note of a run that had no directory yet.
+function operatorAnswer(state, note) {
+  const answers = [...recordedAnswers(state), text(note)].filter((answer) => answer !== "");
+  return answers.map((answer) => `\n\nOperator answer to the gate: ${answer}`).join("");
+}
+
+// The operator's recorded answers as the architect reads them, numbered and oldest first; empty for any other target.
+function operatorAnswersValue(target, state) {
+  if (target !== "architect") return "";
+  return recordedAnswers(state)
+    .map((answer, index) => `${index + 1}. ${answer}`)
+    .join("\n");
 }
 
 // The request the triager reads: the job's own prompt inside a job, else the `request` argument.
-function rawRequest({ job, args, env, openItems }) {
+function rawRequest({ job, args, state, env, openItems }) {
   const asked = text(args.request);
   const prompt = typeof job?.prompt === "string" ? job.prompt.trim() : "";
   if (prompt) {
     if (asked) openItems.push("`request` was ignored: inside a job the triager reads the job's own prompt");
-    return prompt + operatorAnswer(job.operator_note, prompt);
+    return prompt + operatorAnswer(state, job.operator_note);
   }
   if (asked) return asked;
   if (callerJobId(env) !== null) throw new UserError("this job's prompt could not be read: pass the request as `request`");
@@ -257,13 +271,13 @@ function rawRequest({ job, args, env, openItems }) {
 }
 
 // The values only the triager reads: the raw request, its origin data, whether it names the slug, and the fixed lists it chooses from.
-async function triagerValues({ args, run, dir, env, openItems }) {
+async function triagerValues({ args, run, state, dir, env, openItems }) {
   const fixed = { COMMIT_TYPES: COMMIT_TYPES.join(", "), DEPENDENT_REFUSAL: DEPENDENT_PROMPT_REFUSAL };
   if (args.target !== "triager") return { ...fixed, RAW_REQUEST: "", ORIGIN: "", NEEDS_SLUG: false };
   const job = await ownJobRow(env, openItems);
   return {
     ...fixed,
-    RAW_REQUEST: rawRequest({ job, args, env, openItems }),
+    RAW_REQUEST: rawRequest({ job, args, state, env, openItems }),
     ORIGIN: readOriginFiles(join(dir, "origin")).map(originEntry).join("\n\n"),
     NEEDS_SLUG: isProvisionalSlug(job, run.slug),
   };
@@ -280,7 +294,7 @@ async function promptValues({ args, template, run, state, env, openItems }) {
   requireRequestRule(args);
   const dir = runDir(run.projectId, run.slug, env);
   const brief = args.target === "triager" ? "" : readBrief(dir);
-  const triage = await triagerValues({ args, run, dir, env, openItems });
+  const triage = await triagerValues({ args, run, state, dir, env, openItems });
   const repo = repositoryOf({ run, state, env, openItems });
   const query = text(args.query) || briefField(brief, "Affected area") || leadingWords(triage.RAW_REQUEST);
   const lookup = { template, query, run, repo, env, openItems };
@@ -306,6 +320,7 @@ async function promptValues({ args, template, run, state, env, openItems }) {
     PLUGIN_ROOT: join(packageRoot(), "plugin"),
     ...triage,
     DELIVERY_CONSTRAINTS: text(args.delivery_constraints),
+    OPERATOR_ANSWERS: operatorAnswersValue(args.target, state),
     STAGE: text(args.stage),
     GROUP: text(args.group),
     NOTE: text(args.note),

@@ -8,6 +8,17 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **The runner hands a run its facts, and the pipeline decides where to continue.** The
+  `RESUME CANDIDATE` block, the resume cap, the terminal-verdict stop, the operator re-runs and the QA
+  stage marker are gone: a prompt now carries a `RUN FACTS` block of records (phases, answers, wip,
+  branch), and the resolve skill's `## Resume` section decides. A `queue retry --note` on a job with a
+  run directory is recorded in `state.json.answers` and leaves `operator_note` NULL; `run check 03`
+  answers `CONFIRM: answered (<at>)` from it. The root prompt drops the pull request, human-stop and
+  shell lines, and the open pull requests move to `origin/open-prs.md` for the triager. `jobs.pipeline`
+  names the pipeline a job runs. A plain retry of a run with no new phase and no new answer in its last
+  two attempts is refused, a preflight gate excepted. `run_set` refuses `qa_stage_a`, `answers` and `lastClaim`. `nightqueue
+  update` required (schema v28), MCP clients restart (tool contract 12).
+
 - **Terminated work stays as a wip commit, and the delivery folds it.** A retry or a new
   `start_branch` job now starts on the wip commit with a clean tree: the claim no longer resets
   it, the attempt's end no longer moves the branch back, and the `RESTORED WIP:` prompt line is

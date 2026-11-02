@@ -1,1 +1,1 @@
-{"check":"03","type":"bug/error","operatorNote":"go ahead","gateQuestionDigest":"2135bb3b8f1e1314b16923262e15fcd3d1d3de243096a88c39fc4a459d74b6a0"}
+{"check":"03","type":"bug/error","answers":[{"text":"go ahead","at":"2026-09-06T00:00:00.000Z","attempt":1}],"gateQuestionDigest":"2135bb3b8f1e1314b16923262e15fcd3d1d3de243096a88c39fc4a459d74b6a0"}

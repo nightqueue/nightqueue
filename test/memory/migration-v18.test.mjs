@@ -13,7 +13,7 @@ import { finishV18, migrateToV18 } from "../../src/memory/migration/v18.mjs";
 import * as registry from "../../src/memory/registry.mjs";
 import { logPipelineRun } from "../../src/memory/runs.mjs";
 import { sharedSlugPending } from "../../src/memory/shared-slug-migration.mjs";
-import { decideResume, ownRunState, resumeHandoff } from "../../src/queue/resume.mjs";
+import { ownRunState, runFacts } from "../../src/queue/resume.mjs";
 import { buildLegacyHome, legacyConfig, preV22Name } from "../../test-support/legacy-home.mjs";
 import { makeDir, makeHome } from "../../test-support/memory.mjs";
 import { migrateTestHome } from "../../test-support/migrate.mjs";
@@ -103,7 +103,7 @@ test("a runner holding a live lease refuses the migration with one line and noth
   };
   const { env, fixture } = v17Home(t, "v18-live-lease", { seed: running("+1 hour") });
   assert.throws(() => migrateTestHome(env), (err) => LEASE_REFUSAL.test(err.message) && err.message.split("\n").length === 1);
-  assert.throws(() => openDb(env), (err) => err.code === "SCHEMA_OUTDATED" && /database at v17, this nightqueue expects v27: run `nightqueue update`/.test(err.message));
+  assert.throws(() => openDb(env), (err) => err.code === "SCHEMA_OUTDATED" && /database at v17, this nightqueue expects v28: run `nightqueue update`/.test(err.message));
   assert.equal(diskVersion(env), 17);
   assert.equal(existsSync(preV18BackupPath(env)), false, "a refused migration published a copy");
   assert.ok(readFileSync(dbPath(env)).equals(fixture), "a refused migration wrote to the database");
@@ -319,7 +319,7 @@ test("a job whose runner died before the upgrade fails after the migration and a
     ).run();
   };
   const { env } = v17Home(t, "v18-expired-lease-resume", { seed: died, runs: { api: ["run-a"] } });
-  const state = { schemaVersion: 1, project: "api", slug: "run-a", resumeCount: 0, branch: "fix/run-a", phases: [{ phase: "triage" }, { phase: "explore" }] };
+  const state = { schemaVersion: 1, project: "api", slug: "run-a", branch: "fix/run-a", phases: [{ phase: "triage" }, { phase: "explore" }] };
   writeFileSync(join(homeDir(env), "runs", "api", "run-a", "state.json"), JSON.stringify(state));
 
   const db = migrateTestHome(env);
@@ -334,10 +334,10 @@ test("a job whose runner died before the upgrade fails after the migration and a
 
   const recorded = ownRunState({ projectId: job.project_id, slug: job.slug, jobId: job.id, env });
   assert.deepEqual(recorded, state, "the run did not follow its job to the project id");
-  const handoff = resumeHandoff({ job, resume: decideResume({ state: recorded }), state: recorded, env });
-  assert.equal(handoff.runDir, runDir(apiId, "run-a", env));
-  assert.equal(handoff.fromPhase, "architecture");
-  assert.equal(handoff.branch, "fix/run-a");
+  const facts = runFacts(recorded, { runDir: runDir(job.project_id, job.slug, env) });
+  assert.equal(facts.runDir, runDir(apiId, "run-a", env));
+  assert.deepEqual(facts.phases.map((entry) => entry.phase), ["triage", "explore"]);
+  assert.equal(facts.branch, "fix/run-a");
 });
 
 const PROJECT_TABLES = ["lessons", "memory", "project_index", "project_libs", "pipeline_runs"];
@@ -379,6 +379,7 @@ function rowsOf(db, table) {
         reason: _reason,
         start_branch: _startBranch,
         start_worktree: _startWorktree,
+        pipeline: _pipeline,
         max_attempts: _maxAttempts,
         ...row
       }) => ({ ...row }),

@@ -57,7 +57,7 @@ function writeJobLog(env, id, log) {
 function writeRunState(env, { slug = SLUG, terminal = { status: "gate", prUrl: null, finishedAt: "2026-09-14T21:00:00Z" }, outcome = DELIVERY } = {}) {
   const dir = runDir(ensureProject(env, "alpha"), slug, env);
   mkdirSync(dir, { recursive: true });
-  const state = { schemaVersion: 1, slug, project: "alpha", resumeCount: 0, phases: [{ phase: "triage", artifact: "01-triage.md", verdict: "ok" }], terminal, outcome };
+  const state = { schemaVersion: 1, slug, project: "alpha", phases: [{ phase: "triage", artifact: "01-triage.md", verdict: "ok" }], terminal, outcome };
   writeFileSync(join(dir, "state.json"), `${JSON.stringify(state, null, 2)}\n`);
   return join(dir, "state.json");
 }
@@ -265,7 +265,6 @@ test("`queue repair` of a job whose QA published another branch's pull request r
     schemaVersion: 1,
     slug: SLUG,
     project: "alpha",
-    resumeCount: 0,
     branch: "worktree-fix+the-worker",
     phases: [],
     outcome: { status: "done", prUrl: PR_URL },

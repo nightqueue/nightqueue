@@ -1,3 +1,5 @@
+import { existsSync } from "node:fs";
+import { join } from "node:path";
 import { UserError } from "../config/errors.mjs";
 import { withLockSync, withPathLock } from "../config/lock.mjs";
 import { runDir } from "../config/paths.mjs";
@@ -12,7 +14,7 @@ import {
   isStateObject,
   outcomeHostFacts,
   readRunState,
-  RESUME_PHASE_ORDER,
+  PHASE_NAMES,
   RESUME_SCHEMA_VERSION,
   RUN_LOCK,
   saveRunState,
@@ -29,7 +31,7 @@ export const RUN_OUTCOME_STATUSES = ["done", "gate", "no_change"];
 export const NO_CHANGE_OUTCOME = "no_change";
 
 // The keys of `state.json` only the runtime writes: no pipeline writer may set them, whole or by a dotted name.
-export const RUNTIME_ONLY_KEYS = ["job", "gateQuestionDigest", "draftPrUrl", "qaMode", "pipeline", "freshRetry", "pipelineUnpinned"];
+export const RUNTIME_ONLY_KEYS = ["job", "gateQuestionDigest", "gateAnswersSeen", "draftPrUrl", "qaMode", "pipeline", "freshRetry", "pipelineUnpinned", "answers", "lastClaim", "previousClaim"];
 
 // The QA modes a triage may decide.
 const QA_MODES = ["skip", "lite", "full"];
@@ -40,21 +42,11 @@ export const JOB_BLOCK_ALREADY_RECORDED = "already recorded";
 // Where the pull request template of a run came from: the repository's own, or nightqueue's fallback.
 const PR_TEMPLATE_SOURCES = ["repo", "nightqueue"];
 
-// The only sub-phase of the pipeline with a record of its own: a top-level marker, never an entry of `phases`.
-const QA_STAGE_A = "qaStageA";
-
-// The one numeric field of the run: the evidence level the triage reached, 1 to 4.
-const EVIDENCE_LEVEL = "evidenceLevel";
-
 // The fields of the run itself a phase may still discover, each with the values it accepts (`null` means any text).
 const RUN_FIELDS = {
   type: PIPELINE_TASK_TYPES,
   branch: null,
   worktree: null,
-  [QA_STAGE_A]: null,
-  origin: ["operator"],
-  [EVIDENCE_LEVEL]: [1, 2, 3, 4],
-  planStatus: ["draft", "approved"],
   commitType: COMMIT_TYPES,
 };
 
@@ -96,8 +88,7 @@ function withText(record, fields) {
 // The state as every writer needs it: the fields the contract fixes, over whatever the file already held.
 function withFixedFields(state, { projectId, slug }) {
   const held = isStateObject(state) ? state : {};
-  const resumeCount = Number.isInteger(held.resumeCount) && held.resumeCount >= 0 ? held.resumeCount : 0;
-  return { ...held, schemaVersion: RESUME_SCHEMA_VERSION, projectId, slug, resumeCount };
+  return { ...held, schemaVersion: RESUME_SCHEMA_VERSION, projectId, slug };
 }
 
 // Runs an action on one run's files under the same lock as its state.json; never call a `record*` inside it, the lock is not re-entrant.
@@ -187,7 +178,8 @@ function record({ projectId, slug, env, change, runtimeFields = {}, claim = null
       if (late !== null && (claim?.over === true || newerClaimHolds(state[late.kind], claim))) {
         return setLateRecordAside({ projectId, slug, env, state, claim, late, at });
       }
-      return saveRunState({ projectId, slug, env, state: { ...withRuntimeFields({ ...state, ...withoutRuntimeKeys(change(state, at)) }, runtimeFields), updatedAt: at } });
+      const runtime = typeof runtimeFields === "function" ? runtimeFields(state) : runtimeFields;
+      return saveRunState({ projectId, slug, env, state: { ...withRuntimeFields({ ...state, ...withoutRuntimeKeys(change(state, at)) }, runtime), updatedAt: at } });
     },
   });
 }
@@ -221,7 +213,7 @@ function phasesWithRecord(phases, { phase, artifact, verdict, note, reason, by, 
 
 // Records a phase the pipeline completed; the list is append-only, so a phase recorded twice never erases the first record.
 export function recordPhaseDone({ projectId, slug, phase, artifact, verdict, note, reason, by, claim = null, env = process.env } = {}) {
-  if (!RESUME_PHASE_ORDER.includes(phase)) return refuseEnum("phase", phase, RESUME_PHASE_ORDER);
+  if (!PHASE_NAMES.includes(phase)) return refuseEnum("phase", phase, PHASE_NAMES);
   return record({
     projectId,
     slug,
@@ -273,7 +265,7 @@ function phasesAfterCheck({ state, check, memo, done, claim, at }) {
 // Records the answer of one `run check` and, when it completed a phase, the phase itself, in one write so the reason reads the memo it replaces.
 export function recordCheck({ projectId, slug, check, memo, done = null, claim = null, env = process.env } = {}) {
   if (trimmedText(check) === null || !isStateObject(memo)) return kept("a check record needs its check and its memo");
-  if (done !== null && !RESUME_PHASE_ORDER.includes(done?.phase)) return refuseEnum("phase", done?.phase, RESUME_PHASE_ORDER);
+  if (done !== null && !PHASE_NAMES.includes(done?.phase)) return refuseEnum("phase", done?.phase, PHASE_NAMES);
   let decided = null;
   const written = record({
     projectId,
@@ -311,7 +303,7 @@ export function recordQaMode({ projectId, slug, mode, reason, env = process.env 
   return record({ projectId, slug, env, change, runtimeFields: { qaMode: { mode, reason: why, at: new Date().toISOString() } } });
 }
 
-// Records that the run stopped on purpose at a phase; a retry consumes the stop, and whether the run resumes is `decideResume`'s call.
+// Records that the run stopped on purpose at a phase; a retry consumes the stop, and where the run continues is the pipeline's call.
 export function recordTermination({ projectId, slug, phase, reason, by, wip = null, claim = null, env = process.env } = {}) {
   const refused = terminationRefusal(phase, reason);
   if (refused) return refused;
@@ -332,7 +324,7 @@ export function recordTermination({ projectId, slug, phase, reason, by, wip = nu
 
 // Why a termination cannot be recorded (an unknown phase or no reason), or null when it can.
 export function terminationRefusal(phase, reason) {
-  if (!RESUME_PHASE_ORDER.includes(phase)) return refuseEnum("phase", phase, RESUME_PHASE_ORDER);
+  if (!PHASE_NAMES.includes(phase)) return refuseEnum("phase", phase, PHASE_NAMES);
   if (trimmedText(reason) === null) return kept("a termination needs a reason: it is what the operator reads in the queue");
   return null;
 }
@@ -403,7 +395,17 @@ function withDraftRecord(outcome, { draft, failures, staysDraft }) {
   };
 }
 
-// Records how the run ended (with the files it delivered when known) and, at the top level of the state where they outlive the outcome the next attempt clears, the digest of the question a pause showed and the draft the run opened (each dropped by a null, left alone when not sent); the pull request URL is the runtime's to write, so an outcome already carrying one keeps it.
+// The answers a state already holds, as a list.
+function answerEntries(state) {
+  return Array.isArray(state?.answers) ? state.answers : [];
+}
+
+// How many answers a pause on this digest finds already recorded, so only a later one answers it: the count beside a digest, dropped with it and left alone when none was sent.
+function answersSeenBy(questionDigest, state) {
+  return typeof questionDigest === "string" ? answerEntries(state).length : questionDigest;
+}
+
+// Records how the run ended (with the files it delivered when known) and, at the top level of the state where they outlive the outcome the next attempt clears, the digest of the question a pause showed with the answers it found, and the draft the run opened (each dropped by a null, left alone when not sent); the pull request URL is the runtime's to write, so an outcome already carrying one keeps it.
 export function recordOutcome({ projectId, slug, status, notice, files, questionDigest, draft = false, failures = 0, draftPrUrl, staysDraft = false, claim = null, env = process.env } = {}) {
   if (!RUN_OUTCOME_STATUSES.includes(status)) return refuseEnum("status", status, RUN_OUTCOME_STATUSES);
   if (status === NO_CHANGE_OUTCOME && trimmedText(notice) === null) {
@@ -420,7 +422,7 @@ export function recordOutcome({ projectId, slug, status, notice, files, question
       outcome: withStamp(withText(withDraftRecord({ ...outcomeToKeep(state, claim), status, at, ...(Array.isArray(files) ? { files } : {}) }, { draft, failures, staysDraft }), { notice }), claim),
       ...displacedSlot(state, "outcome", claim, at),
     }),
-    runtimeFields: { gateQuestionDigest: questionDigest, draftPrUrl },
+    runtimeFields: (state) => ({ gateQuestionDigest: questionDigest, gateAnswersSeen: answersSeenBy(questionDigest, state), draftPrUrl }),
   });
 }
 
@@ -447,19 +449,53 @@ function withoutAttemptConclusion(state, claim) {
   return rest;
 }
 
-// Consumes, in one write under the run lock, what the last claim concluded, only while `stillCurrent` holds; a run another job stamped answers `foreign` with that job, so nothing speaks for the next attempt and nothing a later claim recorded is erased.
-export async function consumeRunConclusion({ projectId, slug, jobId, attempt = null, ordinal = null, env = process.env, stillCurrent = async () => true } = {}) {
+// Whether a run can take an answer: its directory exists.
+function hasRunDir({ projectId, slug, env }) {
+  return isRunPath(projectId, slug) && existsSync(runDir(projectId, slug, env));
+}
+
+// Whether a state read back can take an answer: a readable one, or a run with no state.json yet; a file that cannot be read is never overwritten.
+function canRecordAnswer(state, { projectId, slug, env }) {
+  return isStateObject(state) || !existsSync(join(runDir(projectId, slug, env), "state.json"));
+}
+
+// Whether the run's last claim already counted every answer it holds, so a claim happened after the newest one.
+function claimCountedAnswers(state, count) {
+  return isStateObject(state?.lastClaim) && state.lastClaim.answers >= count;
+}
+
+// The answers after one more: a retry whose commit failed and sends the same answer of the same attempt again, with no claim since, appends nothing.
+function answersWith(state, { text, attempt }, at) {
+  const held = answerEntries(state);
+  const last = held.at(-1);
+  const repeated = last?.text === text && last?.attempt === attempt && !claimCountedAnswers(state, held.length);
+  return repeated ? held : [...held, { text, at, attempt }];
+}
+
+// The one write of a retry: what the last claim concluded consumed and, when an answer can be recorded, that answer appended.
+function saveConsumption({ state, claim, answer, run }) {
+  const at = new Date().toISOString();
+  const consumed = holdsAttemptConclusion(state, claim) ? withoutAttemptConclusion(state, claim) : state;
+  if (answer === null || !canRecordAnswer(state, run)) return saveRunState({ ...run, state: { ...consumed, updatedAt: at } });
+  const saved = saveRunState({ ...run, state: { ...withFixedFields(consumed, run), answers: answersWith(consumed, answer, at), updatedAt: at } });
+  return saved.status === "written" ? { ...saved, answerRecorded: true } : saved;
+}
+
+// Consumes, in one write under the run lock, what the last claim concluded and records the operator's `answer` ({text, attempt}), only while `stillCurrent` holds; a run another job stamped answers `foreign` with that job, so nothing speaks for the next attempt and nothing a later claim recorded is erased.
+export async function consumeRunConclusion({ projectId, slug, jobId, attempt = null, ordinal = null, answer = null, env = process.env, stillCurrent = async () => true } = {}) {
   const claim = { attempt, ordinal };
-  const first = readRunState({ projectId, slug, env });
-  if (foreignStampOf(first, jobId) === null && !holdsAttemptConclusion(first, claim)) return NOTHING_CONSUMED;
+  const run = { projectId, slug, env };
+  const records = answer !== null && hasRunDir(run);
+  const first = readRunState(run);
+  if (!records && foreignStampOf(first, jobId) === null && !holdsAttemptConclusion(first, claim)) return NOTHING_CONSUMED;
   try {
     return await withPathLock(`${runDir(projectId, slug, env)}.lock`, async () => {
       if (!(await stillCurrent())) return { status: "moved", path: null, reason: null };
-      const state = readRunState({ projectId, slug, env });
+      const state = readRunState(run);
       const stampedBy = foreignStampOf(state, jobId);
       if (stampedBy !== null) return { status: "foreign", path: null, reason: null, stampedBy };
-      if (!holdsAttemptConclusion(state, claim)) return NOTHING_CONSUMED;
-      return saveRunState({ projectId, slug, env, state: { ...withoutAttemptConclusion(state, claim), updatedAt: new Date().toISOString() } });
+      if (!holdsAttemptConclusion(state, claim) && !(records && canRecordAnswer(state, run))) return NOTHING_CONSUMED;
+      return saveConsumption({ state, claim, answer: records ? answer : null, run });
     }, RUN_LOCK);
   } catch (err) {
     return kept(String(err?.message ?? err).split("\n")[0]);
@@ -507,46 +543,29 @@ export function recordPrTemplate({ projectId, slug, template, env = process.env 
   return record({ projectId, slug, env, change: (_state, at) => ({ prTemplate: withText({ source, headings, at }, { path }) }) });
 }
 
-// Refusal of a QA stage A marker without the artifact the resume decision reads to re-enter the QA phase at stage B.
-function invalidQaStageA(value) {
-  const artifact = isStateObject(value) ? trimmedText(value.artifact) : null;
-  return artifact === null ? kept(`field \`${QA_STAGE_A}\` needs the \`artifact\` of the stage A report`) : null;
-}
-
 // Refusal of a field `run_set` does not own, or of a value outside the enum of a field that has one.
 function invalidRunField([name, value]) {
   const reserved = runtimeOnlyKey(name);
   if (reserved !== null) return kept(`\`${reserved}\` is written by the runtime only`);
   if (!(name in RUN_FIELDS)) return refuseEnum("field", name, Object.keys(RUN_FIELDS));
-  if (name === QA_STAGE_A) return invalidQaStageA(value);
   const accepted = RUN_FIELDS[name];
-  if (name === EVIDENCE_LEVEL) return Number.isInteger(value) && accepted.includes(value) ? null : refuseEnum(name, value, accepted);
   if (accepted && !accepted.includes(value)) return refuseEnum(name, value, accepted);
   return trimmedText(value) === null ? kept(`field \`${name}\` cannot be empty`) : null;
 }
 
-// The fields as state.json keeps them: the text ones trimmed, the evidence level as its number, and the QA stage A marker stamped by the runtime.
-function runFieldsRecord(fields, at) {
-  const { [QA_STAGE_A]: marker, [EVIDENCE_LEVEL]: evidenceLevel, ...text } = fields;
-  const written = { ...withText({}, text), ...(evidenceLevel === undefined ? {} : { [EVIDENCE_LEVEL]: evidenceLevel }) };
-  if (!marker) return written;
-  return { ...written, [QA_STAGE_A]: withText({ artifact: trimmedText(marker.artifact), at }, { verdict: marker.verdict }) };
-}
-
-
-// Records the fields of the run a phase discovered: its type, where its code lives and the QA stage it already paid for.
+// Records the fields of the run a phase discovered: its type and where its code lives.
 export function recordRunFields({ projectId, slug, fields, claim = null, env = process.env } = {}) {
   const changes = isStateObject(fields) ? fields : {};
   const entries = Object.entries(changes);
   if (entries.length === 0) return kept(`no field to record; accepted: ${Object.keys(RUN_FIELDS).join(", ")}`);
   const refused = entries.map(invalidRunField).find(Boolean);
   if (refused) return refused;
-  return record({ projectId, slug, env, claim, late: { kind: "fields", record: changes }, change: (_state, at) => runFieldsRecord(changes, at) });
+  return record({ projectId, slug, env, claim, late: { kind: "fields", record: changes }, change: () => withText({}, changes) });
 }
 
 // Refusal of a skip `run_skip` cannot record, or null when its phase, author and reason are the ones state.json keeps.
 function invalidSkip({ phase, by, reason }) {
-  if (!RESUME_PHASE_ORDER.includes(phase)) return refuseEnum("phase", phase, RESUME_PHASE_ORDER);
+  if (!PHASE_NAMES.includes(phase)) return refuseEnum("phase", phase, PHASE_NAMES);
   if (!SKIP_AGENTS.includes(by)) return refuseEnum("by", by, SKIP_AGENTS);
   return trimmedText(reason) === null ? kept("a skip needs a reason: it is what the studio track shows on the slot") : null;
 }
@@ -602,19 +621,33 @@ export function recordAdoptedWorktree({ projectId, slug, branch, worktree, env =
   return record({ projectId, slug, env, change: () => ({ ...held, adoptedWorktree: held.worktree }) });
 }
 
-// The resume count over the state already on disk: a run the pipeline never recorded anything into is not created by a resume.
-function saveResumeCount({ projectId, slug, resumeCount, env }) {
-  const state = readRunState({ projectId, slug, env });
-  if (!isStateObject(state)) return kept("there is no state.json to record the resume into");
-  return saveRunState({ projectId, slug, env, state: { ...state, resumeCount, updatedAt: new Date().toISOString() } });
+// What one claim found recorded: how many phases and how many answers, under its attempt.
+function claimCounts(state, attempt) {
+  return { attempt, phases: phaseEntries(state).length, answers: answerEntries(state).length };
 }
 
-// Records the resume the runtime decided on: the only writer of `resumeCount`, which the agent never touches again.
-export function recordResume({ projectId, slug, resumeCount, env = process.env } = {}) {
-  if (!Number.isInteger(resumeCount) || resumeCount < 0) {
-    return kept(`resumeCount must be a non-negative integer, got \`${String(resumeCount)}\``);
-  }
-  return underRunLock({ projectId, slug, env, write: () => saveResumeCount({ projectId, slug, resumeCount, env }) });
+// Records what this claim found: another attempt moves the last claim to `previousClaim`, and the same attempt claimed again replaces it, so an attempt given back never counts twice. A run with no readable state is not created by a claim.
+export function recordClaim({ projectId, slug, attempt, env = process.env } = {}) {
+  if (!Number.isInteger(attempt)) return kept(`a claim record needs its attempt, got \`${String(attempt)}\``);
+  return underRunLock({
+    projectId,
+    slug,
+    env,
+    write: () => {
+      const state = readRunState({ projectId, slug, env });
+      if (!isStateObject(state)) return kept("there is no state.json to record the claim into");
+      const moved = isStateObject(state.lastClaim) && state.lastClaim.attempt !== attempt ? { previousClaim: state.lastClaim } : {};
+      return saveRunState({ projectId, slug, env, state: { ...state, ...moved, lastClaim: claimCounts(state, attempt), updatedAt: new Date().toISOString() } });
+    },
+  });
+}
+
+// The phases a run is stalled on: their count when its last two claims both found exactly what it holds now, else null.
+export function stalledPhases(state) {
+  if (!isStateObject(state)) return null;
+  const now = claimCounts(state);
+  const foundNow = (claim) => isStateObject(claim) && claim.phases === now.phases && claim.answers === now.answers;
+  return foundNow(state.lastClaim) && foundNow(state.previousClaim) ? now.phases : null;
 }
 
 // Refusal of a job block the run could not identify itself by, or null when its shape is the one state.json keeps.

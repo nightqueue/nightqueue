@@ -966,8 +966,8 @@ const RETRY_FRESH_COLUMNS =
   ", slug = NULL, branch = NULL, session_id = NULL, last_session_id = NULL, last_session_attempt = NULL, next_attempt_fresh = 1";
 
 // Sends a gated, failed or cancelled job back to the queue; a gate a preflight block wrote (`blocked_code` set) needs no note
-// and keeps its attempts and the operator note it had, since that attempt was already given back; the decision is in the WHERE and a refusal writes nothing.
-export function retryJob(id, { note, fresh } = {}, env = process.env) {
+// and keeps its attempts and the operator note it had, since that attempt was already given back; a note the run already recorded (`noteRecorded`) leaves the row empty; the decision is in the WHERE and a refusal writes nothing.
+export function retryJob(id, { note, fresh, noteRecorded = false } = {}, env = process.env) {
   const statement = openDb(env).prepare(
     `UPDATE jobs
         SET result = json_set(${RESULT_OBJECT_BASE}, '$.retriedFrom', status),
@@ -977,14 +977,14 @@ export function retryJob(id, { note, fresh } = {}, env = process.env) {
             finished_at = NULL,
             not_before = NULL,
             blocked_code = NULL,
-            operator_note = COALESCE(?, CASE WHEN status = 'gate' AND blocked_code IS NOT NULL THEN operator_note END)${fresh === true ? RETRY_FRESH_COLUMNS : ""}
+            operator_note = CASE WHEN ? = 1 THEN NULL ELSE COALESCE(?, CASE WHEN status = 'gate' AND blocked_code IS NOT NULL THEN operator_note END) END${fresh === true ? RETRY_FRESH_COLUMNS : ""}
       WHERE id = ? AND (status IN ('failed', 'cancelled') OR (status = 'gate' AND (? IS NOT NULL OR blocked_code IS NOT NULL)))
       RETURNING *`,
   );
   const jobId = requireId(id);
   refuseRecoveredRetry(jobId, env);
   const answer = optionalText(note);
-  const row = withWriteRetry(() => statement.get(answer, jobId, answer));
+  const row = withWriteRetry(() => statement.get(noteRecorded === true ? 1 : 0, answer, jobId, answer));
   if (row) return jobView(withProjectFacts(openDb(env), row));
   throw new UserError(retryRefusal(jobId, getJob(jobId, env), { note: answer }));
 }

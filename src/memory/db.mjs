@@ -29,6 +29,7 @@ import { isPendingV24, migrateToV24 } from "./migration/v24.mjs";
 import { isPendingV25, migrateToV25 } from "./migration/v25.mjs";
 import { isPendingV26, migrateToV26 } from "./migration/v26.mjs";
 import { isPendingV27, migrateToV27 } from "./migration/v27.mjs";
+import { isPendingV28, JOBS_PIPELINE_COLUMN, JOBS_PIPELINE_TYPE, migrateToV28 } from "./migration/v28.mjs";
 import { jobRef } from "./refs.mjs";
 import { ensureDefaultOrg } from "./registry.mjs";
 import { DB_USER_VERSION, sqlList } from "./schema.mjs";
@@ -86,6 +87,7 @@ const ONE_SHOT_STEPS = Object.freeze([
   { pending: isPendingV25, run: migrateToV25 },
   { pending: isPendingV26, run: migrateToV26 },
   { pending: isPendingV27, run: migrateToV27, leavesReferencesAlone: true },
+  { pending: isPendingV28, run: migrateToV28, leavesReferencesAlone: true },
 ]);
 
 // The tables the pending chain drops with no step before the drop still auditing their rows: the decisions from v22 on.
@@ -154,6 +156,7 @@ function migrate(db) {
   if (version === 24) throw new UserError("the v25 migration did not run; nothing was stamped");
   if (version === 25) throw new UserError("the v26 migration did not run; nothing was stamped");
   if (version === 26) throw new UserError("the v27 migration did not run; nothing was stamped");
+  if (version === 27) throw new UserError("the v28 migration did not run; nothing was stamped");
   if (sharedSlugPending(db)) inTransaction(db, () => migrateSharedSlugs(db));
   db.exec(INDEXES);
   db.exec(FTS);
@@ -166,6 +169,7 @@ function migrate(db) {
   addColumnIfMissing(db, "pipeline_phases", "reason", "TEXT");
   addColumnIfMissing(db, "jobs", "start_branch", "TEXT");
   addColumnIfMissing(db, "jobs", "start_worktree", "TEXT");
+  addColumnIfMissing(db, "jobs", JOBS_PIPELINE_COLUMN, JOBS_PIPELINE_TYPE);
   ensureDefaultOrg(db);
   if (version < DB_USER_VERSION) db.exec(`PRAGMA user_version = ${DB_USER_VERSION}`);
 }

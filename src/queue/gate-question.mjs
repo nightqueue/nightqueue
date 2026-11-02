@@ -164,6 +164,13 @@ export function questionDigest(question) {
   return createHash("sha256").update(comparableQuestion(question)).digest("hex");
 }
 
+// The answer recorded after the run's last pause on a question: the last one, when more exist than the pause found; else null.
+export function answerSinceGate(state) {
+  const answers = Array.isArray(state?.answers) ? state.answers : [];
+  const seen = Number.isInteger(state?.gateAnswersSeen) ? state.gateAnswersSeen : 0;
+  return answers.length > seen ? answers.at(-1) : null;
+}
+
 // Whether the plan holds a filled question the run never recorded a pause on.
 export function openQuestion(planText, state) {
   const question = gateQuestion(planText);

@@ -8,6 +8,8 @@ import { actsOnOrigin, providerOf } from "./registry.mjs";
 
 export const ORIGIN_MAX_BYTES = 16384;
 export const ENRICH_BUDGET_MS = 20000;
+// The origin file of the open pull requests the claim found: read by the triager, never printed in the root prompt.
+export const OPEN_PRS_KIND = "open-prs";
 const TRUNCATED_MARK = "\n\n[truncated]";
 
 // Cuts a markdown text to the byte cap on a code point boundary, marking the cut.

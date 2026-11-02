@@ -359,7 +359,7 @@ test("run_set and run_skip of a session of an earlier attempt answer that it is 
   const client = await connectMcp(t, home, "1:host:1");
   for (const [name, args] of [
     ["run_set", { branch: "job/late" }],
-    ["run_set", { qa_stage_a: { artifact: "05-qa.md" } }],
+    ["run_set", { type: "bug/error" }],
     ["run_skip", { phase: "qa", by: "coder", reason: "A late skip." }],
   ]) {
     const answer = await client.callTool({ name, arguments: args });
@@ -367,7 +367,7 @@ test("run_set and run_skip of a session of an earlier attempt answer that it is 
     assert.match(textOf(answer), /attempt 1 of this job is over/, name);
   }
   const state = stateOf(home);
-  assert.deepEqual([state.branch, state.qaStageA, state.skips], ["job/live", undefined, undefined]);
+  assert.deepEqual([state.branch, state.type, state.skips], ["job/live", undefined, undefined]);
   assert.deepEqual(state.ignoredRecords.map((entry) => entry.kind), ["fields", "fields", "skip"]);
 });
 
@@ -381,12 +381,13 @@ test("a late `run_terminate` never reaches the wip commit, and its stop is set a
   assert.deepEqual([state.termination, state.wip, state.ignoredRecords.map((entry) => entry.kind)], [undefined, undefined, ["termination"]]);
 });
 
-test("the `run_terminate` description names when a retry does not resume", async (t) => {
+test("the `run_terminate` description says a retry hands the facts over and names no resume decision", async (t) => {
   const home = stampHome(t, "stamp-terminate-text");
   const client = await connectMcp(t, home, "1:host:1");
   const { tools } = await client.listTools();
   const { description } = tools.find((tool) => tool.name === "run_terminate");
-  for (const condition of [/resume cap/, /no completed phase/, /terminal verdict/, /already done/]) assert.match(description, condition);
+  assert.match(description, /the pipeline decides where to continue/);
+  for (const condition of [/resume cap/, /no completed phase/, /terminal verdict/, /already done/]) assert.doesNotMatch(description, condition);
 });
 
 test("a paragraph a run wrote that opens like the runtime's ignored line reaches the origins; the exact line alone does not", () => {
@@ -420,7 +421,7 @@ test("a parked run re-claimed at the same attempt ends on its own record, with n
   assert.deepEqual([row.status, row.pr_url, row.attempts, row.notice_md], ["done", PR_URL, 1, "Delivered before the park."]);
 });
 
-test("a retried terminated run resumes after its last phase; a termination of another attempt no longer closes it", async (t) => {
+test("a retried terminated run is handed its last phase; a termination of another attempt no longer closes it", async (t) => {
   const home = stampHome(t, "stamp-resume", [FAILED, CLEAN]);
   await runJob(home);
   const run = { projectId: home.projectId, slug: getJob(home.id, home.env).slug, env: home.env };
@@ -431,8 +432,7 @@ test("a retried terminated run resumes after its last phase; a termination of an
   await runJob(home);
 
   const prompt = fakeCalls(home.planPath)[1].argv.join("\n");
-  assert.ok(prompt.includes("RESUME CANDIDATE"), prompt.slice(0, 400));
-  assert.ok(prompt.includes("Last completed phase: triage"), prompt.slice(0, 400));
+  assert.ok(prompt.includes("Recorded phases: triage · PROCEED · 01-triage.md"), prompt.slice(0, 600));
 });
 
 test("a claim over a run another job stamped gates before the spawn and gives the attempt back; a plain retry refuses and --fresh moves it", async (t) => {
@@ -590,7 +590,7 @@ for (const [kind, runState] of [
   });
 }
 
-test("a parked run still resumes after its last completed phase: `phases[]` stays read whole, and a termination from before the park closes nothing", async (t) => {
+test("a parked run is still handed its last completed phase: `phases[]` stays read whole, and a termination from before the park closes nothing", async (t) => {
   const phase = { phase: "triage", at: new Date().toISOString(), artifact: "01-triage.md", verdict: "PROCEED", claim: PRE_PARK_STAMP };
   const runState = { phases: [phase], termination: { phase: "qa", reason: QUESTION, claim: PRE_PARK_STAMP } };
   const home = stampHome(t, "stamp-park-phases", [{ stdout: PARKED_STREAM, runState, exitCode: 1 }, CLEAN]);
@@ -599,8 +599,7 @@ test("a parked run still resumes after its last completed phase: `phases[]` stay
   await runJob(home);
 
   const prompt = fakeCalls(home.planPath)[1].argv.join("\n");
-  assert.ok(prompt.includes("RESUME CANDIDATE"), prompt.slice(0, 400));
-  assert.ok(prompt.includes("Last completed phase: triage"), prompt.slice(0, 400));
+  assert.ok(prompt.includes("Recorded phases: triage · PROCEED · 01-triage.md"), prompt.slice(0, 600));
 });
 
 test("a stamp holds the pin's ordinal, and the slot rule compares it inside one attempt", (t) => {

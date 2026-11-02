@@ -5,7 +5,6 @@ import { validConsolidatedText } from "../../src/cli/run.mjs";
 import { appendedText, proverRound } from "../../src/cli/run-append.mjs";
 import { lastRound, nextRound, roundDefects, roundsOf, unclosedFenceOf, withClosedFence } from "../../src/queue/phase-artifacts.mjs";
 import { aggregateVerdict, appendRoundText, breakItems, consolidationOf, roundSource } from "../../src/queue/qa-rounds.mjs";
-import { decideResume } from "../../src/queue/resume.mjs";
 
 const ANALYST = "## Round 1\n## Mapped rules\n- rule A\n\n## Proven breaks\nNone\n\n## Break hypotheses\n- H1 · group: g1\n\n## Test recipe\nnode --test\n\n## Validated risks\n- R1 → hypothesis H1\n\n## Invalidated assumptions\nNone\n\n## Generated PoCs\nNone — this request writes no runtime PoC\n\n## Verdict\nAPPROVED\n";
 
@@ -80,15 +79,6 @@ test("`05 --stage analyst` answers QA-STAGE over the analyst's round, and no oth
   assert.deepEqual(skip.lines, ["OK", "VERDICT: APPROVED", "QA-STAGE: skip"]);
   assert.throws(() => evaluateCheck({ check: "06", stage: "analyst", texts: {} }), /unknown stage/);
   assert.throws(() => evaluateCheck({ check: "05", stage: "foo", texts: {} }), /unknown stage/);
-});
-
-test("a resume enters QA stage B only on a marker of 05-qa.md newer than the last implementation", () => {
-  const phases = [...["triage", "explore", "architecture"].map((phase) => ({ phase, at: "2026-01-01T00:00:00Z" })), { phase: "implementation", at: "2026-01-02T00:00:00Z" }];
-  const state = (qaStageA) => ({ schemaVersion: 1, slug: "s", resumeCount: 0, phases, qaStageA });
-  assert.equal(decideResume({ state: state({ artifact: "05-qa.md", at: "2026-01-03T00:00:00Z" }) }).fromStage, "qa-stage-b");
-  assert.equal(decideResume({ state: state({ artifact: "05-qa.md", at: "2026-01-01T12:00:00Z" }) }).fromStage, null);
-  assert.equal(decideResume({ state: state({ artifact: "05-qa.md" }) }).fromStage, null);
-  assert.equal(decideResume({ state: state({ artifact: "other.md", at: "2026-01-03T00:00:00Z" }) }).fromStage, null);
 });
 
 const FENCE_OPEN_BODIES = [

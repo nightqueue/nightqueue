@@ -56,9 +56,9 @@ test("a v26 home with dangling references reaches v27 with both rows and a pre-v
 
   const db = migrateTestHome(home.env);
 
-  assert.equal(db.prepare("PRAGMA user_version").get().user_version, 27);
+  assert.equal(db.prepare("PRAGMA user_version").get().user_version, 28);
   closeDb(home.env);
-  assert.deepEqual(plantedFacts(home), { version: 27, runs: 1, jobs: 1, budget: 0 });
+  assert.deepEqual(plantedFacts(home), { version: 28, runs: 1, jobs: 1, budget: 0 });
   assert.equal(existsSync(preVersionBackupPath(home.env, 27)), true, "no pre-v27 copy was kept");
 });
 

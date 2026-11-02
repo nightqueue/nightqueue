@@ -1,6 +1,6 @@
 import { PIPELINE_TASK_TYPES } from "../memory/runs.mjs";
 import { lastRound, lastRoundWithSource, nextRound, PHASE_ARTIFACTS, QA_STAGES, QA_TRIAGE_STAGE, roundDefects } from "./phase-artifacts.mjs";
-import { gateQuestion, labelBlock, questionDigest, unreadableQuestion } from "./gate-question.mjs";
+import { answerSinceGate, gateQuestion, labelBlock, questionDigest, unreadableQuestion } from "./gate-question.mjs";
 import { backtickRunAt, codeSpanEnd, hasGateMarker, sectionOf, unfencedLines, withoutHtmlComments } from "./stream.mjs";
 import { briefGates, briefType } from "./triage-brief.mjs";
 
@@ -280,11 +280,11 @@ function triageFacts(ctx) {
   return { gates: [...briefGates(ctx.text, ctx.verdict), ...symptomProofGates(ctx)] };
 }
 
-// The `CONFIRM:` line of a filled question: answered once a note exists and the recorded digest is this question's, else the pause; null without a question.
+// The `CONFIRM:` line of a filled question: answered once an answer was recorded after the pause and the recorded digest is this question's, else the pause; null without a question.
 function confirmLine(ctx, question) {
   if (question === null) return null;
-  const hasNote = typeof ctx.operatorNote === "string" && ctx.operatorNote.trim() !== "";
-  if (hasNote && ctx.state?.gateQuestionDigest === questionDigest(question)) return CONFIRM_ANSWERED;
+  const answer = answerSinceGate(ctx.state);
+  if (answer !== null && ctx.state?.gateQuestionDigest === questionDigest(question)) return `${CONFIRM_ANSWERED} (${answer.at})`;
   return `${CONFIRM_LINE} — ${evidenceLine(question)}`;
 }
 
@@ -585,8 +585,8 @@ function readRound(artifact, raw) {
 // The run files a check may read besides its own artifact: the triage and the plan.
 export const CHECK_CONTEXT_FILES = Object.freeze(["01-triage.md", "03-plan.md"]);
 
-// Evaluates the artifact of one phase (or a stage of check 05) against the check contract; `texts` maps each run file name to its content, `state` is the run's state.json, `operatorNote` the job's current answer.
-export function evaluateCheck({ check, stage = null, texts = {}, state = null, gaps = [], operatorNote = null }) {
+// Evaluates the artifact of one phase (or a stage of check 05) against the check contract; `texts` maps each run file name to its content, `state` is the run's state.json.
+export function evaluateCheck({ check, stage = null, texts = {}, state = null, gaps = [] }) {
   const artifact = checkedArtifact(check, stage);
   const read = (file) => normalize(texts[file]);
   const raw = texts[artifact.file] ?? "";
@@ -594,7 +594,7 @@ export function evaluateCheck({ check, stage = null, texts = {}, state = null, g
   const text = round === null ? read(artifact.file) : normalize(round.text);
   const triage = read("01-triage.md");
   const type = (check === "01" ? briefType(text) : null) ?? runType(state, triage);
-  const base = { check, stage, artifact, text, triage, plan: read("03-plan.md"), type, state, operatorNote };
+  const base = { check, stage, artifact, text, triage, plan: read("03-plan.md"), type, state };
   const ctx = { ...base, verdict: artifact.verdict ? readVerdict(text, artifact.verdict) : null };
   const common = { check: stage === null ? check : `${check}-${stage}`, type: ctx.type, evaluated: text };
   const defects = artifact.rounds ? [...new Set([...gaps, ...roundDefectParts(artifact.file, raw, round.numbers)])] : gaps;

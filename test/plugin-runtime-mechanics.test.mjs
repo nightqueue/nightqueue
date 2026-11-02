@@ -70,7 +70,7 @@ test("each agent names the runtime work that replaced its prose", () => {
 // A pipeline-independent agent learns about the runtime blocks from its request, never from its file.
 test("the triager's request names the blocks the runtime hands it", () => {
   const request = readFileSync(join(PROMPTS, "triager.md"), "utf8");
-  for (const block of ["Open pull requests matching this job:", "## Related jobs"]) {
+  for (const block of ["`open-prs` entry of the job origin", "## Related jobs"]) {
     assert.ok(request.includes(block), `the triager request does not name \`${block}\``);
     assert.equal(readAgent("triager").includes(block), false, `triager.md still names \`${block}\``);
   }

@@ -4,7 +4,6 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { withLockSync } from "../../src/config/lock.mjs";
 import { runDir } from "../../src/config/paths.mjs";
-import { decideResume } from "../../src/queue/resume.mjs";
 import {
   clearTermination,
   recordCheck,
@@ -12,7 +11,6 @@ import {
   recordPhaseDone,
   recordPrTemplate,
   recordPrUrl,
-  recordResume,
   recordRunFields,
   recordSkip,
   recordTermination,
@@ -63,8 +61,8 @@ test("a completed phase is appended with the fixed fields of the contract and a 
 
   const state = readState(env);
   assert.deepEqual(
-    { schemaVersion: state.schemaVersion, projectId: state.projectId, slug: state.slug, resumeCount: state.resumeCount },
-    { schemaVersion: 1, projectId: FIXED_PROJECT_ID, slug: "fix-the-worker", resumeCount: 0 },
+    { schemaVersion: state.schemaVersion, projectId: state.projectId, slug: state.slug },
+    { schemaVersion: 1, projectId: FIXED_PROJECT_ID, slug: "fix-the-worker" },
   );
   assert.deepEqual(state.phases, [{ phase: "triage", at: state.phases[0].at, artifact: "01-triage.md", verdict: "CONFIRMED" }]);
   assert.match(state.phases[0].at, UTC_ISO);
@@ -243,7 +241,6 @@ test("a termination without a reason is refused, and one with it closes the run 
   assert.equal(state.termination.phase, "triage");
   assert.equal(state.termination.reason, "not reproducible");
   assert.match(state.termination.at, UTC_ISO);
-  assert.equal(decideResume({ state }).reason, "terminated-by-verdict");
 });
 
 test("run fields refuse an unknown field and a value outside the enum, and record the ones they own", (t) => {
@@ -255,8 +252,9 @@ test("run fields refuse an unknown field and a value outside the enum, and recor
   assert.match(recordRunFields({ ...RUN, fields: { tierRaiseReason: "a stack trace" }, env }).reason, /unknown field `tierRaiseReason`/);
   assert.match(recordRunFields({ ...RUN, fields: { type: "chore" }, env }).reason, /unknown type `chore`; accepted: bug\/error, feature\/refactor/);
   assert.match(recordRunFields({ ...RUN, fields: { branch: "  " }, env }).reason, /field `branch` cannot be empty/);
-  assert.match(recordRunFields({ ...RUN, fields: { qaStageA: { verdict: "BREAKS-FOUND" } }, env }).reason, /field `qaStageA` needs the `artifact`/);
-  assert.match(recordRunFields({ ...RUN, fields: { qaStageA: "05-qa.md" }, env }).reason, /field `qaStageA` needs the `artifact`/);
+  for (const removed of ["qaStageA", "origin", "evidenceLevel", "planStatus"]) {
+    assert.match(recordRunFields({ ...RUN, fields: { [removed]: "x" }, env }).reason, new RegExp(`unknown field \`${removed}\``));
+  }
   assert.equal(existsSync(join(runDir(RUN.projectId, RUN.slug, env), "state.json")), false, "a refused record created the file");
 
   assert.equal(recordRunFields({ ...RUN, fields: { type: "bug/error", branch: "fix/the-worker" }, env }).status, "written");
@@ -264,23 +262,7 @@ test("run fields refuse an unknown field and a value outside the enum, and recor
   assert.deepEqual({ type: state.type, branch: state.branch }, { type: "bug/error", branch: "fix/the-worker" });
 });
 
-test("the operator fields accept only their enums, and the evidence level is kept as an integer", (t) => {
-  const env = makeHome(t, "run-state-operator-fields");
-
-  assert.match(recordRunFields({ ...RUN, fields: { origin: "x" }, env }).reason, /unknown origin `x`; accepted: operator/);
-  assert.match(recordRunFields({ ...RUN, fields: { evidenceLevel: 0 }, env }).reason, /unknown evidenceLevel `0`; accepted: 1, 2, 3, 4/);
-  assert.match(recordRunFields({ ...RUN, fields: { evidenceLevel: "3" }, env }).reason, /unknown evidenceLevel `3`/);
-  assert.match(recordRunFields({ ...RUN, fields: { evidenceLevel: 2.5 }, env }).reason, /unknown evidenceLevel/);
-  assert.match(recordRunFields({ ...RUN, fields: { planStatus: "final" }, env }).reason, /unknown planStatus `final`; accepted: draft, approved/);
-  assert.equal(existsSync(join(runDir(RUN.projectId, RUN.slug, env), "state.json")), false, "a refused record created the file");
-
-  const written = recordRunFields({ ...RUN, fields: { origin: "operator", evidenceLevel: 3, planStatus: "approved" }, env });
-  assert.equal(written.status, "written");
-  const state = readState(env);
-  assert.deepEqual({ origin: state.origin, evidenceLevel: state.evidenceLevel, planStatus: state.planStatus }, { origin: "operator", evidenceLevel: 3, planStatus: "approved" });
-});
-
-test("the writers never lose each other's fields, and the resume decision reads the file they built", (t) => {
+test("the writers never lose each other's fields", (t) => {
   const env = makeHome(t, "run-state-sequence");
 
   recordRunFields({ ...RUN, fields: { type: "bug/error", branch: "fix/the-worker", worktree: "/tmp/wt" }, env });
@@ -293,50 +275,16 @@ test("the writers never lose each other's fields, and the resume decision reads 
   assert.equal(state.phases[1].note, "index refreshed");
   assert.equal(state.type, "bug/error");
   assert.equal(state.outcome.status, "gate");
-  assert.deepEqual(decideResume({ state }), {
-    resume: true,
-    fromPhase: "architecture",
-    fromStage: null,
-    reuseWorktree: true,
-    reason: "resume",
-    resumeCount: 1,
-    lastPhase: "explore",
-  });
 });
 
-test("the QA stage A marker lives outside `phases` and makes the resume re-enter at stage B", async (t) => {
-  const env = makeHome(t, "run-state-qa-stage-a");
-  for (const phase of ["triage", "explore", "architecture", "implementation"]) {
-    recordPhaseDone({ ...RUN, phase, artifact: `0-${phase}.md`, verdict: "ok", env });
-  }
-  assert.equal(decideResume({ state: readState(env) }).fromStage, null, "the stage was offered before the marker existed");
-  await new Promise((done) => setTimeout(done, 5));
-
-  const marker = { artifact: " 05-qa.md ", verdict: "BREAKS-FOUND" };
-  assert.equal(recordRunFields({ ...RUN, fields: { qaStageA: marker }, env }).status, "written");
-
-  const state = readState(env);
-  assert.equal(state.qaStageA.artifact, "05-qa.md");
-  assert.equal(state.qaStageA.verdict, "BREAKS-FOUND");
-  assert.match(state.qaStageA.at, UTC_ISO);
-  assert.deepEqual(state.phases.map((entry) => entry.phase), ["triage", "explore", "architecture", "implementation"]);
-  assert.equal(state.schemaVersion, 1, "the additive marker bumped the schema version");
-  assert.deepEqual(
-    { fromPhase: decideResume({ state }).fromPhase, fromStage: decideResume({ state }).fromStage },
-    { fromPhase: "qa", fromStage: "qa-stage-b" },
-  );
-});
-
-test("an updatedAt written by an older plugin is overwritten by the clock, and the resume count is never reset", (t) => {
+test("an updatedAt written by an older plugin is overwritten by the clock, and a stale key of an older state is left alone", (t) => {
   const env = makeHome(t, "run-state-updated-at");
-  writeState(env, { schemaVersion: 1, project: "alpha", slug: "fix-the-worker", resumeCount: 1, updatedAt: "yesterday", phases: [] });
+  writeState(env, { schemaVersion: 1, project: "alpha", slug: "fix-the-worker", staleKey: 1, updatedAt: "yesterday", phases: [] });
 
   assert.equal(recordPhaseDone({ ...RUN, phase: "triage", artifact: "01-triage.md", env }).status, "written");
   const state = readState(env);
   assert.match(state.updatedAt, UTC_ISO);
-  assert.equal(state.resumeCount, 1, "the record reset the resume count the runtime owns");
-  assert.equal(recordResume({ ...RUN, resumeCount: 2, env }).status, "written");
-  assert.equal(readState(env).resumeCount, 2);
+  assert.equal(state.staleKey, 1);
 });
 
 // The skips of the run on disk, each reduced to its author.
@@ -382,16 +330,12 @@ test("a skip is refused for a phase already run, an author outside the agents, a
   assert.equal("skips" in readState(env), false, "a refused skip was recorded");
 });
 
-test("a recorded skip never moves the resume decision", (t) => {
+test("a recorded skip never enters the phases", (t) => {
   const env = makeHome(t, "run-state-skip-resume");
   for (const phase of ["triage", "explore", "architecture", "implementation"]) recordPhaseDone({ ...RUN, phase, artifact: `0-${phase}.md`, env });
   recordOutcome({ ...RUN, status: "gate", notice: "stopped", env });
-  const without = decideResume({ state: readState(env) });
   assert.equal(recordSkip({ ...RUN, phase: "qa", by: "architect", reason: "docs only", env }).status, "written");
-  const state = readState(env);
-  assert.deepEqual(state.phases.map((entry) => entry.phase), ["triage", "explore", "architecture", "implementation"], "a skip went into phases");
-  assert.deepEqual(decideResume({ state }), without);
-  assert.equal(without.fromPhase, "qa");
+  assert.deepEqual(readState(env).phases.map((entry) => entry.phase), ["triage", "explore", "architecture", "implementation"], "a skip went into phases");
 });
 
 test("an unsafe project or slug records nothing at all", (t) => {

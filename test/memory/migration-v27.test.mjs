@@ -87,7 +87,7 @@ for (const version of [24, 25, 26]) {
 
     const db = migrateTestHome(env);
 
-    assert.equal(db.prepare("PRAGMA user_version").get().user_version, 27);
+    assert.equal(db.prepare("PRAGMA user_version").get().user_version, 28);
     assert.equal(db.prepare("PRAGMA table_info(jobs)").all().some((column) => column.name === "max_attempts"), false);
     assert.deepEqual(jobRows(dbPath(env)), before.map(withoutBudget), "a job changed");
     assert.deepEqual(hitIds(env, NOTICE_WORD), [done], "the job index lost its row");
@@ -128,7 +128,7 @@ test("a home that lost the column at v18 still takes the step: stamped, its jobs
 
   const db = migrateTestHome(env);
 
-  assert.equal(db.prepare("PRAGMA user_version").get().user_version, 27);
+  assert.equal(db.prepare("PRAGMA user_version").get().user_version, 28);
   assert.equal(jobRows(dbPath(env)).length, jobsBefore);
   assert.ok(existsSync(preVersionBackupPath(env, 27)), "no pre-v27 copy");
 });
@@ -136,8 +136,8 @@ test("a home that lost the column at v18 still takes the step: stamped, its jobs
 test("a fresh home is created at the current version with no budget column and nothing pending", (t) => {
   const env = makeHome(t, "v27-fresh");
   const db = openDb(env);
-  assert.equal(DB_USER_VERSION, 27);
-  assert.equal(db.prepare("PRAGMA user_version").get().user_version, 27);
+  assert.equal(DB_USER_VERSION, 28);
+  assert.equal(db.prepare("PRAGMA user_version").get().user_version, 28);
   assert.equal(isPendingV27(db), false);
   assert.equal(db.prepare("PRAGMA table_info(jobs)").all().some((column) => column.name === "max_attempts"), false);
 });
@@ -165,7 +165,7 @@ test("a runner holding a live lease refuses the migration and nothing is written
 test("a read-only open of a v26 home refuses with the update message and writes nothing", (t) => {
   const { env } = buildBudgetHome(t, "v27-read-only");
   const fixture = readFileSync(dbPath(env));
-  assert.throws(() => openDbReadOnly(env), (err) => err.code === "SCHEMA_OUTDATED" && /database at v26, this nightqueue expects v27/.test(err.message));
+  assert.throws(() => openDbReadOnly(env), (err) => err.code === "SCHEMA_OUTDATED" && /database at v26, this nightqueue expects v28/.test(err.message));
   assert.ok(readFileSync(dbPath(env)).equals(fixture), "a read-only open wrote to the database");
 });
 

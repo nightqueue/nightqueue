@@ -28,12 +28,25 @@ Inside a queued job the runtime enforces them; never work around a denial — ha
 The orchestrator never calls `lesson_save`/`memory_save`; the reflector is the run's only writer.
 Independent launches go in parallel; the runtime waits for every subagent and background task of an unattended run — never end a turn to wait for one.
 
+## Resume
+
+Read at Phase 0 when the prompt carries `RUN FACTS`. The block holds records, never a decision: you decide where to continue, from its verdicts and the artifacts' existence; hand artifact paths to the next agent, never read them to decide.
+
+<!-- generic: moves to the pipeline template in R6 -->
+- Continue after the last recorded phase whose artifact exists in `RUN_DIR`, by that phase's table for its verdict. A recorded phase whose artifact is missing → redo from that phase; `-` names none to check.
+- Reuse `Branch`/`Worktree`. A `wip(<slug>)` commit on the branch is the previous attempt's work: start on it, never reset or rewrite it; `run publish` folds it into the delivery commit.
+- Answers apply at the phase that paused.
+
+**Resolve's exceptions:**
+- An answer at Phase 3: `run check 03` first, then its table and answer rule (approved → Phase 4; adjustments → relaunch the architect, `note` = the answer; a Type answer → `run_set` `type`).
+- A retried `NOT-REPRODUCIBLE`/`NO-CHANGE-NEEDED` triage → relaunch the triager.
+- Phase 5 re-runs whole; a `qa` `SKIPPED` has no artifact, so its triage check decides.
+
 ## Pipeline (execute in this exact order)
 
 ### Phase 0 — Start
 
-1. **Run resume.** When the context carries a ``RESUME CANDIDATE`` block, read
-   `references/resume.md` now and follow it before step 2.
+1. **Run resume.** When the prompt carries a `RUN FACTS` block, read `## Resume` and follow it before step 2.
 
 2. **Start the run**: run `nightqueue run start` (outside a job add
    `--project <project> --slug <a short kebab-case slug of the request>`). It answers one JSON
@@ -158,15 +171,15 @@ approach ruled out by diff size): the ONLY constraint is the delivery LIMIT, on 
 | `TYPE-MISMATCH: … — triage: feature/refactor …` (the Type divergence valve) | `run_set` with `type: "feature/refactor"`, then Phase 4 |
 | `TYPE-MISMATCH: … — triage: bug/error …` | stays bug/error, Phase 4 (the check already prints the `OPEN:`) |
 | `CONFIRM: requires-user-confirmation` | the one pause: `run_outcome` with `status: "gate"` and `from_artifact: { file: "03-plan.md", section: "## Requires user confirmation" }`, then end the turn with one plain line |
-| `CONFIRM: answered` | Phase 4 |
+| `CONFIRM: answered (<at>)` | the answer below, then Phase 4 |
 | plain `OK` | Phase 4 |
 
-**The answer** arrives as a retry, the `OPERATOR ANSWER TO THE GATE:` line; an interactive run's
-chat answer counts as `CONFIRM: answered`. The pause completed the phase, so the block may resume
-later: run `run check 03` first, before Phase 4, whatever the block says. Go-ahead or the
-recommended option → Phase 4. Any other answer → relaunch the architect once (🔁, `note` = the
-answer), then `run check 03` again: a NEW question is a new pause. Never write code before the
-answer.
+**The answer** arrives as a retry, the last entry of `Answers:` in `RUN FACTS` (a job with no run
+directory yet: the `OPERATOR ANSWER TO THE GATE:` line); an interactive run's chat answer counts
+as `CONFIRM: answered`. The pause completed the phase, so the block may list it: run `run check 03`
+first, before Phase 4, whatever the block says. Go-ahead or the recommended option → Phase 4. Any
+other answer → relaunch the architect once (🔁, `note` = the answer), then `run check 03` again: a
+NEW question is a new pause. Never write code before the answer.
 
 ### Phase 4 — Implementation
 
@@ -188,7 +201,7 @@ two coders in one tree, and no `git stash`/`checkout`/`reset` while a batch is a
 
 ### Phase 5 — Adversarial QA (attack)
 
-**Triage first:** 1 qa-guardian with `phase_prompt` `qa-triage`, then `nightqueue run check 05 --stage triage`. On a resume at Phase 5 run the check first (a pure read); launch the lane only on its `MISSING`. Stage B of a resume skips this.
+**Triage first:** 1 qa-guardian with `phase_prompt` `qa-triage`, then `nightqueue run check 05 --stage triage`. On a resume at Phase 5 run the check first (a pure read); launch the lane only on its `MISSING`.
 
 | `run check 05 --stage triage` answers | Action |
 | --- | --- |

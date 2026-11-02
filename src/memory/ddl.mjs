@@ -180,7 +180,7 @@ export function pipelineRunsDdl(name) {
 );`;
 }
 
-// The `jobs` table under a given name: the queue, every job owned by a project id, a closed job carrying its merge, or its resolution without change (`origin` is added per open by migration/v21.mjs).
+// The `jobs` table under a given name: the queue, every job owned by a project id, a closed job carrying its merge, or its resolution without change (`origin` is added per open by migration/v21.mjs, `pipeline` by migration/v28.mjs and per open for a fresh home).
 export function jobsDdl(name) {
   return `CREATE TABLE IF NOT EXISTS ${name} (
   id INTEGER PRIMARY KEY AUTOINCREMENT,

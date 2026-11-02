@@ -1,15 +1,15 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { runDir } from "../../src/config/paths.mjs";
-import { decideResume, isSafeSegment, readRunState, recordsOfClaim, RESUME_PHASE_ORDER, resumeHandoff } from "../../src/queue/resume.mjs";
+import { isSafeSegment, PHASE_NAMES, readRunState, recordsOfClaim, runFacts } from "../../src/queue/resume.mjs";
 import { recordHeldWorktree, recordJobBlock } from "../../src/queue/run-state.mjs";
 import { buildPrompt } from "../../src/queue/spawn.mjs";
 import { FIXED_PROJECT_ID as ALPHA_ID, makeHome } from "../../test-support/memory.mjs";
 
 // A state.json in the shape the plugin writes it, with the canonical ENGLISH keys and phase names.
-function state({ phases = ["triage", "explore"], resumeCount = 0, ...extra } = {}) {
+function state({ phases = ["triage", "explore"], ...extra } = {}) {
   return {
     schemaVersion: 1,
     slug: "fix-the-worker",
@@ -17,7 +17,6 @@ function state({ phases = ["triage", "explore"], resumeCount = 0, ...extra } = {
     type: "bug/error",
     branch: "fix/the-worker",
     worktree: "/tmp/worktrees/fix-the-worker",
-    resumeCount,
     updatedAt: "2026-09-06T00:00:00Z",
     phases: phases.map((phase) => ({ phase, artifact: `0X-${phase}.md`, verdict: "ok" })),
     ...extra,
@@ -32,153 +31,40 @@ function writeState(env, { projectId, slug, content }) {
   return join(dir, "state.json");
 }
 
-test("the phase order is the canonical contract of the plugin, in english", () => {
-  assert.deepEqual(RESUME_PHASE_ORDER, [
-    "triage",
-    "explore",
-    "architecture",
-    "implementation",
-    "qa",
-    "verification",
-    "runtime",
-    "commit",
-  ]);
+test("the phase names are the enum of the plugin's contract, in english", () => {
+  assert.deepEqual(PHASE_NAMES, ["triage", "explore", "architecture", "implementation", "qa", "verification", "runtime", "commit"]);
 });
 
-test("a run stopped after a completed phase resumes from the next one and reuses the worktree", () => {
-  const decision = decideResume({ state: state({ phases: ["triage", "explore"] }) });
-  assert.deepEqual(decision, {
-    resume: true,
-    fromPhase: "architecture",
-    fromStage: null,
-    reuseWorktree: true,
-    reason: "resume",
-    resumeCount: 1,
-    lastPhase: "explore",
-  });
-  assert.equal(decideResume({ state: JSON.stringify(state()) }).resume, true, "a raw string of the file is not parsed");
-});
-
-const IMPLEMENTED_AT = "2026-09-06T10:00:00.000Z";
-
-// A state whose phases all carry the implementation time, with the QA stage A marker given.
-function stagedState(qaStageA) {
-  const base = state({ phases: ["triage", "explore", "architecture", "implementation"], qaStageA });
-  return { ...base, phases: base.phases.map((entry) => ({ ...entry, at: IMPLEMENTED_AT })) };
-}
-
-test("the qa stage A marker sends the resume to stage B instead of redoing the analysis", () => {
-  const phases = ["triage", "explore", "architecture", "implementation"];
-  const plain = decideResume({ state: state({ phases }) });
-  assert.deepEqual({ fromPhase: plain.fromPhase, fromStage: plain.fromStage }, { fromPhase: "qa", fromStage: null });
-  const staged = decideResume({ state: stagedState({ artifact: "05-qa.md", verdict: "BREAKS-FOUND", at: "2026-09-06T11:00:00.000Z" }) });
-  assert.deepEqual({ fromPhase: staged.fromPhase, fromStage: staged.fromStage }, { fromPhase: "qa", fromStage: "qa-stage-b" });
-  assert.equal(decideResume({ state: stagedState("05-qa.md") }).fromStage, null);
-});
-
-test("a stage A marker older than the last implementation, on another file or with no time never resumes at stage B", () => {
-  const stale = { artifact: "05-qa.md", verdict: "APPROVED", at: "2026-09-06T09:00:00.000Z" };
-  assert.equal(decideResume({ state: stagedState(stale) }).fromStage, null, "a marker of the old implementation resumed at stage B");
-  assert.equal(decideResume({ state: stagedState({ ...stale, at: IMPLEMENTED_AT }) }).fromStage, null);
-  assert.equal(decideResume({ state: stagedState({ ...stale, artifact: "05-other.md", at: "2026-09-06T11:00:00.000Z" }) }).fromStage, null);
-  assert.equal(decideResume({ state: stagedState({ artifact: "05-qa.md", verdict: "APPROVED" }) }).fromStage, null);
-  assert.equal(decideResume({ state: state({ phases: ["triage", "explore", "architecture", "implementation"], qaStageA: { ...stale, at: "2026-09-06T11:00:00.000Z" } }) }).fromStage, null, "an implementation with no time resumed at stage B");
-});
-
-test("a state written with the PORTUGUESE keys of another runtime is never resumable", () => {
-  const portuguese = {
-    schemaVersion: 1,
-    slug: "corrigir-o-worker",
-    resumeCount: 0,
-    fases: [{ fase: "triagem" }, { fase: "arquitetura" }],
-    phases: [{ fase: "triagem", artefato: "01-triagem.md", veredito: "ok" }],
-  };
-  assert.equal(decideResume({ state: portuguese }).resume, false);
-  assert.equal(decideResume({ state: portuguese }).reason, "unknown-phase");
-  const translatedNames = state({ phases: ["triagem", "exploracao"] });
-  assert.equal(decideResume({ state: translatedNames }).reason, "unknown-phase");
-  const terminationInPortuguese = state({ encerramento: { fase: "triage", motivo: "nao reproduzivel" } });
-  assert.equal(decideResume({ state: terminationInPortuguese }).resume, true, "a portuguese `encerramento` was honoured as a termination");
-});
-
-test("a deliberate termination closes the run, whether it came as an object or as a verdict", () => {
-  assert.equal(decideResume({ state: state({ termination: { phase: "triage", reason: "not reproducible" } }) }).reason, "terminated-by-verdict");
-  assert.equal(decideResume({ state: state({ termination: "closed on purpose" }) }).reason, "terminated-by-verdict");
-  assert.equal(decideResume({ state: state({ termination: "   " }) }).resume, true, "an empty termination closed the run");
-
-  const verdict = { schemaVersion: 1, slug: "s", resumeCount: 0, phases: [{ phase: "triage", verdict: "NOT-REPRODUCIBLE" }] };
-  assert.equal(decideResume({ state: verdict }).reason, "terminated-by-verdict");
-  const clarification = { ...verdict, phases: [{ phase: "triage", verdict: "NEEDS CLARIFICATION: no repro steps" }] };
-  const stopped = decideResume({ state: clarification });
-  assert.deepEqual({ reason: stopped.reason, lastPhase: stopped.lastPhase }, { reason: "terminated-by-verdict", lastPhase: "triage" });
-});
-
-test("the latest entry of a repeated phase decides the resume, so a re-triage after a gate answer counts", () => {
-  const triages = (...verdicts) => ({ schemaVersion: 1, slug: "s", resumeCount: 0, phases: verdicts.map((verdict) => ({ phase: "triage", verdict })) });
-  const reTriaged = decideResume({ state: triages("PROPOSE-ALTERNATIVE", "PROCEED") });
-  assert.deepEqual({ resume: reTriaged.resume, fromPhase: reTriaged.fromPhase }, { resume: true, fromPhase: "explore" });
-  assert.equal(decideResume({ state: triages("PROCEED", "NEEDS-CLARIFICATION") }).reason, "terminated-by-verdict");
-  const explored = decideResume({ state: state({ phases: ["triage", "explore", "explore"] }) });
-  assert.deepEqual({ resume: explored.resume, fromPhase: explored.fromPhase }, { resume: true, fromPhase: "architecture" });
-});
-
-test("the resume budget is spent once: the second stop of the same run stays stopped", () => {
-  assert.equal(decideResume({ state: state({ resumeCount: 0 }) }).resumeCount, 1);
-  assert.equal(decideResume({ state: state({ resumeCount: 1 }) }).reason, "resume-cap");
-  assert.equal(decideResume({ state: state({ resumeCount: 1 }), maxResumes: 2 }).resume, true);
-  assert.equal(decideResume({ state: state({ resumeCount: 2 }), maxResumes: 2 }).reason, "resume-cap");
-  assert.equal(decideResume({ state: state({ resumeCount: null }) }).reason, "resume-cap");
-});
-
-test("every broken state has its own reason and none of them ever throws", () => {
-  assert.equal(decideResume({ state: null }).reason, "no-state");
-  assert.equal(decideResume({}).reason, "no-state");
-  assert.equal(decideResume({ state: "{ not json" }).reason, "corrupt-state");
-  assert.equal(decideResume({ state: [] }).reason, "invalid-state");
-  assert.equal(decideResume({ state: { slug: "s", phases: [] } }).reason, "invalid-state");
-  assert.equal(decideResume({ state: { ...state(), schemaVersion: 2 } }).reason, "unknown-schema");
-  assert.equal(decideResume({ state: state({ phases: [] }) }).reason, "no-completed-phase");
-  assert.equal(decideResume({ state: state({ phases: [...RESUME_PHASE_ORDER] }) }).reason, "run-already-done");
-  for (const decision of [decideResume({ state: null }), decideResume({ state: "{ not json" })]) {
-    assert.deepEqual({ resume: decision.resume, fromPhase: decision.fromPhase, reuseWorktree: decision.reuseWorktree }, { resume: false, fromPhase: null, reuseWorktree: false });
-  }
-});
-
-test("the handoff tells the agent where the run lives, what it kept and which phase comes next", (t) => {
-  const env = makeHome(t, "resume-handoff");
-  const job = { id: 7, project: "alpha", project_id: ALPHA_ID, slug: "fix-the-worker" };
-  const written = stagedState({ artifact: "05-qa.md", at: "2026-09-06T11:00:00.000Z" });
-  writeState(env, { projectId: ALPHA_ID, slug: job.slug, content: written });
-  const stored = readRunState({ projectId: ALPHA_ID, slug: job.slug, env });
-
-  assert.deepEqual(resumeHandoff({ job, resume: decideResume({ state: stored }), state: stored, env }), {
-    slug: "fix-the-worker",
-    runDir: runDir(ALPHA_ID, "fix-the-worker", env),
+test("the facts of a state hold its records in the order it recorded them, with the directory given", () => {
+  const facts = runFacts(state({ wip: { commit: "abcdef1234", short: "abcdef1", files: ["a.mjs", "b.mjs"] }, answers: [{ text: "go", at: "2026-09-06T01:00:00Z", attempt: 2 }] }), { runDir: "/tmp/run" });
+  assert.deepEqual(facts, {
+    runDir: "/tmp/run",
     branch: "fix/the-worker",
     worktree: "/tmp/worktrees/fix-the-worker",
-    lastPhase: "implementation",
-    fromPhase: "qa",
-    fromStage: "qa-stage-b",
+    phases: [
+      { phase: "triage", verdict: "ok", artifact: "0X-triage.md", at: null },
+      { phase: "explore", verdict: "ok", artifact: "0X-explore.md", at: null },
+    ],
+    answers: [{ text: "go", at: "2026-09-06T01:00:00Z", attempt: 2 }],
+    wip: { commit: "abcdef1234", short: "abcdef1", files: ["a.mjs", "b.mjs"] },
   });
-
-  const bare = state({ branch: "  ", worktree: undefined });
-  const plain = resumeHandoff({ job, resume: decideResume({ state: bare }), state: bare, env });
-  assert.deepEqual({ branch: plain.branch, worktree: plain.worktree, fromStage: plain.fromStage }, { branch: null, worktree: null, fromStage: null });
 });
 
-test("there is no handoff when the decision refuses, when the job has no safe slug or when the project is not an id", (t) => {
-  const env = makeHome(t, "resume-handoff-refused");
-  const job = { id: 7, project: "alpha", project_id: ALPHA_ID, slug: "fix-the-worker" };
-  const resume = decideResume({ state: state() });
+test("the facts keep a phase name outside the enum and a repeated phase: deciding from them is the pipeline's", () => {
+  const facts = runFacts({ phases: [{ phase: "triage", verdict: "NOT-REPRODUCIBLE" }, { phase: "triagem" }, { phase: "triage", verdict: "PROCEED" }] });
+  assert.deepEqual(facts.phases.map((entry) => [entry.phase, entry.verdict]), [["triage", "NOT-REPRODUCIBLE"], ["triagem", null], ["triage", "PROCEED"]]);
+});
 
-  assert.equal(resumeHandoff({ job, resume: decideResume({ state: null }), state: null, env }), null);
-  assert.equal(resumeHandoff({ job, resume: decideResume({ state: state({ resumeCount: 1 }) }), state: state(), env }), null);
-  assert.equal(resumeHandoff({ job: { ...job, slug: "../../escape" }, resume, state: state(), env }), null);
-  assert.equal(resumeHandoff({ job: { ...job, slug: null }, resume, state: state(), env }), null);
-  assert.equal(resumeHandoff({ job: { ...job, project_id: "../../etc" }, resume, state: state(), env }), null);
-  assert.equal(resumeHandoff({ job: { ...job, project_id: "alpha" }, resume, state: state(), env }), null, "a project name was taken for an id");
-  assert.equal(resumeHandoff({}), null);
-  assert.equal(resumeHandoff({ job, resume, state: "not an object", env }).branch, null, "a broken state stopped the handoff instead of degrading it");
+test("a schema version the runtime does not know is no refusal: the facts still come", () => {
+  assert.equal(runFacts({ ...state(), schemaVersion: 2 }).phases.length, 2);
+});
+
+test("an unreadable state has no facts, malformed entries are dropped, and nothing ever throws", () => {
+  for (const held of [null, undefined, "text", 7, [1]]) assert.equal(runFacts(held), null);
+  const facts = runFacts({ branch: "  ", worktree: 3, phases: [null, 3, "qa", {}, { phase: " " }, { phase: "qa", verdict: 1 }], answers: "junk", wip: { files: [] } });
+  assert.deepEqual(facts, { runDir: null, branch: null, worktree: null, phases: [{ phase: "qa", verdict: null, artifact: null, at: null }], answers: [], wip: null });
+  assert.deepEqual(runFacts({ answers: [null, {}, { text: " " }, { text: "ok", attempt: "2" }] }).answers, [{ text: "ok", at: null, attempt: null }]);
+  assert.deepEqual(runFacts({ wip: { commit: "abcdef1234" } }).wip, { commit: "abcdef1234", short: "abcdef1", files: [] });
 });
 
 test("the state file is read from the run directory, and an unsafe segment never becomes a path", (t) => {
@@ -198,109 +84,19 @@ test("the state file is read from the run directory, and an unsafe segment never
   assert.equal(readRunState({ projectId: ALPHA_ID, slug: "broken-run", env }), null);
 });
 
-// A state.json an operator session recorded: no branch nor worktree, and `origin: operator`.
-function operatorState({ phases = ["triage"], resumeCount = 0, ...extra } = {}) {
-  const { branch, worktree, ...base } = state({ phases, resumeCount });
-  return { ...base, origin: "operator", ...extra };
-}
-
-// The prompt the runner builds for a job resumed from the given state.
-function resumePrompt(recorded) {
-  const job = { id: 7, project: "alpha", project_id: ALPHA_ID, slug: "fix-the-worker", prompt: "p" };
-  const handoff = resumeHandoff({ job, resume: decideResume({ state: recorded }), state: recorded, env: { NIGHTQUEUE_HOME: "/tmp/ns" } });
-  return buildPrompt({ job, handoff, env: { NIGHTQUEUE_HOME: "/tmp/ns" } });
-}
-
-test("an operator run with a triage at evidence level 3 resumes at explore, with nothing to re-run", () => {
-  const recorded = operatorState({ evidenceLevel: 3 });
-  const decision = decideResume({ state: recorded });
-  assert.equal(decision.fromPhase, "explore");
-  assert.equal(decision.reuseWorktree, false);
-  assert.equal("reruns" in decision, false);
-  assert.ok(resumePrompt(recorded).includes("Resume from phase: explore"));
-});
-
-test("an operator run whose bug triage stopped below level 3 re-runs the triage, and says so in the prompt", () => {
-  const recorded = operatorState({ evidenceLevel: 2 });
-  const decision = decideResume({ state: recorded });
-  assert.equal(decision.resume, true);
-  assert.equal(decision.fromPhase, "triage");
-  assert.equal(decision.lastPhase, null);
-  assert.equal(decision.reason, "operator-rerun");
-  assert.equal(decision.reruns[0].phase, "triage");
-  assert.match(decision.reruns[0].reason, /evidence level 2/);
-  const prompt = resumePrompt(recorded);
-  assert.ok(prompt.includes("Re-run: triage"), prompt);
-  assert.ok(prompt.includes("Last completed phase: none"), prompt);
-});
-
-test("an operator run resumes at implementation only with an approved plan, and re-runs a draft architecture", () => {
-  const phases = ["triage", "explore", "architecture"];
-  const approved = decideResume({ state: operatorState({ phases, evidenceLevel: 3, planStatus: "approved" }) });
-  assert.equal(approved.fromPhase, "implementation");
-  assert.equal("reruns" in approved, false);
-
-  const draft = decideResume({ state: operatorState({ phases, evidenceLevel: 3, planStatus: "draft" }) });
-  assert.equal(draft.fromPhase, "architecture");
-  assert.equal(draft.lastPhase, "explore");
-  assert.deepEqual(draft.reruns.map((rerun) => rerun.phase), ["architecture"]);
-  assert.match(draft.reruns[0].reason, /plan status draft/);
-
-  const unrecorded = decideResume({ state: operatorState({ phases, evidenceLevel: 3 }) });
-  assert.match(unrecorded.reruns[0].reason, /plan status not recorded/);
-});
-
-test("the triage trap reads a missing type as a bug, and never applies to a feature", () => {
-  const { type, ...untyped } = operatorState({ evidenceLevel: 2 });
-  assert.equal(decideResume({ state: untyped }).fromPhase, "triage");
-  const unrecorded = decideResume({ state: operatorState({}) });
-  assert.match(unrecorded.reruns[0].reason, /evidence level not recorded/);
-  const feature = decideResume({ state: operatorState({ type: "feature/refactor" }) });
-  assert.equal(feature.fromPhase, "explore");
-  assert.equal("reruns" in feature, false);
-});
-
-test("the operator handoff does not spend the job's own resume, and the cap still bites after it", () => {
-  assert.equal(decideResume({ state: operatorState({ evidenceLevel: 3, resumeCount: 1 }) }).fromPhase, "explore");
-  assert.equal(decideResume({ state: operatorState({ evidenceLevel: 3, resumeCount: 2 }) }).reason, "resume-cap");
-});
-
-test("a trapped triage is re-run even when its recorded verdict would have closed the run", () => {
-  const recorded = operatorState({ evidenceLevel: 2 });
-  recorded.phases[0].verdict = "NOT-REPRODUCIBLE";
-  const decision = decideResume({ state: recorded });
-  assert.equal(decision.resume, true);
-  assert.equal(decision.fromPhase, "triage");
-});
-
-test("a run with no operator origin takes exactly the decision it took before", () => {
-  const phases = ["triage", "explore", "architecture"];
-  assert.deepEqual(decideResume({ state: state({ phases, evidenceLevel: 1 }) }), {
-    resume: true,
-    fromPhase: "implementation",
-    fromStage: null,
-    reuseWorktree: true,
-    reason: "resume",
-    resumeCount: 1,
-    lastPhase: "architecture",
-  });
-  assert.equal(decideResume({ state: state({ phases, resumeCount: 1 }) }).reason, "resume-cap");
-});
-
-test("the claim's view drops a termination of another attempt, so the run resumes after its earlier phases; an unstamped or own one still closes it", () => {
+test("the claim's view drops a termination of another attempt and keeps the phases of the earlier claims; an unstamped or own one stays", () => {
   const phases = ["triage", "explore"];
   const stale = state({ phases, termination: { phase: "qa", reason: "Old.", claim: { attempt: 1, session: "s" } } });
   const view = recordsOfClaim(stale, 2);
   assert.equal(view.termination, undefined);
   assert.deepEqual(view.ignoredAttempts, [1]);
-  assert.equal(view.phases.length, 2, "the phases of an earlier claim are what a retry resumes from");
-  assert.deepEqual([decideResume({ state: view }).reason, decideResume({ state: view }).fromPhase], ["resume", "architecture"]);
+  assert.equal(runFacts(view).phases.length, 2, "the phases of an earlier claim are what a retry is handed");
 
   const own = recordsOfClaim(stale, 1);
-  assert.equal(decideResume({ state: own }).reason, "terminated-by-verdict");
+  assert.equal(own.termination.reason, "Old.");
   assert.equal(own.ignoredAttempts, undefined);
   const unstamped = recordsOfClaim(state({ phases, termination: { phase: "qa", reason: "Old." } }), 2);
-  assert.equal(decideResume({ state: unstamped }).reason, "terminated-by-verdict");
+  assert.equal(unstamped.termination.reason, "Old.");
 });
 
 test("the claim's view leaves anything that is not a usable state or attempt as it came", () => {
@@ -311,15 +107,15 @@ test("the claim's view leaves anything that is not a usable state or attempt as 
   assert.deepEqual(recordsOfClaim(odd, 2), odd);
 });
 
-test("a first attempt whose state.json holds only the job block and the worktree is not resumed, for the reason it had before the block", (t) => {
+test("a first attempt whose state.json holds only the job block and the worktree prints no facts block", (t) => {
   const env = makeHome(t, "resume-job-block-only");
   const slug = "fix-the-worker";
   const block = { id: 3, createdAt: "2026-01-01T00:00:00.000Z" };
   assert.equal(recordJobBlock({ projectId: ALPHA_ID, slug, block, env }).status, "written");
   assert.equal(recordHeldWorktree({ projectId: ALPHA_ID, slug, branch: "fix/the-worker", worktree: "/tmp/wt", env }).status, "written");
 
-  const decision = decideResume({ state: readRunState({ projectId: ALPHA_ID, slug, env }) });
+  const facts = runFacts(readRunState({ projectId: ALPHA_ID, slug, env }));
+  const prompt = buildPrompt({ job: { id: 3, project: "alpha", project_id: ALPHA_ID, slug, prompt: "p" }, facts, env });
 
-  assert.equal(decision.resume, false);
-  assert.equal(decision.reason, "invalid-state");
+  assert.equal(prompt.includes("RUN FACTS"), false, prompt);
 });

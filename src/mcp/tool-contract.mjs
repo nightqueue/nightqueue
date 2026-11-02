@@ -1,7 +1,7 @@
 import { UserError } from "../config/errors.mjs";
 
-// The version of the tool input shapes; bump it whenever a tool's input shape changes incompatibly (contract 1 is the pre-v19 integer ids, 2 the refs, 3 the tracker renamed, 4 the tracker removed, 5 the tracker_issues tool, home-scoped connections and `queue_add` `origin: false`, 6 `origin` is a list of {kind, ref}, 7 the `lesson_delete` and `memory_delete` tools, 8 the decision tools removed, 9 the `connection_call` tool, 10 the `operator_consent` tool, 11 `queue_add` `max_attempts` removed).
-export const TOOL_CONTRACT = 11;
+// The version of the tool input shapes; bump it whenever a tool's input shape changes incompatibly (contract 1 is the pre-v19 integer ids, 2 the refs, 3 the tracker renamed, 4 the tracker removed, 5 the tracker_issues tool, home-scoped connections and `queue_add` `origin: false`, 6 `origin` is a list of {kind, ref}, 7 the `lesson_delete` and `memory_delete` tools, 8 the decision tools removed, 9 the `connection_call` tool, 10 the `operator_consent` tool, 11 `queue_add` `max_attempts` removed, 12 `run_set` `qa_stage_a` removed).
+export const TOOL_CONTRACT = 12;
 
 export const STALE_CONTRACT_ADVISORY = "this client's tool contract is older than the server";
 
@@ -27,6 +27,14 @@ export const TIER_REMOVED_LINE =
 const MAX_ATTEMPTS_REMOVED_LINE =
   "`max_attempts` was removed: a job has no attempt budget, a failed job goes back with `queue_retry`; drop it - a client still sending it is an older nightqueue plugin, update it";
 
+const QA_STAGE_A_REMOVED_LINE =
+  "`qa_stage_a` was removed: a resumed QA re-runs Phase 5 whole; drop it - a client still sending it is an older nightqueue plugin, update it";
+
+// The refusal line of a state key `run_set` never writes.
+function runtimeOnlyLine(field) {
+  return `\`${field}\` is written by the runtime only`;
+}
+
 // Inputs a newer contract removed, by tool, each with its refusal line: a call that still sends one with a value is refused, never silently stripped.
 const RETIRED_FIELDS = {
   queue_add: { run_dir: operatorRunLine("run_dir"), tier: TIER_REMOVED_LINE, max_attempts: MAX_ATTEMPTS_REMOVED_LINE },
@@ -34,6 +42,9 @@ const RETIRED_FIELDS = {
     origin: operatorRunLine("origin"),
     evidence_level: operatorRunLine("evidence_level"),
     plan_status: operatorRunLine("plan_status"),
+    qa_stage_a: QA_STAGE_A_REMOVED_LINE,
+    answers: runtimeOnlyLine("answers"),
+    lastClaim: runtimeOnlyLine("lastClaim"),
   },
 };
 
