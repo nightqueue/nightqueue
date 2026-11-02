@@ -815,7 +815,7 @@ the first user event of `agent_transcript_path` and the final text from `last_as
 Any prompt is held to the lines it declares outside a code fence, whichever way it opens; a declaration
 only quoted inside a fence does not count, so the orchestrator launches a block with its fence removed.
 When the final text's first line does not have the declared shape, or the text exceeds the declared
-lines (up to 2 `Lesson L<id> applied:` lines do not count), it answers
+lines (every line counts: the runtime knows no line format of a pipeline, so a pipeline that allows extra lines declares them in its limit), it answers
 `{"decision":"block","reason":…}` quoting the declaration, and the subagent
 sends its final message again. `stop_hook_active: true` always passes, so it blocks once. A prompt
 with no declaration, a missing field or any error passes: the check is fail-open. Both fields and the

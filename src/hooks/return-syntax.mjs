@@ -4,8 +4,6 @@ import { unfencedLines } from "../queue/stream.mjs";
 const HEAD_DECLARATION_RE = /^RETURN-HEAD:[ \t]*(.*\S)[ \t]*$/gm;
 const MAX_LINES_DECLARATION_RE = /^RETURN-MAX-LINES:[ \t]*(\d+)[ \t]*$/gm;
 const PLACEHOLDER_RE = /<[^<>]+>/;
-const LESSON_CITATION_RE = /^Lesson L\d+ applied:/;
-const LESSON_CITATIONS_OUTSIDE_LIMIT = 2;
 
 // The text of a transcript message, whichever of the host's two shapes carries it.
 function messageText(content) {
@@ -44,17 +42,11 @@ function headPattern(head) {
   return new RegExp(`^${literals.join(".+")}$`, "u");
 }
 
-// How many lines of a final message count against the limit: the lesson citations the agents add outside it do not.
-function countedLines(lines) {
-  const citations = lines.filter((line) => LESSON_CITATION_RE.test(line.trim())).length;
-  return lines.length - Math.min(citations, LESSON_CITATIONS_OUTSIDE_LIMIT);
-}
-
 // Whether a final message follows a declared syntax: its first line shaped like the head, within the line limit.
 function followsSyntax(message, { head, maxLines }) {
   const lines = message.trim().split("\n");
   const headFits = head === null || headPattern(head).test(lines[0].trim());
-  return headFits && (maxLines === null || countedLines(lines) <= maxLines);
+  return headFits && (maxLines === null || lines.length <= maxLines);
 }
 
 // The instruction a blocked subagent receives, quoting what its own prompt declared.

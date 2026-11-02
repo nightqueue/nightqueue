@@ -91,13 +91,13 @@ Read at Phase 0 when the prompt carries `RUN FACTS`. The block holds records, ne
 
 Fill one block and launch it: the filled block, fence removed, is the whole `prompt`, with `subagent_type` = its
 `AGENT` and `model` = its `MODEL`, from the `models` `run start` answered. No other call is needed.
-Never add a line: relaunch context goes in `NOTE:` (the `note` of the tables),
-and a `STAGE:` with no stage is left out. `<RETURN>` stands for these three lines, written out:
+Never add a line: relaunch context goes in `NOTE:` (the tables' `note`),
+an empty `STAGE:` is left out. `<RETURN>` stands for these three lines, written out:
 
 ```
 RETURN-HEAD: VERDICT: <verdict> · ARTIFACT: <file> · OPEN: <n>
-RETURN-MAX-LINES: 25
-## Did (≤ 5) · ## Found (≤ 10) · ## Open (≤ 6, or "none")
+RETURN-MAX-LINES: 27
+## Did (≤ 5) · ## Found (≤ 10) · ## Open (≤ 6, or "none") +≤2 citations
 ```
 
 ### triager

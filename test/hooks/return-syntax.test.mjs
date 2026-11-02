@@ -131,12 +131,10 @@ test("a declaration quoted in a fence after the real one does not win over it", 
   assert.equal(decide(stopOf(transcript, "FORGED: yes"))?.decision, "block");
 });
 
-test("two lesson citations sit outside the limit, a third one and any other line count", (t) => {
+test("the hook counts every line of the return: no line format of a pipeline is known to the runtime", (t) => {
   const transcript = transcriptOf(t, DECLARED);
-  const citations = (count) => Array.from({ length: count }, (_, at) => `Lesson L${at} applied: x`);
-  assert.equal(decide(stopOf(transcript, [GOOD, ...citations(2)].join("\n"))), null);
-  assert.equal(decide(stopOf(transcript, [GOOD, ...citations(3)].join("\n")))?.decision, "block");
-  assert.equal(decide(stopOf(transcript, [GOOD, "Lesson L1 applied: x", "x"].join("\n")))?.decision, "block");
+  assert.equal(decide(stopOf(transcript, GOOD)), null);
+  assert.equal(decide(stopOf(transcript, `${GOOD}\nLesson L1 applied: x`))?.decision, "block");
 });
 
 test("the caps of the shared return layout add up to its line limit", () => {
@@ -144,7 +142,8 @@ test("the caps of the shared return layout add up to its line limit", () => {
   const caps = [...shared.matchAll(/## \w+ \(≤ (\d+)/g)].map((match) => Number(match[1]));
   assert.equal(caps.length, 3, shared);
   const headAndHeadings = 1 + caps.length;
-  assert.equal(headAndHeadings + caps.reduce((sum, cap) => sum + cap, 0), Number(/^RETURN-MAX-LINES: (\d+)$/m.exec(shared)[1]));
+  const citations = Number(/\+≤(\d+) citations/.exec(shared)[1]);
+  assert.equal(headAndHeadings + caps.reduce((sum, cap) => sum + cap, 0) + citations, Number(/^RETURN-MAX-LINES: (\d+)$/m.exec(shared)[1]));
 });
 
 test("the head of every real SKILL block accepts a real return and refuses free text", (t) => {
