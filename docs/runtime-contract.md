@@ -1087,8 +1087,8 @@ artifact (and, where a rule needs them, `01-triage.md`, `03-plan.md`, `state.jso
 operator note) and prints one fact per line, in this fixed order:
 
 1. `OK` | `MISSING: <sections>` | `GENERATED` (`04`), unchanged. After `MISSING:` nothing
-   else is printed but a `REPAIRED:` line: no gate is evaluated and nothing is recorded but the
-   check memo. On a round artifact (`05`, `06`, `07`) whose open code fence the check closed, the
+   else is printed but a `REPAIRED:` line and, on `06`, its `OPEN: pre-existing-failure` lines: no
+   gate is evaluated and nothing is recorded but the check memo. On a round artifact (`05`, `06`, `07`) whose open code fence the check closed, the
    `REPAIRED: …` line follows the first line, before `VERDICT:`; it never changes the memo nor
    completion. `01`
    with `NOT-REPRODUCIBLE` also requires `## Open items` with an item
@@ -1100,13 +1100,28 @@ operator note) and prints one fact per line, in this fixed order:
    `## Verdict` (`APPROVED`, `NEEDS FIX`, `NEEDS DISCUSSION`); `06` the suffix of
    `## Verification:` (`PASSED`, `PASSED-STATIC`, `FAILED`); `07` the first non-blank line of
    `## Runtime verdict` (`CONFIRMED`, `NOT-MET`, `SYMPTOM-PERSISTS`, `NEEDS-DEVICE`,
-   `UNAVAILABLE`). A verdict outside the values is a `MISSING:` naming the expected line.
+   `UNAVAILABLE`). A verdict outside the values is a `MISSING:` naming the expected line. A `06`
+   round whose verdict line says `(stage N)` is a stage round: the line reads
+   `VERDICT: <value> (stage N)`. A stated `FAILED` with at least one failure, each of them excused,
+   does not read `FAILED`. A failure is an item of `## Failures` or a line of `## Checks run` whose
+   status is not `PASSED`, `SKIPPED`, `OK` or `not run`. Its excuse is an item of
+   `## Pre-existing failures` that opens with `<that check>:` and mentions every file the check's
+   line blames, or, on a stage round with no `qa` phase and no `05*` check recorded, a failure that
+   only says `05-qa.md`, the QA report, a PoC or runtime evidence is absent, and names no error. An
+   item of `## Failures` is never excused by the base. The round reads `PASSED` on a stage round and
+   `PASSED-STATIC` on a final one, whose Phase 7 stays owed.
 3. `GATE: <code> — <evidence>`, one per firing item, the evidence one trimmed line of at most
    160 code points.
 4. `OPEN: <text>`: `03` the coverage items below, `## Requires user confirmation has no filled
    **Question:**` and `type mismatch — <evidence> — kept <bug/error|feature/refactor>` (`bug/error`
-   with `## Diagnosis` filled, else `feature/refactor`); `05` `<label> — <value>` per filled
+   with `## Diagnosis` filled, else `feature/refactor`), `stages-unjustified — <n> stages, no reason
+   line` (two or more stages titled under `## Implementation plan`, no `**Stage reason:**` line from
+   the closed list and no Brief that numbers them) and `assumption-without-evidence — <first words>`
+   per `## Assumptions` item (a bullet with what is nested under it, or a table row) with neither a
+   `path:line` (a directory, or a source extension on a bare file name) nor `(unverified)`;
+   `05` `<label> — <value>` per filled
    `omitted:`, `divergences:` or `unconfirmed decisions:` line other than `none`;
+   `06` `pre-existing-failure — <item>` per item of `## Pre-existing failures`, whatever the verdict;
    `07` `<scenario> — to confirm` per `NOT MET / to confirm` row. Never a gate.
 5. `TYPE-MISMATCH: <evidence> — triage: <bug/error|feature/refactor> (<## Diagnosis filled|## Diagnosis absent or empty>)` (`03`).
 6. `CONFIRM:` (`03`, only with a filled question, the one human stop of a run):

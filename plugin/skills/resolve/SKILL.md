@@ -64,8 +64,8 @@ Read at Phase 0 when the prompt carries `RUN FACTS`. The block holds records, ne
 
 5. Every agent definition carries the shell rule; every test command a phase runs goes under an explicit `timeout`.
 
-6–7. **After the first subagent returns** read `references/phases.md`, once: the artifact gate
-   (step 6), the records (step 7) and the table of every phase.
+6–7. **After the first subagent returns** read `references/phases.md`, once: the artifact gate,
+   the records and each phase's table.
 
 8. No execution log by hand: never time a phase nor keep a table — `run report` derives them.
 
@@ -92,7 +92,7 @@ Read at Phase 0 when the prompt carries `RUN FACTS`. The block holds records, ne
 Fill one block and launch it: the filled block, fence removed, is the whole `prompt`, with `subagent_type` = its
 `AGENT` and `model` = its `MODEL`, from the `models` `run start` answered. No other call is needed.
 Never add a line: relaunch context goes in `NOTE:` (the tables' `note`),
-an empty `STAGE:` is left out. `<RETURN>` stands for these three lines, written out:
+an empty `STAGE:` is left out. `<RETURN>` is these three lines:
 
 ```
 RETURN-HEAD: VERDICT: <verdict> · ARTIFACT: <file> · OPEN: <n>
@@ -151,7 +151,7 @@ TARGET: coder-fix · AGENT: nightqueue:coder · MODEL: <models.coder>
 RUN_DIR: <runDir>
 WORKTREE: <worktree>
 PROJECT: <project>
-INPUTS: 06-verification.md, ## Proven breaks of 05-qa.md, 04-implementation.md
+INPUTS: 06-verification.md, ## Proven breaks, ## Generated PoCs of 05-qa.md, 04-implementation.md
 NOTE: <the iteration and its failures, in one line>
 <RETURN>
 ```
@@ -164,6 +164,7 @@ WORKTREE: <worktree>
 PROJECT: <project>
 INPUTS: ## Generated PoCs and ## Proven breaks of 05-qa.md, 04-implementation.md
 STAGE: <stage>
+BASE_REF: <baseRef>
 DEMO_REPO: <demoRepo>
 NOTE: <note, or none>
 <RETURN>

@@ -327,6 +327,8 @@ The question carries its `?`: only that reads as a question, and with nothing to
 **Order of work:**
 [The sequence of the changes, each step leaving the code working.]
 
+**Stages:** one, the default: write no stage. More only when the Brief numbers them, or with one line `**Stage reason:** <independent parts | green intermediate | over 25 files> — <why>`, each stage then under `### Stage <n> — <title>`. `run check 03` prints `OPEN: stages-unjustified` otherwise; it never gates.
+
 **Tests:**
 [The tests that prove the change, each with what it asserts.]
 
@@ -383,6 +385,7 @@ Rules: one line per entry point of the diff (`·` separators, no spaces around `
 ## Assumptions
 - [P1] <assumption> — invalidated if: <evidence that would refute it>
 Or `- None (everything confirmed by evidence)`.
+A claim about how the current code behaves, here, in `## Identified risks` or in a mitigation, cites the `path:line` you read or is marked `(unverified)`. `run check 03` prints `OPEN: assumption-without-evidence` for an assumption with neither; it never gates.
 
 ## Pre-mortem
 The plan itself failed — its 2-3 most likely causes (wrong approach, forgotten file/entry point, an API that does not behave as supposed, an unmapped side effect):

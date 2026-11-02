@@ -8,6 +8,15 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **The pipeline stops causing its own relaunches.** A QA `NEEDS FIX` opens Phase 6 with `coder-fix`
+  (fix iteration 1), then the verifier. A verifier launched with `STAGE:` checks only that stage and
+  writes `(stage N)` on its verdict; `run check 06` prints it and no longer reads a stage round that
+  only demands the QA as `FAILED` before Phase 5. A check that also fails on the base goes under
+  `## Pre-existing failures`: `run check 06` prints `OPEN: pre-existing-failure — …`, does not count it
+  as a failure when the item opens with that failed check's name and mentions the files it blames, and
+  `run report` lists it, from a malformed round too. A plan has one stage by default, and `run check 03` prints
+  `OPEN: stages-unjustified` and `OPEN: assumption-without-evidence`, never a gate.
+
 - **Phase prompts are short and live in the SKILL; the agents know how.** The method, the artifact
   layouts and the first-step fetches moved from `references/prompts/` into a `## Inside a run` section
   of each agent, and `## Phase prompts` of the resolve SKILL holds one block of at most 12 lines per

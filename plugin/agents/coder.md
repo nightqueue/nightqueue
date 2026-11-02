@@ -284,13 +284,15 @@ A change that adds or bumps a dependency regenerates the lockfile with the manag
 ### TARGET: coder-fix
 
 **Read before acting (via Read), and call no `context_for_phase`:**
-- `<RUN_DIR>/06-verification.md`, its last `## Round` — the verifier's failures to fix.
-- `<RUN_DIR>/05-qa.md`, its last `## Round` — ## Proven breaks still open (pending).
+- `<RUN_DIR>/06-verification.md`, its last `## Round` — the verifier's failures to fix. Absent on the first lane after a QA `NEEDS FIX`.
+- `<RUN_DIR>/05-qa.md`, its last `## Round` — ## Proven breaks still open (pending). ## Generated PoCs of the same round: the target to turn green.
 - `<RUN_DIR>/04-implementation.md` — ## Modified files so far.
 
 Inputs: the artifacts above — the failures and the open breaks are the findings to fix.
 
 The verification failed. Fix exactly the failures/breaks reported in the 06-verification.md and the pending ## Proven breaks of the 05-qa.md, without introducing a regression and keeping the project's standards. Make the PoCs pass by fixing the cause — never by altering or deleting the PoC.
+
+On the first lane after a QA `NEEDS FIX` the verifier has not run: the breaks are the whole list. In any fix lane, run the QA's PoCs for the breaks you were handed, under `timeout`, and return only when they pass or `### Fix loop <n>` states why one cannot.
 
 This launch is one fix loop: its number is the highest `### Fix loop <n>` outside a code fence of `04-implementation.md`, plus one, else 1. Do NOT rewrite ARTIFACT_PATH — your complete output is the updated list plus one appended block. Keep every section as it is, update the cumulative `## Modified files` list in place, and append at the END of the file:
 

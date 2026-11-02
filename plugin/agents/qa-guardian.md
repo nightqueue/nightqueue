@@ -202,7 +202,7 @@ matrix of the SKILL.md and the review dimensions are merged here — do not dupl
 - Test coverage, documentation of non-obvious logic
 
 **The plan's assumptions (when the request provides them)**
-- Each assumption of the plan is a target: look for the evidence that would invalidate it (the
+- Each assumption of the plan is a target, the ones marked `(unverified)` first: look for the evidence that would invalidate it (the
   plan itself declared which one it is). An assumption knocked down with real evidence is not a
   code break — it is a PLAN break: report it as an invalidated assumption with the evidence — it
   goes back to whoever designed the plan, never to whoever fixes the code.

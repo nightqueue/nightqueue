@@ -78,8 +78,8 @@ commands, or anything that changes remote state.
 - `FAILED` carries a snippet of at most 20 lines under its line — that snippet is exactly
   what whoever fixes needs; quote it instead of re-running the check to get a longer log.
 - A check whose dependencies are not installed is `FAILED` with
-  `dependencies not installed — nightqueue verify never installs`. Report it as a failure;
-  never install anything to make it pass.
+  `dependencies not installed — nightqueue verify never installs`. Step 2.1 says how it is
+  reported; `nightqueue verify` itself never installs.
 - The command never modifies the repository under test, never opens the network on its own
   account, and runs every check against a throwaway `NIGHTQUEUE_HOME`/`CLAUDE_CONFIG_DIR`
   of its own.
@@ -91,6 +91,17 @@ If `nightqueue verify` is not installed on this host, fall back to running the p
 own scripts through the package manager its lockfile names — never `bunx`/`npx` from a
 global version (e.g. `bunx tsc` validates with another version and lies) — and report the
 same block by hand.
+
+### Step 2.1 — A failing check on the base
+
+**Pre-existing failures.** A `FAILED` check is the diff's only after this test. Re-run that one check, with its own command, on the base, never with `git stash`: `git worktree add --detach tmp/base-check <BASE_REF>` (with no `BASE_REF:` line, `git merge-base HEAD origin/HEAD`), link `node_modules` the way the worktree has it (a symlink, never an install), run it there under `timeout`, then `git worktree remove --force <its absolute path>`, whatever the result, and before any other check runs.
+
+- The same failure on the base (compare the failing test names or the error, never the exit code) → one line under `## Pre-existing failures`, with both outputs' last lines. It does not make the verdict `FAILED`.
+- A failure only on the diff stays in `## Failures`, even inside the same check. A base that fails for another reason, or that you could not run, proves nothing: the failure stays in `## Failures`.
+- A missing environment (dependencies not installed, required env vars absent): one documented attempt to install or run with placeholders. Still missing → the same section, `<check>: environment: <what> · attempt: <what you tried>`, never a code failure; if the attempt makes it run, its real result is the result. Remove any link you made.
+- A test that fails only under the full suite: retry it once alone; it passes → the same section, `<check>: load-sensitive — <test>`.
+
+Each line opens with the failed check's name and a colon, as `## Checks run` writes the name: the two are held against each other. A line that names no failed check excuses nothing, and a file the check's line blames must be on the line.
 
 ### Step 2.5 — QA PoCs (proven breaks + fuzz)
 
@@ -315,13 +326,13 @@ persist a token/PII there either.
   sustains it.
 - **PASSED-STATIC** — the static checks passed but the runtime path of the bug was NOT
   executed (Step 2.8). List what was left unexecuted.
-- **FAILED** — at least one check or PoC failed. List objectively what must be fixed.
+- **FAILED** — at least one check or PoC failed, outside `## Pre-existing failures`. List objectively what must be fixed.
 
 Be honest: if it failed, say it failed. Do not mask it or soften it.
 
 ## Inside a run
 
-This section applies only when the request carries a `RUN_DIR:` line; a request with no such line ignores it. Such a request says only what this run wants: its `TARGET` (`verifier` or `runtime`), `RUN_DIR`, `WORKTREE`, `PROJECT`, its `INPUTS`, `DEMO_REPO`, the `STAGE` when the plan is staged and the `NOTE` of a relaunch. `<RUN_DIR>` below is the value of that line; `WORKTREE` is the `Repository:` and `PROJECT` the `Project:` the rest of this file speaks of. A `NOTE:` other than `none` is the relaunch note: follow it.
+This section applies only when the request carries a `RUN_DIR:` line; a request with no such line ignores it. Such a request says only what this run wants: its `TARGET` (`verifier` or `runtime`), `RUN_DIR`, `WORKTREE`, `PROJECT`, its `INPUTS`, `BASE_REF`, `DEMO_REPO`, the `STAGE` when the plan is staged and the `NOTE` of a relaunch. `<RUN_DIR>` below is the value of that line; `WORKTREE` is the `Repository:` and `PROJECT` the `Project:` the rest of this file speaks of. A `NOTE:` other than `none` is the relaunch note: follow it.
 
 Search rule: a search for a file or a pattern stays inside the repository below or the project checkout — never from `/` or the home (the job refuses them) — and a plugin file lives under `plugin/` of the checkout, never elsewhere on disk.
 Long commands: inside a job a command that outlives the Bash timeout is KILLED, not backgrounded — give a long command a Bash `timeout` parameter sized to it, up to `queue.bashTimeoutS.max`.
@@ -348,6 +359,8 @@ Apply your methodology (the QA's PoCs and the Runtime API Check when they apply)
 A PoC that fails = the break is still present → FAILED.
 A QA report runs before you here: a changed input/API with no PoC and no justification in it is FAILED.
 
+**The stage round.** With a `STAGE:` line you are a stage verifier, never the final gate: check that stage's acceptance (its part of `<RUN_DIR>/03-plan.md`) and the project's checks. Never require `05-qa.md`, PoCs or runtime evidence, and skip Steps 2.5 and 2.8: those belong to the final Phase 6, after the QA. The verdict line says `## Verification: PASSED (stage N)` or `## Verification: FAILED (stage N)`.
+
 **Deliver.** Write this launch's output to ARTIFACT_PATH, in this order. `## Checks run` and the verdict line are mandatory (`nightqueue run check 06` fails without either, in the last `## Round`).
 
 ````
@@ -358,6 +371,9 @@ One line per line of the `nightqueue verify` block (typecheck, lint, build, test
 ## Failures (if any)
 - [check]: file:line — essential error message
 - [PoC]: vector/function — the assert or minimized counter-example that failed (break still present)
+
+## Pre-existing failures  (only when Step 2.1 found one; a failure listed here alone never makes the verdict FAILED)
+- <check>: <what> — base: <last line> · diff: <last line>
 
 ## Runtime API Check  (only when the diff introduces or changes a third-party call)
 PASSED, or the list of problems.

@@ -174,6 +174,31 @@ test("a QA skip leaves the verifier's launch and its gate unconditional", () => 
   assert.equal(/skip/i.test(phase6.slice(0, phase6.indexOf("**Gate and fix loop:**"))), false, "a skip now conditions the verifier's launch");
 });
 
+test("a QA NEEDS FIX opens Phase 6 with coder-fix, and Phase 6 routes the stage and pre-existing lines", () => {
+  const phase5 = SKILL.slice(SKILL.indexOf("### Phase 5 —"), SKILL.indexOf("### Phase 6 —"));
+  const row = phase5.split("\n").find((line) => line.startsWith("| `VERDICT: NEEDS FIX` |"));
+  assert.ok(row.includes("Phase 6 opens with `coder-fix`"), "NEEDS FIX no longer goes to the coder first");
+  assert.ok(row.endsWith("then the verifier |"), "the verifier no longer follows the first fix lane");
+  assert.ok(phase5.includes("| `VERDICT: APPROVED` | Phase 6, with the PoCs as a regression net |"), "the APPROVED row changed");
+  assert.ok(phase5.includes("| `VERDICT: NEEDS DISCUSSION` | ⚠️ mandatory open item of Phase 9, then Phase 6 |"), "the NEEDS DISCUSSION row changed");
+  const phase6 = SKILL.slice(SKILL.indexOf("### Phase 6 —"), SKILL.indexOf("### Phase 7 —"));
+  assert.ok(phase6.includes("| `VERDICT: <any> (stage N)` |"), "Phase 6 has no row for a stage round");
+  assert.ok(phase6.includes("| `OPEN: pre-existing-failure — …` |"), "Phase 6 has no row for a pre-existing failure");
+});
+
+test("the stage-verifier and pre-existing-failure rules live once, in the verifier's definition", () => {
+  const count = (text, marker) => text.split(marker).length - 1;
+  const agents = readdirSync(new URL("../plugin/agents/", import.meta.url)).filter((file) => file.endsWith(".md"));
+  const references = readdirSync(new URL("../plugin/skills/resolve/references/", import.meta.url), { recursive: true }).filter((file) => file.endsWith(".md"));
+  const read = (base, file) => readFileSync(new URL(`${base}${file}`, import.meta.url), "utf8");
+  const elsewhere = [SKILL_FILE, ...references.map((file) => read("../plugin/skills/resolve/references/", file)), ...agents.filter((file) => file !== "verifier.md").map((file) => read("../plugin/agents/", file))];
+  const verifier = read("../plugin/agents/", "verifier.md");
+  for (const marker of ["**The stage round.**", "**Pre-existing failures.**"]) {
+    assert.equal(count(verifier, marker), 1, `${marker} is not once in the verifier`);
+    assert.equal(elsewhere.filter((text) => text.includes(marker)).length, 0, `${marker} has a copy outside the verifier`);
+  }
+});
+
 test("Phase 5 pauses nothing and terminates nothing: its findings are routed or open items", () => {
   const phase5 = phase5Text();
   assert.ok(phase5.includes("| `MISSING` still (Stage A likewise) | Phase 6, ⚠️ open item |"), "a persisting QA MISSING no longer proceeds to Phase 6");

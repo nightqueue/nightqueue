@@ -2,11 +2,11 @@ import { PIPELINE_TASK_TYPES } from "../memory/runs.mjs";
 import { lastRound, lastRoundWithSource, nextRound, PHASE_ARTIFACTS, QA_STAGES, QA_TRIAGE_STAGE, roundDefects } from "./phase-artifacts.mjs";
 import { answerSinceGate, gateQuestion, labelBlock, questionDigest, unreadableQuestion } from "./gate-question.mjs";
 import { backtickRunAt, codeSpanEnd, hasGateMarker, sectionOf, unfencedLines, withoutHtmlComments } from "./stream.mjs";
-import { briefGates, briefType } from "./triage-brief.mjs";
+import { briefGates, briefSection, briefStageLines, briefType } from "./triage-brief.mjs";
 
 // The contract of `nightqueue run check`: one fact per line, in this order, each with a stable prefix.
 // OK | MISSING: <sections> | GENERATED, then VERDICT:, GATE:, OPEN:, TYPE-MISMATCH:, CONFIRM:, QA-MODE:, QA-STAGE:, INVALIDATED:, DIFF-APPLIES:,
-// NEEDS-DEVICE, and last of all SCRIPT: with the device script verbatim. A MISSING first line prints nothing else.
+// NEEDS-DEVICE, and last of all SCRIPT: with the device script verbatim. A MISSING first line prints nothing else but the pre-existing failures check 06 still reads.
 
 const BUG = "bug/error";
 const FEATURE = "feature/refactor";
@@ -37,6 +37,24 @@ const NONE_VALUE_RE = /^none\.?$/i;
 const LOOP_BACK = { "06": ["FAILED"], "07":["NOT-MET", "SYMPTOM-PERSISTS"] };
 // The verdicts a check memo keeps as its notable line when nothing else fired.
 const FAILING = { ...LOOP_BACK, "05": ["NEEDS FIX"] };
+// A stage heading of a plan, `### Stage 2 — …`, or a bullet or bold line that titles one, `- Stage 2: …`, `**Stage 2**`; prose such as `- Stage 2 deploy may fail` is neither.
+const PLAN_STAGE_RE = /^\s*(?:#{1,6}\s+(?:\*\*)?|(?:[-*]\s+)?(?:\*\*)?(?=Stage\s+\d+\b(?:\*\*)?\s*(?:$|[:.)—–-])))Stage\s+(\d+)\b/;
+const STAGE_REASON_RE = /^\s*(?:[-*]\s+)?\*\*Stage reason:\*\*\s*(?:independent parts|green intermediate|over 25 files)\b/i;
+// What numbers a stage in the Brief's `**Stages:**` field: `stage 2`, or a list number followed by its text, never a decimal such as `1.2`.
+const BRIEF_STAGE_NUMBER_RE = /\bstage\s+\d+|(?<![\w.])\d+[.)](?=\s+\S)/gi;
+const UNVERIFIED_RE = /\(unverified\)/i;
+// A `path:line` citation: any path with a directory whose last part has a letter, or a bare file name with a source extension, so a `host.tld:port` or a `12.30:45` is none.
+const PATH_LINE_RE = /(?<![\w./:-])(?:\/?(?:[\w.-]+\/)+[\w.-]*[a-z][\w.-]*|[\w-][\w.-]*\.(?:mjs|cjs|js|jsx|mts|cts|ts|tsx|json|md|mdx|ya?ml|toml|sh|py|rb|go|rs|java|kt|swift|c|h|cc|cpp|hpp|cs|php|html|css|scss|sql|txt|xml|vue|svelte|lock)):\d+\b/i;
+const ASSUMPTION_WORDS_MAX = 8;
+const STAGE_VERDICT_RE = /\(stage\s+(\d+)\)/i;
+const QA_OWED = "(?:05-qa\\.md|QA report|PoCs?|runtime evidence)";
+// A failure that only says what the QA still owes: the thing named as absent, and no error of its own.
+const QA_DEMAND_RE = new RegExp(`^(?!.*\\b(?:\\w*Error|throws?|crash(?:es|ed)?)\\b).*(?:\\b(?:no|missing|absent|without|requires?)\\s+(?:\\w+\\s+){0,2}?${QA_OWED}\\b|\\b${QA_OWED}\\s+(?:(?:is|are|was)\\s+)?(?:missing|absent|not found|not written|not run|required)\\b)`, "i");
+// A `## Checks run` or `## Pre-existing failures` line, undecorated: `<name> (<command>): <status>`.
+const CHECK_LINE_RE = /^(?:-\s+)?([^:(]*?)\s*(?:\([^)]*\)\s*)?:\s*(.*)$/;
+// The status of a check that did not fail; anything else on a `FAILED` round counts as a failure, so an unread wording never hides one.
+const CLEAN_STATUS_RE = /^(?:passed|skipped|ok|not run)\b(?!.*\b(?:[1-9]\d*\s+fail|failed\b|exit\s+[1-9]))/i;
+const BLAMED_FILE_RE = /[\w./-]*\w\.[a-z]\w*/gi;
 
 // The text as the gates read it: one kind of line break and no HTML comment, so a commented-out heading never counts.
 function normalize(text) {
@@ -68,6 +86,42 @@ function plainValue(text) {
 function bodyLines(text, heading) {
   const section = sectionOf(text, heading);
   return section === null ? null : unfencedLines(section).slice(1).map((line) => line.trimEnd());
+}
+
+// Whether a line is a markdown bullet, at any indent.
+function isBullet(line) {
+  return /^\s*[-*]\s+/.test(line);
+}
+
+// Whether a line continues the line above: under `fold` an indented non-bullet, under `nest` a bullet deeper than the bullet above.
+function continuesAbove(line, above, { fold, nest }) {
+  if (above === undefined) return false;
+  const indent = line.search(/\S/);
+  if (!isBullet(line)) return fold && indent > 0;
+  return nest && isBullet(above) && indent > above.search(/\S/);
+}
+
+// The non-blank lines of a section with each continuation joined to the top-level line above it.
+function foldedLines(lines, { fold = false, nest = false }) {
+  const folded = [];
+  for (const line of lines) {
+    if (continuesAbove(line, folded.at(-1), { fold, nest })) folded[folded.length - 1] += ` ${line.trim().replace(/^[-*]\s+/, "")}`;
+    else folded.push(line);
+  }
+  return folded;
+}
+
+// The items among a section's lines other than `None`: its bullets, or its lines when it has no bullet.
+function itemsOfLines(sectionLines, options = {}) {
+  const present = sectionLines.filter((line) => line.trim() !== "");
+  const lines = foldedLines(present, options).map((line) => line.trim());
+  const bullets = lines.filter(isBullet);
+  return (bullets.length > 0 ? bullets : lines).map((line) => line.replace(/^[-*]\s+/, "").trim()).filter((item) => !/^none\b/i.test(plainValue(item)));
+}
+
+// The items of a section other than `None`; none when the section is absent.
+function sectionItems(text, heading, options = {}) {
+  return itemsOfLines(bodyLines(text, heading) ?? [], options);
 }
 
 // The first item of a section (a bullet or a prose line, a `None` item skipped), or null when the section is absent or has none.
@@ -288,7 +342,42 @@ function confirmLine(ctx, question) {
   return `${CONFIRM_LINE} — ${evidenceLine(question)}`;
 }
 
-// The open items of the plan: its coverage, a confirmation section that asks nothing, and a Type mismatch with the Type the run keeps.
+// Whether the Brief of the triage numbers two or more stages, which bind the plan.
+function briefNumbersStages(triage) {
+  const field = briefStageLines(briefSection(triage) ?? "").join(" ");
+  return (field.match(BRIEF_STAGE_NUMBER_RE) ?? []).length >= 2;
+}
+
+// The open item of a plan split into stages with no reason from the closed list and no Brief that numbers them.
+function stagesOpen(ctx) {
+  const planned = bodyLines(ctx.plan, "## Implementation plan") ?? [];
+  const stages = new Set(planned.map((line) => PLAN_STAGE_RE.exec(line)?.[1]).filter(Boolean));
+  if (stages.size < 2 || unfencedLines(ctx.plan).some((line) => STAGE_REASON_RE.test(line)) || briefNumbersStages(ctx.triage)) return [];
+  return [`stages-unjustified — ${stages.size} stages, no reason line`];
+}
+
+// The opening words of an assumption, without its `[P1]` tag.
+function assumptionOpening(item) {
+  const words = item.replace(/^\[[^\]]*\]\s*/, "").split(/\s+/);
+  const opening = words.slice(0, ASSUMPTION_WORDS_MAX).join(" ");
+  return words.length > ASSUMPTION_WORDS_MAX ? `${opening}…` : opening;
+}
+
+// The items of `## Assumptions`: a bullet with what is folded or nested under it, and a table's rows without its header.
+function assumptionItems(plan) {
+  const lines = bodyLines(plan, "## Assumptions") ?? [];
+  const rows = tablesOf(lines).flatMap(({ rows: cells }) => cells.map((row) => `- ${row.join(" ")}`));
+  return itemsOfLines([...lines.filter((line) => !line.trim().startsWith("|")), ...rows], { fold: true, nest: true });
+}
+
+// One open item per assumption that neither cites a `path:line` nor is marked `(unverified)`.
+function assumptionsOpen(ctx) {
+  return assumptionItems(ctx.plan)
+    .filter((item) => !UNVERIFIED_RE.test(item) && !PATH_LINE_RE.test(item))
+    .map((item) => `assumption-without-evidence — ${evidenceLine(assumptionOpening(item))}`);
+}
+
+// The open items of the plan: its coverage, a confirmation section that asks nothing, a Type mismatch with the Type the run keeps, unjustified stages and assumptions with no evidence.
 function planOpen(ctx, question) {
   const mismatch = typeMismatchOf(ctx.plan);
   const kept = diagnosisFilled(ctx.triage) ? BUG : FEATURE;
@@ -296,6 +385,8 @@ function planOpen(ctx, question) {
     ...coverageOpen(ctx),
     ...(question === null && hasGateMarker(ctx.plan) ? ["## Requires user confirmation has no filled **Question:**"] : []),
     ...(mismatch === null ? [] : [`type mismatch — ${evidenceLine(mismatch)} — kept ${kept}`]),
+    ...stagesOpen(ctx),
+    ...assumptionsOpen(ctx),
   ];
 }
 
@@ -314,9 +405,7 @@ function planFacts(ctx) {
 
 // Every item of `## Invalidated assumptions` other than `None`.
 function invalidatedItems(text) {
-  const lines = (bodyLines(text, "## Invalidated assumptions") ?? []).map((line) => line.trim()).filter(Boolean);
-  const bullets = lines.filter((line) => /^[-*]\s+/.test(line));
-  return (bullets.length > 0 ? bullets : lines).map((line) => line.replace(/^[-*]\s+/, "").trim()).filter((item) => !/^none\b/i.test(plainValue(item)));
+  return sectionItems(text, "## Invalidated assumptions");
 }
 
 // Whether a field states something: filled, and other than `none`.
@@ -336,6 +425,81 @@ function qaOpenItems(text) {
 // The facts of the QA report: its open lines and its invalidated assumptions.
 function qaFacts(ctx) {
   return { gates: [], open: qaOpenItems(ctx.text), invalidated: invalidatedItems(ctx.text) };
+}
+
+// The stage a verification round states on its verdict line, `(stage N)`; null on a final round.
+function statedStage(text) {
+  const line = unfencedLines(text).find((candidate) => candidate.trimEnd().startsWith("## Verification"));
+  return STAGE_VERDICT_RE.exec(line ?? "")?.[1] ?? null;
+}
+
+// Whether the run has not reached Phase 5: no recorded `qa` phase and no check memo of the QA.
+function beforeQa(state) {
+  const phases = Array.isArray(state?.phases) ? state.phases : [];
+  return !phases.some((entry) => entry?.phase === "qa") && !Object.keys(state?.checks ?? {}).some((key) => key.startsWith("05"));
+}
+
+// The lower-case name and the status a check line states; null for a line of any other shape.
+function checkLineParts(line) {
+  const match = CHECK_LINE_RE.exec(plainValue(line));
+  return match === null || match[1] === "" ? null : { name: match[1].toLowerCase(), status: match[2].toLowerCase() };
+}
+
+// Whether a `## Checks run` line states anything but a clean status.
+function isFailedCheck(line) {
+  if (line.trim() === "") return false;
+  return !CLEAN_STATUS_RE.test(checkLineParts(line)?.status ?? "");
+}
+
+// Whether items of `## Pre-existing failures` open with the failed check's name and mention every file its line blames.
+function namedByPreExisting(line, preExisting) {
+  const failed = checkLineParts(line);
+  if (failed === null) return false;
+  const items = preExisting.map(checkLineParts).filter((item) => item?.name === failed.name);
+  return items.length > 0 && (failed.status.match(BLAMED_FILE_RE) ?? []).every((file) => items.some((item) => item.status.includes(file)));
+}
+
+// Whether a `FAILED` round has failures and each is excused: an item of the base names that failed check, or a stage round before the QA only demands the QA.
+function failuresExcused(text, { preExisting, qaAbsent }) {
+  const isQaDemand = (line) => qaAbsent && QA_DEMAND_RE.test(line);
+  const failures = sectionItems(text, "## Failures", { fold: true });
+  const failedChecks = (bodyLines(text, "## Checks run") ?? []).filter(isFailedCheck);
+  const held = [...failures.filter((item) => !isQaDemand(item)), ...failedChecks.filter((line) => !isQaDemand(line) && !namedByPreExisting(line, preExisting))];
+  return failures.length + failedChecks.length > 0 && held.length === 0;
+}
+
+// The verdict of a verification round: the stated one, unless `FAILED` with every failure excused, which reads `PASSED` on a stage round and `PASSED-STATIC` on a final one (Phase 7 still owed).
+function verificationVerdict(ctx, { stage, preExisting }) {
+  if (ctx.verdict !== "FAILED") return ctx.verdict;
+  const qaAbsent = stage !== null && beforeQa(ctx.state);
+  if (!failuresExcused(ctx.text, { preExisting, qaAbsent })) return ctx.verdict;
+  return stage === null ? "PASSED-STATIC" : "PASSED";
+}
+
+// The items of a verification round's `## Pre-existing failures`.
+function preExistingItems(text) {
+  return sectionItems(text, "## Pre-existing failures", { fold: true });
+}
+
+// One open item per failure the base shares.
+function preExistingOpen(items) {
+  return items.map((item) => `pre-existing-failure — ${evidenceLine(item)}`);
+}
+
+// The facts of a verification round: its verdict, the stage it checked and one open item per failure the base shares.
+function verificationFacts(ctx) {
+  const stage = statedStage(ctx.text);
+  const preExisting = preExistingItems(ctx.text);
+  return {
+    verdict: verificationVerdict(ctx, { stage, preExisting }),
+    stage,
+    open: preExistingOpen(preExisting),
+  };
+}
+
+// The facts a `MISSING:` answer still carries: the pre-existing failures a malformed verification names, which the report must not lose.
+function malformedFacts(ctx) {
+  return ctx.check === "06" ? { open: preExistingOpen(preExistingItems(ctx.text)) } : {};
 }
 
 // The rows of the runtime's acceptance table: scenario, result and evidence.
@@ -391,7 +555,7 @@ function runtimeFacts(ctx) {
   };
 }
 
-const PHASE_FACTS = { "01": triageFacts, "03": planFacts, "05": qaFacts, "07": runtimeFacts };
+const PHASE_FACTS = { "01": triageFacts, "03": planFacts, "05": qaFacts, "06": verificationFacts, "07": runtimeFacts };
 
 // The sections the verdict's next step reads that the artifact lacks or leaves without an item.
 function verdictSectionGaps(ctx) {
@@ -420,7 +584,7 @@ function missingParts(ctx) {
 function contractLines(first, facts) {
   return [
     first,
-    ...(facts.verdict ? [`VERDICT: ${facts.verdict}`] : []),
+    ...(facts.verdict ? [`VERDICT: ${facts.verdict}${facts.stage ? ` (stage ${facts.stage})` : ""}`] : []),
     ...(facts.gates ?? []).map(({ code, evidence }) => `GATE: ${code} — ${evidenceLine(evidence)}`),
     ...(facts.open ?? []).map((text) => `OPEN: ${flatLine(text)}`),
     ...(facts.typeMismatch ? [`TYPE-MISMATCH: ${facts.typeMismatch}`] : []),
@@ -598,9 +762,9 @@ export function evaluateCheck({ check, stage = null, texts = {}, state = null, g
   const ctx = { ...base, verdict: artifact.verdict ? readVerdict(text, artifact.verdict) : null };
   const common = { check: stage === null ? check : `${check}-${stage}`, type: ctx.type, evaluated: text };
   const defects = artifact.rounds ? [...new Set([...gaps, ...roundDefectParts(artifact.file, raw, round.numbers)])] : gaps;
-  if (defects.length > 0) return resultOf({ ...common, first: `MISSING: ${defects.join("; ")}` });
+  if (defects.length > 0) return resultOf({ ...common, first: `MISSING: ${defects.join("; ")}`, facts: malformedFacts(ctx) });
   const missing = missingParts(ctx);
-  if (missing.length > 0) return resultOf({ ...common, first: `MISSING: ${missing.join(", ")}` });
+  if (missing.length > 0) return resultOf({ ...common, first: `MISSING: ${missing.join(", ")}`, facts: malformedFacts(ctx) });
   const facts = stage !== null ? STAGE_FACTS[stage](ctx) : { verdict: ctx.verdict, ...(PHASE_FACTS[check]?.(ctx) ?? {}) };
   return resultOf({ ...common, first: "OK", facts });
 }

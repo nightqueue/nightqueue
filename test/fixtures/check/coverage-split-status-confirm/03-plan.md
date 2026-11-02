@@ -24,7 +24,7 @@
 - grep tool · today: unescaped · after: escaped · changed=yes · source=literal ticket ("escape the pattern")
 
 ## Assumptions
-- [P1] the grep path is the only shell call — invalidated if: another tool shells out.
+- [P1] the grep path is the only shell call (`src/queue/list.mjs:12`) — invalidated if: another tool shells out.
 
 ## Pre-mortem
 - [PM1] the escape breaks a literal pattern — mitigation: a test.

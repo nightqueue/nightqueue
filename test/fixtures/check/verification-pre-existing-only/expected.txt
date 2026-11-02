@@ -1,0 +1,4 @@
+OK
+VERDICT: PASSED-STATIC
+OPEN: pre-existing-failure — lint: 3 errors — base: 3 errors · diff: 3 errors
+recorded: phase_done verification PASSED-STATIC

@@ -119,7 +119,7 @@ function qaFacts(qa) {
   ];
 }
 
-// The last verification round: its verdict with what sustains it, the checks it ran, its failures and the diff-hygiene finding.
+// The last verification round: its verdict with what sustains it, the checks it ran, its failures, the ones the base shares and the diff-hygiene finding.
 function verificationFacts(verification) {
   const round = lastRound(verification);
   const verdict = unfencedLines(round).find((line) => line.startsWith("## Verification"));
@@ -131,6 +131,7 @@ function verificationFacts(verification) {
     ...labelled("Verification evidence", itemsOf(round, "## Verification"), EVIDENCE_MAX),
     ...labelled("Check run", checks.filter((line) => !isHygiene(line)), LIST_MAX),
     ...labelled("Remaining failure", itemsOf(round, "## Failures"), LIST_MAX),
+    ...labelled("Pre-existing failure", itemsOf(round, "## Pre-existing failures"), LIST_MAX),
     ...(hygiene ? [`Diff hygiene: ${hygiene}`] : []),
   ];
 }

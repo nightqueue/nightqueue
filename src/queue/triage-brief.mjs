@@ -8,6 +8,7 @@ import { wholeHeadingSectionOf } from "./stream.mjs";
 // The `## Brief` the triage writes: the section `run check 01` copies into `00-brief.md`, and the gates it must pass first.
 
 const BRIEF_HEADING = "## Brief";
+const STAGES_FIELD = "**Stages:**";
 // The fields a PROCEED triage must fill, in the order the gate names them.
 export const REQUIRED_FIELDS = ["Affected area", "Context", "Objective", "Expected outcome", "Commit type"];
 // The closed list of words that stand for "nothing" in a field, compared lower-cased.
@@ -121,6 +122,17 @@ export function briefCommitType(text) {
 export function briefSlug(text) {
   const value = briefFieldOf(briefSection(text), "Slug");
   return value === null || isUnfilled("Slug", value) ? null : plainValue(value);
+}
+
+// The lines of the Brief's `**Stages:**` field, trimmed, blank ones left out; none when it has no such field.
+export function briefStageLines(text) {
+  const lines = String(text ?? "").split("\n");
+  const start = lines.findIndex((line) => line.startsWith(STAGES_FIELD));
+  if (start < 0) return [];
+  const rest = lines.slice(start + 1);
+  const end = rest.findIndex((line) => line.trim() === "" || /^(\*\*|#)/.test(line));
+  const field = [lines[start].slice(STAGES_FIELD.length), ...(end < 0 ? rest : rest.slice(0, end))];
+  return field.map((line) => line.trim()).filter((line) => line !== "");
 }
 
 // The required fields a PROCEED Brief leaves absent or unfilled, in the gate's order.
