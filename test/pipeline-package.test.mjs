@@ -290,7 +290,7 @@ test("every retired tool answers the stale-contract line, `context_for_phase` na
     assert.equal(listed.includes(name), false, name);
     const answer = await client.callTool({ name, arguments: { phase: "triage" } });
     assert.equal(answer.isError, true, name);
-    assert.match(textOf(answer), /your client has the tool definitions of an older nightqueue \(contract 13, this server is 14\)/, name);
+    assert.match(textOf(answer), /your client has the tool definitions of an older nightqueue \(contract 14, this server is 15\)/, name);
   }
   assert.match(textOf(await client.callTool({ name: "context_for_phase", arguments: { target: "coder" } })), /use `context_for_agent` with `agent`/);
 });

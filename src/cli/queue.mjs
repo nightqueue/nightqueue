@@ -69,7 +69,7 @@ export const USAGE = {
   status: "nightqueue queue status [J-<id>|<id>|<PR URL>] [--limit <n>] [--json] [--follow [seconds]] [--until-idle] [--blocked]",
   run: "nightqueue queue run [--job <id> | --watch [seconds] [--from HH:MM] --until HH:MM] [--max <jobs>] [--stop] [--foreground] [--dry] [--json]",
   cancel: "nightqueue queue cancel <id> [--reason <text>] [--json]",
-  close: "nightqueue queue close <id> [--force] [--foreground] [--json] (a done job with a pull request, or one resolved without change; --force only with a pull request), nightqueue queue close <id> --steps origin,log [--again] [--json], or nightqueue queue close --merged [--json]",
+  close: "nightqueue queue close <id> [--force] [--allow-draft] [--allow-revert] [--foreground] [--json] (a done job with a pull request, or one resolved without change; --force only with a pull request), nightqueue queue close <id> --steps origin,log [--again] [--json], or nightqueue queue close --merged [--json]",
   retry: "nightqueue queue retry <id> [--note <text>] [--fresh] [--run] [--foreground]",
   repair: "nightqueue queue repair [<id>] [--from-disk] [--json]",
   pause: "nightqueue queue pause",
@@ -1156,7 +1156,16 @@ async function runCancel(argv, ctx) {
   if (worktree) ctx.out(worktreeLine(worktree));
 }
 
-const CLOSE_OPTIONS = { json: { type: "boolean" }, merged: { type: "boolean" }, force: { type: "boolean" }, foreground: { type: "boolean" }, steps: { type: "string" }, again: { type: "boolean" } };
+const CLOSE_OPTIONS = {
+  json: { type: "boolean" },
+  merged: { type: "boolean" },
+  force: { type: "boolean" },
+  foreground: { type: "boolean" },
+  steps: { type: "string" },
+  again: { type: "boolean" },
+  "allow-draft": { type: "boolean" },
+  "allow-revert": { type: "boolean" },
+};
 
 // One `closed job #N` line per closed job, each followed by the line of the worktree it released, when it had one.
 function closedJobLines(closed, worktrees = []) {
@@ -1234,6 +1243,18 @@ function closeOutcomeLine(id, { outcome, job }) {
   return closeStoppedLine(jobView(job)) ?? `⛔ close stopped at ${outcome.step}: ${outcome.reason} - run again with: nightqueue queue close ${jobRef(id)}`;
 }
 
+// The gates a close was told to let through: an open draft (--allow-draft) and a squash that reverts the base (--allow-revert).
+function closeAllowances(values) {
+  return { allowDraft: values["allow-draft"] === true, allowRevert: values["allow-revert"] === true };
+}
+
+// Refuses --allow-draft or --allow-revert with --steps or --merged, which never merge an open pull request.
+function refuseAllowancesOutsideMerge(values) {
+  const { allowDraft, allowRevert } = closeAllowances(values);
+  if (!allowDraft && !allowRevert) return;
+  if (values.steps !== undefined || values.merged === true) throw new UserError(`--allow-draft and --allow-revert cannot be combined with --steps or --merged; usage: ${USAGE.close}`);
+}
+
 // Runs the close of a job in this process, printing each settled step, and answers its outcome with the job as it ended.
 async function closeInThisProcess(id, values, ctx) {
   const say = values.json === true ? ctx.err : ctx.out;
@@ -1241,6 +1262,7 @@ async function closeInThisProcess(id, values, ctx) {
     store: openStore(ctx.env),
     id,
     force: values.force === true,
+    ...closeAllowances(values),
     env: ctx.env,
     deps: ctx.closeDeps ?? null,
     killImpl: ctx.killImpl,
@@ -1286,6 +1308,7 @@ async function runCloseDetached(id, values, ctx) {
     store: openStore(ctx.env),
     id,
     force: values.force === true,
+    ...closeAllowances(values),
     env: ctx.env,
     spawnImpl: ctx.spawnImpl,
     killImpl: ctx.killImpl,
@@ -1333,6 +1356,7 @@ async function runCloseSteps(positionals, values, ctx) {
 async function runClose(argv, ctx) {
   const { values, positionals } = parseCommand(argv, CLOSE_OPTIONS);
   if (values.again === true && values.steps === undefined) throw new UserError(`\`--again\` is valid only with --steps; usage: ${USAGE.close}`);
+  refuseAllowancesOutsideMerge(values);
   if (values.steps !== undefined) return await runCloseSteps(positionals, values, ctx);
   if (values.merged === true) {
     checkArgs(positionals, { max: 0, usage: USAGE.close });

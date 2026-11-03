@@ -29,6 +29,8 @@ nightqueue queue cancel 7 --reason "not needed"                # cancel a pendin
 nightqueue queue retry 7 --note "rename the column" [--fresh]  # answer the gate and send the job back to the queue (a preflight gate needs no --note)
 nightqueue queue repair 7 [--json]                             # re-classify a gated or failed job from its own log
 nightqueue queue close 7 [--force] [--foreground] [--json]      # merge a done job's pull request and close the job, detached
+nightqueue queue close 7 --allow-draft                          # mark an open draft ready (gh pr ready) and close it
+nightqueue queue close 7 --allow-revert                         # merge a squash that puts back older versions of base files
 nightqueue queue close 7 --steps origin,log [--json]             # re-run only the post-close steps of a closed job (ota, origin, log)
 nightqueue queue close --merged [--json]                         # close every done job whose pull request is already merged
 nightqueue queue pause | nightqueue queue resume                    # stop claiming new jobs, or claim again
@@ -1300,7 +1302,14 @@ agent, never a second job, never queue work:
    recorded no branch is closed with `branch not recorded; attribution not checked` in the
    step note. A pull request closed without being merged cancels the job (see *A closed pull
    request cancels* below); one that is already merged is recorded as merged by the operator
-   and nothing else is checked. Otherwise the checks must be
+   and nothing else is checked. An open draft pull request stops here with `draft` -
+   ``PR #<n> is a draft: review the remaining failures, then `gh pr ready <n>` and close again`` -
+   before any check is read, re-run, rebased or merged (a draft is how `run publish --draft`
+   delivers a run that hit its fix limit). `--allow-draft` (`allow_draft: true` over MCP) runs
+   `gh pr ready <n>` once instead, records `markedReady` in the close data and goes on; the
+   merge step checks the draft state again on its last read, so a pull request drafted after a
+   done preflight stops there with `draft` too. Nothing in a close ever turns a pull request
+   back into a draft. Otherwise the checks must be
    green - a red check stops the close naming it (`checks-red`), a check GitHub cancelled before
    it ran (`cancelled`, `timed_out`, `startup_failure`, `stale`) has its failed jobs re-run once per
    head and is then waited on (`checks-aborted` when it is aborted again), and a pending one is waited
@@ -1514,6 +1523,22 @@ step stops with `base-moved` (main keeps moving), merging nothing, and `queue cl
 resumes from the conflict step. A merge that leaves no merge commit for any other reason is
 still `merge-without-sha`.
 
+**The revert guard.** Right before the merge call, on the exact head it pins, the step runs
+`git fetch origin <base> <head branch>` and checks what squashing that head into `origin/<base>`
+would put back. A path counts when it differs between the base tip and the head, the head
+changed it since its merge base (a path the head never touched keeps the base's version in the
+squash), and the head's blob equals the path's blob before a commit of the base's first-parent
+history (`git log --first-parent -m`, so a merge commit on the base counts as one change and its
+side branch's states never do). A path the head deletes counts only when the commit that added
+it is not on the head's own line before it (its first parent): deleting a file the branch had is
+a plain change, while a merge that kept the branch's old side and dropped a file the base added
+is a revert. Any such path stops the step with `reverts-base`, merging nothing, and a note of
+up to 10 lines `<path> back to <sha7> (undoes <sha7> <subject>)`; the close data keeps
+`revertedPaths`. A guard git cannot run stops with `revert-check-failed`, and so does a failed
+fetch that leaves the guard nothing to flag, since `origin/<base>` may then be stale. `--allow-revert`
+(`allow_revert: true` over MCP) skips the guard for a pull request whose purpose is a revert,
+and the merge note and `allowedRevert` say so.
+
 Any push by the close reopens preflight, which runs again in the same run on the pushed head
 - the checks of that head are waited for, even when none is registered yet - and its note ends
 `head <sha7> pushed by this close`. GitHub can answer the old head for a few seconds after a
@@ -1559,8 +1584,11 @@ it closed, a stopped close replaces the status with `close failed` or `close sta
 checklist under the status line; `--json` and the MCP `queue_status` carry `close_status`,
 `close_worker`, `close_lease_until` and `close`. A close that stops prints, in the listing, the
 detail and the queue's hint lines,
-`⛔ close stopped at <step>: <reason> - run again with: nightqueue queue close J-<id>`, and a close
-in flight adds `close in flight: J-<id> at <step> (pid <pid>) - follow with: nightqueue queue
+`⛔ close stopped at <step>: <reason> - run again with: nightqueue queue close J-<id>` (a `draft`
+says `mark it ready with gh pr ready, then run again with: nightqueue queue close J-<id> (or
+--allow-draft)`, a `reverts-base` says `review the reverted paths; for an intended revert run
+again with: nightqueue queue close J-<id> --allow-revert`; both are failed closes, never
+stalled), and a close in flight adds `close in flight: J-<id> at <step> (pid <pid>) - follow with: nightqueue queue
 status J-<id>`. `nightqueue doctor` has a `closes` row that warns on a failed close or one whose
 lease expired.
 
@@ -1606,7 +1634,8 @@ conflict step rebases and pushes without running the project's `npm test` (`suit
 suite are skipped; conflicts, attribution and status still stop the close`, and the checklist
 records `forced: true` for good. It never runs the merger, never opens another status, never lifts
 `pr-not-the-job-branch`, a real conflict, leftover conflict markers, uncommitted files the pull
-would touch, a missing checkout or a closed pull request.
+would touch, a missing checkout, a closed pull request, a `draft` or a `reverts-base` (those
+two have their own `--allow-draft` and `--allow-revert`).
 
 **What it closes.** Only a `done` job of a registered project whose checkout exists, with a
 GitHub pull request URL or resolved without change (no pull request). Everything else is

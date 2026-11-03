@@ -73,10 +73,19 @@ export function statusLabel(job, nowMs = Date.now()) {
   return CLOSE_STATE_LABELS[closeState(job, nowMs)] ?? job?.status ?? "";
 }
 
+// How to resume a close that stopped for a reason: a draft or a reverting squash name their own way out, any other reason runs again.
+export function closeResumeHint(id, reason) {
+  const command = `nightqueue queue close ${jobRef(id)}`;
+  if (reason === "draft") return `mark it ready with gh pr ready, then run again with: ${command} (or --allow-draft)`;
+  if (reason === "reverts-base") return `review the reverted paths; for an intended revert run again with: ${command} --allow-revert`;
+  return `run again with: ${command}`;
+}
+
 // The line that tells the operator a close stopped and how to resume it, or null when the job's close did not fail.
 export function closeStoppedLine(job) {
   if (job?.close_status !== "failed") return null;
-  return `⛔ close stopped at ${currentCloseStep(job.close)}: ${failedReason(job.close)} - run again with: nightqueue queue close ${jobRef(job.id)}`;
+  const reason = failedReason(job.close);
+  return `⛔ close stopped at ${currentCloseStep(job.close)}: ${reason} - ${closeResumeHint(job.id, reason)}`;
 }
 
 // The `closing: <step>` cell, with the running step's note after an em dash when it has one.
@@ -165,7 +174,7 @@ export function closeLines(summary) {
     const owner = pid === null ? "" : ` (pid ${pid})`;
     return `close in flight: ${jobRef(id)} at ${step}${owner} - follow with: nightqueue queue status ${jobRef(id)}`;
   });
-  const failed = (summary?.failed ?? []).map(({ id, step, reason }) => `⛔ close stopped at ${step}: ${reason} - run again with: nightqueue queue close ${jobRef(id)}`);
+  const failed = (summary?.failed ?? []).map(({ id, step, reason }) => `⛔ close stopped at ${step}: ${reason} - ${closeResumeHint(id, reason)}`);
   const stalled = (summary?.stalled ?? []).map(
     ({ id, leaseUntil }) => `close of ${jobRef(id)} stalled: its lease expired at ${leaseUntil} - run again with: nightqueue queue close ${jobRef(id)}`,
   );
