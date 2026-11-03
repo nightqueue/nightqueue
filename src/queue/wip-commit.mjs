@@ -1,5 +1,5 @@
 import { UserError } from "../config/errors.mjs";
-import { runGit, runGitAsync } from "../host/git.mjs";
+import { hooklessCommitArgs, runGit, runGitAsync } from "../host/git.mjs";
 import { jobRef } from "../memory/refs.mjs";
 import { sameRefName } from "./branch-name.mjs";
 import { neverCommittedReason } from "./never-committed.mjs";
@@ -194,8 +194,7 @@ function* undoFailedCommit(head) {
 
 // Makes (or amends) the wip commit with what is staged, every repository hook and signing skipped, never pushed, and anchors its ref.
 function* writeWipCommit({ message, amend, head, ref }) {
-  const args = ["-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null", "commit", "--no-verify", "-q", ...(amend ? ["--amend"] : []), "-m", message];
-  const committed = yield args;
+  const committed = yield hooklessCommitArgs({ message, amend });
   if (!committed?.ok) return { error: `${gitFailure(committed, "git commit failed")}${yield* undoFailedCommit(head)}` };
   const commit = yield* gitText(["rev-parse", "HEAD"]);
   if (!commit) return { error: "the wip commit was made but HEAD could not be read" };

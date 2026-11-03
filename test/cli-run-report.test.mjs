@@ -7,6 +7,7 @@ import { reportRows } from "../src/cli/run-report.mjs";
 import { jobLogPath, logsDir, pendingWritesPath, runDir } from "../src/config/paths.mjs";
 import { openDb } from "../src/memory/db.mjs";
 import { addJob } from "../src/memory/jobs.mjs";
+import { pipelineManifest, reportLayoutOf } from "../src/queue/pipeline-package.mjs";
 import { questionDigest } from "../src/queue/question-text.mjs";
 import { readRunState, saveRunState } from "../src/queue/resume.mjs";
 import { recordOutcome, recordPhaseDone, recordPrUrl, recordRunFields, recordTermination } from "../src/queue/run-state.mjs";
@@ -233,23 +234,44 @@ test("the reason and the note of an entry share its Note cell", async (t) => {
   assert.ok(lines.includes("| 5 QA | 🛡️ QA-Guardian | ✅ APPROVED | GATE: coverage-x — revised | - |"), lines.join("\n"));
 });
 
-test("the Time of a row is the measurement of its own launch: the k-th measured lane of a phase meets its k-th recorded row", () => {
+test("the Time of a row is the duration its own entry recorded: the k-th row of a phase reads the k-th entry", () => {
   const state = {
     phases: [
-      { phase: "implementation", verdict: "ok" },
-      { phase: "verification", verdict: "FAILED" },
-      { phase: "implementation", verdict: "ok" },
+      { phase: "implementation", verdict: "ok", durationS: 41 },
+      { phase: "verification", verdict: "FAILED", durationS: null },
+      { phase: "implementation", verdict: "ok", durationS: 30 },
     ],
   };
-  const measured = [
-    { phase: "implementation", durationS: 41 },
-    { phase: "verification", durationS: null },
-    { phase: "implementation", durationS: 30 },
-  ];
 
-  const rows = reportRows(state, measured).filter((row) => row.launch > 0);
+  const rows = reportRows(state, { layout: reportLayoutOf(pipelineManifest()) }).filter((row) => row.launch > 0);
 
   assert.deepEqual(rows.map((row) => [row.phase, row.launch, row.durationS]), [["implementation", 1, 41], ["verification", 1, null], ["implementation", 2, 30]]);
+});
+
+// Gives each recorded entry the model and the duration it measured of itself, as the phase writers stamp them.
+function seedMeasures(target, measures) {
+  const state = readRunState(target);
+  saveRunState({ ...target, state: { ...state, phases: state.phases.map((entry, index) => ({ ...entry, ...measures[index] })) } });
+}
+
+test("the Time column prints the duration each entry recorded, and the telemetry stores the entries' model and duration", async (t) => {
+  const { env, id, run: target } = makeRun(t, "report-entry-durations");
+  startAttempt(env, id);
+  recordPhases(target, [
+    ["triage", "PROCEED", "confirmed"],
+    ["implementation", "ok", "done"],
+  ]);
+  seedMeasures(target, [
+    { model: "sonnet", durationS: 61 },
+    { model: "opus", durationS: 420 },
+  ]);
+
+  const lines = await report(env, id);
+
+  assert.equal(lines[4], "| 1 Triage | 🔍 Triager | ✅ PROCEED | confirmed | 1m01s |");
+  assert.equal(lines[7], "| 4 Implementation | ⚙️ Coder | ✅ OK | done | 7m00s |");
+  const stored = openDb(env).prepare("SELECT phase, model, duration_s FROM pipeline_phases ORDER BY seq").all();
+  assert.deepEqual(stored.map((row) => [row.phase, row.model, row.duration_s]), [["triage", "sonnet", 61], ["implementation", "opus", 420]]);
 });
 
 test("a malformed entry in state.json is skipped, never a crash: the launches count only the phases named", async (t) => {

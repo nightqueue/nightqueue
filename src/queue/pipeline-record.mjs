@@ -1,13 +1,12 @@
-import { StoreUnavailableError } from "../config/errors.mjs";
+import { StoreUnavailableError, UserError } from "../config/errors.mjs";
 import { callerJobId } from "../config/job-home.mjs";
 import { openStore } from "../store/open.mjs";
 import { appendPendingWrite, PENDING_KEYS } from "./pending-writes.mjs";
+import { deliveryPhaseOf, gateStopOf, stateManifest } from "./pipeline-package.mjs";
 import { isStateObject } from "./resume.mjs";
 
 export const OK_VERDICTS = new Set(["PROCEED", "APPROVED", "PASSED", "CONFIRMED", "DONE", "OK"]);
 export const FAILED_VERDICT = /^(NEEDS|FAILED|NOT-|NOT |SYMPTOM-PERSISTS)/;
-
-const GATE_OF = Object.freeze({ triage: "triage", architecture: "architect", qa: "qa", verification: "verification", runtime: "runtime" });
 
 // The verdict word a phase recorded, without a heading prefix such as `## Verification:`.
 export function verdictWord(verdict) {
@@ -34,7 +33,12 @@ function textOrNull(value) {
   return text || null;
 }
 
-// The `pipeline_phases` rows of a run, one per phase its state.json recorded: a failing verdict is `failed` and a phase seen before is a re-run.
+// The duration a phase entry recorded of itself, in whole seconds, or null when it recorded none.
+export function entryDurationS(entry) {
+  return Number.isInteger(entry?.durationS) && entry.durationS >= 0 ? entry.durationS : null;
+}
+
+// The `pipeline_phases` rows of a run, one per phase its state.json recorded with the model and duration of its entry: a failing verdict is `failed` and a phase seen before is a re-run.
 export function statePipelinePhases(state) {
   const seen = new Set();
   return stateEntries(state)
@@ -43,15 +47,27 @@ export function statePipelinePhases(state) {
       const phase = entry.phase.trim();
       const retry = seen.has(phase);
       seen.add(phase);
-      return { phase, status: verdictIcon(entry.verdict) === "❌" ? "failed" : "ok", retry, note: textOrNull(entry.note), reason: textOrNull(entry.reason) };
+      const status = verdictIcon(entry.verdict) === "❌" ? "failed" : "ok";
+      return { phase, model: textOrNull(entry.model), status, retry, durationS: entryDurationS(entry), note: textOrNull(entry.note), reason: textOrNull(entry.reason) };
     });
 }
 
+// The manifest of the pipeline a run's state pinned, or null when that package cannot be read, so a derivation never fails on it.
+function readableStateManifest(state) {
+  try {
+    return stateManifest(state);
+  } catch (error) {
+    if (error instanceof UserError) return null;
+    throw error;
+  }
+}
+
 // The outcome of a run, derived from what its state.json recorded: a pull request, a commit, or neither.
-export function derivedOutcome(state) {
+export function derivedOutcome(state, manifest = readableStateManifest(state)) {
   const outcome = isStateObject(state?.outcome) ? state.outcome : {};
   if (outcome.status === "done" && typeof outcome.prUrl === "string" && outcome.prUrl.trim() !== "") return "pr_opened";
-  if (outcome.status === "done" || stateEntries(state).some((entry) => entry.phase === "commit")) return "local_commit";
+  const delivery = deliveryPhaseOf(manifest);
+  if (outcome.status === "done" || (delivery !== null && stateEntries(state).some((entry) => entry.phase === delivery))) return "local_commit";
   return "no_commit";
 }
 
@@ -62,14 +78,14 @@ function noChangeRun(state) {
 }
 
 // The gate a run without a commit stopped at: the user's pause, the terminated phase, else the last failing phase; null when none applies.
-export function derivedGateStop(state, outcome) {
+export function derivedGateStop(state, outcome, manifest = readableStateManifest(state)) {
   if (outcome !== "no_commit") return null;
   if (noChangeRun(state)) return null;
   if (isStateObject(state?.outcome) && state.outcome.status === "gate") return "user";
-  const terminated = isStateObject(state?.termination) ? GATE_OF[state.termination.phase] : undefined;
+  const terminated = isStateObject(state?.termination) ? gateStopOf(manifest, state.termination.phase) : null;
   if (terminated) return terminated;
   const failed = stateEntries(state).filter((entry) => verdictIcon(entry.verdict) === "❌").at(-1);
-  return GATE_OF[failed?.phase] ?? null;
+  return gateStopOf(manifest, failed?.phase);
 }
 
 // Queues a pipeline run the unavailable database refused into the run's pending-writes file, fully resolved, and answers ok with the warning;

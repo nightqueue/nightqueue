@@ -58,6 +58,25 @@ export function modelFor(agent, projectAgents = null) {
   return MODEL_NAMES.includes(override) ? override : AGENT_MODELS[agent];
 }
 
+// The agent a phase of a manifest runs on: its track slot's model agent, else the first agent it declares, else null.
+function phaseAgentOf(manifest, phaseId) {
+  const slot = (Array.isArray(manifest?.track) ? manifest.track : []).find((candidate) => candidate?.phase === phaseId);
+  if (typeof slot?.modelAgent === "string") return slot.modelAgent;
+  const phase = (Array.isArray(manifest?.phases) ? manifest.phases : []).find((candidate) => candidate?.id === phaseId);
+  const first = Array.isArray(phase?.agents) ? phase.agents[0] : null;
+  return typeof first === "string" ? first : null;
+}
+
+// The model a phase of a manifest ran on, the project's valid override applied; null for a phase with no agent or an agent with no model, never a throw.
+export function phaseModelOf(manifest, phaseId, projectAgents = null) {
+  const agent = phaseAgentOf(manifest, phaseId);
+  if (agent === null) return null;
+  const override = projectAgents && Object.hasOwn(projectAgents, agent) ? projectAgents[agent]?.model : null;
+  if (MODEL_NAMES.includes(override)) return override;
+  const models = manifest?.models ?? {};
+  return Object.hasOwn(models, agent) && typeof models[agent] === "string" ? models[agent] : null;
+}
+
 // The model of every agent, the project's overrides applied.
 export function agentModels(projectAgents = null) {
   return Object.fromEntries(Object.keys(AGENT_MODELS).map((agent) => [agent, modelFor(agent, projectAgents)]));

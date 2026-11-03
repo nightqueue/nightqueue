@@ -55,20 +55,20 @@ test("the recorded phases render in seq order with their models, statuses and re
   assert.deepEqual(openItems, []);
 });
 
-test("a row with no model takes the lane model the runtime measured in the job log, paired by phase in order", async (t) => {
-  const { env, id, run } = makeJobRun(t, "timeline-measured");
+test("each row shows the model its entry recorded, a row with none shows a dash, and the job log's lanes are never read", async (t) => {
+  const { env, id, run } = makeJobRun(t, "timeline-recorded-model");
   logRun(env, run.projectId, [
-    { phase: "verification", status: "failed" },
+    { phase: "verification", model: "haiku", status: "failed" },
     { phase: "verification", status: "ok", retry: true, reason: "fix loop 1: lint" },
   ]);
   mkdirSync(logsDir(env), { recursive: true });
   const lanes = [
-    agentToolUseEvent({ id: "toolu_v1", subagentType: "nightqueue:verifier", model: "haiku" }),
+    agentToolUseEvent({ id: "toolu_v1", subagentType: "nightqueue:verifier", model: "sonnet" }),
     agentToolUseEvent({ id: "toolu_v2", subagentType: "nightqueue:verifier", model: "opus" }),
   ];
   writeFileSync(jobLogPath(id, env), [attemptMarker(1), toNdjson(lanes)].join("\n"));
   const { text } = await timeline({ run, env });
-  assert.equal(text, ["1. verification · haiku · failed · first run", "2. verification · opus · ok · fix loop 1: lint"].join("\n"));
+  assert.equal(text, ["1. verification · haiku · failed · first run", "2. verification · - · ok · fix loop 1: lint"].join("\n"));
 });
 
 test("a run older than the attempt is ignored and state.json speaks, with an open item", async (t) => {

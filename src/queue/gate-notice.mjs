@@ -24,7 +24,7 @@ function sentText(value) {
 // Reads one artifact of the run directory, refusing a path or a file that is not there.
 function readRunArtifact(runDir, file) {
   if (!ARTIFACT_FILE_RE.test(file)) {
-    throw new UserError(`\`from_artifact.file\` must be the bare name of a run artifact (e.g. \`03-plan.md\`), not \`${file}\`: nothing was recorded`);
+    throw new UserError(`\`from_artifact.file\` must be the bare name of a run artifact (e.g. \`${pipelineManifest().gateArtifact}\`), not \`${file}\`: nothing was recorded`);
   }
   try {
     const text = readFileSync(join(runDir, file), "utf8");

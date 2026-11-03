@@ -251,20 +251,25 @@ test("the runtime records in the state of the run the pull request the host publ
   assert.equal(state.terminal.prUrl, PR_URL, "the witness lost the pull request the same write recorded");
 });
 
-test("the durations and the models of the telemetry come from the stream, and the agent's survive only where the runtime measured none", async (t) => {
+test("the phase durations and models of the telemetry come from the recorded entries, never the stream's lanes, and the stored ones survive where an entry recorded none", async (t) => {
   const at = (seconds) => new Date(Date.now() + seconds * 1000).toISOString();
   const stream = toNdjson([
     systemInitEvent(),
     assistantEvent("## Brief\nTier: simple\nTier raised: simple -> complex: a stack trace in the claim path", { timestamp: at(1) }),
     slugEvent(SLUG),
-    agentToolUseEvent({ id: "toolu_t", subagentType: "nightqueue:triager", model: "haiku", timestamp: at(2) }),
-    taskNotificationEvent({ toolUseId: "toolu_t", durationMs: 61000 }),
-    agentToolUseEvent({ id: "toolu_c", subagentType: "nightqueue:coder", model: "opus", timestamp: at(63) }),
-    taskNotificationEvent({ toolUseId: "toolu_c", durationMs: 420000 }),
+    agentToolUseEvent({ id: "toolu_t", subagentType: "nightqueue:triager", model: "sonnet", timestamp: at(2) }),
+    taskNotificationEvent({ toolUseId: "toolu_t", durationMs: 5000 }),
+    agentToolUseEvent({ id: "toolu_c", subagentType: "nightqueue:coder", model: "sonnet", timestamp: at(63) }),
+    taskNotificationEvent({ toolUseId: "toolu_c", durationMs: 7000 }),
     assistantEvent(noticeText(), { timestamp: at(65) }),
     resultEvent({ text: `Done. Pull request: ${PR_URL}` }),
   ]);
-  const { env } = makeRunnerHome(t, "runner-telemetry", [{ stdout: stream, runState: recordedDone(), exitCode: 0 }]);
+  const phases = [
+    { phase: "triage", verdict: "PROCEED", model: "haiku", durationS: 61 },
+    { phase: "implementation", model: "opus", durationS: 420 },
+    { phase: "commit", verdict: "PR opened" },
+  ];
+  const { env } = makeRunnerHome(t, "runner-telemetry", [{ stdout: stream, runState: { ...recordedDone(), phases }, exitCode: 0 }]);
   const id = enqueue(env);
   const logged = logPipelineRun(
     {

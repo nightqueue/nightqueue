@@ -75,9 +75,16 @@ What a runtime has to provide, and what it can rely on:
     is `{truncated}`, the start of its JSON; an attempt keeps at most five entries, and
     `notKept` on its last one counts the late writes past them. It is never consumed, and never
     read but to name the attempts in the notice.
-  - `phases[{phase, at, artifact?, verdict?, note?, reason?, by?, claim?}]`: `nightqueue run check` on
-    a complete phase and `run publish`/`run pr` for `commit` (both `by: "runtime"`); append-only, so a phase recorded twice never erases the first record. The
+  - `phases[{phase, at, artifact?, verdict?, note?, reason?, by?, claim?, attempt?, durationS?, model?}]`: `nightqueue run check` on
+    a complete phase and `run publish`/`run pr` for the phase the manifest marks `delivers` (both `by: "runtime"`); append-only, so a phase recorded twice never erases the first record. The
     one removal is the runtime's own `qa` `SKIPPED`, dropped when a `lite` or `full` triage replaces it.
+    Both writers stamp the entry's own measures inside the run lock: `attempt` is the claim's attempt;
+    `durationS` is the whole seconds since the last entry of the same attempt (of any attempt with no
+    claim), the first entry of an attempt measuring from the job's `attempt_started_at`, and left out
+    when neither exists; `model` is the model of the phase's track `modelAgent`, else its first
+    `agents` entry, with the project's override, and is left out when there is none (the delivery
+    entry). `run report`, `run log`, the reflector timeline and the runner's telemetry read these
+    fields and never the job log's lanes; an older entry without them reads as `-` and NULL.
   - `checks{<NN>: {line, ok, completed, digest, at}, lastFailure?{check, line, at}}`:
     `nightqueue run check` alone, the memo of the last check of each artifact (its first
     notable line and the sha256 of the text it read); it supplies the reason of a re-run and
@@ -101,8 +108,8 @@ What a runtime has to provide, and what it can rely on:
     `phases` and is never read by resume, routing, the run report or the run context;
     a phase that still runs shows as run. `pipeline_phases.status` is post-run
     telemetry only: it is written by `nightqueue run report` (or an older plugin's
-    `pipeline_log`) from `state.json` after the run and is never a
-    source of the live track.
+    `pipeline_log`) from `state.json` after the run, one row per `phases[]` entry with that
+    entry's `model` and `durationS`, and is never a source of the live track.
   - `outcome{status, at, notice?, prUrl?, files?, draft?, draftFailures?, staysDraft?}`: `run_outcome` (`status`, and `notice` or, for a
     gate, the notice it composes from `question`/`from_artifact`),
     `nightqueue run pr` (`status: "done"`) and the runner, which writes `prUrl` at
@@ -858,12 +865,38 @@ A pipeline is a package the runtime loads by name: `plugin/skills/<name>/pipelin
 npm package's own plugin. `resolve` is the only one. Its `manifest.json` declares `name`, `version` (equal
 to the plugin's, and pinned on the run as `state.json.pipeline`), the ordered `phases` (`id`, null on the
 Brief's `00`; `check`; `artifact`; `sections`; the `verdicts` it may record; the `agents` that serve it; and
-`rounds`, `appendable`, `derivesFileList` and `stages` where they apply), `models`, `targets` (the launches
-a `next` may name), `recordable`, `track`,
-`constants`, `renumbered`, `gateArtifact` and `fileListFallback`. Its `check.mjs` has one export, `check`; the
+`rounds`, `appendable`, `derivesFileList`, `stages`, `gateStop`, `delivers` and `precedesDelivery` where
+they apply), `models`, `targets` (the launches a `next` may name), `recordable`, `track`,
+`constants`, `renumbered`, `gateArtifact`, `fileListFallback`, `gateStops` and `report`. Its `check.mjs` has one export, `check`; the
 other modules are its own. It imports from `src/` only `config/errors`, `config/store`, `host/paths`,
-`memory/runs`, `queue/branch-name`, `queue/file-list`, `queue/resume`, `queue/rounds`, `queue/question-text`
-and `queue/stream`. What names nothing of a pipeline stays in the runtime: `src/queue/rounds.mjs` and
+`memory/runs`, `queue/branch-name`, `queue/file-list`, `queue/orchestrator-scope`, `queue/pipeline-record`,
+`queue/resume`, `queue/rounds`, `queue/question-text` and `queue/stream`.
+
+The optional keys the runtime reads in place of a phase name, each validated at load with one defect line:
+
+- `gateStops` (a list of strings): the gate stops telemetry accepts, in order; `pipeline_runs.gate_stop`
+  takes them plus `user`. A phase's `gateStop` must be one of them: it is the stop a run terminated at,
+  or last failing at, that phase records.
+- `delivers` (a boolean, on at most one phase): the phase `run publish` records once the pull request is
+  open, and whose entry makes the outcome `local_commit`. `narrate` puts `run publish` and `run report` on
+  its track slot.
+- `precedesDelivery` (a boolean): a phase whose entry tells `run start` the delivery drafts of this run
+  may already exist, so it keeps them.
+- `track[].lane` and `track[].promptMode` (strings): a lane named `lane` whose prompt carries the line
+  `Mode: <promptMode>` is that slot's, not its own agent's.
+- `report.rows` (a list of `{phase, step, agent}`, `phase` a declared id or null): the rows of the
+  `run report` table, in order. A null `phase` is the report's own row (⏳ `this report`). With no
+  `report`, the table has one row per phase id, named by it.
+
+`report.mjs`, optional, is loaded on every `run report` and must have no side effect at import. Every export
+is optional:
+
+| export | what the runtime does with it |
+| --- | --- |
+| `rowOf({ phase, entry, state, delivery, note })` | answers `{icon, word, note}` for a row, or null for the runtime's default (the verdict's icon and word, else ⚠️ `not recorded`) |
+| `openItems({ read, state })` | the open-item lines, after the runtime's own failures and draft lines |
+| `FACT_FILES` | the artifacts the facts read |
+| `facts({ texts, state, root, evidence, worktree })` | the ordered facts, each a string or `{ text, max }`; the runtime clips each to one line and adds the evidence listing | What names nothing of a pipeline stays in the runtime: `src/queue/rounds.mjs` and
 `src/queue/question-text.mjs`, which `run append`, the gate notice and `run publish` read too.
 
 `nightqueue run check` resolves the name from the caller's job row (`jobs.pipeline`), else `state.json`'s
@@ -915,8 +948,9 @@ span that covers the read, `check` and the writes; everything that takes the loc
 check 04` never overwrites `04-implementation.md`: the list it derives goes to `04-files.generated.md`, and
 `run publish`, the report facts and the studio read that file when the artifact lists no file.
 
-`run report` and its facts still read the package by a static path (`pipeline/reader.mjs`), a debt the
-telemetry and report job takes over.
+`run report` and its facts load the package of the pipeline the state pinned (`resolve` when it pinned
+none): its manifest's `report.rows` and its `report.mjs`. The table frame, the Time cells, the first
+failing gate, the outcome and draft lines, the total and the fact clipping stay the runtime's own.
 
 ### Agent models and pipeline constants
 

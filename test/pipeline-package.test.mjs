@@ -4,7 +4,7 @@ import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, 
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { reportFacts } from "../src/cli/report-facts.mjs";
@@ -13,7 +13,9 @@ import { runDir } from "../src/config/paths.mjs";
 import { openDb } from "../src/memory/db.mjs";
 import { addJob } from "../src/memory/jobs.mjs";
 import { refuseInvalidAnswer } from "../src/queue/pipeline-answer.mjs";
-import { loadPipeline, phaseIdsOf, phaseNamesOf, pipelineManifest } from "../src/queue/pipeline-package.mjs";
+import { deliveryPhaseOf, gateStopOf, gateStopsOf, loadPipeline, loadReport, phaseIdsOf, phaseNamesOf, phasesBeforeDeliveryOf, pipelineManifest, reportLayoutOf } from "../src/queue/pipeline-package.mjs";
+import { derivedGateStop, derivedOutcome } from "../src/queue/pipeline-record.mjs";
+import { PIPELINE_GATE_STOPS } from "../src/memory/runs.mjs";
 import { AGENT_MODELS, TRACK_SLOTS } from "../src/queue/routing.mjs";
 import { readRunState } from "../src/queue/resume.mjs";
 import { recordPhaseDone, recordRunFields, recordRuntimeField, terminationRefusal } from "../src/queue/run-state.mjs";
@@ -25,7 +27,7 @@ const CLI = join(ROOT, "bin", "nightqueue.mjs");
 const PACKAGE_DIR = join(ROOT, "plugin", "skills", "resolve", "pipeline");
 const SLUG = "package-run";
 const ACCEPTANCE_RE = /"(triage|explore|architecture|implementation|qa|verification|runtime|commit)"|0[1-7]-[a-z-]+\.md/;
-const IMPORT_ALLOW_LIST = ["config/errors", "config/store", "host/paths", "memory/runs", "queue/branch-name", "queue/file-list", "queue/resume", "queue/rounds", "queue/question-text", "queue/stream"];
+const IMPORT_ALLOW_LIST = ["config/errors", "config/store", "host/paths", "memory/runs", "queue/branch-name", "queue/file-list", "queue/orchestrator-scope", "queue/pipeline-record", "queue/resume", "queue/rounds", "queue/question-text", "queue/stream"];
 
 // A job bound to the run slug, with the run directory ready and these files in it.
 function seedRun(t, name, files = {}) {
@@ -115,6 +117,56 @@ test("the real package loads, and a pipeline with no package or a bad name is re
   await assert.rejects(() => loadPipeline("../escape"), /the pipeline `\.\.\/escape` is not a valid name/);
 });
 
+test("the real package's report module exposes its row rules, open items and facts, and its layout is the manifest's rows", async () => {
+  const { manifest, report } = await loadReport("resolve");
+  assert.equal(typeof report.rowOf, "function");
+  assert.equal(typeof report.openItems, "function");
+  assert.equal(typeof report.facts, "function");
+  assert.deepEqual(report.FACT_FILES, ["00-brief.md", "01-triage.md", "03-plan.md", "04-implementation.md", "05-qa.md", "06-verification.md", "07-runtime.md"]);
+  assert.deepEqual(reportLayoutOf(manifest).map((row) => row.phase), [...phaseIdsOf(manifest), null]);
+  assert.deepEqual(reportLayoutOf({ phases: [{ id: null }, { id: "draft" }] }), [{ phase: "draft", step: "draft", agent: "-" }]);
+});
+
+test("the gate stops, the delivering phase and the phases before it come from the manifest, with the same values as before", () => {
+  const manifest = pipelineManifest("resolve");
+  assert.deepEqual([...PIPELINE_GATE_STOPS], ["critique", "triage", "architect", "qa", "verification", "runtime", "user"]);
+  assert.deepEqual(manifest.phases.map((phase) => gateStopOf(manifest, phase.id)), [null, "triage", null, "architect", null, "qa", "verification", "runtime", null]);
+  assert.equal(deliveryPhaseOf(manifest), "commit");
+  assert.deepEqual(phasesBeforeDeliveryOf(manifest), ["verification", "runtime"]);
+  const bare = { phases: [{ id: null }, { id: "draft" }] };
+  assert.deepEqual([gateStopsOf(bare), gateStopOf(bare, "draft"), deliveryPhaseOf(bare), phasesBeforeDeliveryOf(bare)], [[], null, null, []]);
+});
+
+test("a second pipeline's outcome and gate stop are derived from its own manifest", () => {
+  const duo = { phases: [{ id: "draft", gateStop: "drafting" }, { id: "ship", delivers: true }], gateStops: ["drafting"] };
+  const shipped = { phases: [{ phase: "draft", verdict: "OK" }, { phase: "ship", verdict: "OK" }] };
+  const failed = { phases: [{ phase: "draft", verdict: "FAILED" }] };
+  assert.equal(derivedOutcome(shipped, duo), "local_commit");
+  assert.equal(derivedOutcome(failed, duo), "no_commit");
+  assert.equal(derivedGateStop(failed, "no_commit", duo), "drafting");
+  assert.equal(derivedGateStop({ termination: { phase: "draft" } }, "no_commit", duo), "drafting");
+  assert.equal(derivedOutcome({ phases: [{ phase: "commit", verdict: "PR opened" }] }, duo), "no_commit");
+});
+
+test("the run's outcome and gate stop are derived without throwing for a state pinning a pipeline with no readable package", () => {
+  const state = { pipeline: { name: "missing-one" }, phases: [{ phase: "draft", verdict: "NEEDS-WORK" }] };
+
+  assert.equal(derivedOutcome(state), "no_commit");
+  assert.equal(derivedGateStop(state, "no_commit"), null);
+  assert.equal(derivedOutcome({ ...state, outcome: { status: "done", prUrl: "https://example.test/pr/1" } }), "pr_opened");
+});
+
+test("a package with no report.mjs answers an empty report module", (t) => {
+  const copy = installCopy(t);
+  rmSync(join(copy, "plugin", "skills", "resolve", "pipeline", "report.mjs"));
+  const script = `const { loadReport } = await import(${JSON.stringify(pathToFileURL(join(copy, "src", "queue", "pipeline-package.mjs")).href)}); const { manifest, report } = await loadReport("resolve"); console.log(JSON.stringify({ name: manifest.name, keys: Object.keys(report) }));`;
+
+  const result = spawnSync(process.execPath, ["--input-type=module", "-e", script], { encoding: "utf8", env: makeHome(t, "package-no-report") });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout), { name: "resolve", keys: [] });
+});
+
 test("a job whose row names a pipeline with no package is refused by name and writes nothing", async (t) => {
   const { env, id, dir } = seedRun(t, "missing-one");
   openDb(env).prepare("UPDATE jobs SET pipeline = 'missing-one' WHERE id = ?").run(id);
@@ -181,6 +233,18 @@ for (const [label, reshape, reason] of [
   ["no phases", ({ phases, ...rest }) => rest, /`phases` is not a list/],
   ["no models", ({ models, ...rest }) => rest, /`models` is not an object/],
   ["a phase with no verdicts", (manifest) => ({ ...manifest, phases: [{ id: "qa", sections: [] }] }), /the phase `qa` has no `verdicts` list/],
+  ["a report that is not an object", (manifest) => ({ ...manifest, report: [] }), /`report` is not an object/],
+  ["report rows that are not a list", (manifest) => ({ ...manifest, report: { rows: {} } }), /`report\.rows` is not a list/],
+  ["a report row of an undeclared phase", (manifest) => ({ ...manifest, report: { rows: [{ phase: "deploy", step: "9 Deploy", agent: "x" }] } }), /the `report\.rows` phase `deploy` is not a declared phase/],
+  ["a report row with no step", (manifest) => ({ ...manifest, report: { rows: [{ phase: "qa", step: 5, agent: "x" }] } }), /the `report\.rows` entry of `qa` has no `step` string/],
+  ["a report row with no agent", (manifest) => ({ ...manifest, report: { rows: [{ phase: null, step: "9 Report" }] } }), /the `report\.rows` entry of `null` has no `agent` string/],
+  ["a track lane that is not a string", (manifest) => ({ ...manifest, track: manifest.track.map((slot) => (slot.name === "runtime" ? { ...slot, lane: 6 } : slot)) }), /the `track` slot `runtime` has a `lane` that is not a string/],
+  ["a track prompt mode that is not a string", (manifest) => ({ ...manifest, track: manifest.track.map((slot) => (slot.name === "runtime" ? { ...slot, promptMode: true } : slot)) }), /the `track` slot `runtime` has a `promptMode` that is not a string/],
+  ["gate stops that are not a list", (manifest) => ({ ...manifest, gateStops: "qa" }), /`gateStops` is not a list of strings/],
+  ["a gate stop its list does not name", (manifest) => ({ ...manifest, phases: manifest.phases.map((phase) => (phase.id === "qa" ? { ...phase, gateStop: "deploy" } : phase)) }), /the phase `qa` has a `gateStop` `deploy` that `gateStops` does not list/],
+  ["a delivers that is not a boolean", (manifest) => ({ ...manifest, phases: manifest.phases.map((phase) => (phase.id === "commit" ? { ...phase, delivers: "yes" } : phase)) }), /the phase `commit` has a `delivers` that is not a boolean/],
+  ["a precedesDelivery that is not a boolean", (manifest) => ({ ...manifest, phases: manifest.phases.map((phase) => (phase.id === "runtime" ? { ...phase, precedesDelivery: 1 } : phase)) }), /the phase `runtime` has a `precedesDelivery` that is not a boolean/],
+  ["two delivering phases", (manifest) => ({ ...manifest, phases: manifest.phases.map((phase) => (phase.id === "qa" ? { ...phase, delivers: true } : phase)) }), /more than one phase `delivers`/],
 ]) {
   test(`a manifest with ${label} fails every command with one line naming the path`, (t) => {
     const copy = installCopy(t);
@@ -275,7 +339,7 @@ test("the report facts and the job screen read the derived file list when the ar
   });
   recordRunFields({ projectId, slug: SLUG, fields: { type: "feature/refactor" }, env });
 
-  const facts = reportFacts({ runDir: dir, state: readRunState({ projectId, slug: SLUG, env }) });
+  const facts = await reportFacts({ runDir: dir, state: readRunState({ projectId, slug: SLUG, env }) });
   assert.ok(facts.includes("- Modified file: /w/src/derived.mjs"), facts.join("\n"));
 
   const extras = await jobExtras({ id, project_id: projectId, slug: SLUG }, { env, store: { projects: { agents: async () => null } } });

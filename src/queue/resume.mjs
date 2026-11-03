@@ -4,14 +4,14 @@ import { isId } from "../config/ids.mjs";
 import { withLockSync } from "../config/lock.mjs";
 import { runDir, runsDir } from "../config/paths.mjs";
 import { writeFileAtomic } from "../config/store.mjs";
+import { RUNTIME_AUTHOR } from "../host/runtime.mjs";
 
 // The lock of one run's state.json: a holder only ever keeps it for a single read and write, so a lock this old can only have been left behind by a dead process.
 export const RUN_LOCK = { timeoutMs: 5000, staleAfterMs: 15000 };
 
 export const RESUME_SCHEMA_VERSION = 1;
 
-// The author of the phase entries the runtime writes itself (`run check`, `run publish`).
-export const RUNTIME_AUTHOR = "runtime";
+export { RUNTIME_AUTHOR };
 
 const SEGMENT_RE = /^[A-Za-z0-9][A-Za-z0-9._+-]{0,79}$/;
 

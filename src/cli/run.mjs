@@ -3,9 +3,11 @@ import { join, resolve } from "node:path";
 import { UserError } from "../config/errors.mjs";
 import { refuseInvalidAnswer } from "../queue/pipeline-answer.mjs";
 import { DEFAULT_PIPELINE, loadPipeline, pinnedPipelineName } from "../queue/pipeline-package.mjs";
+import { attemptSince } from "../queue/pipeline-record.mjs";
 import { defaultGitImpl } from "../queue/preflight.mjs";
 import { readRunState } from "../queue/resume.mjs";
 import { callerJobId } from "../queue/retry.mjs";
+import { phaseModelOf } from "../queue/routing.mjs";
 import { isProvisionalSlug } from "../queue/run-slug.mjs";
 import { recordPrTemplate, withRunLock } from "../queue/run-state.mjs";
 import { runDurationS } from "../queue/telemetry.mjs";
@@ -53,9 +55,8 @@ async function runLog(argv, ctx) {
   checkArgs(positionals, { max: 0, usage: USAGE.log });
   const run = await resolveRun(values, ctx);
   const state = requireRunState(run, ctx.env);
-  const log = readJobLog(run.jobId, ctx.env);
-  const rows = phaseRows(state, log);
-  const totalS = runDurationS(log);
+  const rows = phaseRows(state);
+  const totalS = runDurationS(readJobLog(run.jobId, ctx.env));
   if (values.json === true) ctx.out(JSON.stringify({ run, phases: rows, durationS: totalS }));
   else for (const line of logLines(rows, totalS)) ctx.out(line);
   return 0;
@@ -150,6 +151,23 @@ async function runDirCommand(argv, ctx) {
   return 0;
 }
 
+// The agent overrides of the run's project, or null when there is no project or the store cannot read them.
+async function projectAgentsOf(run, env) {
+  if (!run.projectId) return null;
+  try {
+    return await openStore(env).projects.agents(run.projectId);
+  } catch {
+    return null;
+  }
+}
+
+// What a completed phase records of itself besides its verdict: when its attempt started and the model it ran on; null for a check that completes no phase.
+async function phaseMeasures({ answer, manifest, run, ctx }) {
+  if (answer.record === null) return null;
+  const attemptStartedAt = await attemptSince(run.jobId, ctx.env);
+  return { attemptStartedAt, model: phaseModelOf(manifest, answer.record.phase, await projectAgentsOf(run, ctx.env)) };
+}
+
 // Runs `run check`, which resolves the run's pipeline to its package, has it answer for the artifact of a phase of THIS run, and applies and prints the answer.
 async function runCheck(argv, ctx) {
   const { values, positionals } = parseCommand(argv, { ...RUN_OPTIONS, stage: { type: "string" } });
@@ -165,7 +183,8 @@ async function runCheck(argv, ctx) {
   const pipeline = name === firstName ? first : await load(name);
   const request = name === firstName ? asked : checkRequest(pipeline.manifest, positionals[0], values.stage);
   const answer = checkAnswer({ pipeline, request, job, run, ctx });
-  printCheck(answer, await checkEffectLines({ answer, run, job, ctx }), ctx);
+  const measures = await phaseMeasures({ answer, manifest: pipeline.manifest, run, ctx });
+  printCheck(answer, await checkEffectLines({ answer, run, job, ctx, measures }), ctx);
   return 0;
 }
 

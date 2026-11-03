@@ -61,7 +61,8 @@ import {
   sumUsage,
   unpricedSessions,
 } from "./stream.mjs";
-import { phaseTelemetry, runDurationS } from "./telemetry.mjs";
+import { statePipelinePhases } from "./pipeline-record.mjs";
+import { runDurationS } from "./telemetry.mjs";
 import { resolveWindow, windowPhase } from "./window.mjs";
 import { ADOPTED_WORKTREE_REASON, finishNotice, inspectRunWorktree, isAdoptedWorktree, keptWorktreeLine, openJobHolds, openJobWorktrees, removeRunWorktree, withoutKeptLine } from "./worktree.mjs";
 import { jobRef } from "../memory/refs.mjs";
@@ -664,12 +665,13 @@ function persistPrUrl(job, run, state, env) {
   if (written.status !== "written") appendJobLog(job.id, `the pull request could not be recorded in the state of the run: ${written.reason}`, env);
 }
 
-// Fills the telemetry row the agent recorded with what the runtime MEASURED in the stream: the measured durations and models win,
-// the agent's survive only where the runtime observed none, and a run with no row of its own is left alone instead of being invented.
+// Fills the telemetry row of the run with what its phase entries recorded and the attempt's duration the stream measured: the recorded values win,
+// the stored ones survive only where an entry recorded none, and a run with no row of its own is left alone instead of being invented.
 async function persistTelemetry(job, run, { store, env }) {
   if (!isSafeSegment(run.facts.slug)) return;
-  const log = readJobLog(job.id, env);
-  const telemetry = { projectId: job.project_id, slug: run.facts.slug, durationS: runDurationS(log), phases: phaseTelemetry(log) };
+  const state = readRunState({ projectId: job.project_id, slug: run.facts.slug, env });
+  const phases = statePipelinePhases(state).map(({ phase, model, durationS }) => ({ phase, model, durationS }));
+  const telemetry = { projectId: job.project_id, slug: run.facts.slug, durationS: runDurationS(readJobLog(job.id, env)), phases };
   const record = { kind: "telemetry", key: PENDING_KEYS.telemetry(job.id, job.worker), payload: telemetry };
   try {
     await writeOrQueue(job, run.facts.slug, record, { write: () => store.runs.updateRunTelemetry(telemetry), env });

@@ -117,7 +117,7 @@ function appendUnderLock(run, path, round, env) {
   });
 }
 
-// Runs `run append 05`, which appends one prover round to `05-qa.md` of THIS run, safe against provers appending at the same time.
+// Runs `run append 05`, which appends one prover round to the appendable artifact of THIS run, safe against provers appending at the same time.
 export async function runAppend(argv, ctx) {
   const { values, positionals } = parseCommand(argv, { ...RUN_OPTIONS, from: { type: "string" }, group: { type: "string" }, "group-label": { type: "string" } });
   const [check] = checkArgs(positionals, { min: 1, max: 1, usage: APPEND_USAGE });

@@ -5,9 +5,9 @@ import { jobLogPath, runDir } from "../config/paths.mjs";
 import { registeredProject } from "../memory/registry-access.mjs";
 import { resolveJobRun } from "../queue/job-run.mjs";
 import { formatDuration } from "../queue/narrate.mjs";
+import { entryDurationS } from "../queue/pipeline-record.mjs";
 import { isSafeSegment, isStateObject, readRunState } from "../queue/resume.mjs";
 import { callerJobId } from "../queue/retry.mjs";
-import { phaseTelemetry } from "../queue/telemetry.mjs";
 
 // The options every subcommand shares: outside a job they are the only way to say which run is meant.
 export const RUN_OPTIONS = { project: { type: "string" }, slug: { type: "string" } };
@@ -97,37 +97,22 @@ export function readJobLog(jobId, env) {
   }
 }
 
-// The lanes the runtime measured, grouped by phase name, so a phase that ran twice keeps one measure per run of it.
-export function measuredByPhase(log) {
-  const byPhase = new Map();
-  for (const lane of phaseTelemetry(log)) {
-    const lanes = byPhase.get(lane.phase) ?? [];
-    lanes.push(lane);
-    byPhase.set(lane.phase, lanes);
-  }
-  return byPhase;
-}
-
 // How a recorded phase ended: the verdict the phase reported, or `ok` for a phase that was recorded without one.
 function phaseStatus(entry) {
   const verdict = typeof entry?.verdict === "string" ? entry.verdict.trim() : "";
   return verdict || "ok";
 }
 
-// One row per phase recorded in state.json, enriched with the model and the duration the runtime measured for its lane.
-export function phaseRows(state, log) {
-  const measured = measuredByPhase(log);
-  const phases = Array.isArray(state.phases) ? state.phases : [];
-  return phases.map((entry) => {
-    const lane = measured.get(entry?.phase)?.shift() ?? null;
-    return {
-      phase: String(entry?.phase ?? "-"),
-      at: typeof entry?.at === "string" ? entry.at : null,
-      model: lane?.model ?? null,
-      status: phaseStatus(entry),
-      durationS: lane?.durationS ?? null,
-    };
-  });
+// One row per phase recorded in state.json, with the model and the duration its own entry recorded.
+export function phaseRows(state) {
+  const phases = Array.isArray(state?.phases) ? state.phases : [];
+  return phases.map((entry) => ({
+    phase: String(entry?.phase ?? "-"),
+    at: typeof entry?.at === "string" ? entry.at : null,
+    model: typeof entry?.model === "string" && entry.model.trim() ? entry.model.trim() : null,
+    status: phaseStatus(entry),
+    durationS: entryDurationS(entry),
+  }));
 }
 
 // A duration as the report reads it, and a dash when the runtime measured none.
