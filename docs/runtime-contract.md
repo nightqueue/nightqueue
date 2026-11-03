@@ -647,13 +647,13 @@ Job mode is unchanged and still fails open.
 In an operator session the MCP server's instructions replace the tools-only line with the
 three-band line and add one line on `connection-write`; any other client sees them unchanged.
 
-The thirty MCP tools of tool contract 14, with the parameters `nightqueue mcp` actually
-accepts (every answer carries `contract: 14`; a call to a tool an older contract had and this one
+The thirty MCP tools of tool contract 15, with the parameters `nightqueue mcp` actually
+accepts (every answer carries `contract: 15`; a call to a tool an older contract had and this one
 dropped is answered with the older-definitions line; contract 13 removed `phase_prompt`, whose refusal
 names the block of `## Phase prompts` of the resolve SKILL to launch from; contract 14 removed
 `run_phase_done` and `run_skip`, renamed `context_for_phase` to `context_for_agent` with `agent` for
 `target`, whose refusal names the new tool, and reads the `phase` of `run_terminate` from the manifest
-of the run's pipeline):
+of the run's pipeline; contract 15 added `allow_draft` and `allow_revert` to `queue_close`):
 
 | tool | parameters |
 |---|---|
@@ -682,7 +682,7 @@ of the run's pipeline):
 | `queue_stop` | `pid?` |
 | `queue_session` | `job_id` |
 | `queue_cancel` | `job_id`, `reason?`, `stop?`, `release_worktree?` |
-| `queue_close` | `job_id`, `force?` |
+| `queue_close` | `job_id`, `force?`, `allow_draft?`, `allow_revert?` |
 | `queue_retry` | `job_id`, `note?`, `fresh?`, `run?` (a `closed` job, or a `done` job whose pull request is merged, is refused: a finished job does not resume; with neither `note` nor `fresh`, a run with no new phase and no new answer in its last two attempts is refused too) |
 | `run_terminate` | `phase`, `reason`, `project?`, `slug?` (commits the recorded worktree's changes as the wip commit unless the worktree is adopted or on the default branch, the main checkout's branch or a detached HEAD; answers the record plus `wip{status, commit, branch, files, reason}` and `notice`, the paragraph that opens with `Terminated run: ` and carries `Retry: nightqueue queue retry J-<id>` inside a job and `New job from it: start_branch: <branch>`; a repeated call keeps the same wip commit, adopted through its `refs/nightqueue/wip/<slug>` ref even when the first call's record was refused; a refused phase or empty reason commits nothing) |
 | `run_outcome` | `status` (`done`, `gate`, `no_change`), `notice?` (required with `no_change`), `question?` and `from_artifact?{file, section}` (`gate` only, never with `notice`: the runtime composes the whole `## Notice`; see "A gate notice is composed from the record" below), `project?`, `slug?` |
@@ -1119,7 +1119,19 @@ recorded as `rerun: { head, runIds, urls, at }` in the close checklist `data`, n
 and waits for the checks; an aborted check whose details URL is one recorded in `urls` is the old
 job GitHub still shows and counts as pending. The same head aborted again under a new details URL,
 a refused re-run or a check with no run id stops the close with
-`checks-aborted`, and `force` lists such checks as `aborted`. A pull request
+`checks-aborted`, and `force` lists such checks as `aborted`. An open draft pull request stops
+preflight with `draft` (and the merge step, on its last read, for a pull request drafted after a
+done preflight) before anything is re-run, rebased or merged; `allow_draft: true` (`--allow-draft`)
+runs `gh pr ready` once instead and records `markedReady` and `markedReadyAt` in the close data.
+Right before the pinned merge call the revert guard stops the merge step with `reverts-base`
+(`revertedPaths` in the close data, a note of up to 10 `<path> back to <sha7> (undoes <sha7>
+<subject>)` lines) when the head's blob of a path the head changed since its merge base, and that
+differs from the base tip, equals the blob before a commit of the base's first-parent history; a
+deletion counts only when the commit that added the path is not on the head's first-parent line.
+A guard git cannot run stops with `revert-check-failed`, as does a failed fetch of the base when
+the guard flags nothing (the base may be stale). `allow_revert: true` (`--allow-revert`)
+skips the guard and records `allowedRevert`. `force` lifts neither gate, and both reasons are
+failed closes (`closes.failed` in `queue_status`), never stalled. A pull request
 closed without merge ends the close by cancelling the job, one merged by hand is recorded as
 `merged outside a close`. Inside a job
 it is refused, like the CLI (see [Queue](queue.md#closing-a-job)).

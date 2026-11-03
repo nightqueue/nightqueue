@@ -17,7 +17,7 @@ import { doneStream } from "../../test-support/streams.mjs";
 import { addWorktree, gitVars, lockWorktree, makeDirty, publishedCheckout } from "../../test-support/worktrees.mjs";
 
 const REMAINING_MS = 600000;
-const CANONICAL_COMMANDS = /^(fetch origin|status --porcelain -z|diff --name-only HEAD origin\/|rev-parse |worktree (add|remove|prune)|pull --ff-only$)/;
+const CANONICAL_COMMANDS = /^(fetch origin|status --porcelain -z|diff --name-only HEAD origin\/|diff --raw |diff --name-only --no-renames |merge-base |log -z --raw |rev-list --count |rev-parse |worktree (add|remove|prune)|pull --ff-only$)/;
 const CONFLICTING = { mergeable: "CONFLICTING", mergeStateStatus: "DIRTY" };
 
 // A home with a `done` job of `alpha` carrying the pull request, whose close lease `worker` holds.
@@ -256,7 +256,7 @@ test("--force never overrides the attribution: a pull request on another branch 
 
 test("a failed git fetch origin is a warning carried on every later note of the checklist, never a failure", async (t) => {
   const home = closeHome(t, "close-steps-fetch-warning");
-  const fake = fakeCloseDeps({ git: { "fetch origin": gitFail("fatal: Could not resolve host: github.com") } });
+  const fake = fakeCloseDeps({ git: { "fetch origin": gitFail("fatal: Could not resolve host: github.com"), "fetch origin main fix/worker": gitOk("") } });
   const { outcome, checklist } = await close(home, fake);
   assert.equal(outcome.status, "closed");
   const warning = "WARNING: git fetch origin failed (fatal: Could not resolve host: github.com) | ";

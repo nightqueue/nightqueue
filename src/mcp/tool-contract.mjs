@@ -1,7 +1,7 @@
 import { UserError } from "../config/errors.mjs";
 
-// The version of the tool input shapes; bump it whenever a tool's input shape changes incompatibly (contract 1 is the pre-v19 integer ids, 2 the refs, 3 the tracker renamed, 4 the tracker removed, 5 the tracker_issues tool, home-scoped connections and `queue_add` `origin: false`, 6 `origin` is a list of {kind, ref}, 7 the `lesson_delete` and `memory_delete` tools, 8 the decision tools removed, 9 the `connection_call` tool, 10 the `operator_consent` tool, 11 `queue_add` `max_attempts` removed, 12 `run_set` `qa_stage_a` removed, 13 the prompt rendering tool removed, 14 `run_phase_done` and `run_skip` removed, `context_for_phase` renamed `context_for_agent` with `agent` for `target`, `run_terminate` `phase` read from the run's manifest).
-export const TOOL_CONTRACT = 14;
+// The version of the tool input shapes; bump it whenever a tool's input shape changes incompatibly (contract 1 is the pre-v19 integer ids, 2 the refs, 3 the tracker renamed, 4 the tracker removed, 5 the tracker_issues tool, home-scoped connections and `queue_add` `origin: false`, 6 `origin` is a list of {kind, ref}, 7 the `lesson_delete` and `memory_delete` tools, 8 the decision tools removed, 9 the `connection_call` tool, 10 the `operator_consent` tool, 11 `queue_add` `max_attempts` removed, 12 `run_set` `qa_stage_a` removed, 13 the prompt rendering tool removed, 14 `run_phase_done` and `run_skip` removed, `context_for_phase` renamed `context_for_agent` with `agent` for `target`, `run_terminate` `phase` read from the run's manifest, 15 `queue_close` `allow_draft` and `allow_revert`).
+export const TOOL_CONTRACT = 15;
 
 export const STALE_CONTRACT_ADVISORY = "this client's tool contract is older than the server";
 

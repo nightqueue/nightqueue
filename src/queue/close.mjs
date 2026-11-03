@@ -9,6 +9,7 @@ import { noChangeConclusion, runOwnNotice } from "./run-notice.mjs";
 import { isNoChangeJob } from "../memory/jobs.mjs";
 import { resolveConflictedRebase } from "./merger.mjs";
 import { releaseJobWorktree } from "./worktree.mjs";
+import { findRevertedPaths, revertNoteLines } from "./revert-guard.mjs";
 import { checkoutOfJob } from "../memory/registry-access.mjs";
 import { jobRef } from "../memory/refs.mjs";
 import { parseOriginsColumn, validOrigins } from "../integrations/origin.mjs";
@@ -590,6 +591,37 @@ function pushedHeadNote(data) {
   return data.pushedBy === "close" ? `; head ${sha7(data.headSha)} pushed by this close` : "";
 }
 
+// The instruction a draft stop leaves the operator.
+function draftNote(pr) {
+  return `PR #${pr.number} is a draft: review the remaining failures, then \`gh pr ready ${pr.number}\` and close again`;
+}
+
+// Tells whether a read shows an open draft pull request.
+function isOpenDraft(pr) {
+  return Boolean(pr?.ok) && pr.state === "OPEN" && pr.isDraft === true;
+}
+
+// Stops an open draft pull request, or with --allow-draft marks it ready once; null for a pull request that is not an open draft.
+async function draftGate(ctx, deps, pr) {
+  if (!isOpenDraft(pr)) return null;
+  if (!ctx.allowDraft) return { problem: failed("draft", draftNote(pr)) };
+  const ready = await deps.gh.prReady(ctx.prUrl, bounded(ctx, GH_TIMEOUT_MS));
+  if (!ready?.ok) return { problem: failed("draft", `PR #${pr.number} is a draft and gh pr ready failed (${ready?.error ?? "no answer"}); ${draftNote(pr)}`) };
+  return { note: "marked ready with --allow-draft (gh pr ready)", data: { markedReady: true, markedReadyAt: new Date(ctx.nowMs()).toISOString() } };
+}
+
+// The draft verdict of preflight: a pull request of another branch stops on that first, then the draft gate answers.
+async function preflightDraftVerdict(ctx, deps, pr) {
+  if (!isOpenDraft(pr)) return null;
+  const attribution = attributionVerdict(ctx, pr);
+  return attribution.problem ? attribution : await draftGate(ctx, deps, pr);
+}
+
+// A done preflight note with the draft gate's note appended when it marked the pull request ready.
+function withDraftNote(note, draft) {
+  return draft?.note ? `${note}; ${draft.note}` : note;
+}
+
 // Checks, before anything is changed, that the pull request is the job's own, open, green and pullable into the canonical checkout.
 async function preflightStep({ ctx, deps }) {
   if (!ctx.checkout || !deps.fs.exists(ctx.checkout)) return failed("checkout-missing", `the checkout of project \`${ctx.project}\` is missing: ${ctx.checkout ?? "not registered"}`);
@@ -598,6 +630,9 @@ async function preflightStep({ ctx, deps }) {
   const expected = await expectedPushedHead(ctx, deps, fetched.ok);
   const pr = expected ? await readPushedPr(ctx, deps, expected) : await readPr(ctx, deps);
   if (!pr?.ok) return { ...unreadablePr(ctx, pr), data };
+  const draft = await preflightDraftVerdict(ctx, deps, pr);
+  if (draft?.problem) return { ...draft.problem, data: { ...data, ...prData(pr) } };
+  Object.assign(data, draft?.data ?? {});
   const verdict = ctx.data.pushedBy === "close" && pr.state === "OPEN" ? await pushedHeadVerdict(ctx, deps, { pr, expected, fetchedOk: fetched.ok }) : null;
   if (verdict?.problem) return { ...verdict.problem, data: { ...data, ...verdict.problem.data } };
   Object.assign(data, prData(pr));
@@ -611,7 +646,7 @@ async function preflightStep({ ctx, deps }) {
   Object.assign(data, checks.data ?? {});
   const checkout = await checkoutVerdict(ctx, deps, pr.baseRefName);
   if (checkout.problem) return { ...checkout.problem, data };
-  return { status: "done", note: withAttributionNote(`PR #${pr.number} open; ${checks.note}; ${checkout.note}${pushedHeadNote(data)}`, attribution), data };
+  return { status: "done", note: withDraftNote(withAttributionNote(`PR #${pr.number} open; ${checks.note}; ${checkout.note}${pushedHeadNote(data)}`, attribution), draft), data };
 }
 
 // Reads the pull request's mergeability, reading once more after a pause when GitHub has not computed it yet.
@@ -1055,7 +1090,58 @@ async function mergeTurn(ctx, deps, { pr, merge }) {
   const live = await liveRead(ctx, deps, { pr, verdict });
   if (live.changed) return { next: live.pr };
   if (openAt(live.pr, verdict.head) && live.pr.mergeStateStatus === "BEHIND") return behindTurn(merge, verdict, live.pr);
+  const stopped = await mergeGates(ctx, deps, { pr: live.pr, verdict, merge });
+  if (stopped) return { result: stopped };
   return await callMerge(ctx, deps, { verdict, merge });
+}
+
+// Folds a gate that let the merge through into the step's notes and data.
+function acceptGate(merge, gate) {
+  if (gate?.note) merge.leads.push(gate.note);
+  Object.assign(merge.data, gate?.data ?? {});
+}
+
+// The draft and revert gates right before the merge call: the failed result that stops it, or null once both let it through.
+async function mergeGates(ctx, deps, { pr, verdict, merge }) {
+  const draft = await draftGate(ctx, deps, pr);
+  if (draft?.problem) return withMergeData(draft.problem, merge, verdict.note);
+  acceptGate(merge, draft);
+  const revert = await revertVerdict(ctx, deps, { pr, head: verdict.head });
+  if (revert.problem) return withMergeData(revert.problem, merge, verdict.note);
+  acceptGate(merge, revert);
+  return null;
+}
+
+// Runs the revert guard on the head about to be squashed into the fetched base tip, failing closed when git cannot tell.
+async function revertVerdict(ctx, deps, { pr, head }) {
+  if (ctx.allowRevert) return { note: "revert guard skipped with --allow-revert", data: { allowedRevert: true } };
+  const base = pr.baseRefName;
+  const fetched = await git(ctx, deps, ["fetch", "origin", base, pr.headRefName]);
+  const found = await revertedOnBase(ctx, deps, { base: `origin/${base}`, head });
+  if (!found.ok) return { problem: revertCheckFailed({ head, base, error: found.error }) };
+  if (found.reverted.length) return { problem: revertsBase({ head, base, reverted: found.reverted }) };
+  if (!fetched.ok) return { problem: revertCheckFailed({ head, base, error: `git fetch origin ${base} ${pr.headRefName} failed, so origin/${base} may be stale: ${firstLine(fetched.stderr)}` }) };
+  return { note: null };
+}
+
+// The stop of a revert guard that could not tell what the squash does to the base.
+function revertCheckFailed({ head, base, error }) {
+  return failed("revert-check-failed", `could not check what the squash of ${sha7(head)} does to ${base} (${error}); run again, or --allow-revert for an intended revert`);
+}
+
+// The stop of a head whose squash would put back older versions of base files.
+function revertsBase({ head, base, reverted }) {
+  const note = `squashing ${sha7(head)} would put back older versions of files ${base} changed since: ${revertNoteLines(reverted).join("; ")}`;
+  return failed("reverts-base", note, { data: { revertedPaths: reverted.map((item) => item.path) } });
+}
+
+// The reverted paths of a head over a base ref, once both resolve to commits in the canonical checkout.
+async function revertedOnBase(ctx, deps, { base, head }) {
+  for (const ref of [head, base]) {
+    const resolved = await git(ctx, deps, ["rev-parse", "--verify", "--quiet", `${ref}^{commit}`]);
+    if (!resolved.ok) return { ok: false, error: `${ref} does not resolve to a commit` };
+  }
+  return await findRevertedPaths({ git: (args) => git(ctx, deps, args), base, head });
 }
 
 // Brings a head GitHub shows behind its base up to date with the conflict step's own path, and answers the next read or the stop.
@@ -1244,7 +1330,7 @@ function armDeadline({ timeoutS, signal, now }) {
 
 // The context every step reads: the job, its pull request, the deadline and the data recorded by earlier steps.
 function buildContext(run, stepName) {
-  const { job, checkout, checklist, deadline, now, force } = run;
+  const { job, checkout, checklist, deadline, now, force, allowDraft, allowRevert } = run;
   return {
     progress: (note) => reportProgress(run, stepName, note),
     jobId: job.id,
@@ -1255,6 +1341,8 @@ function buildContext(run, stepName) {
     slug: job.slug ?? null,
     type: job.type ?? null,
     force: force === true,
+    allowDraft: allowDraft === true,
+    allowRevert: allowRevert === true,
     checkout,
     deadlineMs: deadline.deadlineMs,
     nowMs: () => now(),
@@ -1634,11 +1722,11 @@ async function runPostClosePhase(base, steps, signal) {
 }
 
 // Runs one attempt of a close over its steps, resuming from the stored checklist, then its post-close steps once the job is closed; a step failure is an outcome, never an exception.
-export async function runClosePipeline({ store, job, worker, env = process.env, deps = null, timeoutS, signal = null, now = Date.now, onStep = null, checkout, force = false, steps = CLOSE_STEPS, again = false }) {
+export async function runClosePipeline({ store, job, worker, env = process.env, deps = null, timeoutS, signal = null, now = Date.now, onStep = null, checkout, force = false, allowDraft = false, allowRevert = false, steps = CLOSE_STEPS, again = false }) {
   if (!job) throw new UserError("runClosePipeline needs the job it closes");
   const pre = steps.filter((step) => !isPostCloseStep(step));
   const post = steps.filter(isPostCloseStep);
-  const base = { store, job, worker, env, deps: deps ?? defaultCloseDeps(env), now, onStep, force, again, checkout: checkout ?? resolveCheckout(job, env) };
+  const base = { store, job, worker, env, deps: deps ?? defaultCloseDeps(env), now, onStep, force, allowDraft, allowRevert, again, checkout: checkout ?? resolveCheckout(job, env) };
   if (!pre.length && post.length) return await runPostClose(base, post, signal);
   const deadline = armDeadline({ timeoutS: requireTimeoutS(timeoutS), signal, now });
   const run = { ...base, checklist: startingChecklist(job), deadline };

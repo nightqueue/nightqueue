@@ -72,6 +72,10 @@ export function fakeCloseDeps(changes = {}) {
       return { ok: true, stderr: "" };
     },
     rerun: () => ({ ok: true, error: null }),
+    ready: (current) => {
+      current.pr = { ...current.pr, isDraft: false };
+      return { ok: true, error: null };
+    },
     suite: { ok: true, output: "", timedOut: false },
     testScript: "node --test",
     exists: () => true,
@@ -79,7 +83,7 @@ export function fakeCloseDeps(changes = {}) {
     merger: async () => NO_MERGER_ANSWER,
     ...changes,
   };
-  const log = { git: [], ghCalls: [], prReads: 0, checkReads: 0, requiredReads: 0, merges: [], reruns: [], tests: [], tempDirs: [], removedDirs: [], sleeps: [], linked: [], mergers: [] };
+  const log = { git: [], ghCalls: [], prReads: 0, checkReads: 0, requiredReads: 0, merges: [], readies: [], reruns: [], tests: [], tempDirs: [], removedDirs: [], sleeps: [], linked: [], mergers: [] };
   const recordPrCall = (call, url, options) => log.ghCalls.push({ call, repo: parseRunRepo(url), cwd: options?.cwd ?? null });
   const deps = {
     git: async (args, options = {}) => {
@@ -106,6 +110,11 @@ export function fakeCloseDeps(changes = {}) {
         recordPrCall("prMerge", url, options);
         log.merges.push({ url, matchHeadCommit: options.matchHeadCommit ?? null });
         return world.merge(world);
+      },
+      prReady: async (url, options = {}) => {
+        recordPrCall("prReady", url, options);
+        log.readies.push(url);
+        return world.ready(world);
       },
       prDiffNames: async (url, options = {}) => {
         recordPrCall("prDiffNames", url, options);

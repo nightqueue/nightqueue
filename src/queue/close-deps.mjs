@@ -3,7 +3,7 @@ import { chmodSync, copyFileSync, existsSync, mkdtempSync, readdirSync, readFile
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { easAccountStatus, runEasAsync } from "../host/eas.mjs";
-import { ghPrChecks, ghPrDetail, ghPrDiffNames, ghPrMerge, ghPrRequiredChecks, ghRunRerun } from "../host/gh.mjs";
+import { ghPrChecks, ghPrDetail, ghPrDiffNames, ghPrMerge, ghPrReady, ghPrRequiredChecks, ghRunRerun } from "../host/gh.mjs";
 import { runGitAsync } from "../host/git.mjs";
 import { runNpmAsync } from "../host/npm.mjs";
 import { loadConfig, loadSecrets } from "../config/store.mjs";
@@ -90,6 +90,7 @@ export function defaultCloseDeps(env = process.env) {
       prChecks: (url, options = {}) => ghPrChecks(url, { ...options, env }),
       prRequiredChecks: (url, options = {}) => ghPrRequiredChecks(url, { ...options, env }),
       prMerge: (url, options = {}) => ghPrMerge(url, { ...options, env }),
+      prReady: (url, options = {}) => ghPrReady(url, { ...options, env }),
       runRerun: (runId, options = {}) => ghRunRerun(runId, { ...options, env }),
       prDiffNames: (url, options = {}) => ghPrDiffNames(url, { ...options, env }),
     },

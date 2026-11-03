@@ -6,6 +6,20 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ## Unreleased
 
+### Fixed
+
+- **`queue close` no longer merges a draft or a squash that reverts the base; MCP clients restart
+  (tool contract 15).** Preflight stops an open draft with `draft` before any check, re-run, rebase
+  or merge (``PR #<n> is a draft: review the remaining failures, then `gh pr ready <n>` and close
+  again``), and the merge step checks it again on its last read; `--allow-draft` (`allow_draft: true`)
+  runs `gh pr ready` once and records `markedReady`. Right before the pinned merge, a revert guard
+  stops the merge with `reverts-base` when the head puts back an older version, from the base's
+  first-parent history, of a path it changed and the base changed since - listing up to 10
+  `<path> back to <sha7> (undoes <sha7> <subject>)` - and fails closed with `revert-check-failed`
+  when git cannot tell; `--allow-revert` (`allow_revert: true`) skips it and records
+  `allowedRevert`. `--force` lifts neither. Both reasons show in `queue status` and `closes.failed`
+  with their own resume hint.
+
 ### Changed
 
 - **`resolve` is a package the runtime loads by name; MCP clients restart (tool contract bump).** The

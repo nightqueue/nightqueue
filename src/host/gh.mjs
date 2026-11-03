@@ -355,6 +355,12 @@ export async function ghPrMerge(url, { matchHeadCommit = null, env = process.env
   return { ok: result.ok, stderr: result.stderr };
 }
 
+// Marks one draft pull request ready for review, never rejecting.
+export async function ghPrReady(url, { env = process.env, execFileImpl = execFile, timeoutMs = CALL_TIMEOUT_MS, signal } = {}) {
+  const result = await runGhAsync(["pr", "ready", String(url ?? "")], { env, execFileImpl, timeoutMs, signal });
+  return result.ok ? { ok: true, error: null } : { ok: false, error: firstLine(result.stderr) };
+}
+
 // The files one pull request changes, never rejecting: `ok: false` means nobody could tell.
 export async function ghPrDiffNames(url, { env = process.env, execFileImpl = execFile, timeoutMs = CALL_TIMEOUT_MS, signal } = {}) {
   const result = await runGhAsync(["pr", "diff", String(url ?? ""), "--name-only"], { env, execFileImpl, timeoutMs, signal });

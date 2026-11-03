@@ -1316,12 +1316,15 @@ function toolDefinitions(env, state) {
           "Only a `done` job is closed. `closed`, `running`, `pending`, `gate`, `failed`, `cancelled`, a job already being closed under a live lease, and `force` on a job with no pull request are refused by name, and nothing is written. Refused inside an unattended run. " +
           "A close that stopped keeps its checklist and its reason on the job (`close`, `close_status: failed`); calling this tool again resumes it at the step that failed. " +
           "`force` skips the pull request checks and the rebase test suite only, and never runs the merger; conflicts, a pull request that is not the job's own and the job's status still stop the close. " +
+          "An open draft pull request stops the close with `draft` unless `allow_draft`, which runs `gh pr ready` once and goes on. " +
+          "The merge stops with `reverts-base` when the squash would put back older versions of files the base changed since, unless `allow_revert` (for a pull request whose purpose is a revert); `force` lifts neither. " +
           "A pull request closed without merge cancels the job and releases its worktree; one merged by hand is recorded as `merged outside a close`.",
-        inputSchema: { job_id: jobIdField, force: z.boolean().nullable().optional() },
+        inputSchema: { job_id: jobIdField, force: z.boolean().nullable().optional(), allow_draft: z.boolean().nullable().optional(), allow_revert: z.boolean().nullable().optional() },
       },
       handler: async (args) => {
         const id = parseJobRef(args.job_id);
-        const started = await startCloseDetached({ store: openStore(env), id, force: args.force === true, env });
+        const allowances = { allowDraft: args.allow_draft === true, allowRevert: args.allow_revert === true };
+        const started = await startCloseDetached({ store: openStore(env), id, force: args.force === true, ...allowances, env });
         return { ok: true, started: true, job_id: id, ref: jobRef(id), pid: started.pid, logPath: started.logPath, follow: `nightqueue queue status ${jobRef(id)}` };
       },
     },

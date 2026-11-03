@@ -591,6 +591,8 @@ nightqueue queue close 42 --foreground                # run the four steps in th
 nightqueue queue close 42 --foreground --json         # JSON on stdout, the job and the close outcome
 nightqueue queue close --merged                       # close every done job gh confirms merged
 nightqueue queue close 42 --force                     # skip the pull request checks and the rebase suite, nothing else
+nightqueue queue close 42 --allow-draft               # mark an open draft ready (gh pr ready, once) instead of stopping with `draft`
+nightqueue queue close 42 --allow-revert              # skip the revert guard (`reverts-base`) for a pull request whose purpose is a revert
 nightqueue queue close 42 --steps origin,log          # re-run only the post-close steps of a closed job, in this process
 nightqueue queue close 42 --steps log --again         # clear the named steps' done marks first, so they post again (only with --steps)
 nightqueue queue close 42 --steps ota --again         # publish the Expo OTA update of a closed job once more
@@ -756,7 +758,11 @@ close`), and one merged by hand is recorded as `merged outside a close`. `--forc
 pull request checks and the rebase suite and nothing else: status and attribution
 (`pr-not-the-job-branch`) still stop the close, and a conflict always stops a forced close:
 the merger never runs under `--force`. Without it, a small textual conflict may be resolved by
-the bounded merger agent before the suite runs. A second close of a closed
+the bounded merger agent before the suite runs. An open draft pull request stops at preflight
+with `draft` unless `--allow-draft`, which runs `gh pr ready` once; the merge stops with
+`reverts-base`, listing each path and the base commit it would undo, when the squash would put
+back an older version of a file the base changed since, unless `--allow-revert`. `--force`
+lifts neither, and both flags are refused with `--steps` or `--merged`. A second close of a closed
 job answers ``job `<id>` is already closed``. A `done` job with no pull request, resolved
 without change, closes with no gh or git call (preflight, conflict and merge `skipped`) and
 prints `J-<id> closed: resolved without change (no pull request)`; `--force` is refused on it.
