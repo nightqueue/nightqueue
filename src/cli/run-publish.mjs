@@ -1,3 +1,4 @@
+import { lstatSync } from "node:fs";
 import { isAbsolute, join, relative, resolve } from "node:path";
 import { UserError } from "../config/errors.mjs";
 import { ghPrConvertToDraft, ghPrCreate, ghPrEditBody, ghPrMarkReady, ghPrUrlOfBranch } from "../host/gh.mjs";
@@ -46,6 +47,9 @@ export const EXTRA_IS_NOT_AN_OVERRIDE =
 // A `Refs:` trailer line, a reserved trailer the commit refuses in the agent's message.
 const REFS_TRAILER = /^Refs\s*:/i;
 
+// The reason a listed path git knows nowhere is refused.
+const NOWHERE = "not in the worktree, the index or HEAD";
+
 // The commit message the agent wrote, refused when it is missing or empty: the message is the agent's and the command never invents one.
 export function requireMessageFile(path, usage) {
   if (!path) throw new UserError(`\`--message-file <path>\` is required: the commit message is the agent's; usage: ${usage}`);
@@ -80,13 +84,71 @@ function candidates(cwd, paths) {
   });
 }
 
-// The files a `--extra` pathspec really matches, so the refusal list is checked against what would be staged and never against the pattern alone.
-function expandExtra(cwd, pathspec, env) {
+// True when the path exists on disk, a dangling symlink included.
+function onDisk(cwd, path) {
+  try {
+    lstatSync(join(cwd, path));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// The path itself and every directory above it, so a directory counts as indexed when a file under it is.
+function selfAndParents(path) {
+  const parts = path.split("/");
+  return parts.map((_, index) => parts.slice(0, index + 1).join("/"));
+}
+
+// The paths among these the index holds as a file or as a directory with files under it, each looked up literally.
+function inIndex(cwd, paths, env) {
+  if (paths.length === 0) return new Set();
+  const listed = runGit({ args: ["--literal-pathspecs", "ls-files", "--cached", "-z", "--", ...paths], cwd, env });
+  if (!listed.ok) throw new UserError(`git could not read the index of ${cwd}: ${failureLine(listed)}`);
+  return new Set(listed.stdout.split("\0").filter(Boolean).flatMap(selfAndParents));
+}
+
+// The paths on disk or in the index, which `git add` can take; the others are deletions the index already holds.
+function presentPaths(cwd, paths, env) {
+  const absent = paths.filter((path) => !onDisk(cwd, path));
+  const indexed = inIndex(cwd, absent, env);
+  const gone = new Set(absent.filter((path) => !indexed.has(path)));
+  return paths.filter((path) => !gone.has(path));
+}
+
+// True when one of the trees carries the path, looked up as an exact path.
+function inAnyTree({ cwd, path, refs, env }) {
+  return refs.some((ref) => runGit({ args: ["cat-file", "-e", `${ref}:${path}`], cwd, env }).ok);
+}
+
+// The paths git knows nowhere: not on disk, not in the index, and in none of HEAD, the fold's parent and the base.
+function nowherePaths({ cwd, paths, fold, env }) {
+  const present = new Set(presentPaths(cwd, paths, env));
+  const absent = paths.filter((path) => !present.has(path));
+  if (absent.length === 0) return new Set();
+  const refs = ["HEAD", fold?.parent, findBaseRef(cwd, env)].filter(Boolean);
+  return new Set(absent.filter((path) => !inAnyTree({ cwd, path, refs, env })));
+}
+
+// The deletions the index holds against a commit under a pathspec, which `ls-files --cached` no longer lists.
+function stagedDeletions({ cwd, pathspec, env, against }) {
+  const result = runGit({ args: ["diff", "--cached", "--name-only", "-z", "--no-renames", "--diff-filter=D", against, "--", pathspec], cwd, env });
+  if (!result.ok) throw new UserError(`git could not expand \`--extra ${pathspec}\`: ${failureLine(result)}`);
+  return result.stdout.split("\0").filter(Boolean);
+}
+
+// The files a `--extra` pathspec really matches, staged deletions included, so the refusal list is checked against what would be staged and never against the pattern alone.
+function expandExtra({ cwd, pathspec, env, deletedAgainst }) {
   const result = runGit({ args: ["ls-files", "--cached", "--others", "--exclude-standard", "--", pathspec], cwd, env });
   if (!result.ok) throw new UserError(`git could not expand \`--extra ${pathspec}\`: ${failureLine(result)}`);
-  const files = outputLines(result);
+  const files = [...new Set([...outputLines(result), ...stagedDeletions({ cwd, pathspec, env, against: deletedAgainst })])];
   if (files.length === 0) throw new UserError(`\`--extra ${pathspec}\` matches no file in ${cwd}`);
   return files;
+}
+
+// The same entries, each listed path git knows nowhere refused with that reason.
+function withNowhereReasons(entries, nowhere) {
+  return entries.map((entry) => (entry.reason || !nowhere.has(entry.path) ? entry : { ...entry, reason: NOWHERE }));
 }
 
 // The fold split into what it carries into the delivery and what it leaves out, on disk and uncommitted, with the reason of each.
@@ -108,8 +170,10 @@ export function stageable({ cwd, listed, extras, env, install, fold = null, runD
   const pathspecs = candidates(cwd, extras);
   const asked = withLockfileReasons([...files, ...pathspecs], rule, carried).filter((entry) => entry.reason);
   if (asked.length > 0) return { paths: [], refused: asked, fold: null };
-  const matched = candidates(cwd, extras.flatMap((pathspec) => expandExtra(cwd, pathspec, env)));
-  const everything = withLockfileReasons([...files, ...matched], rule, carried);
+  const deletedAgainst = fold?.parent ?? "HEAD";
+  const matched = candidates(cwd, extras.flatMap((pathspec) => expandExtra({ cwd, pathspec, env, deletedAgainst })));
+  const nowhere = nowherePaths({ cwd, paths: files.map((entry) => entry.path), fold, env });
+  const everything = withNowhereReasons(withLockfileReasons([...files, ...matched], rule, carried), nowhere);
   const refused = everything.filter((entry) => entry.reason);
   if (refused.length > 0) return { paths: [], refused, fold: null };
   const paths = [...new Set(everything.map((entry) => entry.path))];
@@ -138,10 +202,10 @@ export function commitConvention(cwd, env) {
   return `${declared ? `declared by ${declared}; ` : ""}${inferredConvention(cwd, env)}`;
 }
 
-// Stages exactly the list; a git refusal is reported as it came, never guessed at.
+// Stages exactly the list, literally and deletions included, leaving a deletion the index already holds as it is; a git refusal is reported as it came.
 function stageList({ cwd, paths, env }) {
-  const staged = runGit({ args: ["add", "--", ...paths], cwd, env });
-  if (!staged.ok) throw new UserError(`git could not stage the list in ${cwd}: ${failureLine(staged)}`);
+  const toAdd = presentPaths(cwd, paths, env);
+  if (toAdd.length > 0) literalPaths({ command: ["add", "-A"], paths: toAdd, cwd, env, what: "stage the list" });
 }
 
 // Commits what is staged with the agent's own message; a git refusal is reported as it came, never guessed at.
@@ -583,7 +647,7 @@ export async function runPublish(argv, ctx) {
   if (wips.problems.length > 0) return refuse(wips.problems, ctx);
   const { paths, refused, fold } = stageable({ cwd, listed, extras: values.extra ?? [], env: ctx.env, fold: wips.fold, runDir: run.runDir });
   if (refused.length > 0) return refuse(refusedLines(refused), ctx);
-  const scratch = scratchProblemLines(cwd, run, ctx.env, paths, fold?.parent);
+  const scratch = scratchProblemLines(cwd, run, ctx.env, presentPaths(cwd, paths, ctx.env), fold?.parent);
   if (scratch.length > 0) return refuse(scratch, ctx);
   const committed = await commitOnce({ run, cwd, paths, messageFile, fold, ctx });
   if (committed !== 0) return committed;

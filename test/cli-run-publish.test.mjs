@@ -4,6 +4,7 @@ import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync }
 import { join } from "node:path";
 import { test } from "node:test";
 import { run } from "../src/cli/index.mjs";
+import { EXTRA_IS_NOT_AN_OVERRIDE } from "../src/cli/run-publish.mjs";
 import { runDir } from "../src/config/paths.mjs";
 import { openDb } from "../src/memory/db.mjs";
 import { addJob } from "../src/memory/jobs.mjs";
@@ -1142,7 +1143,7 @@ test("a message carrying a `Refs:` line is rejected naming the line, and nothing
   }
 });
 
-test("`run publish` refuses a missing or empty message, an empty list, an extra nothing matches and a file git cannot stage", async (t) => {
+test("`run publish` refuses a missing or empty message, an empty list, an extra nothing matches and a path that never existed", async (t) => {
   const { env, id, worktree, dir } = makeRun(t, "publish-usage");
   const body = join(dir, "pr-body.md");
   const before = commitCount(worktree);
@@ -1167,7 +1168,7 @@ test("`run publish` refuses a missing or empty message, an empty list, an extra 
   writeListed(dir, ["src/missing.mjs"]);
   const missing = await runCli(env, id, publishArgs(dir));
   assert.equal(missing.code, 1);
-  assert.match(missing.errText, /git could not stage the list in .*: .*src\/missing\.mjs/);
+  assert.deepEqual(missing.out.slice(0, 2), ["REFUSED: src/missing.mjs (not in the worktree, the index or HEAD)", EXTRA_IS_NOT_AN_OVERRIDE]);
   assert.equal(commitCount(worktree), before);
 });
 
@@ -1181,4 +1182,124 @@ test("`run publish` stages from the list `run check 04` derived when the impleme
   assert.equal(code, 0, `${out.join("\n")}\n${errText}`);
   assert.match(out[1], /^COMMITTED: [0-9a-f]+ \(1 files\)$/);
   assert.equal(readFileSync(join(dir, "04-implementation.md"), "utf8"), "# Implementation\n\n## Done\nno list\n");
+});
+
+// Commits tracked files on the run's branch and pushes them as the remote's main, the base the branch is compared with.
+function commitOnBase(worktree, files) {
+  for (const [path, body] of Object.entries(files)) writeInWorktree(worktree, path, body);
+  git(["-C", worktree, "add", "--", ...Object.keys(files)]);
+  git(["-C", worktree, "-c", "commit.gpgsign=false", "commit", "-q", "--no-verify", "-m", "chore: tracked files"]);
+  git(["-C", worktree, "push", "-q", "origin", "HEAD:main"]);
+}
+
+// True when HEAD's tree still holds the path.
+function inHead(worktree, path) {
+  return git(["-C", worktree, "ls-tree", "--name-only", "HEAD", "--", path]).trim() !== "";
+}
+
+test("a staged deletion the list names is published: the commit removes the file and the outcome lists it", async (t) => {
+  const { env, id, worktree, dir, projectId } = makeRun(t, "publish-staged-deletion");
+  commitOnBase(worktree, { "old.txt": "old\n" });
+  git(["-C", worktree, "rm", "-q", "old.txt"]);
+  writeListed(dir, ["src/slug.mjs", "old.txt"]);
+
+  const { code, out, errText } = await runCli(env, id, publishArgs(dir));
+
+  assert.equal(code, 0, `${out.join("\n")}\n${errText}`);
+  assert.match(out[1], /^COMMITTED: [0-9a-f]+ \(2 files\)$/);
+  assert.deepEqual(headFiles(worktree), ["old.txt", "src/slug.mjs"]);
+  assert.equal(inHead(worktree, "old.txt"), false);
+  assert.ok(readRunState({ projectId, slug: SLUG, env }).outcome.files.includes("old.txt"));
+});
+
+test("an unstaged deletion the list names is staged and published", async (t) => {
+  const { env, id, worktree, dir } = makeRun(t, "publish-unstaged-deletion");
+  commitOnBase(worktree, { "old.txt": "old\n" });
+  rmSync(join(worktree, "old.txt"));
+  writeListed(dir, ["src/slug.mjs", "old.txt"]);
+
+  const { code, out, errText } = await runCli(env, id, publishArgs(dir));
+
+  assert.equal(code, 0, `${out.join("\n")}\n${errText}`);
+  assert.deepEqual(headFiles(worktree), ["old.txt", "src/slug.mjs"]);
+  assert.equal(inHead(worktree, "old.txt"), false);
+  assert.equal(git(["-C", worktree, "status", "--short"]).trim(), "");
+});
+
+test("a listed directory removed from disk and not staged is published as a deletion", async (t) => {
+  const { env, id, worktree, dir } = makeRun(t, "publish-unstaged-dir-deletion");
+  commitOnBase(worktree, { "dir/a.txt": "a\n", "dir/b.txt": "b\n" });
+  rmSync(join(worktree, "dir"), { recursive: true });
+  writeListed(dir, ["src/slug.mjs", "dir"]);
+
+  const { code, out, errText } = await runCli(env, id, publishArgs(dir));
+
+  assert.equal(code, 0, `${out.join("\n")}\n${errText}`);
+  assert.equal(inHead(worktree, "dir"), false);
+  assert.equal(git(["-C", worktree, "status", "--short"]).trim(), "");
+});
+
+test("`--extra` over a directory whose files were all `git rm`'d matches the staged deletions", async (t) => {
+  const { env, id, worktree, dir } = makeRun(t, "publish-extra-deletions");
+  commitOnBase(worktree, { "dir/a.txt": "a\n", "dir/b.txt": "b\n" });
+  git(["-C", worktree, "rm", "-q", "-r", "dir"]);
+
+  const { code, out, errText } = await runCli(env, id, publishArgs(dir, ["--extra", "dir/**"]));
+
+  assert.equal(code, 0, `${out.join("\n")}\n${errText}`);
+  assert.deepEqual(headFiles(worktree), ["dir/a.txt", "dir/b.txt", "src/slug.mjs"]);
+  assert.equal(inHead(worktree, "dir"), false);
+});
+
+test("a listed path that never existed is refused before anything is committed or pushed", async (t) => {
+  const made = makeRun(t, "publish-never-existed");
+  writeListed(made.dir, ["src/slug.mjs", "src/never.mjs"]);
+
+  await assertRefused(made, "REFUSED: src/never.mjs (not in the worktree, the index or HEAD)");
+});
+
+test("a listed path with glob characters is staged literally, never as a pattern", async (t) => {
+  const { env, id, worktree, dir } = makeRun(t, "publish-literal-path");
+  commitOnBase(worktree, { "a[1].txt": "one\n", "a1.txt": "one\n" });
+  writeInWorktree(worktree, "a[1].txt", "two\n");
+  writeInWorktree(worktree, "a1.txt", "two\n");
+  writeListed(dir, ["src/slug.mjs", "a[1].txt"]);
+
+  const { code, out, errText } = await runCli(env, id, publishArgs(dir));
+
+  assert.equal(code, 0, `${out.join("\n")}\n${errText}`);
+  assert.deepEqual(headFiles(worktree), ["a[1].txt", "src/slug.mjs"]);
+  assert.equal(git(["-C", worktree, "status", "--porcelain", "--", "a1.txt"]).trim(), "M a1.txt");
+});
+
+test("a deletion the wip carries and the list names is folded once into the delivery", async (t) => {
+  const { env, id, worktree, dir } = makeRun(t, "publish-wip-deletion");
+  commitOnBase(worktree, { "gone.txt": "tracked\n" });
+  git(["-C", worktree, "rm", "-q", "gone.txt"]);
+  commitOwnWip(worktree);
+  writeListed(dir, ["src/slug.mjs", "gone.txt"]);
+
+  const { code, out, errText } = await runCli(env, id, publishArgs(dir));
+
+  assert.equal(code, 0, `${out.join("\n")}\n${errText}`);
+  assert.ok(out.some((line) => line.startsWith("FOLDED: 1 wip commits")), out.join("\n"));
+  assert.equal(git(["-C", worktree, "rev-list", "--count", "origin/main..HEAD"]).trim(), "1");
+  assert.deepEqual(headFiles(worktree), ["gone.txt", "notes.txt", "src/slug.mjs"]);
+  assert.equal(inHead(worktree, "gone.txt"), false);
+});
+
+test("a retry after a delivery that deleted a file reads as already committed, never as a path that never existed", async (t) => {
+  const { env, id, worktree, dir } = makeRun(t, "publish-deletion-retry");
+  commitOnBase(worktree, { "old.txt": "old\n" });
+  git(["-C", worktree, "rm", "-q", "old.txt"]);
+  writeListed(dir, ["src/slug.mjs", "old.txt"]);
+  const first = await runCli(env, id, publishArgs(dir));
+  assert.equal(first.code, 0, `${first.out.join("\n")}\n${first.errText}`);
+  const before = commitCount(worktree);
+
+  const { code, out, errText } = await runCli(env, id, publishArgs(dir));
+
+  assert.equal(code, 0, `${out.join("\n")}\n${errText}`);
+  assert.match(out[1], /^COMMITTED: [0-9a-f]+ \(already committed\)$/);
+  assert.equal(commitCount(worktree), before);
 });
