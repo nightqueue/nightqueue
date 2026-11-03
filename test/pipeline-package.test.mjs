@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
@@ -159,12 +159,21 @@ for (const [name, answer, line] of INVALID_ANSWERS) {
   });
 }
 
-// A throwaway copy of the install, sharing the real node_modules.
+// The node_modules the checkout really resolves from: its own, or an ancestor's when the checkout is a worktree nested in another one.
+function resolvingNodeModules(root) {
+  for (let dir = root; ; dir = dirname(dir)) {
+    const candidate = join(dir, "node_modules");
+    if (existsSync(join(candidate, "@modelcontextprotocol", "sdk"))) return candidate;
+    if (dirname(dir) === dir) throw new Error(`no node_modules with @modelcontextprotocol/sdk above ${root}`);
+  }
+}
+
+// A throwaway copy of the install, sharing the node_modules the checkout resolves from.
 function installCopy(t) {
   const copy = mkdtempSync(join(tmpdir(), "nightqueue-manifest-"));
   t.after(() => rmSync(copy, { recursive: true, force: true }));
   for (const entry of ["bin", "src", "plugin", "package.json"]) cpSync(join(ROOT, entry), join(copy, entry), { recursive: true });
-  symlinkSync(join(ROOT, "node_modules"), join(copy, "node_modules"));
+  symlinkSync(resolvingNodeModules(ROOT), join(copy, "node_modules"));
   return copy;
 }
 
