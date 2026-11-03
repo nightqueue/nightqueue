@@ -1,5 +1,7 @@
-import { basename, isAbsolute } from "node:path";
+import { readdirSync } from "node:fs";
+import { basename, isAbsolute, join } from "node:path";
 import { SHIM_NAME, SHORTCUT_SHIM_NAMES, secretsPath } from "../config/paths.mjs";
+import { packageRoot } from "../host/paths.mjs";
 import { registeredCheckouts } from "../memory/registry-access.mjs";
 import {
   FORBIDDEN_SHELL_CHARS,
@@ -63,10 +65,21 @@ export const READONLY_SUBAGENT_COMMANDS = new Map([
   ["version", ANY_SUBCOMMAND],
 ]);
 
+const AGENT_FILE = /\.md$/;
+const OPERATOR_AGENT_FILE = "operator.md";
+
+// The agent files the plugin this package carries ships, sorted; an unreadable directory answers none, so every launch stays refused.
+function pluginAgentNames() {
+  try {
+    const files = readdirSync(join(packageRoot(), "plugin", "agents")).filter((file) => AGENT_FILE.test(file));
+    return files.filter((file) => file !== OPERATOR_AGENT_FILE).map((file) => file.replace(AGENT_FILE, "")).sort();
+  } catch {
+    return [];
+  }
+}
+
 // The plugin agents the operator may launch: every one but the operator itself.
-export const PIPELINE_AGENTS = Object.freeze([
-  "architect", "coder", "explore", "merger", "qa-guardian", "reflector", "reviewer", "triager", "verifier",
-]);
+export const PIPELINE_AGENTS = Object.freeze(pluginAgentNames());
 
 const PLUGIN_NAME = "nightqueue";
 export const NIGHTQUEUE_PROGRAMS = new Set([SHIM_NAME, ...SHORTCUT_SHIM_NAMES]);

@@ -6,7 +6,7 @@ import { packageRoot } from "../host/paths.mjs";
 import { PIPELINE_TASK_TYPES } from "../memory/runs.mjs";
 import { COMMIT_TYPES } from "../queue/branch-name.mjs";
 import { jobPromptText } from "../queue/job-prompt.mjs";
-import { DEFAULT_PIPELINE, phaseIdsOf, pipelineManifest, pipelineModule } from "../queue/pipeline-package.mjs";
+import { DEFAULT_PIPELINE, phaseIdsOf, phasesBeforeDeliveryOf, pipelineManifest, pipelineModule, stateManifest } from "../queue/pipeline-package.mjs";
 import { installedPipelineVersion, pipelineVersionBlock } from "../queue/pipeline-version.mjs";
 import { isSafeSegment, isStateObject, readRunState } from "../queue/resume.mjs";
 import { callerJobId } from "../queue/retry.mjs";
@@ -25,7 +25,6 @@ export const START_USAGE =
 
 const PROMPT_FILE = "00-prompt.md";
 const DELIVERY_DRAFTS = ["commit-message.txt", "pr-body.md"];
-const PHASES_BEFORE_DELIVERY = ["verification", "runtime"];
 const NO_DEMO_REPO = "none configured";
 
 const TIER_REMOVED = "`--tier` was removed: every run executes the one pipeline; run `nightqueue run start` without it";
@@ -166,7 +165,9 @@ function removeDeliveryDrafts(run, ctx) {
 
 // Whether the run recorded a phase Phase 8 follows, the only way a draft of its own can exist.
 function reachedDelivery(state) {
-  return isStateObject(state) && Array.isArray(state.phases) && state.phases.some((entry) => PHASES_BEFORE_DELIVERY.includes(entry?.phase));
+  if (!isStateObject(state) || !Array.isArray(state.phases)) return false;
+  const beforeDelivery = phasesBeforeDeliveryOf(stateManifest(state));
+  return state.phases.some((entry) => beforeDelivery.includes(entry?.phase));
 }
 
 // The drafts an earlier Phase 8 of this run left, kept for the resumed session; with no such phase recorded they are a previous attempt's and go.

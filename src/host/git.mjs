@@ -2,6 +2,14 @@ import { execFile, spawnSync } from "node:child_process";
 
 const CALL_TIMEOUT_MS = 30000;
 const ASYNC_MAX_BUFFER = 16 * 1024 * 1024;
+export const GIT_COMMIT = "commit";
+
+// The arguments of a quiet commit of what is staged, every repository hook and signing skipped, amending HEAD when asked.
+export function hooklessCommitArgs({ message, amend = false }) {
+  if (typeof message !== "string") throw new TypeError(`a commit message must be a string, got ${typeof message}`);
+  const hookless = ["-c", "commit.gpgsign=false", "-c", "core.hooksPath=/dev/null"];
+  return [...hookless, GIT_COMMIT, "--no-verify", "-q", ...(amend ? ["--amend"] : []), "-m", message];
+}
 
 // Runs a git command and never throws: a missing binary or a refusal is a result the caller decides about.
 export function runGit({ args, cwd, env = process.env, timeoutMs = CALL_TIMEOUT_MS, spawnSyncImpl = spawnSync } = {}) {

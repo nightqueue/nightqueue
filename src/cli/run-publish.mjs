@@ -6,7 +6,8 @@ import { runGit } from "../host/git.mjs";
 import { commitTypeOf, publishedBranchName } from "../queue/branch-name.mjs";
 import { FILE_LIST, listedFiles } from "../queue/file-list.mjs";
 import { neverCommittedReason } from "../queue/never-committed.mjs";
-import { fileListArtifacts } from "../queue/pipeline-package.mjs";
+import { deliveryPhaseOf, fileListArtifacts, stateManifest } from "../queue/pipeline-package.mjs";
+import { attemptSince } from "../queue/pipeline-record.mjs";
 import { publishedBodyFile } from "../queue/pr-footer.mjs";
 import { comparableQuestion, PLACEHOLDER_WORDS, plainQuestion } from "../queue/question-text.mjs";
 import { readRunState } from "../queue/resume.mjs";
@@ -484,10 +485,26 @@ function openOrUpdatePr({ branch, title, bodyFile, draft, ownedDraft, listedFail
   return { url, ...(draft ? convertedToDraft({ url, cwd, env }) : readiedOwnDraft({ url, ownedDraft, listedFailures, cwd, env })) };
 }
 
-// Records the commit phase on the run once its pull request is open; a refused record is reported, never fatal.
-function recordCommitPhase(run, draft, ctx) {
+// The delivering phase of the pipeline a run's state pinned, or the reason it has none.
+function deliveryPhaseOfState(state) {
+  try {
+    const phase = deliveryPhaseOf(stateManifest(state));
+    return phase === null ? { reason: "the pipeline declares no phase that `delivers`" } : { phase };
+  } catch (error) {
+    return { reason: String(error?.message ?? error).split("\n")[0] };
+  }
+}
+
+// Records the delivering phase on the run once its pull request is open; a refused record is reported, never fatal.
+async function recordCommitPhase({ run, state, draft }, ctx) {
+  const delivery = deliveryPhaseOfState(state);
+  if (delivery.phase === undefined) {
+    ctx.err(`nightqueue: the commit phase was not recorded on the run: ${delivery.reason}`);
+    return;
+  }
   const verdict = draft ? "Draft PR opened" : "PR opened";
-  const recorded = recordPhaseDone({ projectId: run.projectId, slug: run.slug, phase: "commit", verdict, by: RUNTIME_AUTHOR, claim: run.claim, env: ctx.env });
+  const measures = { attemptStartedAt: await attemptSince(run.jobId ?? null, ctx.env), model: null };
+  const recorded = recordPhaseDone({ projectId: run.projectId, slug: run.slug, phase: delivery.phase, verdict, by: RUNTIME_AUTHOR, claim: run.claim, measures, env: ctx.env });
   if (recorded.status !== "written") ctx.err(`nightqueue: the commit phase was not recorded on the run: ${recorded.reason}`);
 }
 
@@ -527,7 +544,7 @@ export async function openPullRequest({ run, cwd, bodyFile, body, title, removeW
   if (staysDraft) ctx.err(`nightqueue: ${url} stays a draft: ${staysDraft}`);
   if (recorded.status !== "written") ctx.err(`nightqueue: the run was not recorded as done: ${recorded.reason}`);
   if (prRecorded.status !== "written") ctx.err(`nightqueue: the pull request was not recorded on the run: ${prRecorded.reason}`);
-  recordCommitPhase(run, draft, ctx);
+  await recordCommitPhase({ run, state, draft }, ctx);
   ctx.out(`WORKTREE: ${cwd}`);
   if (removeWorktree) ctx.out(worktreeRemoval(run, cwd, ctx.env));
   return 0;

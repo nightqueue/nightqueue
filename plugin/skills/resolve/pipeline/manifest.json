@@ -9,7 +9,8 @@
       "artifact": "01-triage.md",
       "sections": ["## Verdict", "## Validated brief", "## Out of scope", "## Request gaps"],
       "verdicts": ["PROCEED", "NO-CHANGE-NEEDED", "NOT-REPRODUCIBLE"],
-      "agents": ["triager"]
+      "agents": ["triager"],
+      "gateStop": "triage"
     },
     {
       "id": "explore",
@@ -25,7 +26,8 @@
       "artifact": "03-plan.md",
       "sections": ["## Implementation plan", "## Assumptions", "## Pre-mortem", "## Identified risks"],
       "verdicts": ["OK"],
-      "agents": ["architect"]
+      "agents": ["architect"],
+      "gateStop": "architect"
     },
     {
       "id": "implementation",
@@ -45,6 +47,7 @@
       "agents": ["qa-triage", "qa-analyst", "qa-prover"],
       "rounds": true,
       "appendable": true,
+      "gateStop": "qa",
       "stages": {
         "analyst": { "sections": ["## Proven breaks", "## Break hypotheses", "## Test recipe", "## Validated risks", "## Invalidated assumptions", "## Generated PoCs", "## Verdict"] },
         "triage": { "sections": ["## Diff classification", "## New risk", "## QA mode"] }
@@ -57,7 +60,9 @@
       "sections": ["## Checks run", "## Verification"],
       "verdicts": ["PASSED", "PASSED-STATIC", "FAILED"],
       "agents": ["verifier"],
-      "rounds": true
+      "rounds": true,
+      "gateStop": "verification",
+      "precedesDelivery": true
     },
     {
       "id": "runtime",
@@ -66,10 +71,13 @@
       "sections": ["## Runtime verdict"],
       "verdicts": ["CONFIRMED", "NOT-MET", "SYMPTOM-PERSISTS", "NEEDS-DEVICE", "UNAVAILABLE"],
       "agents": ["verifier"],
-      "rounds": true
+      "rounds": true,
+      "gateStop": "runtime",
+      "precedesDelivery": true
     },
-    { "id": "commit", "check": null, "artifact": null, "sections": [], "verdicts": ["PR opened", "Draft PR opened"], "agents": [] }
+    { "id": "commit", "check": null, "artifact": null, "sections": [], "verdicts": ["PR opened", "Draft PR opened"], "agents": [], "delivers": true }
   ],
+  "gateStops": ["critique", "triage", "architect", "qa", "verification", "runtime"],
   "models": {
     "triager": "sonnet",
     "explore": "haiku",
@@ -91,12 +99,25 @@
     { "number": 4, "name": "coder", "agent": "coder", "modelAgent": "coder", "phase": "implementation" },
     { "number": 5, "name": "qa-guardian", "agent": "qaGuardian", "modelAgent": "qa-analyst", "phase": "qa" },
     { "number": 6, "name": "verifier", "agent": "verifier", "modelAgent": "verifier", "phase": "verification" },
-    { "number": 7, "name": "runtime", "agent": null, "modelAgent": null, "phase": "runtime" },
+    { "number": 7, "name": "runtime", "agent": null, "modelAgent": null, "phase": "runtime", "lane": "verifier", "promptMode": "RUNTIME" },
     { "number": 8, "name": "commit · PR", "agent": null, "modelAgent": null, "phase": "commit" }
   ],
   "constants": {
     "maxFixIterations": 2,
     "qaMethods": "automated; + api for an API change; + emulator for a UI change in an Expo repo; + browser for a UI change in a web repo"
+  },
+  "report": {
+    "rows": [
+      { "phase": "triage", "step": "1 Triage", "agent": "🔍 Triager" },
+      { "phase": "explore", "step": "2 Exploration", "agent": "🧭 Explore" },
+      { "phase": "architecture", "step": "3 Architecture", "agent": "📐 Architect" },
+      { "phase": "implementation", "step": "4 Implementation", "agent": "⚙️ Coder" },
+      { "phase": "qa", "step": "5 QA", "agent": "🛡️ QA-Guardian" },
+      { "phase": "verification", "step": "6 Verification", "agent": "✅ Verifier" },
+      { "phase": "runtime", "step": "7 Runtime", "agent": "📱 Runtime" },
+      { "phase": "commit", "step": "8 Commit/PR", "agent": "🚀 Commit/PR" },
+      { "phase": null, "step": "9 Report", "agent": "🗂️ Report" }
+    ]
   },
   "renumbered": { "06.5": "07", "05a": "05" },
   "gateArtifact": "03-plan.md",

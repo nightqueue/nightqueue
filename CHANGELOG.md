@@ -22,6 +22,16 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **Report and telemetry are read from the recorded phases and the pipeline package.** Each `phases[]`
+  entry `run check` and `run publish` write now carries its own `attempt`, `durationS` (wall time since
+  the previous record of the attempt, orchestrator time included) and `model`, and `run report`, `run log`,
+  the reflector timeline and `pipeline_phases` read them instead of zipping the job log's lanes; an entry
+  recorded before reads as `-` and stores NULL. The report table, its row rules, open items and facts
+  come from the manifest's `report.rows` and the package's `report.mjs`, and the gate stops, the
+  delivering phase, the phases before it and the runtime lane come from new manifest keys (`gateStops`,
+  `gateStop`, `delivers`, `precedesDelivery`, `track[].lane`, `track[].promptMode`), so `src/` names no
+  `resolve` phase or artifact. Every existing report prints the same lines.
+
 - **`resolve` is a package the runtime loads by name; MCP clients restart (tool contract bump).** The
   phases, artifacts, verdicts, gates and models of the pipeline moved to `plugin/skills/resolve/pipeline/`
   (`manifest.json` and `check.mjs`), resolved from `jobs.pipeline`, and `run check` became a skeleton that

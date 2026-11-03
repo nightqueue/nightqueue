@@ -16,6 +16,9 @@ import { hostPackageRoot, packageRoot } from "./paths.mjs";
 
 const SHIM_MODE = 0o755;
 
+// The author of the phase entries the runtime writes itself (`run check`, `run publish`).
+export const RUNTIME_AUTHOR = "runtime";
+
 // Escapes the characters of one path fragment a regular expression would read as syntax.
 function escapeForRegExp(text) {
   return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");

@@ -7,6 +7,7 @@ import {
   withFullSync,
   withWriteRetry,
 } from "./db.mjs";
+import { gateStopsOf, pipelineManifest } from "../queue/pipeline-package.mjs";
 import { projectIdOrNull } from "./registry.mjs";
 
 // `pipeline_runs.tier` is NOT NULL in the shipped schema (ddl.mjs); no run has a tier any more, so every row carries the value of the one track every run now executes, until the schema bump that drops the column.
@@ -14,7 +15,7 @@ const LEGACY_RUN_TIER = "complex";
 export const PIPELINE_TASK_TYPES = ["bug/error", "feature/refactor"];
 export const OPERATOR_PIPELINE_OUTCOMES = ["investigated", "queued"];
 export const PIPELINE_OUTCOMES = ["pr_opened", "local_commit", "no_commit", ...OPERATOR_PIPELINE_OUTCOMES];
-export const PIPELINE_GATE_STOPS = ["critique", "triage", "architect", "qa", "verification", "runtime", "user"];
+export const PIPELINE_GATE_STOPS = Object.freeze([...gateStopsOf(pipelineManifest()), "user"]);
 export const PIPELINE_PHASE_STATUSES = ["ok", "failed", "skipped"];
 
 // Requires a value of an enum, naming the accepted values in the error.

@@ -1,7 +1,7 @@
 import { PHASE_ARTIFACTS } from "./artifacts.mjs";
 import { CHECK_CONTEXT_FILES, deviceScript, evaluateCheck, isTestPath, readVerdict } from "./contract.mjs";
 
-// The pure reads `run report` still needs from the package, by static path until the report job takes them over.
+// The pure reads the package's report.mjs takes from the check contract.
 
 export { CHECK_CONTEXT_FILES, deviceScript, isTestPath };
 

@@ -1,47 +1,19 @@
-import { CHECK_CONTEXT_FILES, fileOf, openLinesOf as openItemsOf } from "../../plugin/skills/resolve/pipeline/reader.mjs";
+import { UserError } from "../config/errors.mjs";
+import { DEFAULT_PIPELINE, loadReport, pinnedPipelineName, reportLayoutOf } from "../queue/pipeline-package.mjs";
 import { openQuestion } from "../queue/question-text.mjs";
-import { lastRound } from "../queue/rounds.mjs";
-import { attemptSince, derivedGateStop, derivedOutcome, recordPipelineRun, statePipelinePhases, verdictIcon, verdictWord } from "../queue/pipeline-record.mjs";
+import { attemptSince, derivedGateStop, derivedOutcome, entryDurationS, recordPipelineRun, statePipelinePhases, verdictIcon, verdictWord } from "../queue/pipeline-record.mjs";
 import { defaultGitImpl } from "../queue/preflight.mjs";
 import { isStateObject } from "../queue/resume.mjs";
 import { draftLine, refusedDraftLine } from "../queue/run-state.mjs";
 import { renderSkillTemplate, skillReferencesDir } from "../queue/skill-template.mjs";
-import { sectionOf } from "../queue/stream.mjs";
 import { runDurationS } from "../queue/telemetry.mjs";
 import { checkArgs, parseCommand } from "./args.mjs";
 import { FACTS_HEADING, reportFacts } from "./report-facts.mjs";
-import { changedFiles, durationCell, phaseRows, readJobLog, readRunFile, requireRunState, resolveRun, RUN_OPTIONS, worktreeOf } from "./run-context.mjs";
+import { changedFiles, durationCell, readJobLog, readRunFile, requireRunState, resolveRun, RUN_OPTIONS, worktreeOf } from "./run-context.mjs";
 
 export const REPORT_USAGE = "nightqueue run report [--json] [--facts] [--project <name> --slug <slug>]";
 
-// The steps of the report, in order: the canonical phase, the step label and the agent of the visual identity.
-const STEPS = [
-  { phase: "triage", step: "1 Triage", agent: "🔍 Triager" },
-  { phase: "explore", step: "2 Exploration", agent: "🧭 Explore" },
-  { phase: "architecture", step: "3 Architecture", agent: "📐 Architect" },
-  { phase: "implementation", step: "4 Implementation", agent: "⚙️ Coder" },
-  { phase: "qa", step: "5 QA", agent: "🛡️ QA-Guardian" },
-  { phase: "verification", step: "6 Verification", agent: "✅ Verifier" },
-  { phase: "runtime", step: "7 Runtime", agent: "📱 Runtime" },
-  { phase: "commit", step: "8 Commit/PR", agent: "🚀 Commit/PR" },
-  { phase: null, step: "9 Report", agent: "🗂️ Report" },
-];
-
-const OPEN_CHECKS = ["03", "05", "06", "07"];
-const DEDICATED_TICKET = "dedicated ticket: yes";
 const EMPTY = durationCell(null);
-
-// The recorded entries of one phase in state.json, in the order they were recorded.
-function entriesOf(state, phase) {
-  const phases = Array.isArray(state.phases) ? state.phases : [];
-  return phases.filter((entry) => entry?.phase === phase);
-}
-
-// True when the verification passed with a real run of the checks, which is what lets a change skip 7 as purely static.
-function passedWithoutRuntimeDebt(state) {
-  const last = entriesOf(state, "verification").at(-1);
-  return last !== undefined && verdictWord(last.verdict) === "PASSED";
-}
 
 // The failures the run's pull request leaves open, or null when it delivered with none.
 function draftFailuresOf(state) {
@@ -72,24 +44,21 @@ function noteOf(entry) {
     .join(" — ");
 }
 
-// The result and the note of one recorded execution; a skip the QA mode decided reads its why, and a commit entry exists only once the runtime committed, so it reads the delivery.
-function resultOf(phase, entry, state) {
-  const word = verdictWord(entry.verdict);
-  if (phase === "qa" && word === "SKIPPED" && state.qaMode?.mode === "skip") return { icon: "⏭️", word: "", note: `no new risk: ${noteOf({ note: entry.note })}` };
-  const icon = verdictIcon(entry.verdict);
-  if (phase !== "commit") return { icon, word, note: noteOf(entry) };
-  return { icon: "✅", word, note: deliveryNote(state) ?? (noteOf(entry) || "committed, no pull request recorded") };
+// The icon, word and note the package reads one row as, or null when it leaves the row to the runtime's default.
+function packageResult(rowOf, row) {
+  const result = typeof rowOf === "function" ? rowOf(row) : null;
+  return result === null || result === undefined ? null : { icon: "", word: "", note: "", ...result };
 }
 
-// The time the runtime measured for the n-th launch of a phase, or null when it measured none.
-function measuredDuration(measured, phase, launch) {
-  const lanes = Array.isArray(measured) ? measured : [];
-  const lane = lanes.filter((row) => row?.phase === phase)[launch - 1];
-  return lane?.durationS ?? null;
+// The result and the note of one recorded execution: the package's reading, else its verdict and what it recorded.
+function resultOf(phase, entry, { state, rowOf }) {
+  const note = noteOf(entry);
+  const custom = packageResult(rowOf, { phase, entry, state, delivery: deliveryNote(state), note });
+  return custom ?? { icon: verdictIcon(entry.verdict), word: verdictWord(entry.verdict), note };
 }
 
-// One row per recorded execution, in the order state.json recorded them; an entry without a phase is skipped.
-function recordedRows(state, measured) {
+// One row per recorded execution, in the order state.json recorded them, with the duration its own entry recorded; an entry without a phase is skipped.
+function recordedRows(state, { layout, rowOf }) {
   const phases = Array.isArray(state.phases) ? state.phases : [];
   const launches = new Map();
   const rows = [];
@@ -98,47 +67,44 @@ function recordedRows(state, measured) {
     if (phase.trim() === "") continue;
     const launch = (launches.get(phase) ?? 0) + 1;
     launches.set(phase, launch);
-    const step = STEPS.find((candidate) => candidate.phase === phase);
-    rows.push({ phase, step: step?.step ?? phase, agent: step?.agent ?? EMPTY, launch, ...resultOf(phase, entry, state), durationS: measuredDuration(measured, phase, launch) });
+    const step = layout.find((candidate) => candidate.phase === phase);
+    rows.push({ phase, step: step?.step ?? phase, agent: step?.agent ?? EMPTY, launch, ...resultOf(phase, entry, { state, rowOf }), durationS: entryDurationS(entry) });
   }
   return rows;
 }
 
-// The icon and the note of a planned step the run never recorded, read from what it did record around it.
-function missingStatus(step, state) {
-  if (step.phase === null) return { icon: "⏳", note: "this report" };
-  if (step.phase === "commit") {
-    const note = deliveryNote(state);
-    return note === null ? { icon: "⚠️", note: "no pull request recorded" } : { icon: "✅", note };
-  }
-  if (step.phase === "runtime" && passedWithoutRuntimeDebt(state)) return { icon: "⏭️", note: "purely static change" };
-  return { icon: "⚠️", note: "not recorded" };
+// The icon and the note of a planned step the run never recorded: the package's reading of what was recorded around it, else not recorded.
+function missingStatus(step, { state, rowOf }) {
+  if (step.phase === null) return { icon: "⏳", word: "", note: "this report" };
+  const custom = packageResult(rowOf, { phase: step.phase, entry: null, state, delivery: deliveryNote(state), note: "" });
+  return custom ?? { icon: "⚠️", word: "", note: "not recorded" };
 }
 
 // The single row of a planned step with no record.
-function missingRow(step, state) {
-  const { icon, note } = missingStatus(step, state);
-  return { phase: step.phase, step: step.step, agent: step.agent, launch: 0, icon, word: "", note, durationS: null };
+function missingRow(step, view) {
+  const { icon, word, note } = missingStatus(step, view);
+  return { phase: step.phase, step: step.step, agent: step.agent, launch: 0, icon, word, note, durationS: null };
 }
 
-// The rows of the report: every recorded execution in temporal order, each unrecorded step once at its nominal slot.
-export function reportRows(state, measured) {
-  const recorded = recordedRows(state, measured);
+// The rows of the report: every recorded execution in temporal order, each unrecorded step of the pipeline's layout once at its nominal slot.
+export function reportRows(state, { layout, rowOf = null }) {
+  const view = { state, layout, rowOf };
+  const recorded = recordedRows(state, view);
   const has = new Set(recorded.map((row) => row.phase));
   const rows = [];
   let next = 0;
   const fill = (upTo) => {
-    for (; next < upTo; next++) if (!has.has(STEPS[next].phase)) rows.push(missingRow(STEPS[next], state));
+    for (; next < upTo; next++) if (!has.has(layout[next].phase)) rows.push(missingRow(layout[next], view));
   };
   for (const row of recorded) {
-    const at = STEPS.findIndex((step) => step.phase === row.phase);
+    const at = layout.findIndex((step) => step.phase === row.phase);
     if (at >= 0) {
       fill(at);
       next = Math.max(next, at + 1);
     }
     rows.push(row);
   }
-  fill(STEPS.length);
+  fill(layout.length);
   return rows;
 }
 
@@ -186,44 +152,11 @@ function tableRows(rows) {
   return rows.map(tableRow).join("\n");
 }
 
-// A text collapsed onto one line.
-function flatLine(text) {
-  return String(text ?? "").replace(/\s+/g, " ").trim();
-}
-
-// The bullets of a markdown section, each flattened onto one line with its indented continuation lines.
-function sectionBullets(section) {
-  const bullets = [];
-  for (const line of String(section ?? "").split("\n")) {
-    if (/^\s*[-*]\s+/.test(line)) bullets.push(line.replace(/^\s*[-*]\s+/, ""));
-    else if (bullets.length > 0 && /^\s+\S/.test(line)) bullets[bullets.length - 1] += ` ${line}`;
-  }
-  return bullets.map(flatLine).filter((bullet) => bullet !== "");
-}
-
-// The suggestions of the QA's last round that ask for a ticket of their own.
-function dedicatedTickets(runDir) {
-  const qa = lastRound(readRunFile(runDir, fileOf("05")));
-  return sectionBullets(sectionOf(qa, "## Suggestions"))
-    .filter((bullet) => bullet.includes(DEDICATED_TICKET))
-    .map((bullet) => `dedicated ticket: ${bullet}`);
-}
-
-// The `OPEN:` lines one check answers for its artifact, named by the check; a check that cannot be evaluated is an open item itself.
-function openLinesOf(check, runDir, state) {
-  const file = fileOf(check);
-  if (readRunFile(runDir, file) === "") return [];
-  const texts = Object.fromEntries([...CHECK_CONTEXT_FILES, file].map((name) => [name, readRunFile(runDir, name)]));
-  try {
-    return openItemsOf(check, texts, state).map((item) => `${check} open: ${item}`);
-  } catch {
-    return [`the open items of check ${check} could not be read`];
-  }
-}
-
-// The `OPEN:` lines the plan, QA, verification and runtime checks answer for their artifacts.
-function checkOpenLines(runDir, state) {
-  return OPEN_CHECKS.flatMap((check) => openLinesOf(check, runDir, state));
+// The items the pipeline's package says its artifacts leave open, none when it says nothing.
+function packageOpenItems(runDir, state, report) {
+  if (typeof report.openItems !== "function") return [];
+  const items = report.openItems({ read: (name) => readRunFile(runDir, name), state });
+  return Array.isArray(items) ? items : [];
 }
 
 // The open item of a pull request gh would not turn ready, whose failures are gone.
@@ -233,20 +166,20 @@ function staysDraftItems(state) {
 }
 
 // The items the run leaves open, which the Notice translates into its Still open.
-function runOpenItems(runDir, state) {
+function runOpenItems(runDir, state, report) {
   const openFailures = openFailuresLine(state);
-  return [...(openFailures === null ? [] : [openFailures]), ...staysDraftItems(state), ...dedicatedTickets(runDir), ...checkOpenLines(runDir, state)];
+  return [...(openFailures === null ? [] : [openFailures]), ...staysDraftItems(state), ...packageOpenItems(runDir, state, report)];
 }
 
-// The telemetry row of the run, derived from its state.json.
-function runSpec(run, state) {
-  const outcome = derivedOutcome(state);
+// The telemetry row of the run, derived from its state.json and the manifest of its pipeline.
+function runSpec(run, state, manifest) {
+  const outcome = derivedOutcome(state, manifest);
   return {
     projectId: run.projectId,
     slug: run.slug,
     taskType: state.type ?? null,
     outcome,
-    gateStop: derivedGateStop(state, outcome),
+    gateStop: derivedGateStop(state, outcome, manifest),
     phases: statePipelinePhases(state),
   };
 }
@@ -258,10 +191,10 @@ function recordedWord(logged) {
 }
 
 // Records the run's telemetry once per attempt, else unless its last record has the same facts; a failure answers `not recorded` and leaves an open item, never an error.
-async function recordRun(run, state, { env, openItems }) {
+async function recordRun(run, state, { env, openItems, manifest }) {
   try {
     const since = run.jobId === null ? null : await attemptSince(run.jobId, env);
-    return recordedWord(await recordPipelineRun({ spec: runSpec(run, state), since }, env));
+    return recordedWord(await recordPipelineRun({ spec: runSpec(run, state, manifest), since }, env));
   } catch (error) {
     const reason = error?.message ?? String(error);
     openItems.push("the run was not recorded in the telemetry");
@@ -274,10 +207,15 @@ function openItemLines(items) {
   return items.length === 0 ? "- none" : items.map((item) => `- ${cellText(item)}`).join("\n");
 }
 
+// The plan the pipeline gates on, empty when its manifest names no gate artifact.
+function gatePlan(runDir, manifest) {
+  return typeof manifest.gateArtifact === "string" ? readRunFile(runDir, manifest.gateArtifact) : "";
+}
+
 // Everything the report says about the run, before it is printed.
-function buildReport(run, state, log) {
-  const rows = reportRows(state, phaseRows(state, log));
-  const reason = firstFailingGate(state, rows, readRunFile(run.runDir, "03-plan.md"));
+function buildReport({ run, state, log }, { manifest, report }) {
+  const rows = reportRows(state, { layout: reportLayoutOf(manifest), rowOf: report.rowOf });
+  const reason = firstFailingGate(state, rows, gatePlan(run.runDir, manifest));
   return {
     slug: run.slug,
     rows,
@@ -325,17 +263,30 @@ function printFacts(facts, values, ctx) {
   return 0;
 }
 
+// The package the report reads: the pinned pipeline's, else the default one's with an open item naming why the pinned one could not be read.
+async function reportPackageOf(state, ctx) {
+  const load = ctx.loadReport ?? loadReport;
+  const name = pinnedPipelineName(state) ?? DEFAULT_PIPELINE;
+  try {
+    return { pipeline: await load(name), unreadable: [] };
+  } catch (error) {
+    if (!(error instanceof UserError) || name === DEFAULT_PIPELINE) throw error;
+    return { pipeline: await load(DEFAULT_PIPELINE), unreadable: [`reported with the \`${DEFAULT_PIPELINE}\` layout: ${error.message}`] };
+  }
+}
+
 // Runs `run report`, which renders the tables of the final report from the run's own records, then the facts of its artifacts; `--facts` prints only those and records nothing.
 export async function runReport(argv, ctx) {
   const { values, positionals } = parseCommand(argv, { ...RUN_OPTIONS, json: { type: "boolean" }, facts: { type: "boolean" } });
   checkArgs(positionals, { max: 0, usage: REPORT_USAGE });
   const run = await resolveRun(values, ctx);
   const state = requireRunState(run, ctx.env);
-  const facts = reportFacts({ runDir: run.runDir, state, worktree: worktreeChanges(run, ctx) });
+  const { pipeline, unreadable } = await reportPackageOf(state, ctx);
+  const facts = await reportFacts({ runDir: run.runDir, state, worktree: worktreeChanges(run, ctx), ...pipeline });
   if (values.facts === true) return printFacts(facts, values, ctx);
-  const openItems = runOpenItems(run.runDir, state);
-  const recorded = await recordRun(run, state, { env: ctx.env, openItems });
-  const report = { ...buildReport(run, state, readJobLog(run.jobId, ctx.env)), openItems, recorded, facts };
+  const openItems = [...unreadable, ...runOpenItems(run.runDir, state, pipeline.report)];
+  const recorded = await recordRun(run, state, { env: ctx.env, openItems, manifest: pipeline.manifest });
+  const report = { ...buildReport({ run, state, log: readJobLog(run.jobId, ctx.env) }, pipeline), openItems, recorded, facts };
   if (values.json === true) ctx.out(JSON.stringify(report));
   else for (const line of [...reportLines(report), ...factLines(facts)]) ctx.out(line);
   return 0;

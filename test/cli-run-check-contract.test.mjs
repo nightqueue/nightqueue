@@ -187,7 +187,7 @@ test("a completed check records its phase as the runtime, and the same artifact 
   assert.deepEqual(again.out, ["OK", "VERDICT: PASSED", "recorded: phase_done verification PASSED (already)"]);
   const { phases, checks } = stateOf(seeded);
   assert.equal(phases.length, 1);
-  assert.deepEqual({ ...phases[0], at: null }, { phase: "verification", at: null, artifact: "06-verification.md", verdict: "PASSED", by: "runtime", claim: { attempt: 0, session: null } });
+  assert.deepEqual({ ...phases[0], at: null }, { phase: "verification", at: null, artifact: "06-verification.md", verdict: "PASSED", by: "runtime", claim: { attempt: 0, session: null }, attempt: 0, model: "haiku" });
   assert.equal(checks["06"].line, "OK");
   assert.equal(checks["06"].ok, true);
   assert.equal(checks.lastFailure, undefined);
@@ -512,7 +512,7 @@ test("a skip records the mode and one SKIPPED qa entry, and a second check leave
   const first = stateOf(seeded);
   assert.deepEqual({ ...first.qaMode, at: null }, { mode: "skip", reason: why, at: null });
   assert.equal(typeof first.qaMode.at, "string");
-  assert.deepEqual({ ...first.phases[0], at: null }, { phase: "qa", at: null, artifact: "05-qa.md", verdict: "SKIPPED", note: why, reason: `QA skipped: ${why}`, by: "runtime", claim: { attempt: 0, session: null } });
+  assert.deepEqual({ ...first.phases[0], at: null }, { phase: "qa", at: null, artifact: "05-qa.md", verdict: "SKIPPED", note: why, reason: `QA skipped: ${why}`, by: "runtime", claim: { attempt: 0, session: null }, attempt: 0, model: "sonnet" });
   await nextMillisecond();
   const again = await runCheck(seeded.env, "05", TRIAGE_ARGS);
   assert.deepEqual(again.out.slice(-2), ["recorded: phase_done qa SKIPPED (already)", "recorded: qa_mode skip (already)"]);

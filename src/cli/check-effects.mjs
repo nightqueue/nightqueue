@@ -123,17 +123,17 @@ function phaseDoneLine(done, written) {
 }
 
 // Writes the check memo and, for a completed check of a phase, the phase itself; answers the `recorded:` line of the phase.
-function memoAndPhaseLines(answer, { run, ctx }) {
+function memoAndPhaseLines(answer, { run, ctx, measures }) {
   const { key, ...memo } = answer.memo;
-  const written = recordCheck({ projectId: run.projectId, slug: run.slug, check: key, memo, done: answer.record, claim: run.claim, env: ctx.env });
+  const written = recordCheck({ projectId: run.projectId, slug: run.slug, check: key, memo, done: answer.record, claim: run.claim, measures, env: ctx.env });
   if (answer.record !== null) return [phaseDoneLine(answer.record, written)];
   if (written.status !== "written") ctx.err(`nightqueue: the check memo was not recorded on the run: ${written.reason}`);
   return [];
 }
 
 // The effects of an answer in order, with the memo and the phase record between those that go before it and those that go after it, and the lines they print.
-export async function checkEffectLines({ answer, run, job, ctx }) {
-  const exec = { run, job, ctx };
+export async function checkEffectLines({ answer, run, job, ctx, measures = null }) {
+  const exec = { run, job, ctx, measures };
   const lines = [];
   for (const effect of answer.effects.filter((candidate) => candidate.afterRecord !== true)) lines.push(...(await effectLines(effect, exec)));
   lines.push(...memoAndPhaseLines(answer, exec));

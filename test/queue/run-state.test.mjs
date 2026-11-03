@@ -307,3 +307,78 @@ test("an unsafe project or slug records nothing at all", (t) => {
     assert.deepEqual({ status: written.status, path: written.path }, { status: "kept", path: null });
   }
 });
+
+// An ISO instant the given number of seconds before now.
+function secondsAgo(seconds) {
+  return new Date(Date.now() - seconds * 1000).toISOString();
+}
+
+// Asserts a measured duration is the expected one, allowing the second the test itself may take.
+function assertAbout(actual, expected) {
+  assert.ok(Number.isInteger(actual) && actual >= expected && actual <= expected + 1, `measured ${actual}s, expected about ${expected}s`);
+}
+
+test("the first entry of an attempt measures from the attempt's start, never from an entry of an earlier attempt", (t) => {
+  const env = makeHome(t, "run-state-measures-first");
+  writeState(env, { phases: [{ phase: "triage", at: secondsAgo(10), claim: { attempt: 1, session: null } }] });
+
+  recordPhaseDone({ ...RUN, phase: "explore", claim: { attempt: 2, session: null }, measures: { attemptStartedAt: secondsAgo(100), model: "haiku" }, env });
+
+  const entry = readState(env).phases.at(-1);
+  assert.equal(entry.attempt, 2);
+  assert.equal(entry.model, "haiku");
+  assertAbout(entry.durationS, 100);
+});
+
+test("a later entry of the attempt measures from the previous entry of the same attempt", (t) => {
+  const env = makeHome(t, "run-state-measures-next");
+  writeState(env, { phases: [{ phase: "triage", at: secondsAgo(40), claim: { attempt: 2, session: null } }] });
+
+  recordPhaseDone({ ...RUN, phase: "explore", claim: { attempt: 2, session: null }, measures: { attemptStartedAt: secondsAgo(500), model: "haiku" }, env });
+
+  assertAbout(readState(env).phases.at(-1).durationS, 40);
+});
+
+test("a previous entry of the attempt with no valid instant (future-dated or unparseable) measures from the attempt's start instead", (t) => {
+  for (const badAt of [new Date(Date.now() + 3600 * 1000).toISOString(), "not-a-date"]) {
+    const env = makeHome(t, "run-state-measures-bad-previous");
+    writeState(env, { phases: [{ phase: "triage", at: badAt, claim: { attempt: 2, session: null } }] });
+
+    recordPhaseDone({ ...RUN, phase: "explore", claim: { attempt: 2, session: null }, measures: { attemptStartedAt: secondsAgo(100), model: "haiku" }, env });
+
+    assertAbout(readState(env).phases.at(-1).durationS, 100);
+  }
+});
+
+test("with no claim the entry has no attempt and measures from the previous entry; with neither a previous entry nor a start, nothing is measured", (t) => {
+  const env = makeHome(t, "run-state-measures-no-claim");
+  writeState(env, { phases: [{ phase: "triage", at: secondsAgo(20) }] });
+  recordPhaseDone({ ...RUN, phase: "explore", measures: { attemptStartedAt: null, model: null }, env });
+  const measured = readState(env).phases.at(-1);
+  assert.equal("attempt" in measured, false);
+  assert.equal("model" in measured, false, "a null model was recorded as a key");
+  assertAbout(measured.durationS, 20);
+
+  const fresh = makeHome(t, "run-state-measures-nothing");
+  recordPhaseDone({ ...RUN, phase: "triage", measures: { attemptStartedAt: null, model: "opus" }, env: fresh });
+  assert.deepEqual(Object.keys(readState(fresh).phases[0]), ["phase", "at", "model"]);
+});
+
+test("a check that completes a phase stamps its measures, a repeated check appends and stamps nothing, and a writer with no measures records the old shape", (t) => {
+  const env = makeHome(t, "run-state-measures-check");
+  const passing = { line: "OK", ok: true, completed: true, digest: "b" };
+  const done = { phase: "runtime", artifact: "07-runtime.md", verdict: "CONFIRMED" };
+  const measures = { attemptStartedAt: secondsAgo(30), model: "haiku" };
+
+  recordCheck({ ...RUN, check: "07", memo: passing, done, claim: { attempt: 1, session: null }, measures, env });
+  const again = recordCheck({ ...RUN, check: "07", memo: passing, done, claim: { attempt: 1, session: null }, measures, env });
+
+  const phases = readState(env).phases;
+  assert.equal(again.phase.status, "already");
+  assert.equal(phases.length, 1);
+  assert.deepEqual([phases[0].attempt, phases[0].model], [1, "haiku"]);
+  assertAbout(phases[0].durationS, 30);
+
+  recordPhaseDone({ ...RUN, phase: "commit", verdict: "PR opened", env });
+  assert.deepEqual(Object.keys(readState(env).phases.at(-1)), ["phase", "at", "verdict"]);
+});

@@ -4,7 +4,7 @@ import { clockLabel } from "./hints.mjs";
 import { extractNotice, extractPrUrl, hasGateMarker, laneName, parseEventLine, parseSlugLine, tokensFromEvent } from "./stream.mjs";
 import { jobRef } from "../memory/refs.mjs";
 import { slotNumberOf, TRACK_SLOTS } from "./routing.mjs";
-import { pipelineManifest } from "./pipeline-package.mjs";
+import { deliveryPhaseOf, pipelineManifest } from "./pipeline-package.mjs";
 
 const ATTEMPT_LINE_RE = /^=== attempt (\d+) @ (\S+) ===$/;
 const RATE_PAUSE_LINE_RE = /^=== rate limit until (\S+) @ (\S+) ===$/;
@@ -25,28 +25,29 @@ const RUN_CHECK_RE = /\bnightqueue run check\s+(\S+)/;
 const FILE_TOOLS = new Set(["Read", "Edit", "Write", "NotebookEdit"]);
 const MCP_TARGET_FIELDS = ["file_path", "path", "pattern", "project", "repo_root", "slug", "query", "name", "key", "id"];
 const EDIT_TOOLS = new Set(["Edit", "Write", "NotebookEdit"]);
-export const PHASES = new Map([
-  ["triager", 1],
-  ["explore", 2],
-  ["architect", 3],
-  ["coder", 4],
-  ["qa-guardian", 5],
-  ["verifier", 6],
-]);
+export const PHASES = new Map(TRACK_SLOTS.filter((slot) => slot.agent !== null).map((slot) => [slot.name, slot.number]));
+
+const DELIVERY_SLOT = slotNumberOf(deliveryPhaseOf(pipelineManifest()));
 
 // `run report` has no slot of its own: it is the tail of commit · PR, like publish.
 const PHASE_MARKERS = [
   [/nightqueue run start\b/, 0],
-  [/nightqueue run publish\b/, slotNumberOf("commit")],
-  [/nightqueue run report\b/, slotNumberOf("commit")],
+  [/nightqueue run publish\b/, DELIVERY_SLOT],
+  [/nightqueue run report\b/, DELIVERY_SLOT],
 ];
 
-export const RUNTIME_PROMPT_RE = /^﻿?[ \t]*Mode: RUNTIME[ \t]*$/m;
+// The pattern of a prompt's own `Mode: <mode>` line, at a line start behind an optional BOM or indentation.
+export function promptModeRe(mode) {
+  const literal = String(mode).replace(/[.*+?^${}()|[\]\\]/g, (char) => `\\${char}`);
+  return new RegExp(`^\\uFEFF?[ \\t]*Mode: ${literal}[ \\t]*$`, "m");
+}
 
-// The track phase of a lane: the runtime lane is the verifier launched with prompts/runtime.md, told apart only by that template's own `Mode: RUNTIME` line.
+const MODE_SLOTS = TRACK_SLOTS.filter((slot) => typeof slot.lane === "string" && typeof slot.promptMode === "string").map((slot) => ({ ...slot, modeRe: promptModeRe(slot.promptMode) }));
+
+// The track phase of a lane: a slot run by another slot's lane is told apart only by its template's own `Mode:` line.
 export function lanePhase(name, prompt) {
-  if (name === "verifier" && typeof prompt === "string" && RUNTIME_PROMPT_RE.test(prompt)) return slotNumberOf("runtime");
-  return PHASES.get(name) ?? null;
+  const moded = typeof prompt === "string" ? MODE_SLOTS.find((slot) => slot.lane === name && slot.modeRe.test(prompt)) : undefined;
+  return moded?.number ?? PHASES.get(name) ?? null;
 }
 
 export const GLYPHS = {

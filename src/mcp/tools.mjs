@@ -36,6 +36,7 @@ import { resolveJobRun } from "../queue/job-run.mjs";
 import { composeGateNotice, gateDigestOf } from "../queue/gate-notice.mjs";
 import { runDir as runDirOf } from "../config/paths.mjs";
 import { attemptSince, recordPipelineRun, statePipelinePhases } from "../queue/pipeline-record.mjs";
+import { pipelineManifest } from "../queue/pipeline-package.mjs";
 import { applyRetry, callerJobId } from "../queue/retry.mjs";
 import { refuseDependentPrompt } from "../queue/dependent-prompt.mjs";
 import { resolveJobSession } from "../queue/session.mjs";
@@ -1373,7 +1374,7 @@ function toolDefinitions(env, state) {
       config: {
         description:
           "Records how the run ended: `done` when the pull request exists, `gate` with the `notice` the operator has to answer, `no_change` with the run's conclusion as `notice` when the run concluded on purpose that no code change is needed (the job ends `done` with no pull request). " +
-          "A `gate` may instead send `question` and/or `from_artifact: {file, section}` (a run artifact such as `03-plan.md` and a heading such as `## Requires user confirmation`): the runtime composes the whole `## Notice` body - the section verbatim under `## Requires user confirmation`, the question, and the answer line - and returns it as `notice`; then end the turn, with no `## Notice` in the final text. `notice` together with either is refused. " +
+          "A `gate` may instead send `question` and/or `from_artifact: {file, section}` (a run artifact such as `" + pipelineManifest().gateArtifact + "` and a heading such as `## Requires user confirmation`): the runtime composes the whole `## Notice` body - the section verbatim under `## Requires user confirmation`, the question, and the answer line - and returns it as `notice`; then end the turn, with no `## Notice` in the final text. `notice` together with either is refused. " +
           "A `gate` whose text carries the plan's question records its digest as `gateQuestionDigest`, which lets the resumed `run check 03` print `CONFIRM: answered (<at>)` for that question once an answer was recorded after this pause; any other gate clears it. " +
           "The pull request URL is NOT a parameter: the runtime writes it from what the session really published. " +
           "Inside a job the run is resolved from the job's own row — passing `project` or `slug` there is refused; outside a job both are required.",

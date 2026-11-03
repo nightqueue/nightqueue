@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { createNarrator, formatNarration, lastNarratedLine, liveState, narrateLog, RUNTIME_PROMPT_RE } from "../../src/queue/narrate.mjs";
+import { createNarrator, formatNarration, lastNarratedLine, liveState, narrateLog, promptModeRe } from "../../src/queue/narrate.mjs";
 import { phasePrompts } from "../../test-support/skill-size.mjs";
 import {
   agentToolUseEvent,
@@ -196,8 +196,8 @@ test("a verifier without the runtime line stays phase 6, and a coder quoting it 
 
 test("the runtime discriminator matches the shipped runtime block and not the verifier block", () => {
   const { blocks } = phasePrompts();
-  assert.equal(RUNTIME_PROMPT_RE.test(blocks.runtime.join("\n")), true);
-  assert.equal(RUNTIME_PROMPT_RE.test(blocks.verifier.join("\n")), false);
+  assert.equal(promptModeRe("RUNTIME").test(blocks.runtime.join("\n")), true);
+  assert.equal(promptModeRe("RUNTIME").test(blocks.verifier.join("\n")), false);
 });
 
 test("the runtime line is still found behind a leading BOM or indentation, and only at a line start of a verifier", () => {

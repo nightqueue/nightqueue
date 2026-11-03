@@ -1,5 +1,6 @@
 import { existsSync, lstatSync, readdirSync, readlinkSync, realpathSync } from "node:fs";
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
+import { GIT_COMMIT } from "../host/git.mjs";
 import { claudeConfigDir, claudePluginsDir, hostPackageRoot, packageRoot } from "../host/paths.mjs";
 
 export const PLUGIN_DIR_ENV = "NIGHTQUEUE_PLUGIN_DIR";
@@ -19,7 +20,7 @@ export const ORCHESTRATOR_BASH_RULES = Object.freeze(
     { argv: ["git", "worktree"] },
     { argv: ["git", "status"], anyOf: ["--short", "-s", "--porcelain"] },
     { argv: ["git", "add"] },
-    { argv: ["git", "commit"], noneOf: ["--amend"] },
+    { argv: ["git", GIT_COMMIT], noneOf: ["--amend"] },
     {
       argv: ["git", "push"],
       noneOf: ["--force", "-f", "--force-with-lease", "--force-if-includes", "--delete", "-d", "--mirror", "--all", "--prune", "--receive-pack", "--exec"],

@@ -57,27 +57,28 @@ function writeJobLog(env, id, events) {
   writeFileSync(jobLogPath(id, env), `${attemptMarker()}\n${toNdjson(events)}`);
 }
 
-// A subagent lane of the stream: the `tool_use` that launched it and the report that closes it with its duration.
-function lane({ id, subagentType, model, durationMs, seconds }) {
-  return [
-    agentToolUseEvent({ id, subagentType, model, timestamp: secondsIntoAttempt(seconds) }),
-    taskNotificationEvent({ toolUseId: id, durationMs }),
-  ];
-}
-
-// The stream of a run that went through triage and implementation, and ended 15 minutes after it started.
+// The stream of a run that ended 15 minutes after it started; it launches lanes the runtime no longer reads for the phases.
 function pipelineLog() {
   return [
-    ...lane({ id: "toolu_a", subagentType: "nightqueue:triager", model: "haiku", durationMs: 61_000, seconds: 5 }),
-    ...lane({ id: "toolu_b", subagentType: "nightqueue:coder", model: "opus", durationMs: 420_000, seconds: 120 }),
+    agentToolUseEvent({ id: "toolu_a", subagentType: "nightqueue:triager", model: "sonnet", timestamp: secondsIntoAttempt(5) }),
+    taskNotificationEvent({ toolUseId: "toolu_a", durationMs: 5_000 }),
     assistantEvent("Done.", { timestamp: secondsIntoAttempt(900) }),
   ];
 }
 
-// Records the two phases the run completed, through the only writer of state.json.
+// Gives each recorded entry the duration it measured of itself, as the phase writers stamp it.
+function seedDurations(env, slug, seconds) {
+  const projectId = ensureProject(env, "alpha");
+  const state = readRunState({ projectId, slug, env });
+  const phases = state.phases.map((entry, index) => ({ ...entry, durationS: seconds[index] }));
+  writeFileSync(join(runDir(projectId, slug, env), "state.json"), JSON.stringify({ ...state, phases }));
+}
+
+// Records the two phases the run completed with the model and the duration each entry carries.
 function recordPhases(env, { slug = SLUG } = {}) {
-  recordPhaseDone({ projectId: ensureProject(env, "alpha"), slug, phase: "triage", artifact: "01-triage.md", verdict: "ok", env });
-  recordPhaseDone({ projectId: ensureProject(env, "alpha"), slug, phase: "implementation", artifact: "04-implementation.md", env });
+  recordPhaseDone({ projectId: ensureProject(env, "alpha"), slug, phase: "triage", artifact: "01-triage.md", verdict: "ok", measures: { model: "haiku" }, env });
+  recordPhaseDone({ projectId: ensureProject(env, "alpha"), slug, phase: "implementation", artifact: "04-implementation.md", measures: { model: "opus" }, env });
+  seedDurations(env, slug, [61, 420]);
 }
 
 test("`nightqueue run` refuses a missing and an unknown subcommand, and says it is not `queue run`", async (t) => {
@@ -206,7 +207,7 @@ test("outside a job `run log` requires the run to be named, with a registered pr
 
   const named = await runCli(env, ["run", "log", "--project", "alpha", "--slug", SLUG]);
   assert.equal(named.code, 0);
-  assert.deepEqual(named.out, ["triage\t-\tok\t-", "implementation\t-\tok\t-", "total\t-"]);
+  assert.deepEqual(named.out, ["triage\thaiku\tok\t1m01s", "implementation\topus\tok\t7m00s", "total\t-"]);
 });
 
 test("`run dir` prints the absolute run directory keyed by the project id: the job's own inside a job, the named one outside", async (t) => {

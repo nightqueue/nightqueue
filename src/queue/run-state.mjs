@@ -112,6 +112,34 @@ function withStamp(entry, claim) {
   return isStateObject(claim) ? { ...entry, claim: claimStamp(claim) } : entry;
 }
 
+// The whole seconds from one ISO instant to another, or null when either is not a date or the gap is negative.
+function secondsBetween(fromIso, toIso) {
+  const from = typeof fromIso === "string" ? Date.parse(fromIso) : NaN;
+  const to = typeof toIso === "string" ? Date.parse(toIso) : NaN;
+  if (!Number.isFinite(from) || !Number.isFinite(to) || to < from) return null;
+  return Math.round((to - from) / 1000);
+}
+
+// The entry the duration of a new one is measured from: the last entry of the same attempt, or the last of all when the writer has no attempt.
+function previousEntryOf(phases, attempt) {
+  const entries = phases.filter(isStateObject);
+  return (attempt === null ? entries : entries.filter((entry) => stampedAttempt(entry) === attempt)).at(-1) ?? null;
+}
+
+// The entry with its own measures when its writer took them: the attempt of its claim, the seconds since the previous record of that attempt (else, or when that record holds no valid instant, since the attempt started) and the model it ran on.
+function withMeasures(entry, { measures, phases, claim, at }) {
+  if (!isStateObject(measures)) return entry;
+  const { attemptStartedAt = null, model = null } = measures;
+  const attempt = isStateObject(claim) && Number.isInteger(claim.attempt) ? claim.attempt : null;
+  const durationS = secondsBetween(previousEntryOf(phases, attempt)?.at, at) ?? secondsBetween(attemptStartedAt, at);
+  return {
+    ...entry,
+    ...(attempt === null ? {} : { attempt }),
+    ...(durationS === null ? {} : { durationS }),
+    ...(trimmedText(model) === null ? {} : { model: trimmedText(model) }),
+  };
+}
+
 // The records a run set aside, as a list.
 function ignoredEntries(state) {
   return Array.isArray(state.ignoredRecords) ? state.ignoredRecords : [];
@@ -205,7 +233,7 @@ function phaseRefusal(phase, state) {
 }
 
 // Records a phase the pipeline completed; the list is append-only, so a phase recorded twice never erases the first record.
-export function recordPhaseDone({ projectId, slug, phase, artifact, verdict, note, reason, by, claim = null, env = process.env } = {}) {
+export function recordPhaseDone({ projectId, slug, phase, artifact, verdict, note, reason, by, claim = null, measures = null, env = process.env } = {}) {
   const refused = phaseRefusal(phase, readRunState({ projectId, slug, env }));
   if (refused) return refused;
   return record({
@@ -214,7 +242,11 @@ export function recordPhaseDone({ projectId, slug, phase, artifact, verdict, not
     env,
     claim,
     late: { kind: "phase", record: withText({ phase }, { artifact, verdict, note, reason, by }) },
-    change: (state, at) => ({ phases: [...phaseEntries(state), withStamp(withText({ phase, at }, { artifact, verdict, note, reason, by }), claim)] }),
+    change: (state, at) => {
+      const phases = phaseEntries(state);
+      const entry = withMeasures(withStamp(withText({ phase, at }, { artifact, verdict, note, reason, by }), claim), { measures, phases, claim, at });
+      return { phases: [...phases, entry] };
+    },
   });
 }
 
@@ -246,18 +278,19 @@ function repeatsRuntimeEntry({ previous, memo, done, last }) {
 }
 
 // The phases after a completed check, and what was decided: `already` when it repeats the runtime's last entry, else `appended` with its reason.
-function phasesAfterCheck({ state, check, memo, done, claim, at }) {
+function phasesAfterCheck({ state, check, memo, done, claim, measures, at }) {
   const phases = phaseEntries(state);
   const checks = checkMemos(state);
   const previous = checks[check];
   if (repeatsRuntimeEntry({ previous, memo, done, last: lastEntryOf(phases, done.phase) })) return { phases, decided: { status: "already", reason: null } };
   const reason = trimmedText(done.reason) ?? reRunReason({ previous, phases, phase: done.phase, lastFailure: checks.lastFailure });
-  const entry = withStamp(withText({ phase: done.phase, at }, { artifact: done.artifact, verdict: done.verdict, note: done.note, reason, by: RUNTIME_AUTHOR }), claim);
+  const stamped = withStamp(withText({ phase: done.phase, at }, { artifact: done.artifact, verdict: done.verdict, note: done.note, reason, by: RUNTIME_AUTHOR }), claim);
+  const entry = withMeasures(stamped, { measures, phases, claim, at });
   return { phases: [...phases, entry], decided: { status: "appended", reason } };
 }
 
 // Records the answer of one `run check` and, when it completed a phase, the phase itself, in one write so the reason reads the memo it replaces.
-export function recordCheck({ projectId, slug, check, memo, done = null, claim = null, env = process.env } = {}) {
+export function recordCheck({ projectId, slug, check, memo, done = null, claim = null, measures = null, env = process.env } = {}) {
   if (trimmedText(check) === null || !isStateObject(memo)) return kept("a check record needs its check and its memo");
   const refused = done === null ? null : phaseRefusal(done?.phase, readRunState({ projectId, slug, env }));
   if (refused) return refused;
@@ -271,7 +304,7 @@ export function recordCheck({ projectId, slug, check, memo, done = null, claim =
     change: (state, at) => {
       const checks = memosWithCheck(checkMemos(state), check, memo, at);
       if (done === null) return { checks };
-      const after = phasesAfterCheck({ state, check, memo, done, claim, at });
+      const after = phasesAfterCheck({ state, check, memo, done, claim, measures, at });
       decided = after.decided;
       return { checks, phases: after.phases };
     },

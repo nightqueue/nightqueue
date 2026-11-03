@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
+import { pipelineManifest } from "../../src/queue/pipeline-package.mjs";
 import {
   AGENT_MODELS,
   MODEL_NAMES,
@@ -11,6 +12,7 @@ import {
   agentModels,
   modelFor,
   modelTable,
+  phaseModelOf,
   phasesFor,
   requireAgent,
   requireModel,
@@ -128,4 +130,22 @@ test("the studio track has nine slots in order, each with its agent, the agent w
   assert.deepEqual([slotNumberOf("verification"), slotNumberOf("runtime"), slotNumberOf("commit")], [6, 7, 8]);
   assert.throws(() => slotNumberOf("nope"), /no track slot for phase "nope"/);
   for (const slot of TRACK_SLOTS.filter((candidate) => candidate.modelAgent)) assert.ok(slot.modelAgent in AGENT_MODELS, `${slot.modelAgent} is an agent with a model`);
+});
+
+test("the model a phase ran on is its track slot's model agent, else its first agent, with the project's override; a phase with no agent has none", () => {
+  const manifest = pipelineManifest();
+  assert.equal(phaseModelOf(manifest, "architecture"), AGENT_MODELS.architect);
+  assert.equal(phaseModelOf(manifest, "qa"), AGENT_MODELS["qa-analyst"]);
+  assert.equal(phaseModelOf(manifest, "runtime"), AGENT_MODELS.verifier);
+  assert.equal(phaseModelOf(manifest, "commit"), null);
+  assert.equal(phaseModelOf(manifest, "architecture", { architect: { model: "haiku" } }), "haiku");
+  assert.equal(phaseModelOf(manifest, "architecture", { architect: { model: "gpt" } }), AGENT_MODELS.architect);
+});
+
+test("a phase of another pipeline answers the model its own manifest names, or null for an agent with none, never a throw", () => {
+  const manifest = { phases: [{ id: "draft", agents: ["writer"] }, { id: "ship", agents: ["shipper"] }], models: { writer: "sonnet" }, track: [] };
+  assert.equal(phaseModelOf(manifest, "draft"), "sonnet");
+  assert.equal(phaseModelOf(manifest, "ship"), null);
+  assert.equal(phaseModelOf(manifest, "nope"), null);
+  assert.equal(phaseModelOf(null, "draft"), null);
 });

@@ -1,4 +1,4 @@
-import { measuredByPhase, phaseRows, readJobLog } from "../cli/run-context.mjs";
+import { phaseRows } from "../cli/run-context.mjs";
 import { callerJobId } from "../config/job-home.mjs";
 import { openStore } from "../store/open.mjs";
 
@@ -13,20 +13,16 @@ async function attemptStart(jobId, env) {
   return job?.attempt_started_at ?? null;
 }
 
-// The phases `pipeline_log` recorded for this attempt, each with the lane model the runtime measured when the row has none.
-function recordedPhases(rows, log) {
-  const measured = measuredByPhase(log);
-  return rows.map((row) => {
-    const lane = measured.get(row.phase)?.shift() ?? null;
-    return { phase: row.phase, model: row.model ?? lane?.model ?? null, status: row.status, retry: row.retry, reason: row.reason };
-  });
+// The phases `pipeline_log` recorded for this attempt, each with the model its row recorded.
+function recordedPhases(rows) {
+  return rows.map((row) => ({ phase: row.phase, model: row.model ?? null, status: row.status, retry: row.retry, reason: row.reason }));
 }
 
 // The phases state.json recorded, for an attempt `pipeline_log` never recorded: a phase seen before is a re-run.
-function statePhases(state, log) {
+function statePhases(state) {
   const entries = Array.isArray(state?.phases) ? state.phases : [];
   const seen = new Set();
-  return phaseRows(state ?? {}, log).map((row, index) => {
+  return phaseRows(state).map((row, index) => {
     const retry = seen.has(row.phase);
     seen.add(row.phase);
     const reason = typeof entries[index]?.reason === "string" ? entries[index].reason.trim() : "";
@@ -54,10 +50,9 @@ async function timelinePhases({ run, state, env, openItems }) {
   const jobId = callerJobId(env);
   const since = await attemptStart(jobId, env);
   const rows = await openStore(env).runs.runTimeline({ projectId: run.projectId ?? null, slug: run.slug, since });
-  const log = readJobLog(jobId, env);
-  if (rows.length > 0) return recordedPhases(rows, log);
+  if (rows.length > 0) return recordedPhases(rows);
   openItems.push(FALLBACK_ITEM);
-  return statePhases(state, log);
+  return statePhases(state);
 }
 
 // The `## Run timeline` block of the reflector's prompt: phase, model, status and why it ran, in order; a failure answers `none recorded` and an open item.

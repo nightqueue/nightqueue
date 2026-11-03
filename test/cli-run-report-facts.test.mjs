@@ -365,14 +365,14 @@ test("past the limit the test files come first and one line says how many more `
   for (const name of others.filter((other) => !shown.includes(other))) assert.ok(status.includes(name), `${name} is held back and not in git status`);
 });
 
-test("5,000 changed files and a 20,000-character path stay within the stated limits, the file name kept", (t) => {
+test("5,000 changed files and a 20,000-character path stay within the stated limits, the file name kept", async (t) => {
   const { dir } = makeRun(t, "facts-outside-bound");
   writeArtifacts(dir, { "04-implementation.md": "## Modified files\n" });
   const root = "/tmp/facts-bound";
   const longPath = `${root}/${"d".repeat(20000)}/kept-name.test.mjs`;
   const many = Array.from({ length: 5000 }, (_, at) => `${root}/src/file-${at}.mjs`);
 
-  const facts = reportFacts({ runDir: dir, state: null, worktree: { path: root, changed: [...many, longPath] } });
+  const facts = await reportFacts({ runDir: dir, state: null, worktree: { path: root, changed: [...many, longPath] } });
 
   const outside = facts.filter((line) => line.startsWith("- Changed outside the list:"));
   assert.equal(outside.length, UNLISTED_MAX + 1);
@@ -381,7 +381,7 @@ test("5,000 changed files and a 20,000-character path stay within the stated lim
   assert.ok(outside.at(-1).includes("+4971 more"), outside.at(-1));
 });
 
-test("a changed path at its limit stays whole and a real file name never loses a character", (t) => {
+test("a changed path at its limit stays whole and a real file name never loses a character", async (t) => {
   const { dir } = makeRun(t, "facts-outside-width");
   writeArtifacts(dir, { "04-implementation.md": "## Modified files\n" });
   const root = "/tmp/facts-width";
@@ -389,7 +389,7 @@ test("a changed path at its limit stays whole and a real file name never loses a
   const longName = "n".repeat(255);
   const tooLong = `${root}/${"d".repeat(600)}/${longName}`;
 
-  const facts = reportFacts({ runDir: dir, state: null, worktree: { path: root, changed: [atLimit, tooLong] } });
+  const facts = await reportFacts({ runDir: dir, state: null, worktree: { path: root, changed: [atLimit, tooLong] } });
 
   assert.ok(facts.includes(`- Changed outside the list: ${atLimit}`), "a path at the limit was changed");
   assert.ok(facts.some((line) => line.includes(`…/${longName} (a path of`)), "a 255-character file name was clipped");
