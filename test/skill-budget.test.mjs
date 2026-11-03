@@ -16,13 +16,13 @@ import {
 } from "../test-support/skill-size.mjs";
 
 // Ratchet: lower these ceilings when the skill shrinks, never raise them to fit a change.
-const ALWAYS_LOADED_CEILING = 8949;
+const ALWAYS_LOADED_CEILING = 8932;
 const LAZY_CEILINGS = Object.freeze({
-  "phases.md": 14450,
+  "phases.md": 13064,
   "phase-8.md": 6853,
   "phase-9.md": 7725,
   "interactive-worktree.md": 2895,
-  "qa-phase.md": 4106,
+  "qa-phase.md": 3925,
   "pr-template.md": 8852,
   "commit-template.md": 2457,
 });

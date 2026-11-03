@@ -7,7 +7,7 @@ import { reportRows } from "../src/cli/run-report.mjs";
 import { jobLogPath, logsDir, pendingWritesPath, runDir } from "../src/config/paths.mjs";
 import { openDb } from "../src/memory/db.mjs";
 import { addJob } from "../src/memory/jobs.mjs";
-import { questionDigest } from "../src/queue/gate-question.mjs";
+import { questionDigest } from "../src/queue/question-text.mjs";
 import { readRunState, saveRunState } from "../src/queue/resume.mjs";
 import { recordOutcome, recordPhaseDone, recordPrUrl, recordRunFields, recordTermination } from "../src/queue/run-state.mjs";
 import { ensureProject, makeHome, makeProject } from "../test-support/memory.mjs";

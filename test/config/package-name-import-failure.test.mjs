@@ -27,12 +27,13 @@ function hasDeclaredDependencies(nodeModulesDir) {
   return DECLARED_DEPENDENCIES.every((name) => existsSync(join(nodeModulesDir, name)));
 }
 
-// Copies bin/ and src/ into a throwaway directory and links a real, verified node_modules tree, so the real entry point runs without touching the checkout.
+// Copies bin/, src/ and plugin/ into a throwaway directory and links a real, verified node_modules tree, so the real entry point runs without touching the checkout.
 function makeSandbox(t) {
   const dir = mkdtempSync(join(tmpdir(), "nightqueue-import-failure-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   cpSync(join(REPO_ROOT, "bin"), join(dir, "bin"), { recursive: true });
   cpSync(join(REPO_ROOT, "src"), join(dir, "src"), { recursive: true });
+  cpSync(join(REPO_ROOT, "plugin"), join(dir, "plugin"), { recursive: true });
   const nodeModules = findDependencyTree(REPO_ROOT);
   assert.ok(
     nodeModules,

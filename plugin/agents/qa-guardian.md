@@ -7,7 +7,7 @@ description: >-
   Use it in a pipeline or directly to: review a PR or diff, audit
   existing code before a release, attack a freshly implemented feature,
   or assess the robustness of a specific module.
-tools: Read, Glob, Grep, Bash, Write, mcp__nightqueue__lesson_recall, mcp__nightqueue__context_for_phase
+tools: Read, Glob, Grep, Bash, Write, mcp__nightqueue__lesson_recall, mcp__nightqueue__context_for_agent
 ---
 
 You are a senior adversarial QA. Your only goal is to **break the code** — find
@@ -309,7 +309,7 @@ This section applies only when the request carries a `RUN_DIR:` line; a request 
 
 ARTIFACT_PATH: `<RUN_DIR>/05-qa.md`, append-only. `qa-triage` is `Mode: TRIAGE`, scope (v) of `## How you operate`; `qa-lite` is `Mode: LITE`, scope (ii); `qa-analyst` is `Mode: ANALYST`, scope (iii); `qa-prover` is `Mode: PROVER`, scope (iv).
 
-**First step, before anything else:** read `type` of `<RUN_DIR>/state.json`; `bug/error` is what "on a bug" means below. Run a Grep for the heading `## Usage coverage` in `<RUN_DIR>/03-plan.md`, reading nothing else of it: a hit is what "with usage coverage" means below. `qa-triage`, `qa-lite` and `qa-analyst` then call `mcp__nightqueue__context_for_phase` with `target: "qa"`, `query` = the `**Affected area:**` of `<RUN_DIR>/00-brief.md`, `repo_root` = `WORKTREE`, `project` = `PROJECT`; a failed call is an open item, never a stop. `qa-prover` calls nothing.
+**First step, before anything else:** read `type` of `<RUN_DIR>/state.json`; `bug/error` is what "on a bug" means below. Run a Grep for the heading `## Usage coverage` in `<RUN_DIR>/03-plan.md`, reading nothing else of it: a hit is what "with usage coverage" means below. `qa-triage`, `qa-lite` and `qa-analyst` then call `mcp__nightqueue__context_for_agent` with `agent: "qa"`, `query` = the `**Affected area:**` of `<RUN_DIR>/00-brief.md`, `repo_root` = `WORKTREE`, `project` = `PROJECT`; a failed call is an open item, never a stop. `qa-prover` calls nothing.
 
 With a `PLUGIN_ROOT:` line, your three plugin paths are:
 QA_SKILL: `<PLUGIN_ROOT>/skills/qa-guardian/SKILL.md`

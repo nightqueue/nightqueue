@@ -1,43 +1,18 @@
-import { createHash } from "node:crypto";
-import { writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { PIPELINE_TASK_TYPES } from "../memory/runs.mjs";
-import { derivedType, firstItem } from "../queue/check-contract.mjs";
-import { PHASE_ARTIFACTS, QA_STAGES } from "../queue/phase-artifacts.mjs";
-import { isSafeSegment } from "../queue/resume.mjs";
-import { adoptRunSlug, isProvisionalSlug } from "../queue/run-slug.mjs";
-import { clearTermination, leavesStaleQaSkip, recordCheck, recordQaMode, recordRunFields, recordTermination, RUNTIME_AUTHOR } from "../queue/run-state.mjs";
-import { briefCommitType, briefSection, briefSlug, briefType } from "../queue/triage-brief.mjs";
+import { UserError } from "../config/errors.mjs";
+import { writeFileAtomic } from "../config/store.mjs";
+import { adoptRunSlug } from "../queue/run-slug.mjs";
+import { clearTermination, recordCheck, recordRunFields, recordRuntimeField, recordTermination, RUNTIME_AUTHOR } from "../queue/run-state.mjs";
 import { openStore } from "../store/open.mjs";
 import { saveIndexFromText } from "./index-save.mjs";
 import { worktreeOf } from "./run-context.mjs";
 
-// The effects `run check` chains after printing its contract lines: the index of 02; the Type, the Brief, the commit type,
-// the termination and the slug of 01; the QA mode of the triage stage; the phase record of a completed check and the check memo.
-// None of them changes the first line.
-
-// The triage verdicts that close the run on purpose.
-const TERMINAL_VERDICT_LABELS = ["NO-CHANGE-NEEDED", "NOT-REPRODUCIBLE", "NEEDS-CLARIFICATION", "PROPOSE-ALTERNATIVE"];
-const TERMINATION_MAX = 200;
-const BRIEF_FILE = PHASE_ARTIFACTS.get("00").file;
-const PASSING_LINES = new Set(["OK", "GENERATED"]);
+// The closed vocabulary a pipeline's `check` answers with, executed in order. None of it changes the contract lines the answer printed first.
 
 // The first line of an error's message.
 function firstLine(err) {
   return String(err?.message ?? err).split("\n")[0];
-}
-
-// The sha256 of the text a check evaluated, which tells a repeated check of the same artifact apart from a new one.
-function digestOf(text) {
-  return createHash("sha256")
-    .update(String(text ?? ""))
-    .digest("hex");
-}
-
-// A text cut to at most the given number of code points.
-function capped(text, max) {
-  const points = [...text];
-  return points.length <= max ? text : `${points.slice(0, max - 1).join("")}…`;
 }
 
 // The line a refused write prints, so the caller sees the record did not happen without the check failing.
@@ -45,11 +20,39 @@ function notRecorded(written) {
   return `recorded: not recorded (${written.reason ?? "unknown reason"})`;
 }
 
-// The `index:` line of check 02: the explore map saved into the project index, queued, or why not; never a failure of the check.
-async function indexLine({ run, result, ctx }) {
-  if (!PASSING_LINES.has(result.first)) return [];
+// The effect's own line on a write, the refusal's otherwise.
+function writtenLines(written, line) {
+  if (written.status !== "written") return [notRecorded(written)];
+  return line ? [line] : [];
+}
+
+// Writes the answer's artifact writes, the only effects that must not lose a concurrent append: the caller holds the run lock when the phase has rounds; a failure stops the check.
+export function applyLockedWrites(effects, runDirectory) {
+  for (const effect of effects.filter((candidate) => candidate.kind === "writeRunFile" && candidate.locked === true)) {
+    const path = join(runDirectory, effect.name);
+    try {
+      mkdirSync(runDirectory, { recursive: true });
+      writeFileAtomic(path, effect.text);
+    } catch (error) {
+      throw new UserError(`could not write ${effect.what ?? effect.name} to ${path}: ${error.message}`);
+    }
+  }
+}
+
+// A plain run file, whose failure is one line and never a failed check.
+function plainWriteLines(effect, { run }) {
   try {
-    const saved = await saveIndexFromText({ text: result.evaluated, project: run.project, repoRoot: worktreeOf(run, ctx.env), ctx });
+    writeFileSync(join(run.runDir, effect.name), effect.text);
+  } catch (err) {
+    return [notRecorded({ reason: `${effect.name} could not be written: ${firstLine(err)}` })];
+  }
+  return effect.line ? [effect.line] : [];
+}
+
+// The `index:` line: the explore map saved into the project index, queued, or why not; never a failure of the check.
+async function indexLines(effect, { run, ctx }) {
+  try {
+    const saved = await saveIndexFromText({ text: effect.text, project: run.project, repoRoot: worktreeOf(run, ctx.env), ctx });
     if (saved.status === "queued") return [`index: not saved (store unavailable; queued at ${saved.path})`];
     return [`index: saved ${saved.files} files, ${saved.libs} libs`];
   } catch (err) {
@@ -57,67 +60,35 @@ async function indexLine({ run, result, ctx }) {
   }
 }
 
-// The `recorded: type` line of check 01: the Brief's Type when it states a valid one, else the Type the triage implies when the run has none yet.
-function typeLines({ run, result, state, ctx }) {
-  if (result.first.startsWith("MISSING")) return [];
-  const recorded = PIPELINE_TASK_TYPES.includes(state?.type) ? state.type : null;
-  const type = briefType(result.evaluated) ?? (recorded === null ? derivedType(result.evaluated) : null);
-  if (type === null || type === recorded) return [];
-  const written = recordRunFields({ projectId: run.projectId, slug: run.slug, fields: { type }, claim: run.claim, env: ctx.env });
-  if (written.status !== "written") return [notRecorded(written)];
-  return [recorded === null ? `recorded: type ${type}` : `recorded: type ${type} (was ${recorded})`];
+// A field of the run itself, under the caller's claim.
+function runFieldLines({ name, value, line }, { run, ctx }) {
+  return writtenLines(recordRunFields({ projectId: run.projectId, slug: run.slug, fields: { [name]: value }, claim: run.claim, env: ctx.env }), line);
 }
 
-// The `recorded: brief` line of a completed check 01: the triage's `## Brief` copied into `00-brief.md`, the Brief every later phase reads.
-function briefLines({ run, result }) {
-  const section = briefSection(result.evaluated);
-  if (section === null) return [notRecorded({ reason: "the triage has no ## Brief" })];
+// The QA mode a phase decided, a key only the runtime writes.
+function qaModeLines({ value, line, dropPhases }, { run, ctx }) {
+  const qaMode = { ...value, at: new Date().toISOString() };
+  return writtenLines(recordRuntimeField({ projectId: run.projectId, slug: run.slug, name: "qaMode", value: qaMode, dropPhases, env: ctx.env }), line);
+}
+
+// The pipeline's loop counters, a key only the runtime writes, set aside when the claim is over; nothing prints on success.
+function loopsLines({ value }, { run, ctx }) {
+  return writtenLines(recordRuntimeField({ projectId: run.projectId, slug: run.slug, name: "pipelineLoops", value, claim: run.claim, env: ctx.env }), null);
+}
+
+// A termination lifted or recorded: lifting prints its line only when one was lifted.
+function terminationLines({ value, line }, { run, ctx }) {
+  const target = { projectId: run.projectId, slug: run.slug, phase: value.phase, env: ctx.env };
+  if (value.clear !== true) return writtenLines(recordTermination({ ...target, reason: value.reason, by: RUNTIME_AUTHOR, claim: run.claim }), line);
+  const cleared = clearTermination(target);
+  return cleared.status === "absent" ? [] : writtenLines(cleared, line);
+}
+
+// The Brief's slug adopted by a provisional run: the row rebound and the run dir renamed, or the slug kept and why.
+async function slugLines({ value: named }, { run, job, ctx }) {
+  if (job === null) return [`recorded: slug ${run.slug} (kept: the job's row cannot be read)`];
   try {
-    writeFileSync(join(run.runDir, BRIEF_FILE), `${section.trim()}\n`);
-  } catch (err) {
-    return [notRecorded({ reason: `${BRIEF_FILE} could not be written: ${firstLine(err)}` })];
-  }
-  return [`recorded: brief ${BRIEF_FILE}`];
-}
-
-// The `recorded: commit type` line of a completed check 01, when the Brief states an accepted commit type.
-function commitTypeLines({ run, result, ctx }) {
-  const commitType = briefCommitType(result.evaluated);
-  if (commitType === null) return [];
-  const written = recordRunFields({ projectId: run.projectId, slug: run.slug, fields: { commitType }, claim: run.claim, env: ctx.env });
-  return [written.status === "written" ? `recorded: commit type ${commitType}` : notRecorded(written)];
-}
-
-// The caller's own job row, or null outside a job or when the store cannot read it.
-async function ownJobRow(run, env) {
-  if (run.jobId === null) return null;
-  try {
-    return await openStore(env).jobs.getJob(run.jobId);
-  } catch {
-    return null;
-  }
-}
-
-// Why the run keeps its provisional slug although the Brief was asked for one, or null when the named slug can be adopted.
-function slugUnusable(named, current) {
-  if (named === null) return "the Brief names no **Slug:**";
-  if (!isSafeSegment(named)) return `\`${named}\` is not a valid run slug`;
-  return named === current ? "the Brief names the same slug" : null;
-}
-
-// The `recorded: slug` line of a completed check 01, run last: a provisional run takes the Brief's slug (the row rebound, the run dir renamed), any other keeps its own.
-async function slugLines({ run, result, ctx }) {
-  const named = briefSlug(result.evaluated);
-  const row = await ownJobRow(run, ctx.env);
-  if (!isProvisionalSlug(row, run.slug)) {
-    const note = named !== null && named !== run.slug ? " (kept: the run already has its slug)" : "";
-    return [`recorded: slug ${run.slug}${note}`];
-  }
-  const unusable = slugUnusable(named, run.slug);
-  if (unusable !== null) return [`recorded: slug ${run.slug} (kept: ${unusable})`];
-  const job = { id: row.id, worker: row.worker, project_id: row.project_id };
-  try {
-    const adopted = await adoptRunSlug({ job, from: run.slug, to: named, store: openStore(ctx.env), env: ctx.env });
+    const adopted = await adoptRunSlug({ job: { id: job.id, worker: job.worker, project_id: job.project_id }, from: run.slug, to: named, store: openStore(ctx.env), env: ctx.env });
     if (adopted.status === "kept") return [`recorded: slug ${run.slug} (kept: ${[adopted.reason, adopted.warning].filter(Boolean).join("; ")})`];
     return [`recorded: slug ${named} (renamed from ${run.slug}; run dir ${adopted.dir})`];
   } catch (err) {
@@ -125,43 +96,22 @@ async function slugLines({ run, result, ctx }) {
   }
 }
 
-// Why the triage stopped the run on purpose: its verdict and the first open item, else the first line of the validated brief.
-function terminationReason(result) {
-  const detail = firstItem(result.evaluated, "## Open items") ?? firstItem(result.evaluated, "## Validated brief");
-  return capped(detail ? `${result.verdict}: ${detail}` : result.verdict, TERMINATION_MAX);
+// The runtime's one writer of each recordable field.
+const FIELD_WRITERS = { type: runFieldLines, commitType: runFieldLines, qaMode: qaModeLines, termination: terminationLines, slug: slugLines, pipelineLoops: loopsLines };
+
+// Every field of a `recordFields` effect, through its writer.
+async function fieldsLines(effect, exec) {
+  const lines = [];
+  for (const [name, value] of Object.entries(effect.fields)) lines.push(...(await FIELD_WRITERS[name]({ name, value, line: effect.line, dropPhases: effect.dropPhases ?? null }, exec)));
+  return lines;
 }
 
-// The `recorded: run_terminate` line of a completed check 01 whose verdict closes the run on purpose.
-function terminationLines({ run, result, ctx }) {
-  if (!TERMINAL_VERDICT_LABELS.includes(result.verdict)) return [];
-  const written = recordTermination({ projectId: run.projectId, slug: run.slug, phase: "triage", reason: terminationReason(result), by: RUNTIME_AUTHOR, claim: run.claim, env: ctx.env });
-  return [written.status === "written" ? `recorded: run_terminate triage ${result.verdict}` : notRecorded(written)];
-}
-
-// The `recorded: termination cleared` line of a completed check 01 that proceeds: the runtime's own triage stop no longer holds.
-function liftedTerminationLines({ run, result, ctx }) {
-  if (TERMINAL_VERDICT_LABELS.includes(result.verdict)) return [];
-  const cleared = clearTermination({ projectId: run.projectId, slug: run.slug, phase: "triage", env: ctx.env });
-  if (cleared.status === "absent") return [];
-  return [cleared.status === "written" ? "recorded: termination cleared" : notRecorded(cleared)];
-}
-
-// The `recorded: qa_mode` line of a completed `check 05 --stage triage`: the decision on the run, left untouched when the same mode already stands with no stale skip beside it, however the reason is worded.
-function qaModeLines({ run, result, state, ctx }) {
-  const { mode, why } = result.qaMode;
-  if (state?.qaMode?.mode === mode && !leavesStaleQaSkip(state, mode)) return [`recorded: qa_mode ${mode} (already)`];
-  const written = recordQaMode({ projectId: run.projectId, slug: run.slug, mode, reason: why, env: ctx.env });
-  return [written.status === "written" ? `recorded: qa_mode ${mode}` : notRecorded(written)];
-}
-
-// The phase record a completed check writes: a QA triage's skip stands for the whole QA phase, any other check records its own phase, and a check of no phase records none.
-function phaseDoneOf(artifact, result) {
-  if (!result.completes) return null;
-  if (result.qaMode?.mode === "skip") {
-    const qa = PHASE_ARTIFACTS.get("05");
-    return { phase: qa.phase, artifact: qa.file, verdict: "SKIPPED", note: result.qaMode.why, reason: `QA skipped: ${result.qaMode.why}`, decision: true };
-  }
-  return artifact.phase ? { phase: artifact.phase, artifact: artifact.file, verdict: result.verdict ?? result.first } : null;
+// One effect applied, and the lines it prints; the writes of the lock span were applied already.
+async function effectLines(effect, exec) {
+  if (effect.kind === "say") return [effect.line];
+  if (effect.kind === "saveIndex") return await indexLines(effect, exec);
+  if (effect.kind === "recordFields") return await fieldsLines(effect, exec);
+  return effect.locked === true ? [] : plainWriteLines(effect, exec);
 }
 
 // The `recorded: phase_done` line from what the check record decided: appended (with its reason) or already recorded.
@@ -173,29 +123,20 @@ function phaseDoneLine(done, written) {
 }
 
 // Writes the check memo and, for a completed check of a phase, the phase itself; answers the `recorded:` line of the phase.
-function memoAndPhaseLines({ run, check, stage, result, ctx }) {
-  const artifact = stage !== null ? QA_STAGES[stage] : PHASE_ARTIFACTS.get(check);
-  const memo = { line: result.memoLine, ok: PASSING_LINES.has(result.memoLine), completed: result.completes, digest: digestOf(result.evaluated) };
-  const done = phaseDoneOf(artifact, result);
-  const memoKey = stage ? `${check}-${stage}` : check;
-  const written = recordCheck({ projectId: run.projectId, slug: run.slug, check: memoKey, memo, done, claim: run.claim, env: ctx.env });
-  if (done !== null) return [phaseDoneLine(done, written)];
+function memoAndPhaseLines(answer, { run, ctx }) {
+  const { key, ...memo } = answer.memo;
+  const written = recordCheck({ projectId: run.projectId, slug: run.slug, check: key, memo, done: answer.record, claim: run.claim, env: ctx.env });
+  if (answer.record !== null) return [phaseDoneLine(answer.record, written)];
   if (written.status !== "written") ctx.err(`nightqueue: the check memo was not recorded on the run: ${written.reason}`);
-  return result.completes || result.first.startsWith("MISSING") ? [] : [`recorded: none (${result.memoLine})`];
+  return [];
 }
 
-// Runs the effects of a check in order and answers the lines they print: `index:` first, then every `recorded:` line.
-export async function checkEffectLines({ run, check, stage = null, result, state, ctx }) {
-  const args = { run, check, stage, result, state, ctx };
-  const triageDone = check === "01" && result.completes;
-  const index = check === "02" ? await indexLine(args) : [];
-  const type = check === "01" ? typeLines(args) : [];
-  const brief = triageDone ? briefLines(args) : [];
-  const commitType = triageDone ? commitTypeLines(args) : [];
-  const recorded = memoAndPhaseLines(args);
-  const qaMode = result.completes && result.qaMode !== null ? qaModeLines(args) : [];
-  const termination = triageDone ? terminationLines(args) : [];
-  const lifted = triageDone ? liftedTerminationLines(args) : [];
-  const slug = triageDone ? await slugLines(args) : [];
-  return [...index, ...type, ...brief, ...commitType, ...recorded, ...qaMode, ...termination, ...lifted, ...slug];
+// The effects of an answer in order, with the memo and the phase record between those that go before it and those that go after it, and the lines they print.
+export async function checkEffectLines({ answer, run, job, ctx }) {
+  const exec = { run, job, ctx };
+  const lines = [];
+  for (const effect of answer.effects.filter((candidate) => candidate.afterRecord !== true)) lines.push(...(await effectLines(effect, exec)));
+  lines.push(...memoAndPhaseLines(answer, exec));
+  for (const effect of answer.effects.filter((candidate) => candidate.afterRecord === true)) lines.push(...(await effectLines(effect, exec)));
+  return lines;
 }

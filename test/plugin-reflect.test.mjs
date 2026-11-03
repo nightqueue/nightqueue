@@ -82,7 +82,7 @@ const RUN_SECTION = AGENT_TEXT.slice(AGENT_TEXT.indexOf("## Inside a run"));
 
 test("the reflector agent is granted exactly Read, the three lesson/memory tools and its run's context", () => {
   const tools = /^tools: (.+)$/m.exec(AGENT_TEXT)?.[1];
-  assert.deepEqual(tools?.split(", "), ["Read", "mcp__nightqueue__lesson_recall", "mcp__nightqueue__lesson_save", "mcp__nightqueue__memory_save", "mcp__nightqueue__context_for_phase"]);
+  assert.deepEqual(tools?.split(", "), ["Read", "mcp__nightqueue__lesson_recall", "mcp__nightqueue__lesson_save", "mcp__nightqueue__memory_save", "mcp__nightqueue__context_for_agent"]);
   assert.match(AGENT_TEXT, /^name: reflector$/m);
 });
 
@@ -99,7 +99,7 @@ test("the reflector's run section has no artifact handoff and names the rubric, 
   assert.equal(RUN_SECTION.includes("ARTIFACT_PATH"), false);
   assert.ok(RUN_SECTION.includes("RUBRIC: `<PLUGIN_ROOT>/skills/reflect/references/rubric.md`"));
   assert.ok(RUN_SECTION.includes("`state.json`"));
-  assert.ok(RUN_SECTION.includes('`target: "reflector"`'));
+  assert.ok(RUN_SECTION.includes('`agent: "reflector"`'));
   assert.ok(RUN_SECTION.includes("`## Run timeline`"));
   assert.ok(RUN_SECTION.includes("`## Lessons given to this run`"));
   assert.ok(RUN_SECTION.includes("Read every round and every fix-loop block; never the job's stream/log."));

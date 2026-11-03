@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { parseExploreArtifact } from "../../src/cli/explore-artifact.mjs";
-import { lastRound, lastRoundWithSource, nextRound, PHASE_ARTIFACTS, QA_ANALYST_STAGE, QA_STAGES, QA_TRIAGE_STAGE } from "../../src/queue/phase-artifacts.mjs";
-import { PHASE_NAMES } from "../../src/queue/resume.mjs";
+import { PHASE_ARTIFACTS, QA_ANALYST_STAGE, QA_STAGES, QA_TRIAGE_STAGE } from "../../plugin/skills/resolve/pipeline/artifacts.mjs";
+import { lastRound, lastRoundWithSource, nextRound } from "../../src/queue/rounds.mjs";
+import { phaseNamesOf } from "../../src/queue/pipeline-package.mjs";
 
 const EXPLORE_HEADINGS = ["## File map", "## Access map", "## Third-party libraries"];
 
@@ -39,7 +40,7 @@ test("each artifact names the canonical phase it completes, and only the brief a
   const phases = Object.fromEntries([...PHASE_ARTIFACTS].map(([check, artifact]) => [check, artifact.phase]));
   assert.deepEqual(phases, { "00": null, "01": "triage", "02": "explore", "03": "architecture", "04": "implementation", "05": "qa", "06": "verification", "07": "runtime" });
   assert.equal(QA_ANALYST_STAGE.phase, null);
-  for (const phase of Object.values(phases).filter(Boolean)) assert.ok(PHASE_NAMES.includes(phase), phase);
+  for (const phase of Object.values(phases).filter(Boolean)) assert.ok(phaseNamesOf(null).includes(phase), phase);
 });
 
 test("the triage, QA, verification and runtime artifacts declare where their verdict is read and the values it takes", () => {

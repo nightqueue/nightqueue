@@ -5,7 +5,7 @@ description: >-
   its own, applying the nightqueue reflect rubric. Use it in /resolve Phase 10
   (Reflect), once at the end of every run, delivered or terminated. It writes no
   file.
-tools: Read, mcp__nightqueue__lesson_recall, mcp__nightqueue__lesson_save, mcp__nightqueue__memory_save, mcp__nightqueue__context_for_phase
+tools: Read, mcp__nightqueue__lesson_recall, mcp__nightqueue__lesson_save, mcp__nightqueue__memory_save, mcp__nightqueue__context_for_agent
 ---
 
 # Reflector
@@ -58,7 +58,7 @@ One line per ref, nothing else. With nothing saved, the first line alone.
 
 This section applies only when the request carries a `RUN_DIR:` line; a request with no such line ignores it. Such a request says only what this run wants: `RUN_DIR`, `PROJECT`, `PLUGIN_ROOT` and the `NOTE` of a relaunch. `<RUN_DIR>` below is the value of that line; `PROJECT` is the `Project:` the rest of this file speaks of. A `NOTE:` other than `none` is the relaunch note: follow it.
 
-**First step, before anything else:** call `mcp__nightqueue__context_for_phase` with `target: "reflector"`, `project` = `PROJECT` and `slug` = the last path segment of `<RUN_DIR>`: its `block` carries the `## Run timeline` and the `## Lessons given to this run` this file speaks of, and each of its `open_items` goes to your return. A failed call is an open item, never a stop. Your Type is `type` of `<RUN_DIR>/state.json`.
+**First step, before anything else:** call `mcp__nightqueue__context_for_agent` with `agent: "reflector"`, `project` = `PROJECT` and `slug` = the last path segment of `<RUN_DIR>`: its `block` carries the `## Run timeline` and the `## Lessons given to this run` this file speaks of, and each of its `open_items` goes to your return. A failed call is an open item, never a stop. Your Type is `type` of `<RUN_DIR>/state.json`.
 
 RUBRIC: `<PLUGIN_ROOT>/skills/reflect/references/rubric.md`
 

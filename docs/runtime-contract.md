@@ -46,12 +46,13 @@ What a runtime has to provide, and what it can rely on:
   already present under the id is never overwritten). The runtime creates the
   directory before the session starts.
 - Artifact names, in order: `01-triage.md`, `02-explore.md`, `03-plan.md`, `04-implementation.md`,
-  `05-qa.md`, `06-verification.md`, `07-runtime.md`. The phases are whole numbers, one
+  `05-qa.md`, `06-verification.md`, `07-runtime.md`, with `04-files.generated.md` beside them when
+  `run check 04` derives the file list. The phases are whole numbers, one
   artifact per phase: the QA analyst, every prover and the consolidation all write rounds of
   `05-qa.md`.
 - `state.json` in the same directory carries the resumable state, and **the runtime
   is its only writer**: every key goes through `src/queue/run-state.mjs`, which the
-  MCP tools `run_phase_done`, `run_terminate`, `run_skip`, `run_outcome` and `run_set`, the
+  MCP tools `run_terminate`, `run_outcome` and `run_set`, the
   commands `nightqueue run check`, `nightqueue run pr` and `nightqueue run publish`, and the
   runner itself call. The pipeline never writes
   the file, and an `updatedAt` an older plugin hand-wrote is overwritten by the
@@ -75,12 +76,8 @@ What a runtime has to provide, and what it can rely on:
     `notKept` on its last one counts the late writes past them. It is never consumed, and never
     read but to name the attempts in the notice.
   - `phases[{phase, at, artifact?, verdict?, note?, reason?, by?, claim?}]`: `nightqueue run check` on
-    a complete phase and `run publish`/`run pr` for `commit` (both `by: "runtime"`), and
-    `run_phase_done`; append-only, so a phase recorded twice never erases the first record. The
+    a complete phase and `run publish`/`run pr` for `commit` (both `by: "runtime"`); append-only, so a phase recorded twice never erases the first record. The
     one removal is the runtime's own `qa` `SKIPPED`, dropped when a `lite` or `full` triage replaces it.
-    One merge keeps an older plugin from doubling a row: a `run_phase_done` with no `reason`
-    whose phase is the one of the LAST entry, written `by: "runtime"` with the same artifact
-    (or the call sent none), merges its `verdict`/`note` into that entry instead of appending.
   - `checks{<NN>: {line, ok, completed, digest, at}, lastFailure?{check, line, at}}`:
     `nightqueue run check` alone, the memo of the last check of each artifact (its first
     notable line and the sha256 of the text it read); it supplies the reason of a re-run and
@@ -99,9 +96,8 @@ What a runtime has to provide, and what it can rely on:
   - `skips{<phase>:{by, reason?, at}}`: why a slot of the studio track did not run,
     for display only. Every run executes every phase, so the runtime writes no skip of
     its own; a `tier` entry (`by: "tier"`) an older runtime wrote is kept and shown as is.
-    Agent entries (`by` an agent name, with a reason) are written by `run_skip`, which
-    refuses a phase already in `phases` and an author that is not an agent (`tier`
-    included). The key is never in
+    Agent entries (`by` an agent name, with a reason) an older run recorded are read the same way;
+    nothing writes one since contract 14. The key is never in
     `phases` and is never read by resume, routing, the run report or the run context;
     a phase that still runs shows as run. `pipeline_phases.status` is post-run
     telemetry only: it is written by `nightqueue run report` (or an older plugin's
@@ -154,6 +150,13 @@ What a runtime has to provide, and what it can rely on:
     beside a `qaMode` of `skip`: otherwise `run report` reads it `⚠️`. A
     `lite` or `full` decision removes the runtime's own `qa` `SKIPPED` in the same write, so the real
     QA after it is its first launch. It is not a `run_set` field.
+  - `pipelineLoops{attempt, missing, fix, architect, retriage, stage, lastNext, fixPending, invalidated,
+    pendingQaRow, counted}`: `nightqueue run check` only, what `NEXT:` needs to remember between checks: per
+    attempt, so another attempt's loops read as zero, as a retried session starts with no memory. `missing`
+    counts per call, because a relaunch that wrote nothing must reach the still-missing row; a counted row
+    (`counted`, by check and digest) repeats on the same text and burns no iteration, while the same text
+    after another check ran means its lane wrote no new round, which answers `publish --draft`. A late write
+    is set aside like any other. It is not a `run_set` field.
   - `prTemplate{source, path?, headings, at}`: `nightqueue run pr` (both the
     `--template` query and the publishing call), the template the body is checked
     against - `repo` with its path, or `nightqueue`.
@@ -449,8 +452,8 @@ when they do not apply.
   agent, and an orchestrator `nightqueue run start|publish|report` (0, 7, 8). A log with no
   attempt line opens phase 0 before its first event.
 - A `report` event (`artifact`, `title` as the file's first markdown heading, `bytes`)
-  follows a `nightqueue run check <NN>`, mapped to its phase artifact, or a `run_phase_done`
-  naming a `*.md` basename. It is emitted only when the file is in the job's run directory,
+  follows a `nightqueue run check <NN>`, mapped to its phase artifact, or, in an old log, a
+  `run_phase_done` naming a `*.md` basename. It is emitted only when the file is in the job's run directory,
   and once per artifact per phase. A stream opened before the job had a run slug re-reads
   the row once per batch that holds such a signal, so its reports still arrive.
 
@@ -639,15 +642,18 @@ Job mode is unchanged and still fails open.
 In an operator session the MCP server's instructions replace the tools-only line with the
 three-band line and add one line on `connection-write`; any other client sees them unchanged.
 
-The thirty-two MCP tools of tool contract 13, with the parameters `nightqueue mcp` actually
-accepts (every answer carries `contract: 13`; a call to a tool an older contract had and this one
+The thirty MCP tools of tool contract 14, with the parameters `nightqueue mcp` actually
+accepts (every answer carries `contract: 14`; a call to a tool an older contract had and this one
 dropped is answered with the older-definitions line; contract 13 removed `phase_prompt`, whose refusal
-names the block of `## Phase prompts` of the resolve SKILL to launch from):
+names the block of `## Phase prompts` of the resolve SKILL to launch from; contract 14 removed
+`run_phase_done` and `run_skip`, renamed `context_for_phase` to `context_for_agent` with `agent` for
+`target`, whose refusal names the new tool, and reads the `phase` of `run_terminate` from the manifest
+of the run's pipeline):
 
 | tool | parameters |
 |---|---|
 | `lesson_recall` | `query?`, `project?`, `target?`, `exclude_ids?` |
-| `context_for_phase` | `target` (`triager`, `architect`, `coder`, `qa`, `verifier`, `explore`, `reflector`), `query?`, `project?`, `slug?` (`reflector` outside a job), `repo_root?`, `exclude_ids?` |
+| `context_for_agent` | `agent` (`triager`, `architect`, `coder`, `qa`, `verifier`, `explore`, `reflector`), `query?`, `project?`, `slug?` (`reflector` outside a job), `repo_root?`, `exclude_ids?` |
 | `lesson_save` | `title`, `root_cause`, `solution`, `prevention`, `attempts?`, `project?`, `target?` (a title the owner already has bumps its `attempts`; answers `deduped` and `violated` - `true` only inside a queue job, on a dedup onto a lesson this run was given, which also bumps the lesson's `violated`) |
 | `memory_recall` | `query?`, `project?` |
 | `lesson_delete` | `id` (`L344` or the plain number), `project` (name or key): deletes one lesson and its search entry; an unknown id or another project's is refused; refused inside a queue job; answers `{id, ref, title, project}` |
@@ -673,9 +679,7 @@ names the block of `## Phase prompts` of the resolve SKILL to launch from):
 | `queue_cancel` | `job_id`, `reason?`, `stop?`, `release_worktree?` |
 | `queue_close` | `job_id`, `force?` |
 | `queue_retry` | `job_id`, `note?`, `fresh?`, `run?` (a `closed` job, or a `done` job whose pull request is merged, is refused: a finished job does not resume; with neither `note` nor `fresh`, a run with no new phase and no new answer in its last two attempts is refused too) |
-| `run_phase_done` | `phase`, `artifact?`, `verdict?`, `note?`, `reason?` (why the phase ran again; omitted on its first run), `project?`, `slug?` |
 | `run_terminate` | `phase`, `reason`, `project?`, `slug?` (commits the recorded worktree's changes as the wip commit unless the worktree is adopted or on the default branch, the main checkout's branch or a detached HEAD; answers the record plus `wip{status, commit, branch, files, reason}` and `notice`, the paragraph that opens with `Terminated run: ` and carries `Retry: nightqueue queue retry J-<id>` inside a job and `New job from it: start_branch: <branch>`; a repeated call keeps the same wip commit, adopted through its `refs/nightqueue/wip/<slug>` ref even when the first call's record was refused; a refused phase or empty reason commits nothing) |
-| `run_skip` | `phase`, `by`, `reason`, `project?`, `slug?` |
 | `run_outcome` | `status` (`done`, `gate`, `no_change`), `notice?` (required with `no_change`), `question?` and `from_artifact?{file, section}` (`gate` only, never with `notice`: the runtime composes the whole `## Notice`; see "A gate notice is composed from the record" below), `project?`, `slug?` |
 | `run_set` | `type?`, `branch?`, `worktree?`, `project?`, `slug?`; a `qa_stage_a` with a value is refused as an older client, contract 12, and `answers` or `lastClaim` as written by the runtime only |
 
@@ -716,11 +720,10 @@ creates a wip commit in an adopted worktree, which may hold the person's own unc
 `--fresh` retry drops the run and leaves the old branch at its wip commit.
 A retry without `fresh` consumes the termination, so the retried run is handed the phases it recorded, on the kept wip commit.
 
-`run publish` and `run commit` read `<base>..HEAD` before anything changes. A commit is the run's
+`run publish` reads `<base>..HEAD` before anything changes. A commit is the run's
 own when its subject is `wip(<slug>): ...`, `refs/nightqueue/wip/<slug>` exists and reaches it,
 and the slug is the run's, or the one its `wip.ref` names (a retry that renamed the run), or any
-slug in a job whose row has `start_branch`. With no base ref there is nothing to read and
-`run commit` commits as usual. Each of these prints one `REJECTED:` line, and nothing is
+slug in a job whose row has `start_branch`. With no base ref there is nothing to read. Each of these prints one `REJECTED:` line, and nothing is
 committed or pushed:
 
 - a `wip(` subject that is not own, and a commit a wip ref names that is not own:
@@ -733,7 +736,7 @@ committed or pushed:
 
 Otherwise the own commits fold into the delivery commit: `git reset --soft <parent of the oldest
 own>`, the listed paths staged, the carried paths the worktree changed since staged as the
-worktree has them, then `git commit -F`. A carried path `run commit` would refuse (`.claude/`,
+worktree has them, then `git commit -F`. A carried path the list would refuse (`.claude/`,
 `tmp/`, a scratch name, the run directory, a lockfile the paired-manifest rule refuses) is left
 out: unstaged, still on disk and reported in `FOLDED: <n> wip commits (<m> files); left out: <path>
 (<reason>)`. A manifest the wip committed counts as the pair of a lockfile listed now. Refused
@@ -768,9 +771,9 @@ registered or queued, and a `null` or blank `tier` is ignored. `nightqueue queue
 --tier <t>` is refused with the same line. `run_set` no longer takes `tier` or
 `tier_raise_reason`.
 
-`context_for_phase` returns `{project, block}`: the block is
+`context_for_agent` returns `{project, block}`: the block is
 `## Applicable lessons` + `## Project memory` (+ `## Structural index` for
-`target: "explore"`, + `## Related jobs` for `target: "triager"`: at most
+`agent: "explore"`, + `## Related jobs` for `agent: "triager"`: at most
 five `- [J-<n>] <title> [<status> · PR #<n> · <YYYY-MM-DD>]` lines, best first, of the
 jobs of the project whose slug, brief or notice match the query, never the caller's own job;
 before them come the jobs the caller's job prompt or the query cites by `J-<n>` or by GitHub pull
@@ -793,7 +796,7 @@ names, outside one the `project` and `slug` it names.
 
 The agent definition knows how; the prompt says what this run wants and the return syntax.
 Each `plugin/agents/<agent>.md` ends in a `## Inside a run` section, applied when the request
-carries a `RUN_DIR:` line: its first-step fetches (`context_for_phase` with its own target, the
+carries a `RUN_DIR:` line: its first-step fetches (`context_for_agent` with its own role, the
 triager's request from `<RUN_DIR>/00-prompt.md`, the origin from `<RUN_DIR>/origin/`, the answers from
 `state.json`), its method and the layout of the artifact it writes. `coder-fix`, `runtime` and
 `qa-prover` fetch no context. `## Phase prompts` of the SKILL holds one block of at most 12 lines per
@@ -831,8 +834,8 @@ reaches them as `## Facts for the report` of `nightqueue run report` (see the CL
 `plugin/skills/resolve/SKILL.md` is the orchestrator's skeleton: the contract, `## Resume`, Phase 0,
 one index row per phase and `## Phase prompts`. What only
 one phase or one mode needs lives in `references/` and is read when the phase says so:
-`phases.md` (the artifact gate, the records and each phase's answer table, once after the first
-subagent returns, or first on a resume), `interactive-worktree.md` (Phase 0
+`phases.md` (the artifact gate, the records, what each `NEXT:` action asks and the judgment it leaves,
+once after the first subagent returns, or first on a resume), `interactive-worktree.md` (Phase 0
 and Phase 8 outside a job; the only file of the skill that names the host's worktree tool),
 `qa-phase.md` (Phase 5), `phase-8.md` with `commit-template.md` and `pr-template.md`
 (Phase 8), `phase-9.md` (Phase 9: the report, the `## Notice` writing rules and the icon
@@ -844,10 +847,77 @@ launch stays at most 60% of what it was with rendered prompts (`test/fixtures/sk
 `SKILL.md` stays within 350 lines, every `### Phase N` section within 40 (Phase 0 within 70) and every
 block within 12.
 
+### The pipeline package
+
+A pipeline is a package the runtime loads by name: `plugin/skills/<name>/pipeline/`, always from this
+npm package's own plugin. `resolve` is the only one. Its `manifest.json` declares `name`, `version` (equal
+to the plugin's, and pinned on the run as `state.json.pipeline`), the ordered `phases` (`id`, null on the
+Brief's `00`; `check`; `artifact`; `sections`; the `verdicts` it may record; the `agents` that serve it; and
+`rounds`, `appendable`, `derivesFileList` and `stages` where they apply), `models`, `targets` (the launches
+a `next` may name), `recordable`, `track`,
+`constants`, `renumbered`, `gateArtifact` and `fileListFallback`. Its `check.mjs` has one export, `check`; the
+other modules are its own. It imports from `src/` only `config/errors`, `config/store`, `host/paths`,
+`memory/runs`, `queue/branch-name`, `queue/file-list`, `queue/resume`, `queue/rounds`, `queue/question-text`
+and `queue/stream`. What names nothing of a pipeline stays in the runtime: `src/queue/rounds.mjs` and
+`src/queue/question-text.mjs`, which `run append`, the gate notice and `run publish` read too.
+
+`nightqueue run check` resolves the name from the caller's job row (`jobs.pipeline`), else `state.json`'s
+`pipeline.name`, else `resolve`, and refuses a name with no package in one line. `PHASE_NAMES` is gone: the
+phases `state.json` and `run_terminate` accept come from the manifest of the pipeline the state pinned.
+A `check` is synchronous, because it runs under the run lock on a phase with rounds: `check({ phase, stage,
+runDir, state, files, run, env })`, where `phase` is the check key, `files` is `{ read(name), changed,
+worktree() }` (`changed` is what git says only for a `derivesFileList` phase, never under the lock) and `run`
+is `{ slug, provisionalSlug }`. It answers:
+
+| key | what it is |
+| --- | --- |
+| `lines` | the contract lines, the first line first and `REPAIRED:` second |
+| `script` | the device script, printed after the effect lines under `SCRIPT:` |
+| `record` | the `phases[]` entry (`phase`, `artifact`, `verdict`, `note?`, `reason?`, `decision?`), or null |
+| `memo` | the check memo (`key`, `line`, `ok`, `completed`, `digest`) |
+| `effects` | the closed list below, applied in order, with the memo and the record after those without `afterRecord` |
+| `next` | one action, printed last as `NEXT: <action>`, after `SCRIPT:` |
+
+`next` is one line of a closed grammar, and the post-check policy that was prose now lives in
+`pipeline/next.mjs`, one fixture per row in `test/fixtures/next/`:
+
+| action | what the orchestrator does |
+| --- | --- |
+| `launch <target> [stage=<n>] [note=<text>]` | fills that block of `## Phase prompts`; `target` must be in the manifest's `targets` |
+| `gate <question>` | the one pause |
+| `terminate <reason>` | `run_terminate`, then the report |
+| `publish [--draft] [remaining=<text>]` | Phase 8 |
+| `report` | Phase 9 |
+| `check <NN>` | runs that check; `NN` must be a check of the manifest |
+
+What the code cannot decide stays prose in `references/phases.md`: what else goes in a `note`, the
+wording of a gate, the `run_set` of the Type valve, `run_outcome`, whether an answer is a go-ahead, the N
+prover groups, the purely static change that takes `publish` for `launch runtime`, and the open-item and
+PR-body duties.
+
+| effect | fields | what the runtime does |
+| --- | --- | --- |
+| `writeRunFile` | `name`, `text`, `line?`, `what?`, `locked?` | writes a bare file name of the run directory; a `locked` write happens before any other effect, inside the lock span, and a failure stops the check |
+| `recordFields` | `fields`, `line?`, `dropPhases?`, `afterRecord?` | writes fields the manifest's `recordable` declares and the runtime has one writer for: `type`, `commitType`, `qaMode`, `termination` (`{phase, reason}`, or `{phase, clear: true}` to lift it, printing its line only when one was lifted), `slug` (the runtime prints its own `renamed from` or `kept:` line), `pipelineLoops` (prints nothing on success) |
+| `saveIndex` | `text` | saves the explore map into the project index and prints the `index:` line |
+| `say` | `line`, `afterRecord?` | prints one line |
+
+The whole answer is validated before anything is written: an unknown effect, an undeclared field, a run file
+that is not a bare name, a phase or a verdict off the manifest or a promise is refused in one line. An effect
+that is refused prints `recorded: not recorded (<reason>)`, never failing the check. The artifact writes
+that must not lose a concurrent `run append` (the fence repair, the QA consolidation) happen in the one lock
+span that covers the read, `check` and the writes; everything that takes the lock itself runs after it. `run
+check 04` never overwrites `04-implementation.md`: the list it derives goes to `04-files.generated.md`, and
+`run publish`, the report facts and the studio read that file when the artifact lists no file.
+
+`run report` and its facts still read the package by a static path (`pipeline/reader.mjs`), a debt the
+telemetry and report job takes over.
+
 ### Agent models and pipeline constants
 
-`src/queue/routing.mjs` is the single source of the model each agent runs on
-(`nightqueue run start --routing` prints the table):
+`src/queue/routing.mjs` reads the model each agent runs on from the `models` of the pipeline's
+manifest, plus the merger, which is the runtime's own (`nightqueue run start --routing` prints the
+table):
 
 | Agent | Default model |
 | --- | --- |
@@ -862,6 +932,19 @@ block within 12.
 | reflector | haiku |
 | merger | sonnet |
 
+The rationale of the defaults:
+
+The agent models below are the single source. The dominant capability of the agent decides its model:
+- writes/edits code or carries the design judgment every later phase builds on → `opus` (architect, coder);
+- reasons and critiques without writing code in bulk → `sonnet` (triager: writes the Brief, critiques the
+  request and reproduces the bug; qa-analyst: adversarial analysis grouped by root, the lite QA included;
+  qa-triage: classifies the real diff under a written rule and decides how much attack it deserves);
+- bounded, mechanical or command-driven work over material another agent already reasoned about → `haiku`
+  (explore maps files the triage already scoped; provers write and run one PoC for one pre-analysed
+  hypothesis; verifier runs the project's checks and the PoCs; reflector distils lessons from written artifacts).
+The merger keeps `sonnet`. A project overrides any of them with `nightqueue project models`.
+Phases 0/8/9 run in the orchestrator, on the skill's model. Every run executes every phase.
+
 A project overrides any agent but the merger with
 `nightqueue project models <project> --set <agent>=<model>` (`opus`, `sonnet` or `haiku`;
 `--unset <agent>` brings the default back). The override is stored as
@@ -875,7 +958,7 @@ names its own: `coder` and `coder-fix` take the coder's,
 Every run shares the same constants: the verifier scope is the project's real checks
 (typecheck, lint, build, tests) plus the QA's PoCs, at most 2 fix iterations, the
 project's `CLAUDE.md` is named to the coder when it exists, `index_recall` and
-`context_for_phase` always run, and there is no time target.
+`context_for_agent` always run, and there is no time target.
 
 `nightqueue run report` records the run's telemetry itself, so the shipped plugin never
 calls `pipeline_log`; the tool stays for an older plugin and for the operator's outcomes
@@ -913,8 +996,8 @@ JSON `{ "ok": false, "error": "store-unavailable", "code", "home", "hint": "nigh
 back. A database older than the server's build answers the same shape with `"code":
 "SCHEMA_OUTDATED"`, `"hint": "nightqueue update"` and the `message` `database at v<file>, this
 nightqueue expects v<code>: run \`nightqueue update\` (...)`: the server never migrates it, and
-it answers normally once `nightqueue update` did. `context_for_phase` is not an error there: it answers `block: ""` and one `warning`
-line. Inside a job whose `state.json` carries its `job` block, the four `run_*` tools keep
+it answers normally once `nightqueue update` did. `context_for_agent` is not an error there: it answers `block: ""` and one `warning`
+line. Inside a job whose `state.json` carries its `job` block, the three `run_*` tools keep
 working from that file. `pipeline_log` whose run resolves (from that block inside a job) queues
 its fully resolved row in the run's `pending-writes.jsonl` and answers `{ "ok": true, "queued": true, "warning": "recorded in
 <path>; replayed once the database is back", "pending": <path> }`; when it cannot queue it
@@ -1073,7 +1156,7 @@ Every optional parameter accepts an explicit `null` and treats it exactly like
 an absent one, so a caller that fills its whole argument object never gets an
 error for a field it had nothing to put in. The closed
 vocabularies are `target` (`triager`, `architect`, `coder`, `qa`, `verifier`, plus
-`explore` for the `target` of `context_for_phase`), the run `phase` (`triage`,
+`explore` for the `agent` of `context_for_agent`), the run `phase` (`triage`,
 `explore`, `architecture`, `implementation`, `qa`, `verification`, `runtime`,
 `commit`), the run `status` of `run_outcome` (`done`, `gate`, `no_change` - how the process
 ended stays the runtime's call),
@@ -1135,7 +1218,7 @@ operator note) and prints one fact per line, in this fixed order:
    start, a heading titled `Question` (a level-2 one stays in the section), or a table row
    `| Question | text |` with a filled second cell (that cell alone; under a header row whose cell
    has no `?`, the first cell of the row below). The block ends at the next bold label or heading.
-   One reader (`src/queue/gate-question.mjs`) serves the check, the pause and the report. A question
+   One reader (`src/queue/question-text.mjs`) serves the check, the pause and the report. A question
    is a value with a `?` and at least one word; nothing else ever pauses a run. A label left unfilled
    (empty, one single `<…>` or `[…]` hint, or a placeholder word, `none`, `no question` or `nothing`
    that goes on to say nothing, such as `None needed`, `(none)`, `N/A - decided above`) is an `OPEN:`
@@ -1158,7 +1241,7 @@ operator note) and prints one fact per line, in this fixed order:
    (`node_modules/`, `vendor/`, `third_party/`, `site-packages/` and the like, at any depth, in any
    case) on its path; an absolute path does not count, and a worktree the
    check cannot read answers `MISSING:` too, so none of these records a mode or a phase. This is the
-   gate's one disk read: `run check` (`src/cli/qa-skip-tests.mjs`) passes what it finds to
+   gate's one disk read: `run check` (`pipeline/worktree-tests.mjs` of the package) passes what it finds to
    `evaluateCheck` as gaps, and `evaluateCheck` itself reads no disk. The orchestrator's Phase 5
    reads this line and nothing else to pick the QA mode; a resume re-runs the check and launches
    the lane only on its `MISSING:`.
@@ -1287,8 +1370,7 @@ own; only a `skip` records a phase, `qa` with the verdict `SKIPPED`, its sentenc
 `QA skipped: <why>` as the `reason`, which puts it on the reflector's timeline. A reworded `skip`
 answers `(already)` while the runtime's `SKIPPED` is the last `qa` entry, so a relaunch is no re-run. A `lite` or `full`
 removes that `SKIPPED` from `phases`, and records its `qa` phase through `05`; `05` is never called on a skip, whose round carries no
-`## Verdict`. `run_phase_done` and
-`run_terminate` still work for an older plugin.
+`## Verdict`. `run_terminate` still works for an older plugin.
 
 **The QA consolidation is the check's own.** `05-qa.md` holds three kinds of `## Round`, told
 apart by the first non-blank line after the heading: `source: runtime consolidation` is a
@@ -1411,8 +1493,7 @@ template's rules read the body without that line, so a `#<number>`, a placeholde
 slug in the reason cannot make it unpublishable; that text reaches the pull request as recorded.
 `lite`, `full` and no `qaMode` owe no line. `run pr` does not enforce it.
 
-**A lockfile is published only when it is proved reproducible.** `run publish` (and
-`run commit`) refuse every lockfile (`package-lock.json`, `yarn.lock`, `pnpm-lock.yaml`,
+**A lockfile is published only when it is proved reproducible.** `run publish` refuses every lockfile (`package-lock.json`, `yarn.lock`, `pnpm-lock.yaml`,
 `bun.lockb`, `bun.lock`) EXCEPT when all three hold: (1) the `package.json` of the same
 directory is in the publish set and differs from the base branch; (2) the lockfile differs
 from the base branch; (3) the manager's frozen install - `npm ci --ignore-scripts`, or
@@ -1434,8 +1515,8 @@ caller's own `job <id>`) or the run slug is rejected naming the line
 <line>``); fenced blocks and code spans (a span wrapped over lines included) are
 not read. A body that ends inside an unclosed fenced block or `<!--` comment is
 rejected naming the line that opens it, since the footer would render inside
-it. A footer that cannot be built pushes nothing. `nightqueue run commit` commits the
-message untouched, and a message that carries a `Refs:` line is refused (``REFUSED: line <n> of the message is a
+it. A footer that cannot be built pushes nothing. `nightqueue run publish` commits the
+message untouched, and a message that carries a `Refs:` line is rejected (``REJECTED: commit message — line <n> is a
 `Refs:` trailer, ...``) with nothing staged.
 
 `pipeline_runs.model` and `pipeline_runs.session_id` are not parameters: the

@@ -29,7 +29,7 @@ export const ORCHESTRATOR_BASH_RULES = Object.freeze(
     { argv: ["git", "branch"], anyOf: ["--show-current"] },
     { argv: ["git", "diff"], anyOf: ["--stat", "--shortstat", "--name-only", "--name-status"], noneOf: ["-p", "-u", "--patch"] },
     { argv: ["gh", "pr"], next: ["view", "list", "status", "checks", "create"] },
-    { argv: ["nightqueue", "run"], next: ["check", "dir", "log", "index-save", "commit", "pr", "start", "publish", "report"] },
+    { argv: ["nightqueue", "run"], next: ["check", "dir", "log", "index-save", "pr", "start", "publish", "report"] },
   ].map(freezeRule),
 );
 

@@ -6,7 +6,7 @@ import { run } from "../../src/cli/index.mjs";
 import { runDir } from "../../src/config/paths.mjs";
 import { openDb } from "../../src/memory/db.mjs";
 import { addJob, getJob } from "../../src/memory/jobs.mjs";
-import { questionDigest } from "../../src/queue/gate-question.mjs";
+import { questionDigest } from "../../src/queue/question-text.mjs";
 import { jobPromptText } from "../../src/queue/job-prompt.mjs";
 import { readRunState } from "../../src/queue/resume.mjs";
 import { applyRetry } from "../../src/queue/retry.mjs";

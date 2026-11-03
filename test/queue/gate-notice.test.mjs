@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { composeGateNotice, gateDigestOf } from "../../src/queue/gate-notice.mjs";
-import { questionDigest } from "../../src/queue/gate-question.mjs";
+import { questionDigest } from "../../src/queue/question-text.mjs";
 
 const PLAN = [
   "## Implementation plan",

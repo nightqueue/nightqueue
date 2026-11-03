@@ -1,10 +1,11 @@
 import { readdirSync, statSync } from "node:fs";
 import { basename, join, relative, resolve } from "node:path";
-import { deviceScript, isTestPath, readVerdict } from "../queue/check-contract.mjs";
+import { deviceScript, isTestPath, readVerdictOf } from "../../plugin/skills/resolve/pipeline/reader.mjs";
 import { recordedFiles } from "../queue/file-list.mjs";
 import { canonicalPath } from "../queue/orchestrator-scope.mjs";
-import { lastRound, PHASE_ARTIFACTS } from "../queue/phase-artifacts.mjs";
+import { fileListArtifacts } from "../queue/pipeline-package.mjs";
 import { isStateObject } from "../queue/resume.mjs";
+import { lastRound } from "../queue/rounds.mjs";
 import { sectionOf, unfencedLines, withoutHtmlComments } from "../queue/stream.mjs";
 import { readRunFile } from "./run-context.mjs";
 
@@ -98,7 +99,7 @@ function qaModeFacts(state) {
 
 // The verdict of a round artifact, or the words saying it states none.
 function verdictOf(round, check) {
-  return readVerdict(round, PHASE_ARTIFACTS.get(check).verdict) ?? "not stated";
+  return readVerdictOf(check, round) ?? "not stated";
 }
 
 // The suggestions of a round that ask for a ticket of their own, a table row or a bullet alike.
@@ -271,11 +272,18 @@ function factLine(fact) {
 
 const FACT_FILES = ["00-brief.md", "01-triage.md", "03-plan.md", "04-implementation.md", "05-qa.md", "06-verification.md", "07-runtime.md"];
 
+// The run's artifacts as the facts read them; an implementation artifact that lists no file reads as the list `run check` derived, when there is one.
+function factTexts(runDir) {
+  const texts = Object.fromEntries(FACT_FILES.map((file) => [file, withoutHtmlComments(readRunFile(runDir, file))]));
+  const { artifact, fallback } = fileListArtifacts();
+  const derived = withoutHtmlComments(readRunFile(runDir, fallback));
+  return recordedFiles(texts[artifact]).length === 0 && recordedFiles(derived).length > 0 ? { ...texts, [artifact]: derived } : texts;
+}
+
 // The bounded lines of `## Facts for the report`, read from the run's artifacts; a failure is one line, never a failed report.
 export function reportFacts({ runDir, state, worktree = null }) {
   try {
-    const texts = Object.fromEntries(FACT_FILES.map((file) => [file, withoutHtmlComments(readRunFile(runDir, file))]));
-    return allFacts({ runDir, state, worktree }, texts).map(factLine);
+    return allFacts({ runDir, state, worktree }, factTexts(runDir)).map(factLine);
   } catch (error) {
     return [factLine(`the facts could not be read: ${error?.message ?? String(error)}`)];
   }

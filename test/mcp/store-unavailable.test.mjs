@@ -95,11 +95,11 @@ test("three tool calls fired concurrently on fixture (iii) all answer store-unav
   for (const answer of after) assert.notEqual(answer.isError, true, textOf(answer));
 });
 
-test("context_for_phase on fixture (iii) answers an empty block plus one warning line, not an error", async (t) => {
+test("context_for_agent on fixture (iii) answers an empty block plus one warning line, not an error", async (t) => {
   const { env } = sickHome(t, "mcp-sick-phase");
   const client = await connectInProcess(t, env);
 
-  const result = await client.callTool({ name: "context_for_phase", arguments: { target: "coder", project: "alpha" } });
+  const result = await client.callTool({ name: "context_for_agent", arguments: { agent: "coder", project: "alpha" } });
   assert.notEqual(result.isError, true, textOf(result));
   const payload = JSON.parse(textOf(result));
   assert.equal(payload.block, "");
@@ -159,7 +159,7 @@ test("nightqueue hook session-start on fixture (iii) prints exactly one line and
   assert.equal(result.stderr.trim(), "", "the hook reported the store failure as a crash");
 });
 
-test("run_set, run_phase_done and run_outcome inside a job with a job block answer ok on fixture (iii); without a block they answer store-unavailable", async (t) => {
+test("run_set and run_outcome inside a job with a job block answer ok on fixture (iii); without a block they answer store-unavailable", async (t) => {
   const env = makeHome(t, "mcp-sick-run-tools");
   makeProject(t, env, "alpha");
   const projectId = ensureProject(env, "alpha");
@@ -173,7 +173,6 @@ test("run_set, run_phase_done and run_outcome inside a job with a job block answ
 
   const answers = await Promise.all([
     inJob.callTool({ name: "run_set", arguments: { type: "bug/error" } }),
-    inJob.callTool({ name: "run_phase_done", arguments: { phase: "triage" } }),
     inJob.callTool({ name: "run_outcome", arguments: { status: "gate", notice: "needs an answer" } }),
   ]);
 
@@ -183,13 +182,12 @@ test("run_set, run_phase_done and run_outcome inside a job with a job block answ
   }
   const state = readRunState({ projectId, slug: "fix-the-worker", env });
   assert.equal(state.type, "bug/error");
-  assert.deepEqual(state.phases.map((entry) => entry.phase), ["triage"]);
   assert.equal(state.outcome.status, "gate");
   assert.equal(state.job.id, blocked);
 
   const outside = await connectInProcess(t, { ...env, NIGHTQUEUE_JOB_ID: String(bare) });
-  for (const name of ["run_set", "run_phase_done", "run_outcome"]) {
-    const args = { run_set: { type: "bug/error" }, run_phase_done: { phase: "triage" }, run_outcome: { status: "done" } }[name];
+  for (const name of ["run_set", "run_outcome"]) {
+    const args = { run_set: { type: "bug/error" }, run_outcome: { status: "done" } }[name];
     assertStoreUnavailable(await outside.callTool({ name, arguments: args }), env);
   }
 });

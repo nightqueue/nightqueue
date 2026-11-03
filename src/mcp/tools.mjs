@@ -31,7 +31,7 @@ import { jobIdOfPrUrl } from "../queue/pr-lookup.mjs";
 import { createPrStateCache } from "../queue/pr-state.mjs";
 import { liveRunnersReport, unreadableRegistry } from "../queue/registry.mjs";
 import { failedCoreSection, jobDetailView, prUrlsOf, queueView } from "../queue/view.mjs";
-import { isSafeSegment, readRunState, PHASE_NAMES } from "../queue/resume.mjs";
+import { isSafeSegment, readRunState } from "../queue/resume.mjs";
 import { resolveJobRun } from "../queue/job-run.mjs";
 import { composeGateNotice, gateDigestOf } from "../queue/gate-notice.mjs";
 import { runDir as runDirOf } from "../config/paths.mjs";
@@ -45,11 +45,8 @@ import { stopReport, stopRunners } from "../queue/stop.mjs";
 import { queueWorkers } from "../queue/close-view.mjs";
 import {
   recordOutcome,
-  recordPhaseDone,
   recordRunFields,
-  recordSkip,
   RUN_OUTCOME_STATUSES,
-  SKIP_AGENTS,
 } from "../queue/run-state.mjs";
 import { startQueueRunner } from "../queue/start.mjs";
 import { terminateRun } from "../queue/terminate.mjs";
@@ -860,14 +857,14 @@ function toolDefinitions(env, state) {
       },
     },
     {
-      name: "context_for_phase",
+      name: "context_for_agent",
       config: {
         description:
-          "The context block a subagent fetches as its first step, already formatted: `## Applicable lessons` ([L<id>]), `## Project memory` ([M<id>]) and, for `target: \"explore\"`, `## Structural index`; an empty `block` means there is genuinely nothing to read. " +
-          "`target: \"reflector\"` answers `## Run timeline` and `## Lessons given to this run` of the run instead, with `open_items`; outside a job it needs `project` and `slug`. " +
+          "The context block a subagent fetches as its first step, already formatted: `## Applicable lessons` ([L<id>]), `## Project memory` ([M<id>]) and, for `agent: \"explore\"`, `## Structural index`; an empty `block` means there is genuinely nothing to read. " +
+          "`agent: \"reflector\"` answers `## Run timeline` and `## Lessons given to this run` of the run instead, with `open_items`; outside a job it needs `project` and `slug`. " +
           "Inside a job the project and the already-injected lessons come from the job's own run: the same lesson is not handed to two phases, unless it is all this run has to give.",
         inputSchema: {
-          target: z.enum(PHASE_TARGETS),
+          agent: z.enum(PHASE_TARGETS),
           query: optionalText,
           project: optionalText,
           slug: optionalText,
@@ -879,12 +876,12 @@ function toolDefinitions(env, state) {
         degradedPhaseContext(args, async () =>
           phaseContextBlock(
             {
-              target: args.target,
+              target: args.agent,
               query: args.query,
               project: args.project,
               repoRoot: args.repo_root,
               excludeIds: args.exclude_ids,
-              run: args.target === "reflector" ? await reflectorRun(args, env) : null,
+              run: args.agent === "reflector" ? await reflectorRun(args, env) : null,
             },
             env,
           ),
@@ -933,7 +930,7 @@ function toolDefinitions(env, state) {
       name: "lesson_delete",
       config: {
         description:
-          "Deletes one lesson by `id` (`L344` or the plain number) of `project` (the registered name or key, required), with its search entry, so it never comes back in `lesson_recall` or `context_for_phase`. " +
+          "Deletes one lesson by `id` (`L344` or the plain number) of `project` (the registered name or key, required), with its search entry, so it never comes back in `lesson_recall` or `context_for_agent`. " +
           "An unknown id and an id of another project are refused and nothing is deleted. Refused inside a queue job: deleting is the operator's call. The answer names the id and the title that went.",
         inputSchema: { id: z.union([z.number().int(), z.string()]), project: z.string() },
       },
@@ -980,7 +977,7 @@ function toolDefinitions(env, state) {
       name: "memory_delete",
       config: {
         description:
-          "Deletes one memory by `id` (`M446` or the plain number) of `project` (the registered name or key, required), with its search entry, so it never comes back in `memory_recall` or `context_for_phase`. " +
+          "Deletes one memory by `id` (`M446` or the plain number) of `project` (the registered name or key, required), with its search entry, so it never comes back in `memory_recall` or `context_for_agent`. " +
           "An unknown id and an id of another project are refused and nothing is deleted. Refused inside a queue job: deleting is the operator's call. The answer names the id and the key that went.",
         inputSchema: { id: z.union([z.number().int(), z.string()]), project: z.string() },
       },
@@ -1354,55 +1351,18 @@ function toolDefinitions(env, state) {
       },
     },
     {
-      name: "run_phase_done",
-      config: {
-        description:
-          "Records one completed phase of the run in `state.json`, which a retry's `RUN FACTS` block lists. The runtime stamps the time and owns the file: never hand-write `state.json`. " +
-          "Inside a job the run is resolved from the job's own row — passing `project` or `slug` there is refused; outside a job both are required. " +
-          "`reason` = why this phase ran again (a fix loop, a relaunch after `MISSING`, a re-architect, a re-triage); omit it on the first run of a phase.",
-        inputSchema: {
-          phase: z.enum(PHASE_NAMES),
-          artifact: optionalText,
-          verdict: optionalText,
-          note: optionalText,
-          reason: optionalText,
-          project: optionalText,
-          slug: optionalText,
-        },
-      },
-      handler: async (args) => {
-        const run = await callerRun(args, env);
-        const done = { phase: args.phase, artifact: args.artifact, verdict: args.verdict, note: args.note, reason: args.reason };
-        return runAnswer(recordPhaseDone({ ...run, ...done, env }), run);
-      },
-    },
-    {
       name: "run_terminate",
       config: {
         description:
           "Records that the run stopped on purpose at a phase, with the reason; a retry consumes the stop and hands the next session the facts the run recorded, on the kept wip commit: the pipeline decides where to continue. " +
           "The runtime commits the worktree's changes on the job's branch as `wip(<slug>): terminated at <phase> — <reason>` (local, never pushed) and answers `wip` and the `notice` to report verbatim; a repeated call keeps the same wip commit; a retry starts on that commit. " +
           "Inside a job the run is resolved from the job's own row — passing `project` or `slug` there is refused; outside a job both are required.",
-        inputSchema: { phase: z.enum(PHASE_NAMES), reason: z.string(), project: optionalText, slug: optionalText },
+        inputSchema: { phase: z.string(), reason: z.string(), project: optionalText, slug: optionalText },
       },
       handler: async (args) => {
         const run = await callerRun(args, env);
         const ended = terminateRun({ ...run, phase: args.phase, reason: args.reason, jobId: callerJobId(env), env });
         return { ...runAnswer(ended, run), wip: wipAnswer(ended.wip), notice: ended.notice };
-      },
-    },
-    {
-      name: "run_skip",
-      config: {
-        description:
-          "Records that an agent skips a later phase of the run, with who decided it and why, so the studio track shows the slot as skipped. " +
-          "It only records: it changes no routing and no resume, and a phase that still runs shows as run. A phase that already ran is refused. " +
-          "Inside a job the run is resolved from the job's own row — passing `project` or `slug` there is refused; outside a job both are required.",
-        inputSchema: { phase: z.enum(PHASE_NAMES), by: z.enum(SKIP_AGENTS), reason: z.string(), project: optionalText, slug: optionalText },
-      },
-      handler: async (args) => {
-        const run = await callerRun(args, env);
-        return runAnswer(recordSkip({ ...run, phase: args.phase, by: args.by, reason: args.reason, env }), run);
       },
     },
     {

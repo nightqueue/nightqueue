@@ -2,10 +2,9 @@ import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { jobLogPath, runDir } from "../config/paths.mjs";
 import { recordedFiles } from "../queue/file-list.mjs";
+import { fileListArtifacts } from "../queue/pipeline-package.mjs";
 import { isSafeSegment, readRunState } from "../queue/resume.mjs";
 import { agentModels } from "../queue/routing.mjs";
-
-const IMPLEMENTATION_ARTIFACT = "04-implementation.md";
 
 // The run directory of a job, or null while it has no slug, or a slug that is not a safe path segment.
 export function runDirOf(job, env) {
@@ -24,14 +23,21 @@ function artifactNames(dir) {
   }
 }
 
-// The files the implementation artifact recorded, or null when the run has no readable one yet.
-function recordedFilesOf(dir) {
-  const path = join(dir, IMPLEMENTATION_ARTIFACT);
+// The files one run file records, or null when it cannot be read.
+function filesRecordedIn(path) {
   try {
     return existsSync(path) ? recordedFiles(readFileSync(path, "utf8")) : null;
   } catch {
     return null;
   }
+}
+
+// The files the implementation artifact recorded, else the list `run check` derived, or null when the run has no readable one yet.
+function recordedFilesOf(dir) {
+  const { artifact, fallback } = fileListArtifacts();
+  const own = filesRecordedIn(join(dir, artifact));
+  if (own !== null && own.length > 0) return own;
+  return filesRecordedIn(join(dir, fallback)) ?? own;
 }
 
 // The run facts the track reads on every send, from one state.json read: its skip records and its task type.

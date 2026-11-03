@@ -15,7 +15,7 @@ import { phasePrompts } from "../../test-support/skill-size.mjs";
 import { agentToolUseEvent, assistantEvent, noticeText, PR_URL, recordedDone, resultEvent, SESSION_ID, SLUG, slugEvent, systemInitEvent, taskNotificationEvent, toNdjson, toolResultEvent, toolUseEvent } from "../../test-support/streams.mjs";
 
 const WORKTREE = "/tmp/whole-run-worktree";
-const CONTEXT_TOOL = "mcp__nightqueue__context_for_phase";
+const CONTEXT_TOOL = "mcp__nightqueue__context_for_agent";
 const REMOVED_TOOL = "mcp__nightqueue__phase_prompt";
 const PLUGIN_ROOT = join(packageRoot(), "plugin");
 const REFERENCES = join(PLUGIN_ROOT, "skills", "resolve", "references");
@@ -185,6 +185,6 @@ test("every main-thread call of the run passes the real guard, and the artifact 
 
 test("the lanes' own context calls land on their phases, the two qa lanes merged on theirs, and the reflector's recalls nothing", async (t) => {
   const { log } = await runWholeRun(t);
-  const contexts = (await jobRecalls(log)).filter((recall) => recall.tool === "context_for_phase" && recall.hits.length > 0);
+  const contexts = (await jobRecalls(log)).filter((recall) => recall.tool === "context_for_agent" && recall.hits.length > 0);
   assert.deepEqual(contexts.map((recall) => [recall.target, recall.phase]), [["triager", 1], ["explore", 2], ["architect", 3], ["coder", 4], ["qa", 5], ["verifier", 6]]);
 });

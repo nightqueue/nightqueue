@@ -97,7 +97,7 @@ use the person's MCP server when they have one, `connection_call` otherwise.
 ## Every call names its project
 
 Every MCP call that takes an owner carries `project` (the project's name or key).
-This covers `queue_add`, `lesson_recall`, `lesson_save`, `memory_save`, `context_for_phase`, `index_recall` and `pipeline_log`. You
+This covers `queue_add`, `lesson_recall`, `lesson_save`, `memory_save`, `context_for_agent`, `index_recall` and `pipeline_log`. You
 run in the home, so nothing is inferred from your cwd. A call without its owner is a bug.
 The `tracker_*` tools take no owner. Before every `tracker_create`, `tracker_comment` or `tracker_update`, show the
 exact change and stop until an explicit ok; never delete or archive; after a "may still have been applied" hint, read first.

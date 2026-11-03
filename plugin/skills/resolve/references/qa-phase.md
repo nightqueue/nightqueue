@@ -8,13 +8,12 @@ artifact, `05-qa.md`, one `## Round <n>` per launch.
 
 **Triage first:** launch 1 qa-guardian — the `qa-triage` block —
 header `🛡️ QA-GUARDIAN · TRIAGE · ...`, then `nightqueue run check 05 --stage triage`.
-Its `QA-MODE:` line decides, and nothing else. On `MISSING`, relaunch once (`note` = the lines);
-if it persists, `lite`, ⚠️ open item. On a resume at Phase 5 run the check first (a pure read);
+Its `QA-MODE:` line decides, and nothing else; follow its `NEXT:`. On a resume at Phase 5 run the check first (a pure read);
 launch the lane only on its `MISSING`.
 
 **skip → no attack lane:** the check recorded it; Phase 6, never `run check 05`.
 
-**lite → one lane:** launch 1 qa-guardian — the `qa-lite` block —
+**lite → one lane:** the `qa-lite` block,
 header `🛡️ QA-GUARDIAN · LITE · ...`. It writes its own `## Round <n>` of `05-qa.md`; then run
 `nightqueue run check 05`. Stages A and B and the consolidation below do not apply.
 
@@ -29,10 +28,8 @@ header `🛡️ QA-GUARDIAN · ANALYST · ...`. It writes its round into `05-qa.
 lists its groups under `## Found`, one `<ids> — <label>` line each.
 
 **Stage A gate:** run `nightqueue run check 05 --stage analyst` (the Phase 0 artifact gate),
-which reads the analyst's round for its mandatory sections — on
-`MISSING`, relaunch the analyst (🔁) once with the check's lines as `note`; if it persists, Phase 6, ⚠️ open item. It
-answers `QA-STAGE: provers|skip`. On `QA-STAGE: skip` (zero runtime hypotheses), go straight to
-`nightqueue run check 05`.
+which reads the analyst's round for its mandatory sections; on `MISSING` follow its `NEXT:`; if it persists, Phase 6, ⚠️ open item. It
+answers `QA-STAGE: provers|skip`, and `skip` (zero runtime hypotheses) has `NEXT: check 05`.
 
 **Stage B — Provers (full):** launch **N qa-guardian in parallel**
 — one

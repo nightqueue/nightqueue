@@ -7,8 +7,8 @@ import { fileURLToPath } from "node:url";
 import { runDir } from "../src/config/paths.mjs";
 import { run } from "../src/cli/index.mjs";
 import { groupIdFromLabel, proverRound } from "../src/cli/run-append.mjs";
-import { roundsOf } from "../src/queue/phase-artifacts.mjs";
-import { appendRoundText, consolidationOf } from "../src/queue/qa-rounds.mjs";
+import { consolidationOf } from "../plugin/skills/resolve/pipeline/consolidation.mjs";
+import { appendRoundText, roundsOf } from "../src/queue/rounds.mjs";
 import { recordRunFields } from "../src/queue/run-state.mjs";
 import { ensureProject, makeDir, makeHome, makeProject } from "../test-support/memory.mjs";
 
@@ -60,6 +60,7 @@ async function runCli(env, argv) {
     err.push(error.message);
     return 1;
   });
+  if (out.at(-1)?.startsWith("NEXT: ")) out.pop();
   return { code, out, err };
 }
 
