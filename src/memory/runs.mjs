@@ -7,7 +7,7 @@ import {
   withFullSync,
   withWriteRetry,
 } from "./db.mjs";
-import { gateStopsOf, pipelineManifest } from "../queue/pipeline-package.mjs";
+import { gateStopsOf, memoized, pipelineManifest } from "../queue/pipeline-package.mjs";
 import { projectIdOrNull } from "./registry.mjs";
 
 // `pipeline_runs.tier` is NOT NULL in the shipped schema (ddl.mjs); no run has a tier any more, so every row carries the value of the one track every run now executes, until the schema bump that drops the column.
@@ -15,7 +15,8 @@ const LEGACY_RUN_TIER = "complex";
 export const PIPELINE_TASK_TYPES = ["bug/error", "feature/refactor"];
 export const OPERATOR_PIPELINE_OUTCOMES = ["investigated", "queued"];
 export const PIPELINE_OUTCOMES = ["pr_opened", "local_commit", "no_commit", ...OPERATOR_PIPELINE_OUTCOMES];
-export const PIPELINE_GATE_STOPS = Object.freeze([...gateStopsOf(pipelineManifest()), "user"]);
+// The gate stops a run may record: the default pipeline's own, then the person's.
+export const pipelineGateStops = memoized(() => Object.freeze([...gateStopsOf(pipelineManifest()), "user"]));
 export const PIPELINE_PHASE_STATUSES = ["ok", "failed", "skipped"];
 
 // Requires a value of an enum, naming the accepted values in the error.
@@ -26,8 +27,19 @@ function requireEnum(field, value, allowed) {
 
 // Requires a value of an enum only when it was informed; absent stays null.
 function optionalEnum(field, value, allowed) {
-  if (value === undefined || value === null || value === "") return null;
+  if (isAbsent(value)) return null;
   return requireEnum(field, value, allowed);
+}
+
+// Whether an optional field was left out.
+function isAbsent(value) {
+  return value === undefined || value === null || value === "";
+}
+
+// Requires a gate stop of the pipeline only when one was informed, so a run with none never reads the manifest.
+function optionalGateStop(value) {
+  if (isAbsent(value)) return null;
+  return requireEnum("gate_stop", value, pipelineGateStops());
 }
 
 // Returns the integer as given, or null when the value is not a usable duration.
@@ -54,7 +66,7 @@ function validateRun({ slug, taskType, outcome, gateStop, phases }) {
     slug: cleanSlug,
     taskType: optionalEnum("task_type", taskType, PIPELINE_TASK_TYPES),
     outcome: requireEnum("outcome", outcome, PIPELINE_OUTCOMES),
-    gateStop: optionalEnum("gate_stop", gateStop, PIPELINE_GATE_STOPS),
+    gateStop: optionalGateStop(gateStop),
     phases: list,
   };
 }

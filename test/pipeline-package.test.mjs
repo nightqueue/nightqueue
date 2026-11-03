@@ -13,10 +13,10 @@ import { runDir } from "../src/config/paths.mjs";
 import { openDb } from "../src/memory/db.mjs";
 import { addJob } from "../src/memory/jobs.mjs";
 import { refuseInvalidAnswer } from "../src/queue/pipeline-answer.mjs";
-import { deliveryPhaseOf, gateStopOf, gateStopsOf, loadPipeline, loadReport, phaseIdsOf, phaseNamesOf, phasesBeforeDeliveryOf, pipelineManifest, reportLayoutOf } from "../src/queue/pipeline-package.mjs";
+import { agentRoles, deliveryPhaseOf, gateStopOf, gateStopsOf, installedPipelineNames, lessonRoles, lessonRolesOf, loadPipeline, loadReport, phaseIdsOf, phaseNamesOf, phasesBeforeDeliveryOf, pipelineManifest, reportLayoutOf, requireRole, rolesOf } from "../src/queue/pipeline-package.mjs";
 import { derivedGateStop, derivedOutcome } from "../src/queue/pipeline-record.mjs";
-import { PIPELINE_GATE_STOPS } from "../src/memory/runs.mjs";
-import { AGENT_MODELS, TRACK_SLOTS } from "../src/queue/routing.mjs";
+import { pipelineGateStops } from "../src/memory/runs.mjs";
+import { defaultAgentModels, trackSlots } from "../src/queue/routing.mjs";
 import { readRunState } from "../src/queue/resume.mjs";
 import { recordPhaseDone, recordRunFields, recordRuntimeField, terminationRefusal } from "../src/queue/run-state.mjs";
 import { jobExtras } from "../src/studio/job-extras.mjs";
@@ -96,8 +96,18 @@ test("the manifest pins the plugin's version and the phases and models the runti
   assert.equal(manifest.version, JSON.parse(readFileSync(join(ROOT, "plugin", ".claude-plugin", "plugin.json"), "utf8")).version);
   assert.deepEqual(phaseIdsOf(manifest), ["triage", "explore", "architecture", "implementation", "qa", "verification", "runtime", "commit"]);
   assert.deepEqual(phaseNamesOf(null), phaseIdsOf(manifest));
-  assert.deepEqual(AGENT_MODELS, { triager: "sonnet", explore: "haiku", architect: "opus", coder: "opus", "qa-triage": "sonnet", "qa-analyst": "sonnet", "qa-prover": "haiku", verifier: "haiku", reflector: "haiku", merger: "sonnet" });
-  assert.equal(TRACK_SLOTS.length, 9);
+  assert.deepEqual(defaultAgentModels(), { triager: "sonnet", explore: "haiku", architect: "opus", coder: "opus", "qa-triage": "sonnet", "qa-analyst": "sonnet", "qa-prover": "haiku", verifier: "haiku", reflector: "haiku", merger: "sonnet" });
+  assert.equal(trackSlots().length, 9);
+});
+
+test("the agent roles and the lesson roles come from the manifest's agents, in order", () => {
+  const manifest = pipelineManifest();
+  assert.deepEqual(rolesOf(manifest), ["triager", "architect", "coder", "qa", "verifier", "explore", "reflector"]);
+  assert.deepEqual(lessonRolesOf(manifest), ["triager", "architect", "coder", "qa", "verifier"]);
+  assert.deepEqual(agentRoles(), rolesOf(manifest));
+  assert.deepEqual(lessonRoles(), lessonRolesOf(manifest));
+  assert.equal(installedPipelineNames()[0], "resolve");
+  assert.throws(() => requireRole("target", "legacy-role", lessonRoles()), /unknown `target` `legacy-role`; accepted: triager, architect, coder, qa, verifier$/);
 });
 
 test("the package imports from src/ only what the allow-list names", () => {
@@ -129,7 +139,7 @@ test("the real package's report module exposes its row rules, open items and fac
 
 test("the gate stops, the delivering phase and the phases before it come from the manifest, with the same values as before", () => {
   const manifest = pipelineManifest("resolve");
-  assert.deepEqual([...PIPELINE_GATE_STOPS], ["critique", "triage", "architect", "qa", "verification", "runtime", "user"]);
+  assert.deepEqual([...pipelineGateStops()], ["critique", "triage", "architect", "qa", "verification", "runtime", "user"]);
   assert.deepEqual(manifest.phases.map((phase) => gateStopOf(manifest, phase.id)), [null, "triage", null, "architect", null, "qa", "verification", "runtime", null]);
   assert.equal(deliveryPhaseOf(manifest), "commit");
   assert.deepEqual(phasesBeforeDeliveryOf(manifest), ["verification", "runtime"]);
@@ -229,6 +239,36 @@ function installCopy(t) {
   return copy;
 }
 
+const INVALID_MANIFEST_LINE_RE = /^nightqueue: the pipeline `resolve` has an invalid manifest: .+ \(.*manifest\.json\)$/;
+
+// Runs one command of an install copy's CLI.
+function runCopy(copy, args, env) {
+  return spawnSync(process.execPath, [join(copy, "bin", "nightqueue.mjs"), ...args], { encoding: "utf8", env });
+}
+
+// Asserts that with its manifest broken by `change`, an install's `--help`, `queue status` and `doctor` run and `run check 02` refuses with the one line.
+function assertBrokenInstall(t, change, reason) {
+  const copy = installCopy(t);
+  change(join(copy, "plugin", "skills", "resolve", "pipeline", "manifest.json"));
+  const env = makeHome(t, "package-bad-manifest");
+
+  for (const args of [["--help"], ["queue", "status"]]) {
+    const result = runCopy(copy, args, env);
+    assert.equal(result.status, 0, `${args.join(" ")}: ${result.stderr}`);
+  }
+  const doctor = runCopy(copy, ["doctor"], env);
+  const row = doctor.stdout.split("\n").find((line) => /\bpipeline\b/.test(line) && /manifest\.json/.test(line));
+  assert.ok(row, doctor.stdout);
+  assert.match(row, /fail/);
+  assert.match(row, reason);
+
+  const check = runCopy(copy, ["run", "check", "02"], env);
+  assert.equal(check.status, 1);
+  assert.equal(check.stderr.trim().split("\n").length, 1, check.stderr);
+  assert.match(check.stderr.trim(), INVALID_MANIFEST_LINE_RE);
+  assert.match(check.stderr, reason);
+}
+
 for (const [label, reshape, reason] of [
   ["no phases", ({ phases, ...rest }) => rest, /`phases` is not a list/],
   ["no models", ({ models, ...rest }) => rest, /`models` is not an object/],
@@ -245,18 +285,15 @@ for (const [label, reshape, reason] of [
   ["a delivers that is not a boolean", (manifest) => ({ ...manifest, phases: manifest.phases.map((phase) => (phase.id === "commit" ? { ...phase, delivers: "yes" } : phase)) }), /the phase `commit` has a `delivers` that is not a boolean/],
   ["a precedesDelivery that is not a boolean", (manifest) => ({ ...manifest, phases: manifest.phases.map((phase) => (phase.id === "runtime" ? { ...phase, precedesDelivery: 1 } : phase)) }), /the phase `runtime` has a `precedesDelivery` that is not a boolean/],
   ["two delivering phases", (manifest) => ({ ...manifest, phases: manifest.phases.map((phase) => (phase.id === "qa" ? { ...phase, delivers: true } : phase)) }), /more than one phase `delivers`/],
+  ["no agents", ({ agents, ...rest }) => rest, /`agents` is not a list/],
+  ["an agent role that is not a string", (manifest) => ({ ...manifest, agents: manifest.agents.map((entry) => (entry.name === "triager" ? { ...entry, role: 5 } : entry)) }), /the agent `triager` has a `role` that does not match/],
+  ["an agent lessons that is not a boolean", (manifest) => ({ ...manifest, agents: manifest.agents.map((entry) => (entry.name === "triager" ? { ...entry, lessons: "yes" } : entry)) }), /the agent `triager` has a `lessons` that is not a boolean/],
+  ["an agent declared twice", (manifest) => ({ ...manifest, agents: [...manifest.agents, manifest.agents[0]] }), /the agent `triager` is declared twice/],
+  ["a role with and without lessons", (manifest) => ({ ...manifest, agents: manifest.agents.map((entry) => (entry.name === "qa-prover" ? { ...entry, lessons: false } : entry)) }), /the role `qa` is declared both with and without `lessons`/],
+  ["a phase agent with no agents entry", (manifest) => ({ ...manifest, agents: manifest.agents.filter((entry) => entry.name !== "coder") }), /the agent `coder` has no `agents` entry/],
 ]) {
-  test(`a manifest with ${label} fails every command with one line naming the path`, (t) => {
-    const copy = installCopy(t);
-    const path = join(copy, "plugin", "skills", "resolve", "pipeline", "manifest.json");
-    writeFileSync(path, JSON.stringify(reshape(JSON.parse(readFileSync(path, "utf8")))));
-
-    const result = spawnSync(process.execPath, [join(copy, "bin", "nightqueue.mjs"), "--help"], { encoding: "utf8", env: makeHome(t, "package-bad-manifest") });
-
-    assert.equal(result.status, 1);
-    assert.equal(result.stderr.trim().split("\n").length, 1, result.stderr);
-    assert.match(result.stderr, /the pipeline `resolve` has an invalid manifest: .*manifest\.json/);
-    assert.match(result.stderr, reason);
+  test(`a manifest with ${label} keeps the CLI running and refuses \`run check\` with one line naming the reason and the path`, (t) => {
+    assertBrokenInstall(t, (path) => writeFileSync(path, JSON.stringify(reshape(JSON.parse(readFileSync(path, "utf8"))))), reason);
   });
 }
 
@@ -265,15 +302,12 @@ test("a record of a phase whose manifest entry has no verdicts is refused, not a
   assert.throws(() => refuseInvalidAnswer(answerWith({ record: { phase: "explore", verdict: "OK" } }), manifest), /the manifest's phase `explore` has no `verdicts` list/);
 });
 
-test("an install with no manifest fails every command with one line naming the path", (t) => {
-  const copy = installCopy(t);
-  rmSync(join(copy, "plugin", "skills", "resolve", "pipeline", "manifest.json"));
+test("an install with no manifest keeps the CLI running and refuses `run check` with one line saying it is missing", (t) => {
+  assertBrokenInstall(t, (path) => rmSync(path), /it is missing/);
+});
 
-  const result = spawnSync(process.execPath, [join(copy, "bin", "nightqueue.mjs"), "doctor"], { encoding: "utf8", env: makeHome(t, "package-no-manifest") });
-
-  assert.equal(result.status, 1);
-  assert.equal(result.stderr.trim().split("\n").length, 1, result.stderr);
-  assert.match(result.stderr, /the pipeline `resolve` has no readable package: .*manifest\.json/);
+test("an install whose manifest is not JSON keeps the CLI running and refuses `run check` with one line saying so", (t) => {
+  assertBrokenInstall(t, (path) => writeFileSync(path, "{ not json"), /it is not valid JSON: /);
 });
 
 test("a manifest that declares a field the runtime has no writer for is still refused", () => {

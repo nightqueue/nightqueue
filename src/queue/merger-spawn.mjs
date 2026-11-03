@@ -5,7 +5,7 @@ import { logsDir } from "../config/paths.mjs";
 import { MERGER_DIR_ENV, MERGER_FILES_ENV } from "../hooks/merger-guard.mjs";
 import { mergerSettings } from "../host/settings.mjs";
 import { CLOSE_WORKER_ENV } from "./close-deps.mjs";
-import { AGENT_MODELS } from "./routing.mjs";
+import { MERGER_MODEL } from "./routing.mjs";
 import { compactStamp } from "./runner.mjs";
 import { pluginDir, spawnClaude } from "./spawn.mjs";
 import { extractResultText } from "./stream.mjs";
@@ -20,7 +20,7 @@ export function mergerArgs({ prompt, env = process.env }) {
     "--agent",
     "nightqueue:merger",
     "--model",
-    AGENT_MODELS.merger,
+    MERGER_MODEL,
     "--tools",
     "Read,Edit",
     "--permission-mode",

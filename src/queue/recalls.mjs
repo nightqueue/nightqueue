@@ -1,6 +1,6 @@
 import { REMOVED_CONTEXT_TOOL } from "../mcp/tool-contract.mjs";
 import { truncateByCodePoint } from "../memory/jobs.mjs";
-import { lanePhase, PHASES } from "./narrate.mjs";
+import { lanePhase, phaseSlots } from "./narrate.mjs";
 import { laneName, parseAttemptMarker, parseEventLine } from "./stream.mjs";
 import { eachLineYielding } from "./yielding-lines.mjs";
 
@@ -196,7 +196,7 @@ function callFields(block, lane) {
   if (!context) return null;
   const asked = block.input?.agent ?? block.input?.target;
   const target = typeof asked === "string" && asked ? asked : null;
-  return { tool: context[1], kind: "context", query: null, target, agent: target ?? agent, phase: PHASES.get(target) ?? lane.phase, calls: 1 };
+  return { tool: context[1], kind: "context", query: null, target, agent: target ?? agent, phase: phaseSlots().get(target) ?? lane.phase, calls: 1 };
 }
 
 // Opens a pending recall for every memory recall or context tool call of an assistant event.

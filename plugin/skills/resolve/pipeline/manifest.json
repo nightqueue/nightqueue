@@ -89,6 +89,17 @@
     "verifier": "haiku",
     "reflector": "haiku"
   },
+  "agents": [
+    { "name": "triager", "role": "triager", "lessons": true },
+    { "name": "architect", "role": "architect", "lessons": true },
+    { "name": "coder", "role": "coder", "lessons": true },
+    { "name": "qa-triage", "role": "qa", "lessons": true },
+    { "name": "qa-analyst", "role": "qa", "lessons": true },
+    { "name": "qa-prover", "role": "qa", "lessons": true },
+    { "name": "verifier", "role": "verifier", "lessons": true },
+    { "name": "explore", "role": "explore", "lessons": false },
+    { "name": "reflector", "role": "reflector", "lessons": false }
+  ],
   "targets": ["triager", "explore", "architect", "coder", "coder-fix", "verifier", "runtime", "qa-triage", "qa-lite", "qa-analyst", "qa-prover", "reflector"],
   "recordable": ["type", "commitType", "qaMode", "termination", "slug", "pipelineLoops"],
   "track": [
