@@ -22,11 +22,11 @@ const ROWS = Object.freeze([
   "t1", "t1-gate", "t2", "t3", "t4", "t5", "t6", "t7", "t8", "t8-still",
   "e1", "e2", "e3",
   "p1", "p2", "p3", "p4", "p5", "p6", "p7a", "p7b", "p8", "p8-staged", "p9",
-  "c1", "c1-resumed", "c2", "c3", "c3-staged", "c4", "c5", "c5-staged", "c6",
+  "c1", "c1-resumed", "c2", "c3", "c3-staged", "c4", "c5", "c5-staged", "c6", "c7-resumed",
   "q1", "q2", "q3", "q4a", "q4b",
   "a1", "a2", "a3", "a4",
   "q5a", "q5a-lite", "q5b", "q6a", "q6b", "q6b-rounds", "q6c", "q7", "q8", "q9",
-  "v1", "v2", "v3", "v3b", "v3c", "v3d", "v4", "v4b", "v5", "v6a", "v6b",
+  "v1", "v2", "v3", "v3b", "v3c", "v3d", "v4", "v4b", "v5", "v6a", "v6b", "v7a", "v7b", "v7c-staged", "v8-resumed",
   "r1", "r2", "r2-verdict", "r2b", "r3", "r4", "r4b", "r5a", "r5b", "r6", "r7", "r8", "r9a", "r9b",
 ]);
 
@@ -138,14 +138,23 @@ test("a new round of the same failure counts, and past the limit it publishes a 
   assert.equal(out.at(-1), "NEXT: publish --draft remaining=it still drops the row");
 });
 
-test("the same failed text after a fix lane ran wrote no new round, so it publishes a draft and a re-run repeats that", async (t) => {
+test("the same failed text after a fix lane ran relaunches the verifier once, then publishes a draft that a re-run repeats", async (t) => {
   const seeded = seedRow(t, "v4-stale", readRow("v4"));
   writeFileSync(join(seeded.dir, "04-implementation.md"), "## Modified files\n/a.mjs\n\n## Done\nDone.\n");
   assert.match((await runCheck(seeded.env, "06")).out.at(-1), /^NEXT: launch coder-fix note=iteration 2: /);
   assert.equal((await runCheck(seeded.env, "04")).out.at(-1), "NEXT: launch verifier");
+  assert.equal((await runCheck(seeded.env, "06")).out.at(-1), "NEXT: launch verifier note=06-verification.md unchanged since the last check");
   const stale = "NEXT: publish --draft remaining=check 06 wrote no new round after the last lane, so its failures stay open";
   assert.equal((await runCheck(seeded.env, "06")).out.at(-1), stale);
   assert.equal((await runCheck(seeded.env, "06")).out.at(-1), stale);
+});
+
+test("a new round written by the unchanged relaunch is read on its own verdict, never as a second unchanged text", async (t) => {
+  const row = readRow("v7a");
+  const seeded = seedRow(t, "v7a-new-round", row);
+  await runCheck(seeded.env, "06");
+  writeFileSync(join(seeded.dir, "06-verification.md"), `${row.texts["06-verification.md"]}\n## Round 2\n\n## Checks run\n- test: PASSED\n\n## Verification: PASSED\n`);
+  assert.equal((await runCheck(seeded.env, "06")).out.at(-1), "NEXT: launch runtime");
 });
 
 test("a relaunch that wrote nothing reaches the still-missing row, with no digest dedupe", async (t) => {
@@ -176,16 +185,81 @@ test("the coder-fix owed survives a re-run of check 04, and the verification cle
   assert.equal((await runCheck(seeded.env, "04")).out.at(-1), "NEXT: launch qa-triage");
 });
 
-test("another attempt's loops read as zero, as a retried session starts with no memory", async (t) => {
-  const row = readRow("v4b");
-  const seeded = seedRow(t, "attempt-reset", row);
+// A phase entry attempt 1 recorded, from `phase` or `phase:verdict`.
+function recorded(spec) {
+  const [phase, verdict = "OK"] = spec.split(":");
+  return { phase, verdict, claim: { attempt: 1 } };
+}
+
+// A seeded row resumed on attempt 2: its cache is attempt 1's, and its phases are what attempt 1 recorded.
+function resumedRow(t, id, rowId, { cache, phases }) {
+  const seeded = seedRow(t, id, readRow(rowId));
   const { env, projectId, slug } = seeded;
-  saveRunState({ projectId, slug, env, state: { ...readRunState({ projectId, slug, env }), pipelineLoops: { attempt: 1, fix: 2 }, lastClaim: { attempt: 2 } } });
-  const { out } = await runCheck(env, "06");
-  assert.equal(out.at(-1), "NEXT: launch coder-fix note=iteration 1: test/a.test.mjs: the filter drops a row");
-  assert.equal(loopsAfter(seeded).attempt, 2);
-  assert.equal(loopsAfter(seeded).fix, 1);
+  saveRunState({ projectId, slug, env, state: { ...readRunState({ projectId, slug, env }), pipelineLoops: { attempt: 1, ...cache }, lastClaim: { attempt: 2 }, phases: phases.map(recorded) } });
+  return seeded;
+}
+
+test("another attempt's loops are a floor: the counts come from phases[], never below what that attempt counted", async (t) => {
+  const reset = resumedRow(t, "attempt-reset", "v4b", { cache: { fix: 2 }, phases: [] });
+  assert.equal((await runCheck(reset.env, "06")).out.at(-1), "NEXT: publish --draft remaining=test/a.test.mjs: the filter drops a row");
+  assert.equal(loopsAfter(reset).attempt, 2);
+  assert.equal(loopsAfter(reset).fix, 2);
+  const replayed = resumedRow(t, "attempt-replayed", "v4b", { cache: { fix: 0 }, phases: ["triage:PROCEED", "explore", "architecture", "implementation", "qa:NEEDS FIX", "implementation"] });
+  assert.equal((await runCheck(replayed.env, "06")).out.at(-1), "NEXT: launch coder-fix note=iteration 2: test/a.test.mjs: the filter drops a row");
+  assert.equal(loopsAfter(replayed).fix, 2);
 });
+
+const REPLAYS = [
+  {
+    title: "a verification loop after an approved QA counts each fix lane",
+    row: "v4",
+    check: "06",
+    phases: ["architecture", "implementation", "qa:APPROVED", "verification:FAILED", "implementation", "implementation"],
+    next: "NEXT: publish --draft remaining=test/a.test.mjs: the filter drops a row",
+    loops: { fix: 2 },
+  },
+  {
+    title: "a stage lane after the fix limit starts its fix count over",
+    row: "v4",
+    check: "06",
+    phases: ["architecture", "implementation", "verification:FAILED", "implementation", "verification:FAILED", "implementation", "verification:FAILED", "implementation"],
+    next: "NEXT: launch coder-fix note=iteration 1: test/a.test.mjs: the filter drops a row",
+    loops: { fix: 1 },
+  },
+  {
+    title: "a triage after a runtime lane is the re-triage, so the coder lane goes straight to the verifier",
+    row: "c3",
+    check: "04",
+    phases: ["triage:PROCEED", "architecture", "implementation", "qa:APPROVED", "verification:PASSED", "runtime:SYMPTOM-PERSISTS", "triage:PROCEED", "architecture"],
+    next: "NEXT: launch verifier",
+    loops: { retriage: 1, fixPending: false },
+  },
+  {
+    title: "a triage relaunched before any runtime lane is no re-triage",
+    row: "c3",
+    check: "04",
+    phases: ["triage:PROCEED", "triage:PROCEED", "explore", "architecture"],
+    next: "NEXT: launch qa-triage",
+    loops: { retriage: 0, fixPending: false },
+  },
+  {
+    title: "only an architecture right after a QA counts as an architect round",
+    row: "c3",
+    check: "04",
+    phases: ["triage:PROCEED", "explore", "architecture", "architecture", "implementation", "qa:APPROVED", "architecture"],
+    next: "NEXT: launch qa-triage",
+    loops: { architect: 1 },
+  },
+];
+
+for (const replay of REPLAYS) {
+  test(`replayed phases: ${replay.title}`, async (t) => {
+    const seeded = resumedRow(t, `replay-${REPLAYS.indexOf(replay)}`, replay.row, { cache: {}, phases: replay.phases });
+    assert.equal((await runCheck(seeded.env, replay.check)).out.at(-1), replay.next);
+    const loops = loopsAfter(seeded);
+    for (const [name, value] of Object.entries(replay.loops)) assert.deepEqual(loops[name], value, `${name} of ${JSON.stringify(loops)}`);
+  });
+}
 
 test("loops of a hostile shape read as zero and never break the check", async (t) => {
   const seeded = seedRow(t, "hostile", readRow("v4b"));

@@ -151,12 +151,17 @@ What a runtime has to provide, and what it can rely on:
     `lite` or `full` decision removes the runtime's own `qa` `SKIPPED` in the same write, so the real
     QA after it is its first launch. It is not a `run_set` field.
   - `pipelineLoops{attempt, missing, fix, architect, retriage, stage, lastNext, fixPending, invalidated,
-    pendingQaRow, counted}`: `nightqueue run check` only, what `NEXT:` needs to remember between checks: per
-    attempt, so another attempt's loops read as zero, as a retried session starts with no memory. `missing`
+    pendingQaRow, counted}`: `nightqueue run check` only, what `NEXT:` needs to remember between checks: a
+    cache of one attempt. On another attempt, or with no cache, the fix, architect, re-triage and fix-owed
+    counts are replayed from `phases[]`, which a plain retry keeps and `--fresh` starts over; the fix and
+    re-triage counts never drop below the previous attempt's cache, which counts what no entry records (a
+    fix lane that left 04 unchanged, a re-triage before its triage entry). `missing`
     counts per call, because a relaunch that wrote nothing must reach the still-missing row; a counted row
-    (`counted`, by check and digest) repeats on the same text and burns no iteration, while the same text
-    after another check ran means its lane wrote no new round, which answers `publish --draft`. A late write
-    is set aside like any other. It is not a `run_set` field.
+    (`counted{key, digest, next, unchanged}`, by check and digest) repeats on the same text and burns no
+    iteration. The same text after another check ran relaunches that row's lane once, with a `note=` that
+    its artifact did not change since the last check; a second unchanged text answers `publish --draft`, and
+    on a stage row its `remaining=` names the stages not run. A late write is set aside like any other. It
+    is not a `run_set` field.
   - `prTemplate{source, path?, headings, at}`: `nightqueue run pr` (both the
     `--template` query and the publishing call), the template the body is checked
     against - `repo` with its path, or `nightqueue`.
