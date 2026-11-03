@@ -1,0 +1,1 @@
+NEXT: launch verifier note=06-verification.md unchanged since the last check

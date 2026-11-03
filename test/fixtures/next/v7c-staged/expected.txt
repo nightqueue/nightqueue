@@ -1,0 +1,1 @@
+NEXT: publish --draft remaining=check 06 wrote no new round after the last lane, so its failures stay open; stages not run: 2

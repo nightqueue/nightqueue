@@ -1,4 +1,4 @@
-import { MANIFEST } from "./artifacts.mjs";
+import { MANIFEST, PHASE_ARTIFACTS } from "./artifacts.mjs";
 import { beforeQa, CONFIRM_LINE, flatLine, planStageNumbers, sectionItems } from "./contract.mjs";
 import { capped, terminationReason } from "./effects.mjs";
 
@@ -14,18 +14,69 @@ const DIAGNOSIS_INCOMPLETE = "the diagnosis is incomplete; look for the underest
 const DECISIONS_TAKEN_NOTE = "record it in ## Decisions taken";
 const NO_VERDICT = "verification produced no verdict";
 const NO_NEW_ROUND = "wrote no new round after the last lane, so its failures stay open";
+const TRIAGE_PHASE = PHASE_ARTIFACTS.get("01").phase;
+const ARCHITECTURE_PHASE = PHASE_ARTIFACTS.get("03").phase;
+const IMPLEMENTATION_PHASE = PHASE_ARTIFACTS.get("04").phase;
+const QA_PHASE = PHASE_ARTIFACTS.get("05").phase;
+const VERIFICATION_PHASE = PHASE_ARTIFACTS.get("06").phase;
+const RUNTIME_PHASE = PHASE_ARTIFACTS.get("07").phase;
+const RUNTIME_FIX_VERDICTS = new Set(["NOT-MET", "SYMPTOM-PERSISTS"]);
 
 // A count of a held state, zero for anything that is not a finite number.
 function countOf(value) {
   return Number.isFinite(value) ? value : 0;
 }
 
-// The loops of this attempt from the state, zero for a state that holds none or holds another attempt's.
+// Whether a recorded phase entry is one the next lane owes a fix to, given the fix count when it landed.
+function owesFix(entry, fix) {
+  if (entry.phase === QA_PHASE) return entry.verdict === "NEEDS FIX";
+  if (entry.phase === VERIFICATION_PHASE) return entry.verdict === "FAILED" && fix < MAX_FIX;
+  return entry.phase === RUNTIME_PHASE && RUNTIME_FIX_VERDICTS.has(entry.verdict);
+}
+
+// The replay after an entry that decides what the next implementation lane is: a QA starts the fix count over.
+function withTrigger(replay, entry) {
+  const fix = entry.phase === QA_PHASE ? 0 : replay.fix;
+  return { ...replay, fix, trigger: entry.phase, fixPending: owesFix(entry, fix) };
+}
+
+// The fix count after an implementation lane: one more for a fix lane, zero for the next stage lane, kept otherwise.
+function fixAfterLane(replay) {
+  if (replay.fixPending) return replay.fix + 1;
+  return replay.trigger === VERIFICATION_PHASE ? 0 : replay.fix;
+}
+
+// The replay after one recorded phase entry.
+function replayEntry(replay, entry) {
+  if (entry.phase === IMPLEMENTATION_PHASE) return { ...replay, fix: fixAfterLane(replay) };
+  if (entry.phase === ARCHITECTURE_PHASE) return replay.previous === QA_PHASE ? { ...replay, architect: replay.architect + 1 } : replay;
+  const triggered = withTrigger(replay, entry);
+  if (entry.phase === RUNTIME_PHASE) return { ...triggered, runtimeSeen: true };
+  if (entry.phase === TRIAGE_PHASE && replay.runtimeSeen) return { ...triggered, retriage: 1 };
+  return triggered;
+}
+
+// The fix, architect and re-triage counts and the fix owed, replayed from the phases every attempt recorded.
+function phaseLoops(phases) {
+  const entries = Array.isArray(phases) ? phases.filter((entry) => entry !== null && typeof entry === "object") : [];
+  const start = { fix: 0, architect: 0, retriage: 0, fixPending: false, trigger: null, previous: null, runtimeSeen: false };
+  const replay = entries.reduce((held, entry) => ({ ...replayEntry(held, entry), previous: entry.phase }), start);
+  return { fix: replay.fix, architect: replay.architect, retriage: replay.retriage, fixPending: replay.fixPending };
+}
+
+// The replayed counts, raised to what an earlier attempt's cache counted that no phase entry records: a re-triage before its triage entry, a fix lane that left 04 unchanged.
+function replayedLoops(state, held) {
+  const replayed = phaseLoops(state?.phases);
+  const earlier = held !== null && typeof held === "object" ? held : {};
+  return { ...replayed, fix: Math.max(replayed.fix, countOf(earlier.fix)), retriage: Math.max(replayed.retriage, countOf(earlier.retriage)) };
+}
+
+// The loops of this attempt from its cache, else the counts replayed from the recorded phases when the cache holds none or another attempt's.
 function loopsOf(state) {
   const attempt = state?.lastClaim?.attempt ?? null;
   const held = state?.pipelineLoops;
   const usable = held !== null && typeof held === "object" && (held.attempt ?? null) === attempt;
-  const loops = usable ? held : {};
+  const loops = usable ? held : replayedLoops(state, held ?? null);
   return {
     attempt,
     missing: loops.missing !== null && typeof loops.missing === "object" ? loops.missing : {},
@@ -51,6 +102,29 @@ function publishDraft(remaining) {
   return `publish --draft remaining=${flatLine(remaining)}`;
 }
 
+// The stages of the plan after a stage, none when the stage is unknown or the plan has no stages.
+function stagesNotRun(ctx, stage) {
+  if (stage === null || ctx.stages.length < 2) return [];
+  return ctx.stages.filter((number) => number > stage);
+}
+
+// A `publish --draft` action that, on a stage row, also names the stages of the plan it leaves unrun.
+function draftOnStage(ctx, stage, remaining) {
+  const notRun = stagesNotRun(ctx, stage);
+  return publishDraft(notRun.length === 0 ? remaining : `${remaining}; stages not run: ${notRun.join(", ")}`);
+}
+
+// The stage a verification round states on its `VERDICT: … (stage N)` line, or null when it states none.
+function statedStage(ctx) {
+  const stated = ctx.result.lines.map((line) => STAGE_VERDICT_RE.exec(line)?.[1]).find(Boolean);
+  return stated === undefined ? null : Number(stated);
+}
+
+// The stage an unchanged row is in: the lane the loops hold, else the one its round states.
+function rowStage(ctx) {
+  return ctx.loops.stage ?? statedStage(ctx);
+}
+
 // The lines of the answer that start with a prefix.
 function linesWith(ctx, prefix) {
   return ctx.result.lines.filter((line) => line.startsWith(prefix));
@@ -73,8 +147,8 @@ function missed(action) {
 }
 
 // A step of a counted loop, which a re-run of the check on the same text repeats instead of counting again.
-function counted(action, set = {}) {
-  return { action, set, counted: true };
+function counted(action, set = {}, unchanged = 0) {
+  return { action, set, counted: true, unchanged };
 }
 
 // The items of a section as one bounded line, or the fallback when it has none.
@@ -223,10 +297,10 @@ function stageVerificationNext(ctx, stage) {
 // The verification: one relaunch of a missing round, a stage's own row, the runtime lane, or the fix loop.
 function verificationNext(ctx) {
   if (isMissing(ctx)) {
-    return missed(ctx.still ? publishDraft(NO_VERDICT) : launch("verifier", { stage: ctx.loops.stage, note: problemNote(ctx) }));
+    return missed(ctx.still ? draftOnStage(ctx, ctx.loops.stage, NO_VERDICT) : launch("verifier", { stage: ctx.loops.stage, note: problemNote(ctx) }));
   }
-  const stated = ctx.result.lines.map((line) => STAGE_VERDICT_RE.exec(line)?.[1]).find(Boolean);
-  if (stated !== undefined) return stageVerificationNext(ctx, Number(stated));
+  const stated = statedStage(ctx);
+  if (stated !== null) return stageVerificationNext(ctx, stated);
   return ctx.result.verdict === "FAILED" ? fixLoop(ctx, verificationFailures(ctx)) : { action: launch("runtime") };
 }
 
@@ -265,6 +339,25 @@ const ROWS = {
   "07": runtimeNext,
 };
 
+const UNCHANGED_RELAUNCHES = {
+  "03": (_ctx, note) => launch("architect", { note }),
+  "05": (ctx, note) => launch(isLiteQa(ctx) ? "qa-lite" : "qa-analyst", { note }),
+  "06": (ctx, note) => launch("verifier", { stage: rowStage(ctx), note }),
+  "07": (_ctx, note) => launch("runtime", { note }),
+};
+
+// What an unchanged relaunch keeps owed: the QA row the plan answered, which the revised plan answers again.
+function heldOnRelaunch(ctx) {
+  return ctx.key === "03" ? { pendingQaRow: ctx.loops.counted.next } : {};
+}
+
+// What a counted row answers on a text unchanged since another check ran: its own lane once, then a draft.
+function unchangedStep(ctx, unchanged) {
+  const relaunch = UNCHANGED_RELAUNCHES[ctx.key];
+  if (unchanged === 0 && relaunch !== undefined) return counted(relaunch(ctx, `${PHASE_ARTIFACTS.get(ctx.key).file} unchanged since the last check`), heldOnRelaunch(ctx), 1);
+  return counted(draftOnStage(ctx, rowStage(ctx), `check ${ctx.key} ${NO_NEW_ROUND}`), {}, 2);
+}
+
 // The loops after a step: this check's miss counted or dropped, the fix a `coder-fix` leaves owed, the step's own changes and what a re-run must repeat.
 function settledLoops(ctx, step) {
   const { key, digest, loops } = ctx;
@@ -276,17 +369,18 @@ function settledLoops(ctx, step) {
     missing: step.missed === true ? { ...missing, [key]: countOf(previous) + 1 } : missing,
     fixPending,
     lastNext: step.action,
-    counted: step.counted === true ? { key, digest, next: step.action } : loops.counted,
+    counted: step.counted === true ? { key, digest, next: step.action, unchanged: step.unchanged } : loops.counted,
   };
 }
 
-// The `NEXT:` action of a check's answer and the loops it leaves; a re-run of a counted row on the same text repeats its action and burns no iteration, and the same text after another check ran means its lane wrote nothing, which ends in a draft.
+// The `NEXT:` action of a check's answer and the loops it leaves; a re-run of a counted row on the same text repeats its action and burns no iteration, and the same text after another check ran relaunches its lane once, then ends in a draft.
 export function nextOf({ result, repaired, state, memo, plan }) {
   const loops = loopsOf(state);
   const { key, digest } = memo;
   const sameText = loops.counted?.key === key && loops.counted?.digest === digest;
-  if (sameText && loops.lastNext === loops.counted.next) return { action: loops.counted.next, loops };
+  const unchanged = sameText ? countOf(loops.counted.unchanged) : 0;
+  if (sameText && unchanged === 0 && loops.lastNext === loops.counted.next) return { action: loops.counted.next, loops };
   const ctx = { result, repaired, state, loops, key, digest, still: countOf(loops.missing[key]) >= 1, stages: planStageNumbers(plan) };
-  const step = sameText ? counted(publishDraft(`check ${key} ${NO_NEW_ROUND}`)) : ROWS[key](ctx);
+  const step = sameText ? unchangedStep(ctx, unchanged) : ROWS[key](ctx);
   return { action: step.action, loops: settledLoops(ctx, step) };
 }
