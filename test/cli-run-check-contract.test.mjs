@@ -7,11 +7,11 @@ import { runDir } from "../src/config/paths.mjs";
 import { run } from "../src/cli/index.mjs";
 import { openDb } from "../src/memory/db.mjs";
 import { addJob, getJob } from "../src/memory/jobs.mjs";
-import { evaluateCheck } from "../src/queue/check-contract.mjs";
+import { evaluateCheck } from "../plugin/skills/resolve/pipeline/contract.mjs";
 import { composeGateNotice, gateDigestOf } from "../src/queue/gate-notice.mjs";
-import { questionDigest } from "../src/queue/gate-question.mjs";
+import { questionDigest } from "../src/queue/question-text.mjs";
 import { jobPromptText } from "../src/queue/job-prompt.mjs";
-import { nextRound } from "../src/queue/phase-artifacts.mjs";
+import { nextRound } from "../src/queue/rounds.mjs";
 import { readRunState, saveRunState } from "../src/queue/resume.mjs";
 import { applyRetry } from "../src/queue/retry.mjs";
 import { provisionalSlug } from "../src/queue/run-slug.mjs";
@@ -56,11 +56,12 @@ function seedRun(t, name, { fixture, texts }) {
   return { env: { ...env, NIGHTQUEUE_JOB_ID: String(id) }, projectId, dir };
 }
 
-// Runs `nightqueue run check` in this process, capturing what it printed.
+// Runs `nightqueue run check` in this process, capturing the contract lines it printed without the `NEXT:` line a successful check ends with.
 async function runCheck(env, check, args = []) {
   const out = [];
   const err = [];
   const code = await run(["run", "check", check, ...args], { env, out: (line) => out.push(line), err: (line) => err.push(line), stdout: { write: () => {} } });
+  if (code === 0) assert.match(out.pop(), /^NEXT: \S/);
   return { code, out, err };
 }
 

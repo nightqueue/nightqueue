@@ -2,8 +2,9 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { UserError } from "../config/errors.mjs";
 import { jobRef } from "../memory/refs.mjs";
-import { comparableQuestion, gateQuestion, nestQuestionHeading, questionDigest } from "./gate-question.mjs";
-import { lastRound, PHASE_ARTIFACTS } from "./phase-artifacts.mjs";
+import { pipelineManifest } from "./pipeline-package.mjs";
+import { comparableQuestion, gateQuestion, nestQuestionHeading, questionDigest } from "./question-text.mjs";
+import { lastRound } from "./rounds.mjs";
 import { hasGateMarker, sectionOf, sectionOfAnyLevel } from "./stream.mjs";
 
 // The heading every gate notice opens with, the one the classifier looks for.
@@ -13,7 +14,7 @@ const GATE_HEADING = "## Requires user confirmation";
 const ARTIFACT_FILE_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*\.md$/;
 
 // The artifacts whose evaluated text is their last `## Round`.
-const ROUND_FILES = new Set([...PHASE_ARTIFACTS.values()].filter((entry) => entry.rounds).map((entry) => entry.file));
+const ROUND_FILES = new Set(pipelineManifest().phases.filter((phase) => phase.rounds === true).map((phase) => phase.artifact));
 
 // The text of a sent value, or null when it is absent or blank.
 function sentText(value) {
@@ -56,7 +57,7 @@ function underGateHeading(section) {
 // The plan of the run, or an empty text when it is absent or unreadable: a gate on a run with no plan still records.
 function planTextOf(runDir) {
   try {
-    return readRunArtifact(runDir, PHASE_ARTIFACTS.get("03").file);
+    return readRunArtifact(runDir, pipelineManifest().gateArtifact);
   } catch {
     return "";
   }

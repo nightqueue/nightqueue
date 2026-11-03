@@ -2,11 +2,11 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { packageRoot } from "../host/paths.mjs";
 import { PLUGIN_DIR_ENV } from "./orchestrator-scope.mjs";
+import { DEFAULT_PIPELINE } from "./pipeline-package.mjs";
 import { BLOCK_CODES } from "./preflight.mjs";
 import { pinnedPipeline } from "./run-state.mjs";
 
-// The one pipeline a run executes: the job row has no column that names another.
-export const DEFAULT_PIPELINE = "resolve";
+export { DEFAULT_PIPELINE };
 
 const UNPINNED_HEAD = "Pipeline version: this run recorded none (";
 const UNPINNED_TAIL = "), so a later pipeline update will not gate it.";

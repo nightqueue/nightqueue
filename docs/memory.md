@@ -155,7 +155,7 @@ an error that merely echoes one of those phrases is never classified; busy, lock
 SQL error are never classified either. A classified error is one
 `StoreUnavailableError` with `code`, `home`, `path` and the hint `nightqueue doctor --fix`: it is
 never retried as busy, the CLI prints it as one line, the MCP tools answer
-`{ ok: false, error: "store-unavailable", code, home, hint, message }`, `context_for_phase` and the
+`{ ok: false, error: "store-unavailable", code, home, hint, message }`, `context_for_agent` and the
 SessionStart hook answer an empty block and one warning line, the MCP server still starts, and
 the runner backs off (see [Runtime contract](runtime-contract.md)). The connection that failed is
 retired - dropped from the cache so the next call opens a fresh one, and never closed, because
@@ -258,7 +258,7 @@ allowed inside a queue job.
 
 `lesson_delete` and `memory_delete` remove one row by `id` (`L344`, `M446` or the plain number) of
 `project`, both required, with its search entry, so it never comes back in recall or
-`context_for_phase`. An unknown id and an id of another project are refused and nothing is
+`context_for_agent`. An unknown id and an id of another project are refused and nothing is
 deleted; unlike the saves, both are refused inside a queue job. The answer names the id and the
 title (or key) that went.
 
@@ -274,8 +274,8 @@ loop artifacts keep their history: `05-qa.md`, `06-verification.md` and
 `07-runtime.md` are append-only, one `## Round n` per launch, and a fix-loop coder appends a
 `### Fix loop n — what was wrong / what changed` block to `04-implementation.md` instead of
 rewriting it (gates read only the last round). Its prompt carries the run timeline - phase,
-model, status and reason in order - from this attempt's `pipeline_phases`: the orchestrator
-passes `reason` to `run_phase_done` on every relaunch, and `nightqueue run report` (Phase 9)
+model, status and reason in order - from this attempt's `pipeline_phases`: `nightqueue run check`
+records the `reason` of every relaunch, and `nightqueue run report` (Phase 9)
 writes one row per phase `state.json` recorded, with its reason. When no run was recorded for the attempt, the timeline
 comes from `state.json` and says so.
 

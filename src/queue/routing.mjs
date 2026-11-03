@@ -1,51 +1,26 @@
 /*
- * The agent models of the /resolve pipeline and its constants: the single source of every model an agent runs on.
+ * The agent models of the pipeline and its constants, read from its package's manifest, with the merger the runtime's own.
  * `nightqueue run start` answers the models of the run's project and the orchestrator launches each block with them, so no prompt restates them.
- *
- * Model rationale:
- *
- * The agent models below are the single source. The dominant capability of the agent decides its model:
- * - writes/edits code or carries the design judgment every later phase builds on → `opus` (architect, coder);
- * - reasons and critiques without writing code in bulk → `sonnet` (triager: writes the Brief, critiques the
- *   request and reproduces the bug; qa-analyst: adversarial analysis grouped by root, the lite QA included;
- *   qa-triage: classifies the real diff under a written rule and decides how much attack it deserves);
- * - bounded, mechanical or command-driven work over material another agent already reasoned about → `haiku`
- *   (explore maps files the triage already scoped; provers write and run one PoC for one pre-analysed
- *   hypothesis; verifier runs the project's checks and the PoCs; reflector distils lessons from written artifacts).
- * The merger keeps `sonnet`. A project overrides any of them with `nightqueue project models`.
- * Phases 0/8/9 run in the orchestrator, on the skill's model. Every run executes every phase.
+ * The rationale of the models lives in docs/runtime-contract.md.
  */
 
 import { UserError } from "../config/errors.mjs";
 import { PIPELINE_TASK_TYPES } from "../memory/runs.mjs";
-import { PHASE_NAMES } from "./resume.mjs";
+import { phaseIdsOf, pipelineManifest } from "./pipeline-package.mjs";
+
+const MANIFEST = pipelineManifest();
 
 // The model aliases an agent may run on.
 export const MODEL_NAMES = Object.freeze(["opus", "sonnet", "haiku"]);
 
-// One line per agent with its default model (decided 2026-10-23).
-export const AGENT_MODELS = Object.freeze({
-  triager: "sonnet",
-  explore: "haiku",
-  architect: "opus",
-  coder: "opus",
-  "qa-triage": "sonnet",
-  "qa-analyst": "sonnet",
-  "qa-prover": "haiku",
-  verifier: "haiku",
-  reflector: "haiku",
-  merger: "sonnet",
-});
+// One line per agent with its default model: the pipeline's roles, then the merger, which runs in the close outside it.
+export const AGENT_MODELS = Object.freeze({ ...MANIFEST.models, merger: "sonnet" });
 
 // The agents a project may override: every agent the pipeline launches (the merger runs in the close, outside it).
 export const OVERRIDABLE_AGENTS = Object.freeze(Object.keys(AGENT_MODELS).filter((agent) => agent !== "merger"));
 
 // The values every run shares, whatever its project.
-export const PIPELINE_CONSTANTS = Object.freeze({
-  maxFixIterations: 2,
-  qaMethods:
-    "automated; + api for an API change; + emulator for a UI change in an Expo repo; + browser for a UI change in a web repo",
-});
+export const PIPELINE_CONSTANTS = Object.freeze({ ...MANIFEST.constants });
 
 const GLYPHS = Object.freeze({
   triager: "🔍",
@@ -100,21 +75,11 @@ export function modelTable(projectAgents = null) {
 // The canonical phases every run goes through, in order; a type, when given, must be one of the pipeline's.
 export function phasesFor(type) {
   if (type !== undefined && type !== null && type !== "") requireType(type);
-  return [...PHASE_NAMES];
+  return phaseIdsOf(MANIFEST);
 }
 
-// The nine slots of the studio track, in order: the number, the label, the agent, the agent whose model it shows and the canonical phase of each.
-export const TRACK_SLOTS = [
-  { number: 0, name: "brief", agent: null, modelAgent: null, phase: null },
-  { number: 1, name: "triager", agent: "triager", modelAgent: "triager", phase: "triage" },
-  { number: 2, name: "explore", agent: "explore", modelAgent: "explore", phase: "explore" },
-  { number: 3, name: "architect", agent: "architect", modelAgent: "architect", phase: "architecture" },
-  { number: 4, name: "coder", agent: "coder", modelAgent: "coder", phase: "implementation" },
-  { number: 5, name: "qa-guardian", agent: "qaGuardian", modelAgent: "qa-analyst", phase: "qa" },
-  { number: 6, name: "verifier", agent: "verifier", modelAgent: "verifier", phase: "verification" },
-  { number: 7, name: "runtime", agent: null, modelAgent: null, phase: "runtime" },
-  { number: 8, name: "commit · PR", agent: null, modelAgent: null, phase: "commit" },
-];
+// The slots of the studio track, in order: the number, the label, the agent, the agent whose model it shows and the canonical phase of each.
+export const TRACK_SLOTS = MANIFEST.track;
 
 // The track slot number of a canonical phase; throws on a phase with no slot.
 export function slotNumberOf(phase) {

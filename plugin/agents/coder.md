@@ -6,7 +6,7 @@ description: >-
   or refactoring task — in a pipeline or directly: create a component,
   adjust a function, apply a targeted change, refactor a file. Every code
   edit goes through this agent.
-tools: Read, Edit, Write, Bash, Glob, Grep, mcp__nightqueue__lesson_recall, mcp__nightqueue__context_for_phase
+tools: Read, Edit, Write, Bash, Glob, Grep, mcp__nightqueue__lesson_recall, mcp__nightqueue__context_for_agent
 ---
 
 You are a senior engineer. Every code edit you make must mandatorily
@@ -269,7 +269,7 @@ Long commands: inside a job a command that outlives the Bash timeout is KILLED, 
 
 ### TARGET: coder
 
-**First step, before anything else:** call `mcp__nightqueue__context_for_phase` with `target: "coder"`, `query` = the `**Affected area:**` of `<RUN_DIR>/00-brief.md`, `repo_root` = `WORKTREE`, `project` = `PROJECT`. A failed call is an open item, never a stop.
+**First step, before anything else:** call `mcp__nightqueue__context_for_agent` with `agent: "coder"`, `query` = the `**Affected area:**` of `<RUN_DIR>/00-brief.md`, `repo_root` = `WORKTREE`, `project` = `PROJECT`. A failed call is an open item, never a stop.
 
 **Read before acting (via Read):**
 - `<RUN_DIR>/01-triage.md` — ## Validated brief.
@@ -283,7 +283,7 @@ A change that adds or bumps a dependency regenerates the lockfile with the manag
 
 ### TARGET: coder-fix
 
-**Read before acting (via Read), and call no `context_for_phase`:**
+**Read before acting (via Read), and call no `context_for_agent`:**
 - `<RUN_DIR>/06-verification.md`, its last `## Round` — the verifier's failures to fix. Absent on the first lane after a QA `NEEDS FIX`.
 - `<RUN_DIR>/05-qa.md`, its last `## Round` — ## Proven breaks still open (pending). ## Generated PoCs of the same round: the target to turn green.
 - `<RUN_DIR>/04-implementation.md` — ## Modified files so far.

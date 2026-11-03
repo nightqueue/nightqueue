@@ -4,20 +4,20 @@ import { ghPrConvertToDraft, ghPrCreate, ghPrEditBody, ghPrMarkReady, ghPrUrlOfB
 import { runGit } from "../host/git.mjs";
 import { commitTypeOf, publishedBranchName } from "../queue/branch-name.mjs";
 import { FILE_LIST, listedFiles } from "../queue/file-list.mjs";
-import { comparableQuestion, plainQuestion } from "../queue/gate-question.mjs";
 import { neverCommittedReason } from "../queue/never-committed.mjs";
+import { fileListArtifacts } from "../queue/pipeline-package.mjs";
 import { publishedBodyFile } from "../queue/pr-footer.mjs";
+import { comparableQuestion, PLACEHOLDER_WORDS, plainQuestion } from "../queue/question-text.mjs";
 import { readRunState } from "../queue/resume.mjs";
 import { gitInChunks, readBranchWips, statusEntries, WIP_REF_PREFIX } from "../queue/wip-commit.mjs";
 import { draftLine, recordOutcome, recordPhaseDone, recordPrUrl, recordRunFields, RUNTIME_AUTHOR } from "../queue/run-state.mjs";
 import { unfencedLines, withoutHtmlComments } from "../queue/stream.mjs";
-import { PLACEHOLDER_WORDS } from "../queue/triage-brief.mjs";
 import { checkArgs, parseCommand } from "./args.mjs";
 import { commitMessageProblems, conventionFile, CONVENTIONAL_SUBJECT_RE, findCommitTemplate } from "./commit-template.mjs";
 import { ANGLE_PLACEHOLDER, bodyProblems } from "./pr-body.mjs";
 import { lockfileRule } from "./lockfile-rule.mjs";
 import { findPrTemplate } from "./pr-template.mjs";
-import { failureLine, outputLines, projectCheckout, readRequiredFile, resolveRun, RUN_OPTIONS, worktreeOf } from "./run-context.mjs";
+import { failureLine, outputLines, projectCheckout, readRequiredFile, readRunFile, resolveRun, RUN_OPTIONS, worktreeOf } from "./run-context.mjs";
 import { scratchFiles } from "./scratch-files.mjs";
 
 export const PUBLISH_USAGE =
@@ -43,7 +43,7 @@ export const EXTRA_IS_NOT_AN_OVERRIDE =
   "`--extra` adds files to the list, it never overrides this refusal: stop here and record it as an open item of the report, " +
   "instead of calling the command again with the same path";
 
-// A `Refs:` trailer line, a reserved trailer `run commit` refuses in the agent's message.
+// A `Refs:` trailer line, a reserved trailer the commit refuses in the agent's message.
 const REFS_TRAILER = /^Refs\s*:/i;
 
 // The commit message the agent wrote, refused when it is missing or empty: the message is the agent's and the command never invents one.
@@ -54,10 +54,15 @@ export function requireMessageFile(path, usage) {
   return absolute;
 }
 
-// The files the implementation artifact (or the file the caller named) lists under `## Modified files`.
+// The files the implementation artifact (or the file the caller named) lists under `## Modified files`; an artifact that lists none falls back to the list `run check` derived, when there is one.
 export function listedFromArtifact(run, filesFrom) {
-  const artifact = resolve(filesFrom ?? join(run.runDir, "04-implementation.md"));
-  return { artifact, listed: listedFiles(readRequiredFile(artifact, "--files-from")) };
+  if (filesFrom) return { artifact: resolve(filesFrom), listed: listedFiles(readRequiredFile(resolve(filesFrom), "--files-from")) };
+  const { artifact, fallback } = fileListArtifacts();
+  const derived = listedFiles(readRunFile(run.runDir, fallback));
+  const own = readRunFile(run.runDir, artifact);
+  if (listedFiles(own).length === 0 && derived.length > 0) return { artifact: join(run.runDir, fallback), listed: derived };
+  const path = join(run.runDir, artifact);
+  return { artifact: path, listed: listedFiles(readRequiredFile(path, "--files-from")) };
 }
 
 // The same entries, each lockfile among them refused unless the paired-manifest rule lets it through for this publish set, which includes what a fold carries.

@@ -4,7 +4,7 @@ import { clockLabel } from "./hints.mjs";
 import { extractNotice, extractPrUrl, hasGateMarker, laneName, parseEventLine, parseSlugLine, tokensFromEvent } from "./stream.mjs";
 import { jobRef } from "../memory/refs.mjs";
 import { slotNumberOf, TRACK_SLOTS } from "./routing.mjs";
-import { PHASE_ARTIFACTS } from "./phase-artifacts.mjs";
+import { pipelineManifest } from "./pipeline-package.mjs";
 
 const ATTEMPT_LINE_RE = /^=== attempt (\d+) @ (\S+) ===$/;
 const RATE_PAUSE_LINE_RE = /^=== rate limit until (\S+) @ (\S+) ===$/;
@@ -402,7 +402,8 @@ function narrateToolUse(state, block, lane) {
 function reportedArtifact(name, input) {
   if (name === "Bash") {
     const match = RUN_CHECK_RE.exec(String(input?.command ?? ""));
-    return match ? (PHASE_ARTIFACTS.get(match[1].toLowerCase())?.file ?? null) : null;
+    const check = match?.[1].toLowerCase();
+    return pipelineManifest().phases.find((phase) => phase.check === check)?.artifact ?? null;
   }
   if (toolLabel(name) !== "run_phase_done") return null;
   const artifact = input?.artifact;

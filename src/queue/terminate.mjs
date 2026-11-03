@@ -22,10 +22,10 @@ function wipOfRun({ state, slug, phase, reason, env }) {
 
 // Stops a run on purpose: commits its worktree's changes as the wip commit, records the termination with it, and answers the notice the operator reads; a claim that is over only has its stop set aside, with the worktree untouched.
 export function terminateRun({ projectId, slug, phase, reason, jobId = null, claim = null, env = process.env } = {}) {
-  const refused = terminationRefusal(phase, reason);
+  const state = readRunState({ projectId, slug, env });
+  const refused = terminationRefusal(phase, reason, state);
   if (refused) return refused;
   if (claim?.over === true) return { ...recordTermination({ projectId, slug, phase, reason, claim, env }), wip: null, notice: null };
-  const state = readRunState({ projectId, slug, env });
   const wip = { ...wipOfRun({ state, slug, phase, reason, env }), phase };
   const written = recordTermination({ projectId, slug, phase, reason, wip, claim, env });
   const notice = wipNoticeLine({

@@ -27,7 +27,7 @@ const HOME_REFUSAL =
 
 const CONTRACT_TOOLS = [
   "connection_call",
-  "context_for_phase",
+  "context_for_agent",
   "index_recall",
   "index_save",
   "lesson_delete",
@@ -49,9 +49,7 @@ const CONTRACT_TOOLS = [
   "queue_status",
   "queue_stop",
   "run_outcome",
-  "run_phase_done",
   "run_set",
-  "run_skip",
   "run_terminate",
   "tracker_comment",
   "tracker_create",
@@ -94,13 +92,13 @@ function textOf(result) {
   return result.content.map((block) => block.text).join("\n");
 }
 
-test("the server exposes exactly the thirty-two tools of the contract, none of them a decision tool", async (t) => {
+test("the server exposes exactly the thirty tools of the contract, none of them a decision tool", async (t) => {
   const env = makeHome(t, "mcp-tools");
   const client = await connect(t, env);
   const names = (await client.listTools()).tools.map((tool) => tool.name).sort();
   assert.deepEqual(names, CONTRACT_TOOLS);
   assert.equal(names.some((name) => name.startsWith("decision_")), false);
-  assert.equal(names.length, 32, "the contract list and the server disagree on how many tools there are");
+  assert.equal(names.length, 30, "the contract list and the server disagree on how many tools there are");
   const consent = (await client.listTools()).tools.find((tool) => tool.name === "operator_consent");
   assert.ok(consent.description.includes("never call it without the person's explicit answer, quoted in `answer`"), consent.description);
 });
@@ -133,7 +131,7 @@ test("connection_call with an unknown connection name is a normal no-connection 
     error: "no-connection",
     status: null,
     detail: "no stored connection named that way; the person lists them with `nightqueue connection list`",
-    contract: 13,
+    contract: 14,
   });
 });
 
@@ -171,7 +169,7 @@ test("tracker_issues with no tracker connection is a normal answer carrying the 
     error: "no-connection",
     provider: "linear",
     hint: 'connect it: echo "$LINEAR_API_KEY" | nightqueue connection add linear --type linear',
-    contract: 13,
+    contract: 14,
   });
 });
 
@@ -199,7 +197,7 @@ test("every new tracker tool with no tracker connection answers the no-connectio
       error: "no-connection",
       provider: "linear",
       hint: 'connect it: echo "$LINEAR_API_KEY" | nightqueue connection add linear --type linear',
-      contract: 13,
+      contract: 14,
     }, name);
   }
 });
@@ -367,7 +365,7 @@ test("the lesson, memory, index, phase and pipeline tools refuse an unknown proj
     ["memory_recall", { project: "ghost" }],
     ["index_save", { project: "ghost", repo_root: alpha, files: [{ path: "src/a.mjs", responsibility: "the module" }] }],
     ["index_recall", { project: "ghost" }],
-    ["context_for_phase", { target: "coder", project: "ghost" }],
+    ["context_for_agent", { agent: "coder", project: "ghost" }],
     ["pipeline_log", { project: "ghost", slug: "a-run", outcome: "investigated" }],
   ]) {
     const refused = await client.callTool({ name, arguments: args });
@@ -386,19 +384,19 @@ test("the lesson, memory, index, phase and pipeline tools refuse an unknown proj
   assert.equal(outside.project, null);
 });
 
-test("a deleted lesson is gone from lesson_recall and context_for_phase, and the answer names its id and title", async (t) => {
+test("a deleted lesson is gone from lesson_recall and context_for_agent, and the answer names its id and title", async (t) => {
   const env = makeHome(t, "mcp-lesson-delete");
   makeProject(t, env, "alpha");
   const client = await connect(t, env);
   const saved = payloadOf(await client.callTool({ name: "lesson_save", arguments: { ...LESSON, project: "alpha" } }));
   const ask = { query: "the worker leaks a file descriptor", project: "alpha" };
   assert.ok(payloadOf(await client.callTool({ name: "lesson_recall", arguments: ask })).some((row) => row.id === saved.id));
-  assert.match(payloadOf(await client.callTool({ name: "context_for_phase", arguments: { ...ask, target: "coder" } })).block, new RegExp(`\\[L${saved.id}\\]`));
+  assert.match(payloadOf(await client.callTool({ name: "context_for_agent", arguments: { ...ask, agent: "coder" } })).block, new RegExp(`\\[L${saved.id}\\]`));
 
   const deleted = payloadOf(await client.callTool({ name: "lesson_delete", arguments: { id: `L${saved.id}`, project: "alpha" } }));
   assert.deepEqual([deleted.id, deleted.title], [saved.id, LESSON.title]);
   assert.equal(payloadOf(await client.callTool({ name: "lesson_recall", arguments: ask })).some((row) => row.id === saved.id), false);
-  assert.doesNotMatch(payloadOf(await client.callTool({ name: "context_for_phase", arguments: { ...ask, target: "coder" } })).block, /file descriptor/);
+  assert.doesNotMatch(payloadOf(await client.callTool({ name: "context_for_agent", arguments: { ...ask, agent: "coder" } })).block, /file descriptor/);
   assert.equal(openDb(env).prepare("SELECT COUNT(*) AS n FROM lessons_fts WHERE lessons_fts MATCH 'descriptor'").get().n, 0);
 });
 
@@ -528,7 +526,7 @@ test("the index round trip reports the freshness of the checkout", async (t) => 
       },
     }),
   );
-  assert.deepEqual(saved, { ok: true, files: 1, libs: 0, contract: 13 });
+  assert.deepEqual(saved, { ok: true, files: 1, libs: 0, contract: 14 });
 
   const fresh = payloadOf(
     await client.callTool({ name: "index_recall", arguments: { project: "alpha", repo_root: repo } }),
@@ -684,7 +682,7 @@ test("queue_add enqueues by project NAME and refuses a path or a project nobody 
     timeoutS: 600,
     origin: [],
     hint: "queued J-1 for `alpha` (1 pending). 0 runners online - pending jobs will wait until `nightqueue queue run` starts one.",
-    contract: 13,
+    contract: 14,
   });
   assert.equal(getJob(1, env).prompt, "fix the worker");
 
@@ -1547,7 +1545,7 @@ test("queue_stop answers the CLI line per runner, and refuses an unknown pid", a
   const client = await connect(t, env);
 
   const empty = payloadOf(await client.callTool({ name: "queue_stop", arguments: {} }));
-  assert.deepEqual(empty, { ok: true, runners: [{ outcome: "absent", pid: null, message: "runner is not running" }], contract: 13 });
+  assert.deepEqual(empty, { ok: true, runners: [{ outcome: "absent", pid: null, message: "runner is not running" }], contract: 14 });
 
   const unknown = await client.callTool({ name: "queue_stop", arguments: { pid: 999999 } });
   assert.equal(unknown.isError, true, textOf(unknown));

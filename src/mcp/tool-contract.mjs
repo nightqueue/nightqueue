@@ -1,7 +1,7 @@
 import { UserError } from "../config/errors.mjs";
 
-// The version of the tool input shapes; bump it whenever a tool's input shape changes incompatibly (contract 1 is the pre-v19 integer ids, 2 the refs, 3 the tracker renamed, 4 the tracker removed, 5 the tracker_issues tool, home-scoped connections and `queue_add` `origin: false`, 6 `origin` is a list of {kind, ref}, 7 the `lesson_delete` and `memory_delete` tools, 8 the decision tools removed, 9 the `connection_call` tool, 10 the `operator_consent` tool, 11 `queue_add` `max_attempts` removed, 12 `run_set` `qa_stage_a` removed, 13 the prompt rendering tool removed).
-export const TOOL_CONTRACT = 13;
+// The version of the tool input shapes; bump it whenever a tool's input shape changes incompatibly (contract 1 is the pre-v19 integer ids, 2 the refs, 3 the tracker renamed, 4 the tracker removed, 5 the tracker_issues tool, home-scoped connections and `queue_add` `origin: false`, 6 `origin` is a list of {kind, ref}, 7 the `lesson_delete` and `memory_delete` tools, 8 the decision tools removed, 9 the `connection_call` tool, 10 the `operator_consent` tool, 11 `queue_add` `max_attempts` removed, 12 `run_set` `qa_stage_a` removed, 13 the prompt rendering tool removed, 14 `run_phase_done` and `run_skip` removed, `context_for_phase` renamed `context_for_agent` with `agent` for `target`, `run_terminate` `phase` read from the run's manifest).
+export const TOOL_CONTRACT = 14;
 
 export const STALE_CONTRACT_ADVISORY = "this client's tool contract is older than the server";
 
@@ -11,10 +11,15 @@ const REMOVED_TRACKER_WORD = ["iss", "ue"].join("");
 // The tool that rendered a phase's prompt until contract 13; old job logs still name it.
 export const REMOVED_CONTEXT_TOOL = "phase_prompt";
 
-const REMOVED_CONTEXT_TOOL_LINE = "launch from the block of `## Phase prompts` of the resolve SKILL";
+// What a removed tool's refusal adds to the stale-contract line, by tool.
+const REMOVED_TOOL_LINES = {
+  [REMOVED_CONTEXT_TOOL]: "launch from the block of `## Phase prompts` of the resolve SKILL",
+  context_for_phase: "use `context_for_agent` with `agent`",
+  run_phase_done: "`run check` records a completed phase",
+};
 
 // Tools an older contract had and a newer one removed: only a client with cached old definitions still calls them.
-const REMOVED_TOOLS = Object.freeze(["decision_save", "decision_update", "decision_list", "decision_recall", REMOVED_CONTEXT_TOOL]);
+const REMOVED_TOOLS = Object.freeze(["decision_save", "decision_update", "decision_list", "decision_recall", REMOVED_CONTEXT_TOOL, "run_phase_done", "run_skip", "context_for_phase"]);
 
 // Inputs an older contract named and a newer one renamed or removed, by tool: only a client with cached old definitions still sends them.
 const RENAMED_FIELDS = {
@@ -69,7 +74,7 @@ export class StaleContractError extends UserError {
 export function refuseRemovedTool(name, state) {
   if (!REMOVED_TOOLS.includes(name)) return;
   state.sawOldShape = true;
-  throw new StaleContractError(name === REMOVED_CONTEXT_TOOL ? REMOVED_CONTEXT_TOOL_LINE : "");
+  throw new StaleContractError(REMOVED_TOOL_LINES[name] ?? "");
 }
 
 // Refuses a call carrying an input its tool renamed, before validation would strip it, and notes the old shape in the server's state.

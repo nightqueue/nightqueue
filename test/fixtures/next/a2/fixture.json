@@ -1,0 +1,1 @@
+{"type":"feature/refactor","check":"05","args":["--stage","analyst"],"prints":"QA-STAGE: skip"}

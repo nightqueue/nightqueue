@@ -32,7 +32,6 @@ nightqueue run check 03       # is the plan there, with the sections the pipelin
 nightqueue run check 05 --stage triage   # how much QA does this change get? QA-MODE: skip|lite|full
 nightqueue run log            # one line per phase of this run, plus the total
 nightqueue run log --json     # the same table as the only thing on stdout
-nightqueue run commit --message-file msg.txt   # stage what the implementation listed, and commit it
 nightqueue run pr --template                   # print and record the PR template in effect
 nightqueue run pr --body-file body.md          # check the body, push and open the pull request
 nightqueue run start                           # the run's agent models and phases, as JSON
@@ -73,7 +72,7 @@ model table of `src/queue/routing.mjs` as markdown (`| Agent | Model |`, one row
 agent), and resolves no run and writes nothing, inside a job or outside.
 
 `run publish --message-file <p> --body-file <p> [--files-from <p>] [--extra
-<pathspec>]... [--title <t>] [--draft] [--remove-worktree]` is `run commit` then `run pr` in
+<pathspec>]... [--title <t>] [--draft] [--remove-worktree]` commits the list and opens the pull request in
 one call, in the safe order: the commit message is checked against the commit template
 in effect (the `commitTemplate` of `run start`), then the body against the pull request
 template in effect, then the list is checked for refused paths and scratch files, and only
@@ -212,11 +211,11 @@ and a round heading inside a comment the round itself closes (`line <Y> of <file
 <k>`) sits inside the HTML comment ...`), every part in line order, joined by `; `. `04` is the only artifact with a fallback: with no file list,
 the command derives one from the changes of the run's worktree (`git diff
 --name-only HEAD` plus `git ls-files --others --exclude-standard`) and from what
-the run's own wip commits would carry into the delivery, writes the
-artifact and prints `GENERATED` - and a worktree with no change at all and no wip to fold prints
+the run's own wip commits would carry into the delivery, writes it to
+`04-files.generated.md`, never over `04-implementation.md`, and prints `GENERATED` - and a worktree with no change at all and no wip to fold prints
 `MISSING: ## Modified files (no changed files)` without writing anything. The
-three answers exit `0`: they are findings the orchestrator routes (relaunch the phase once,
-then follow the phase's row), not failures of the command; only an unknown `<NN>`, a stage other than
+three answers exit `0`: they are findings the last line routes, `NEXT: <action>` (`launch`, `gate`,
+`terminate`, `publish`, `report` or `check`; `docs/runtime-contract.md`), not failures of the command; only an unknown `<NN>`, a stage other than
 `05 --stage analyst|triage`, a retired id of the old numbering (`renumbered: use <NN>`) or a run that
 cannot be resolved exits `1`. In a full QA, `run check 05` first writes the consolidated round
 (`source: runtime consolidation`) of the analyst's and the provers' rounds and answers over it
@@ -280,11 +279,11 @@ the job (see [Runtime contract](runtime-contract.md)), so the agent pastes the
 Time column of its report instead of timing the phases itself; a phase the
 runtime measured no lane for prints `-`.
 
-`run commit` stages exactly the paths `04-implementation.md` listed under `##
-Modified files` (`--files-from <path>` reads the list somewhere else) plus every
+`run commit` was removed, and answers one line naming `run publish`. `run publish` stages exactly the paths `04-implementation.md` listed under `##
+Modified files` (`04-files.generated.md` when the artifact lists no file; `--files-from <path>` reads the list somewhere else) plus every
 file a `--extra <pathspec>` really matches, and commits them with `git commit -F
 <the --message-file>` - the message stays the agent's, and an empty or missing
-one is refused before anything is staged. A message that carries a `Refs:` line is refused. It prints `COMMITTED: <sha> (<n>
+one is refused before anything is staged. A message that carries a `Refs:` line is rejected. It prints `COMMITTED: <sha> (<n>
 files)`. Anything under
 `.claude/` or `tmp/`, a dependency lockfile that is not paired with a changed
 manifest and a green frozen install (see the runtime contract) and any path
@@ -294,8 +293,7 @@ refusal. Before committing it prints `CONVENTION: <...>` - the file that
 declares the repository's commit convention (a commitlint config, `.husky/`,
 `.gitmessage`, `CONTRIBUTING*` or a `commitlint` block in `package.json`) and
 what the last 30 subjects really read like - so the message is written to the
-shape the repository uses. It folds the run's own wip commits and refuses a foreign one exactly
-as `run publish` does, and `run pr` refuses a branch still carrying a wip commit, naming
+shape the repository uses. It folds the run's own wip commits and refuses a foreign one, and `run pr` refuses a branch still carrying a wip commit, naming
 `run publish`.
 
 `run pr` first resolves the run's checkout and finds the pull request template
@@ -810,7 +808,7 @@ nightqueue memory delete M446                 # delete one memory (M446 or 446) 
 Each command deletes one row by id and answers its id and title (a memory's key). An unknown id is
 an error. With `--project <name>`, an id that belongs to another project is refused; both commands
 delete nothing in those cases and are refused inside a queue job. A deleted row never comes back in
-`lesson_recall`, `memory_recall` or `context_for_phase`. The MCP tools `lesson_delete` and
+`lesson_recall`, `memory_recall` or `context_for_agent`. The MCP tools `lesson_delete` and
 `memory_delete` do the same and require `project`.
 
 ## Doctor

@@ -12,7 +12,7 @@ import {
   recordPrTemplate,
   recordPrUrl,
   recordRunFields,
-  recordSkip,
+  recordRuntimeField,
   recordTermination,
   RUN_OUTCOME_STATUSES,
   RUNTIME_AUTHOR,
@@ -32,6 +32,21 @@ function writeState(env, content) {
   const dir = runDir(RUN.projectId, RUN.slug, env);
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, "state.json"), JSON.stringify(content));
+}
+
+for (const [label, name, value, reason] of [
+  ["a QA mode outside the accepted ones", "qaMode", { mode: "bogus", reason: "r" }, /unknown QA mode `bogus`/],
+  ["a QA mode that is a bare string", "qaMode", "full", /unknown QA mode `undefined`/],
+  ["a QA mode with an empty reason", "qaMode", { mode: "lite", reason: " " }, /a QA mode needs its reason/],
+  ["loops that are not an object", "pipelineLoops", [1], /the pipeline loops must be an object/],
+]) {
+  test(`${label} is refused and never reaches the state`, (t) => {
+    const env = makeHome(t, "run-state-runtime-field");
+    const written = recordRuntimeField({ ...RUN, name, value, env });
+    assert.equal(written.status, "kept");
+    assert.match(written.reason, reason);
+    assert.equal(existsSync(join(runDir(RUN.projectId, RUN.slug, env), "state.json")), false);
+  });
 }
 
 test("only the runtime's own termination is cleared, of the named phase, and a held lock keeps the file as it was", (t) => {
@@ -83,22 +98,6 @@ test("the reason a phase ran again is recorded trimmed, a blank one is dropped, 
   assert.deepEqual(Object.keys(first), ["phase", "at", "artifact", "verdict"], "an entry with no reason changed shape");
   assert.equal(second.reason, "fix loop 1: lint failed");
   assert.deepEqual(Object.keys(blank), ["phase", "at"], "a blank reason was recorded as a key");
-});
-
-test("a plain `run_phase_done` repeating the runtime's last entry merges into it; a reason, another phase or another artifact appends", (t) => {
-  const env = makeHome(t, "run-state-phase-merge");
-  recordPhaseDone({ ...RUN, phase: "implementation", artifact: "04-implementation.md", verdict: "OK", by: "runtime", env });
-
-  recordPhaseDone({ ...RUN, phase: "implementation", artifact: "04-implementation.md", verdict: "done", note: "by hand", env });
-  recordPhaseDone({ ...RUN, phase: "implementation", verdict: "done again", env });
-  assert.equal(readState(env).phases.length, 1, "an older SKILL's repeat of the runtime's record doubled the row");
-  assert.deepEqual([readState(env).phases[0].verdict, readState(env).phases[0].note, readState(env).phases[0].by], ["done again", "by hand", "runtime"]);
-
-  recordPhaseDone({ ...RUN, phase: "implementation", artifact: "04-implementation.md", reason: "fix loop 1", env });
-  recordPhaseDone({ ...RUN, phase: "implementation", artifact: "04-implementation.md", verdict: "x", by: "runtime", env });
-  recordPhaseDone({ ...RUN, phase: "implementation", artifact: "other.md", env });
-  recordPhaseDone({ ...RUN, phase: "qa", env });
-  assert.deepEqual(readState(env).phases.map((entry) => entry.phase), ["implementation", "implementation", "implementation", "implementation", "qa"]);
 });
 
 test("a check memo replaces the check's previous one, and only a memo that did not pass becomes the run's last failure", (t) => {
@@ -299,43 +298,6 @@ test("a type write records no skip: every run executes every phase", (t) => {
   assert.equal(recordRunFields({ ...RUN, fields: { type: "feature/refactor" }, env }).status, "written");
   assert.equal("skips" in readState(env), false, "a type write wrote skips");
   assert.deepEqual(skipAuthors(env), {});
-});
-
-test("a branch write keeps an agent's skip as the only skip", (t) => {
-  const env = makeHome(t, "run-state-field-skips");
-  recordRunFields({ ...RUN, fields: { type: "bug/error" }, env });
-  assert.equal(recordSkip({ ...RUN, phase: "runtime", by: "verifier", reason: "nothing to run", env }).status, "written");
-  assert.equal(recordRunFields({ ...RUN, fields: { branch: "fix/the-worker" }, env }).status, "written");
-  assert.deepEqual(readState(env).skips, { runtime: { by: "verifier", reason: "nothing to run", at: readState(env).skips.runtime.at } });
-});
-
-test("an agent skip survives a type write", (t) => {
-  const env = makeHome(t, "run-state-agent-wins");
-  recordRunFields({ ...RUN, fields: { type: "bug/error" }, env });
-  assert.equal(recordSkip({ ...RUN, phase: "qa", by: "architect", reason: "docs only", env }).status, "written");
-  recordRunFields({ ...RUN, fields: { type: "feature/refactor" }, env });
-  assert.deepEqual(readState(env).skips.qa.by, "architect");
-  assert.equal(readState(env).skips.qa.reason, "docs only");
-});
-
-test("a skip is refused for a phase already run, an author outside the agents, an empty reason and an unknown phase", (t) => {
-  const env = makeHome(t, "run-state-skip-refusals");
-  recordPhaseDone({ ...RUN, phase: "triage", artifact: "01-triage.md", env });
-
-  assert.match(recordSkip({ ...RUN, phase: "triage", by: "architect", reason: "late", env }).reason, /`triage` already ran: only a later phase can be skipped/);
-  assert.match(recordSkip({ ...RUN, phase: "qa", by: "tier", reason: "mine", env }).reason, /unknown by `tier`; accepted: orchestrator, triager/);
-  assert.match(recordSkip({ ...RUN, phase: "qa", by: "operator", reason: "mine", env }).reason, /unknown by `operator`; accepted: orchestrator, triager/);
-  assert.match(recordSkip({ ...RUN, phase: "qa", by: "architect", reason: "   ", env }).reason, /a skip needs a reason/);
-  assert.match(recordSkip({ ...RUN, phase: "critique", by: "architect", reason: "x", env }).reason, /unknown phase `critique`/);
-  assert.equal("skips" in readState(env), false, "a refused skip was recorded");
-});
-
-test("a recorded skip never enters the phases", (t) => {
-  const env = makeHome(t, "run-state-skip-resume");
-  for (const phase of ["triage", "explore", "architecture", "implementation"]) recordPhaseDone({ ...RUN, phase, artifact: `0-${phase}.md`, env });
-  recordOutcome({ ...RUN, status: "gate", notice: "stopped", env });
-  assert.equal(recordSkip({ ...RUN, phase: "qa", by: "architect", reason: "docs only", env }).status, "written");
-  assert.deepEqual(readState(env).phases.map((entry) => entry.phase), ["triage", "explore", "architecture", "implementation"], "a skip went into phases");
 });
 
 test("an unsafe project or slug records nothing at all", (t) => {

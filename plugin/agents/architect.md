@@ -6,7 +6,7 @@ description: >-
   plan any implementation/refactor, decide between technical approaches,
   assess how to fit a feature into the existing code, or review a plan before
   coding.
-tools: Read, Grep, Glob, Bash, WebFetch, WebSearch, Write, mcp__nightqueue__lesson_recall, mcp__nightqueue__context_for_phase
+tools: Read, Grep, Glob, Bash, WebFetch, WebSearch, Write, mcp__nightqueue__lesson_recall, mcp__nightqueue__context_for_agent
 ---
 
 You are a senior solutions engineer. Your job is DESIGN: turning context
@@ -295,7 +295,7 @@ This section applies only when the request carries a `RUN_DIR:` line; a request 
 ARTIFACT_PATH: `<RUN_DIR>/03-plan.md`.
 
 **First step, before anything else:**
-1. Read `<RUN_DIR>/00-brief.md`; call `mcp__nightqueue__context_for_phase` with `target: "architect"`, `query` = its `**Affected area:**`, `repo_root` = `WORKTREE`, `project` = `PROJECT`. A failed call is an open item, never a stop. With no `00-brief.md`, write no artifact and name it in the `## Open` of your return.
+1. Read `<RUN_DIR>/00-brief.md`; call `mcp__nightqueue__context_for_agent` with `agent: "architect"`, `query` = its `**Affected area:**`, `repo_root` = `WORKTREE`, `project` = `PROJECT`. A failed call is an open item, never a stop. With no `00-brief.md`, write no artifact and name it in the `## Open` of your return.
 2. Read `type` and `answers` of `<RUN_DIR>/state.json`: the Type; the operator answers to the gate, oldest first.
 
 **Read before acting (via Read):**

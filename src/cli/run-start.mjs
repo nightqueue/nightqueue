@@ -6,13 +6,13 @@ import { packageRoot } from "../host/paths.mjs";
 import { PIPELINE_TASK_TYPES } from "../memory/runs.mjs";
 import { COMMIT_TYPES } from "../queue/branch-name.mjs";
 import { jobPromptText } from "../queue/job-prompt.mjs";
-import { DEFAULT_PIPELINE, installedPipelineVersion, pipelineVersionBlock } from "../queue/pipeline-version.mjs";
+import { DEFAULT_PIPELINE, phaseIdsOf, pipelineManifest, pipelineModule } from "../queue/pipeline-package.mjs";
+import { installedPipelineVersion, pipelineVersionBlock } from "../queue/pipeline-version.mjs";
 import { isSafeSegment, isStateObject, readRunState } from "../queue/resume.mjs";
 import { callerJobId } from "../queue/retry.mjs";
 import { agentModels, modelTable, phasesFor } from "../queue/routing.mjs";
 import { isProvisionalSlug } from "../queue/run-slug.mjs";
 import { recordPipeline, recordPipelineUnpinned, recordPrTemplate, recordRunFields } from "../queue/run-state.mjs";
-import { briefStageLines } from "../queue/triage-brief.mjs";
 import { openStore } from "../store/open.mjs";
 import { checkArgs, parseCommand } from "./args.mjs";
 import { findCommitTemplate } from "./commit-template.mjs";
@@ -27,7 +27,6 @@ const PROMPT_FILE = "00-prompt.md";
 const DELIVERY_DRAFTS = ["commit-message.txt", "pr-body.md"];
 const PHASES_BEFORE_DELIVERY = ["verification", "runtime"];
 const NO_DEMO_REPO = "none configured";
-const BRIEF_FILE = "00-brief.md";
 
 const TIER_REMOVED = "`--tier` was removed: every run executes the one pipeline; run `nightqueue run start` without it";
 
@@ -106,14 +105,28 @@ function noteUnpinned(run, reason, ctx) {
   if (noted.status === "kept") ctx.err(`nightqueue: the run's notice will not say it has no pipeline version: ${noted.reason}`);
 }
 
-// Records the pipeline version the run starts under; an unknown version or a refused write leaves the run unpinned and says so, never fatal.
-function recordStartPipeline(run, ctx) {
+// The pipeline this job's row names, read here so a name with no package is refused before anything is recorded; the default outside a job, with no name on the row or when the row cannot be read.
+async function jobPipelineName(ctx) {
+  const own = callerJobId(ctx.env);
+  if (own === null) return DEFAULT_PIPELINE;
+  let name = DEFAULT_PIPELINE;
+  try {
+    name = (await openStore(ctx.env).jobs.getJob(own))?.pipeline ?? DEFAULT_PIPELINE;
+  } catch (error) {
+    ctx.err(`nightqueue: this job's row could not be read, answering the default pipeline: ${error?.message ?? String(error)}`);
+  }
+  pipelineManifest(name);
+  return name;
+}
+
+// Records the pipeline version the run starts under, with the job's pipeline name; an unknown version or a refused write leaves the run unpinned and says so, never fatal.
+function recordStartPipeline(run, name, ctx) {
   const version = installedPipelineVersion(ctx.env);
   if (version === null) {
     noteUnpinned(run, "the plugin manifest could not be read", ctx);
     return;
   }
-  const recorded = recordPipeline({ projectId: run.projectId, slug: run.slug, pipeline: { name: DEFAULT_PIPELINE, version }, env: ctx.env });
+  const recorded = recordPipeline({ projectId: run.projectId, slug: run.slug, pipeline: { name, version }, env: ctx.env });
   if (recorded.status === "kept") noteUnpinned(run, recorded.reason, ctx);
 }
 
@@ -197,14 +210,16 @@ function baseRefOf(cwd, ctx) {
 }
 
 // The numbered stages of the run's Brief, what a resumed orchestrator launches its coders by; none before the triage wrote the Brief.
-function briefStages(run, ctx) {
+async function briefStages(run, name, ctx) {
+  const briefFile = pipelineManifest(name).phases.find((phase) => phase.id === null).artifact;
   let text;
   try {
-    text = readFileSync(join(run.runDir, BRIEF_FILE), "utf8");
+    text = readFileSync(join(run.runDir, briefFile), "utf8");
   } catch (error) {
     if (error?.code !== "ENOENT") ctx.err(`nightqueue: the stages of the Brief could not be read: ${error?.message ?? String(error)}`);
     return [];
   }
+  const { briefStageLines } = await pipelineModule(name, "brief.mjs");
   return briefStageLines(text);
 }
 
@@ -232,9 +247,10 @@ export async function runStart(argv, ctx) {
   const prior = readRunState({ projectId: run.projectId, slug: run.slug, env: ctx.env });
   const versionBlock = pipelineVersionBlock(prior, ctx.env);
   if (versionBlock !== null) throw new UserError(versionBlock.message);
+  const pipeline = await jobPipelineName(ctx);
   const type = effectiveType(prior, options.type);
   recordType(run, type, ctx);
-  recordStartPipeline(run, ctx);
+  recordStartPipeline(run, pipeline, ctx);
   const cwd = worktreeOf(run, ctx.env);
   const prTemplate = recordTemplate(run, cwd, ctx);
   const promptFile = await writePromptFile(run, ctx);
@@ -251,7 +267,7 @@ export async function runStart(argv, ctx) {
     type,
     commitType: options.commitType ?? stateText(state, "commitType"),
     models: await runModels(run, ctx),
-    phases: phasesFor(type),
+    phases: phaseIdsOf(pipelineManifest(pipeline)),
     prTemplate,
     commitConvention: commitConvention(cwd, ctx.env),
     commitTemplate: findCommitTemplate(cwd, ctx.env),
@@ -260,7 +276,7 @@ export async function runStart(argv, ctx) {
     demoRepo: await demoRepoOf(run, ctx),
     baseRef: baseRefOf(cwd, ctx),
     pluginRoot: join(packageRoot(), "plugin"),
-    stages: briefStages(run, ctx),
+    stages: await briefStages(run, pipeline, ctx),
     drafts,
   };
   ctx.out(JSON.stringify(answer));

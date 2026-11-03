@@ -7,6 +7,7 @@ import { truncateByCodePoint } from "../memory/jobs.mjs";
 import { jobRef } from "../memory/refs.mjs";
 import { PIPELINE_TASK_TYPES } from "../memory/runs.mjs";
 import { COMMIT_TYPES } from "./branch-name.mjs";
+import { phaseNamesOf } from "./pipeline-package.mjs";
 import {
   claimStamp,
   foreignStampOf,
@@ -14,9 +15,9 @@ import {
   isStateObject,
   outcomeHostFacts,
   readRunState,
-  PHASE_NAMES,
   RESUME_SCHEMA_VERSION,
   RUN_LOCK,
+  RUNTIME_AUTHOR,
   saveRunState,
   stampedAttempt,
   stampOrder,
@@ -31,13 +32,16 @@ export const RUN_OUTCOME_STATUSES = ["done", "gate", "no_change"];
 export const NO_CHANGE_OUTCOME = "no_change";
 
 // The keys of `state.json` only the runtime writes: no pipeline writer may set them, whole or by a dotted name.
-export const RUNTIME_ONLY_KEYS = ["job", "gateQuestionDigest", "gateAnswersSeen", "draftPrUrl", "qaMode", "pipeline", "freshRetry", "pipelineUnpinned", "answers", "lastClaim", "previousClaim"];
+export const RUNTIME_ONLY_KEYS = ["job", "gateQuestionDigest", "gateAnswersSeen", "draftPrUrl", "qaMode", "pipeline", "freshRetry", "pipelineUnpinned", "answers", "lastClaim", "previousClaim", "pipelineLoops"];
 
 // The QA modes a triage may decide.
 const QA_MODES = ["skip", "lite", "full"];
 
 // Why a second record of the same job's block is kept: the block is written once, and a retry keeps the first one.
 export const JOB_BLOCK_ALREADY_RECORDED = "already recorded";
+
+// How long a span over a run's files waits for the lock: a check holds it while it reads and consolidates a whole round artifact, longer than a state write's wait.
+const RUN_FILES_WAIT_MS = 30000;
 
 // Where the pull request template of a run came from: the repository's own, or nightqueue's fallback.
 const PR_TEMPLATE_SOURCES = ["repo", "nightqueue"];
@@ -50,11 +54,7 @@ const RUN_FIELDS = {
   commitType: COMMIT_TYPES,
 };
 
-// Who may record a skip through `run_skip`: the pipeline's own agents.
-export const SKIP_AGENTS = ["orchestrator", "triager", "explore", "architect", "coder", "qa-guardian", "verifier"];
-
-// The author of the phase entries the runtime writes itself (`run check`, `run publish`).
-export const RUNTIME_AUTHOR = "runtime";
+export { RUNTIME_AUTHOR };
 
 // How many records one attempt keeps in `ignoredRecords`, and the longest late record kept whole: a session that outlived its claim cannot grow `state.json`.
 const LATE_RECORDS_PER_ATTEMPT = 5;
@@ -91,10 +91,10 @@ function withFixedFields(state, { projectId, slug }) {
   return { ...held, schemaVersion: RESUME_SCHEMA_VERSION, projectId, slug };
 }
 
-// Runs an action on one run's files under the same lock as its state.json; never call a `record*` inside it, the lock is not re-entrant.
+// Runs an action on one run's files under the same lock as its state.json, waiting out a long check of a round artifact; never call a `record*` inside it, the lock is not re-entrant.
 export function withRunLock({ projectId, slug, env = process.env }, action) {
   if (!isRunPath(projectId, slug)) throw new UserError(`unsafe project or slug: \`${projectId}\`/\`${slug}\``);
-  return withLockSync(`${runDir(projectId, slug, env)}.lock`, action, RUN_LOCK);
+  return withLockSync(`${runDir(projectId, slug, env)}.lock`, action, { ...RUN_LOCK, timeoutMs: RUN_FILES_WAIT_MS });
 }
 
 // The runtime-only key a field name writes, whole (`job`) or dotted (`job.id`), or null when it names none.
@@ -194,33 +194,27 @@ function lastEntryOf(phases, phase) {
   return [...phases].reverse().find((entry) => isStateObject(entry) && entry.phase === phase) ?? null;
 }
 
-// The index of the runtime's entry a plain `run_phase_done` call repeats (same phase, last entry, same or no artifact), or -1 when the call appends.
-function repeatedRuntimeEntry(phases, { phase, artifact, by, reason }) {
-  if (trimmedText(by) !== null || trimmedText(reason) !== null) return -1;
-  const index = phases.length - 1;
-  const last = phases[index];
-  if (!isStateObject(last) || last.phase !== phase || last.by !== RUNTIME_AUTHOR) return -1;
-  const sent = trimmedText(artifact);
-  return sent === null || sent === last.artifact ? index : -1;
-}
-
-// The phases after one phase record: a repeat of the runtime's own entry merges into it, anything else is appended.
-function phasesWithRecord(phases, { phase, artifact, verdict, note, reason, by, claim }, at) {
-  const repeated = repeatedRuntimeEntry(phases, { phase, artifact, by, reason });
-  if (repeated >= 0) return phases.map((entry, index) => (index === repeated ? withText(entry, { verdict, note }) : entry));
-  return [...phases, withStamp(withText({ phase, at }, { artifact, verdict, note, reason, by }), claim)];
+// Refusal of a phase the pipeline a state pinned does not declare, or null when it does; a pinned pipeline with no package is refused by name.
+function phaseRefusal(phase, state) {
+  try {
+    const names = phaseNamesOf(state);
+    return names.includes(phase) ? null : refuseEnum("phase", phase, names);
+  } catch (err) {
+    return kept(String(err?.message ?? err).split("\n")[0]);
+  }
 }
 
 // Records a phase the pipeline completed; the list is append-only, so a phase recorded twice never erases the first record.
 export function recordPhaseDone({ projectId, slug, phase, artifact, verdict, note, reason, by, claim = null, env = process.env } = {}) {
-  if (!PHASE_NAMES.includes(phase)) return refuseEnum("phase", phase, PHASE_NAMES);
+  const refused = phaseRefusal(phase, readRunState({ projectId, slug, env }));
+  if (refused) return refused;
   return record({
     projectId,
     slug,
     env,
     claim,
     late: { kind: "phase", record: withText({ phase }, { artifact, verdict, note, reason, by }) },
-    change: (state, at) => ({ phases: phasesWithRecord(phaseEntries(state), { phase, artifact, verdict, note, reason, by, claim }, at) }),
+    change: (state, at) => ({ phases: [...phaseEntries(state), withStamp(withText({ phase, at }, { artifact, verdict, note, reason, by }), claim)] }),
   });
 }
 
@@ -265,7 +259,8 @@ function phasesAfterCheck({ state, check, memo, done, claim, at }) {
 // Records the answer of one `run check` and, when it completed a phase, the phase itself, in one write so the reason reads the memo it replaces.
 export function recordCheck({ projectId, slug, check, memo, done = null, claim = null, env = process.env } = {}) {
   if (trimmedText(check) === null || !isStateObject(memo)) return kept("a check record needs its check and its memo");
-  if (done !== null && !PHASE_NAMES.includes(done?.phase)) return refuseEnum("phase", done?.phase, PHASE_NAMES);
+  const refused = done === null ? null : phaseRefusal(done?.phase, readRunState({ projectId, slug, env }));
+  if (refused) return refused;
   let decided = null;
   const written = record({
     projectId,
@@ -284,28 +279,43 @@ export function recordCheck({ projectId, slug, check, memo, done = null, claim =
   return { ...written, phase: written.status === "written" ? decided : null };
 }
 
-// Whether a phase entry is the runtime's record of a QA skip.
-function isRuntimeQaSkip(entry) {
-  return isStateObject(entry) && entry.phase === "qa" && entry.by === RUNTIME_AUTHOR && entry.verdict === "SKIPPED";
+// Whether a phase entry matches every field of a filter.
+function matchesPhaseFilter(entry, filter) {
+  return isStateObject(entry) && Object.entries(filter).every(([name, value]) => entry[name] === value);
 }
 
-// Whether a QA mode leaves a recorded skip behind: a lite or full decision on a state that still holds one.
-export function leavesStaleQaSkip(state, mode) {
-  return mode !== "skip" && phaseEntries(state).some(isRuntimeQaSkip);
+// The change that drops the phase entries a filter matches; nothing at all when there is none to drop, so `phases` is never created by it.
+function droppedPhases(state, filter) {
+  const entries = phaseEntries(state);
+  const left = filter === null ? entries : entries.filter((entry) => !matchesPhaseFilter(entry, filter));
+  return left.length === entries.length ? {} : { phases: left };
 }
 
-// Records the QA mode the triage decided and its reason, a key only the runtime writes; in the same write a lite or full decision drops the skip it supersedes.
-export function recordQaMode({ projectId, slug, mode, reason, env = process.env } = {}) {
-  if (!QA_MODES.includes(mode)) return refuseEnum("QA mode", mode, QA_MODES);
-  const why = trimmedText(reason);
-  if (why === null) return kept("a QA mode needs its reason");
-  const change = (state) => (leavesStaleQaSkip(state, mode) ? { phases: phaseEntries(state).filter((entry) => !isRuntimeQaSkip(entry)) } : {});
-  return record({ projectId, slug, env, change, runtimeFields: { qaMode: { mode, reason: why, at: new Date().toISOString() } } });
+// Refusal of a QA mode outside the accepted ones or with no reason, or null when it can be recorded.
+function qaModeRefusal(value) {
+  if (!QA_MODES.includes(value?.mode)) return refuseEnum("QA mode", value?.mode, QA_MODES);
+  return trimmedText(value.reason) === null ? kept("a QA mode needs its reason") : null;
+}
+
+// Refusal of pipeline loops that are not an object, or null when they can be recorded.
+function pipelineLoopsRefusal(value) {
+  return isStateObject(value) ? null : kept("the pipeline loops must be an object");
+}
+
+// The runtime-only keys a pipeline's answer may have the runtime record, each with the check of its value.
+const RECORDED_RUNTIME_FIELDS = { qaMode: qaModeRefusal, pipelineLoops: pipelineLoopsRefusal };
+
+// Records one key only the runtime writes for a pipeline's answer; in the same write it drops the phase entries the answer's filter matches, and a claim that is over sets the write aside.
+export function recordRuntimeField({ projectId, slug, name, value, dropPhases = null, claim = null, env = process.env } = {}) {
+  if (!Object.hasOwn(RECORDED_RUNTIME_FIELDS, name)) return refuseEnum("runtime field", name, Object.keys(RECORDED_RUNTIME_FIELDS));
+  const refused = RECORDED_RUNTIME_FIELDS[name](value);
+  if (refused !== null) return refused;
+  return record({ projectId, slug, env, claim, late: { kind: "fields", record: { [name]: value } }, change: (state) => droppedPhases(state, dropPhases), runtimeFields: { [name]: value } });
 }
 
 // Records that the run stopped on purpose at a phase; a retry consumes the stop, and where the run continues is the pipeline's call.
 export function recordTermination({ projectId, slug, phase, reason, by, wip = null, claim = null, env = process.env } = {}) {
-  const refused = terminationRefusal(phase, reason);
+  const refused = terminationRefusal(phase, reason, readRunState({ projectId, slug, env }));
   if (refused) return refused;
   const stop = withText({ phase, reason: trimmedText(reason) }, { by });
   return record({
@@ -322,9 +332,10 @@ export function recordTermination({ projectId, slug, phase, reason, by, wip = nu
   });
 }
 
-// Why a termination cannot be recorded (an unknown phase or no reason), or null when it can.
-export function terminationRefusal(phase, reason) {
-  if (!PHASE_NAMES.includes(phase)) return refuseEnum("phase", phase, PHASE_NAMES);
+// Why a termination cannot be recorded (a phase the state's pipeline does not declare, or no reason), or null when it can.
+export function terminationRefusal(phase, reason, state = null) {
+  const refused = phaseRefusal(phase, state);
+  if (refused) return refused;
   if (trimmedText(reason) === null) return kept("a termination needs a reason: it is what the operator reads in the queue");
   return null;
 }
@@ -561,42 +572,6 @@ export function recordRunFields({ projectId, slug, fields, claim = null, env = p
   const refused = entries.map(invalidRunField).find(Boolean);
   if (refused) return refused;
   return record({ projectId, slug, env, claim, late: { kind: "fields", record: changes }, change: () => withText({}, changes) });
-}
-
-// Refusal of a skip `run_skip` cannot record, or null when its phase, author and reason are the ones state.json keeps.
-function invalidSkip({ phase, by, reason }) {
-  if (!PHASE_NAMES.includes(phase)) return refuseEnum("phase", phase, PHASE_NAMES);
-  if (!SKIP_AGENTS.includes(by)) return refuseEnum("by", by, SKIP_AGENTS);
-  return trimmedText(reason) === null ? kept("a skip needs a reason: it is what the studio track shows on the slot") : null;
-}
-
-// Writes one agent skip into the run's state.json, refused when the phase already ran.
-function saveSkip({ projectId, slug, phase, skip, env }) {
-  const state = withFixedFields(readRunState({ projectId, slug, env }), { projectId, slug });
-  const ran = Array.isArray(state.phases) && state.phases.some((entry) => entry?.phase === phase);
-  if (ran) return kept(`\`${phase}\` already ran: only a later phase can be skipped`);
-  const skips = { ...(isStateObject(state.skips) ? state.skips : {}), [phase]: skip };
-  return saveRunState({ projectId, slug, env, state: { ...state, skips, updatedAt: skip.at } });
-}
-
-// Sets aside the skip of a claim that is over, in the same list as every other late record.
-function setLateSkipAside({ projectId, slug, phase, skip, claim, env }) {
-  const state = withFixedFields(readRunState({ projectId, slug, env }), { projectId, slug });
-  const { at, ...fields } = skip;
-  return setLateRecordAside({ projectId, slug, env, state, claim, late: { kind: "skip", record: { phase, ...fields } }, at });
-}
-
-// Records that an agent skips a later phase, for display only: routing and resume never read it.
-export function recordSkip({ projectId, slug, phase, by, reason, claim = null, env = process.env } = {}) {
-  const refused = invalidSkip({ phase, by, reason });
-  if (refused) return refused;
-  const skip = { by, reason: trimmedText(reason), at: new Date().toISOString() };
-  return underRunLock({
-    projectId,
-    slug,
-    env,
-    write: () => (claim?.over === true ? setLateSkipAside({ projectId, slug, phase, skip, claim, env }) : saveSkip({ projectId, slug, phase, skip, env })),
-  });
 }
 
 // Sets where the code of a run lives to what git actually holds: `branch` and `worktree` each recorded, or dropped when null.

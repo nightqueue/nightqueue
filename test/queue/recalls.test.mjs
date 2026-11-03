@@ -238,6 +238,18 @@ test("a context_for_phase recall reads its block and takes its phase and agent f
   assert.deepEqual([untargeted.phase, untargeted.agent, untargeted.target], [4, "coder", null]);
 });
 
+test("a `context_for_agent` call counts as a fetch, its `agent` read as the old `target` was", async () => {
+  const block = `## ${LESSONS_HEADING}\n- [L4] keep it small`;
+  const log = logOf([
+    attemptMarker(1),
+    toolUseEvent({ name: "mcp__nightqueue__context_for_agent", id: "c1", input: { agent: "explore" } }),
+    jsonResult("c1", { block }),
+  ]);
+  const [context] = await jobRecalls(log);
+  assert.deepEqual([context.tool, context.phase, context.agent, context.target], ["context_for_agent", 2, "explore", "explore"]);
+  assert.deepEqual(context.hits, [{ ref: "L4", title: "keep it small", score: null, kind: "lesson" }]);
+});
+
 test("a failed context call stays its own block, and a context call that hands over nothing is dropped", async () => {
   const log = logOf([
     attemptMarker(1),

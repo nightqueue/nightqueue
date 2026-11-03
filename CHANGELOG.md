@@ -8,6 +8,26 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **`resolve` is a package the runtime loads by name; MCP clients restart (tool contract bump).** The
+  phases, artifacts, verdicts, gates and models of the pipeline moved to `plugin/skills/resolve/pipeline/`
+  (`manifest.json` and `check.mjs`), resolved from `jobs.pipeline`, and `run check` became a skeleton that
+  validates the package's answer whole and applies a closed list of effects (`docs/runtime-contract.md`,
+  `### The pipeline package`). What it prints and records is byte for byte what it did, with one change:
+  `run check 04` no longer overwrites `04-implementation.md`, the list it derives goes to
+  `04-files.generated.md` and `run publish`, the report facts and the studio read it when the artifact
+  lists no file. Tool contract 14: `run_phase_done` and `run_skip` are refused as removed, and
+  `context_for_phase` is now `context_for_agent` with `agent` for `target`. `run commit` is removed and
+  names `run publish`. `pipeline_log` and `run pr` stay, because the operator and
+  `references/pr-template.md` still use them. `src/queue/check-contract.mjs`, `phase-artifacts.mjs`,
+  `qa-rounds.mjs`, `triage-brief.mjs` and `gate-question.mjs` no longer exist; what names no pipeline lives on
+  in `src/queue/rounds.mjs` and `src/queue/question-text.mjs`.
+
+- **`run check` answers what comes next.** Its last line is now `NEXT: <action>`, one of `launch`, `gate`,
+  `terminate`, `publish`, `report` or `check`, decided by `plugin/skills/resolve/pipeline/next.mjs` with the
+  relaunch and fix-loop counters it keeps in `state.json`'s runtime-only `pipelineLoops`. The answer tables of
+  `references/phases.md` collapsed into following `NEXT:`, and what stays prose is the judgment the code cannot
+  make.
+
 - **The pipeline stops causing its own relaunches.** A QA `NEEDS FIX` opens Phase 6 with `coder-fix`
   (fix iteration 1), then the verifier. A verifier launched with `STAGE:` checks only that stage and
   writes `(stage N)` on its verdict; `run check 06` prints it and no longer reads a stage round that

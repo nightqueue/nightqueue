@@ -6,7 +6,7 @@ description: >-
   the installed version of the third-party libs on its path. Use it in a pipeline or
   directly to: map the files relevant to a code area, find the real version of an
   installed lib, or x-ray a module before planning a change.
-tools: Read, Grep, Glob, Bash, Write, mcp__nightqueue__lesson_recall, mcp__nightqueue__context_for_phase
+tools: Read, Grep, Glob, Bash, Write, mcp__nightqueue__lesson_recall, mcp__nightqueue__context_for_agent
 ---
 
 You are a code-area scout. You LOCATE the real files with a one-line responsibility each,
@@ -71,7 +71,7 @@ ARTIFACT_PATH: `<RUN_DIR>/02-explore.md`. Read before acting: only the first ste
 
 **First step, before anything else:**
 1. Read the Brief from `<RUN_DIR>/00-brief.md`, never the user's raw input. Find the files related to its `**Affected area:**`; the task objective is its `**Objective:**`. With no `00-brief.md`, write no artifact and name it in the `## Open` of your return.
-2. Call `mcp__nightqueue__context_for_phase` with `target: "explore"`, `query` = the `**Affected area:**`, `repo_root` = `WORKTREE`, `project` = `PROJECT`. A failed call is an open item, never a stop.
+2. Call `mcp__nightqueue__context_for_agent` with `agent: "explore"`, `query` = the `**Affected area:**`, `repo_root` = `WORKTREE`, `project` = `PROJECT`. A failed call is an open item, never a stop.
 
 Inputs: the affected area and the objective (from the validated brief, never the user's raw input); the known map of the project and its known libs when earlier runs indexed one; the `## Applicable lessons` and `## Project memory` when the context carries them.
 

@@ -1,39 +1,23 @@
-import { mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
-import { basename, dirname, join, resolve } from "node:path";
+import { existsSync, readFileSync, statSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { UserError } from "../config/errors.mjs";
-import { writeFileAtomic } from "../config/store.mjs";
-import { FILE_LIST } from "../queue/file-list.mjs";
-import { CHECK_CONTEXT_FILES, evaluateCheck, fileListResult, repairedLine, roundDefectParts } from "../queue/check-contract.mjs";
-import { PHASE_ARTIFACTS, QA_STAGES, withClosedFence } from "../queue/phase-artifacts.mjs";
+import { refuseInvalidAnswer } from "../queue/pipeline-answer.mjs";
+import { DEFAULT_PIPELINE, loadPipeline, pinnedPipelineName } from "../queue/pipeline-package.mjs";
 import { defaultGitImpl } from "../queue/preflight.mjs";
-import { consolidationNumbersOf, consolidationOf } from "../queue/qa-rounds.mjs";
 import { readRunState } from "../queue/resume.mjs";
+import { callerJobId } from "../queue/retry.mjs";
+import { isProvisionalSlug } from "../queue/run-slug.mjs";
 import { recordPrTemplate, withRunLock } from "../queue/run-state.mjs";
 import { runDurationS } from "../queue/telemetry.mjs";
+import { openStore } from "../store/open.mjs";
 import { checkArgs, parseCommand } from "./args.mjs";
-import { checkEffectLines } from "./check-effects.mjs";
-import { APPEND_USAGE, appendedText, runAppend } from "./run-append.mjs";
+import { applyLockedWrites, checkEffectLines } from "./check-effects.mjs";
+import { APPEND_USAGE, runAppend } from "./run-append.mjs";
 import { saveIndexFromText } from "./index-save.mjs";
 import { realPath } from "./paths.mjs";
 import { findPrTemplate } from "./pr-template.mjs";
-import { citedTestGaps } from "./qa-skip-tests.mjs";
-import { changedFiles, durationCell, phaseRows, readJobLog, readRequiredFile, requireRunState, resolveRun, resolveWritableRun, RUN_OPTIONS, worktreeOf } from "./run-context.mjs";
-import {
-  bodyProblemLines,
-  branchWips,
-  commitPaths,
-  foldedPaths,
-  listedFromArtifact,
-  nothingToCommit,
-  openPullRequest,
-  PUBLISH_USAGE,
-  refusedLines,
-  requireMessageFile,
-  runPublish,
-  scratchProblemLines,
-  stageable,
-  wipProblemLines,
-} from "./run-publish.mjs";
+import { changedFiles, durationCell, phaseRows, readJobLog, readRequiredFile, readRunFile, requireRunState, resolveRun, resolveWritableRun, RUN_OPTIONS, worktreeOf } from "./run-context.mjs";
+import { bodyProblemLines, foldedPaths, openPullRequest, PUBLISH_USAGE, runPublish, scratchProblemLines, wipProblemLines } from "./run-publish.mjs";
 import { REPORT_USAGE, runReport } from "./run-report.mjs";
 import { START_USAGE, runStart } from "./run-start.mjs";
 import { SECRETS_SWEEP_USAGE, runSecretsSweep } from "./secrets-sweep.mjs";
@@ -41,8 +25,7 @@ import { SECRETS_SWEEP_USAGE, runSecretsSweep } from "./secrets-sweep.mjs";
 const USAGE = {
   check: "nightqueue run check <NN> [--stage analyst|triage] [--project <name> --slug <slug>]",
   append: APPEND_USAGE,
-  commit: "nightqueue run commit --message-file <path> [--files-from <path>] [--extra <pathspec>]",
-  dir: "nightqueue run dir [--project <name> --slug <slug>]",
+  dir:"nightqueue run dir [--project <name> --slug <slug>]",
   log: "nightqueue run log [--json] [--project <name> --slug <slug>]",
   pr: "nightqueue run pr --body-file <path> [--title <text>] [--remove-worktree] | --template",
   "index-save": "nightqueue run index-save <artifact> [--project <name>] [--repo-root <path>]",
@@ -56,7 +39,7 @@ const HELP_FLAGS = new Set(["--help", "-h", "help"]);
 
 const NOTHING_TO_PRINT = "no phase recorded yet";
 
-const RENUMBERED = new Map([["06.5", "07"], ["05a", "05"]]);
+const COMMIT_REMOVED = "`run commit` was removed: `nightqueue run publish --message-file <path> --body-file <path>` commits and opens the pull request in one call";
 
 // The tab-separated table the agent pastes: one line per phase, then the total of the whole run.
 function logLines(rows, totalS) {
@@ -78,119 +61,84 @@ async function runLog(argv, ctx) {
   return 0;
 }
 
-// The artifact as it is on disk, and nothing at all when the phase never wrote it.
-function readArtifact(path) {
+// The caller's own job row, or null outside a job or when the store cannot read it.
+async function callerJobRow(env) {
+  const own = callerJobId(env);
+  if (own === null) return null;
   try {
-    return readFileSync(path, "utf8");
+    return await openStore(env).jobs.getJob(own);
   } catch {
-    return "";
+    return null;
   }
 }
 
-// Whether the implementation artifact already lists at least one file, which is what its section exists for.
-function listsFiles(text) {
-  const after = text.split(FILE_LIST).slice(1).join(FILE_LIST);
-  const body = after.split("\n## ")[0] ?? "";
-  return body.split("\n").some((line) => line.trim() !== "");
+// The manifest entry of a check.
+function phaseOfCheck(manifest, check) {
+  return manifest.phases.find((phase) => phase.check === check);
 }
 
-// The implementation artifact derived from git, written only when the agent left none with a file list.
-function writeFileList(path, files) {
-  const body = ["# Implementation (derived from git)", "", FILE_LIST, ...files, ""].join("\n");
-  try {
-    mkdirSync(dirname(path), { recursive: true });
-    writeFileSync(path, body);
-  } catch (error) {
-    throw new UserError(`could not write ${path}: ${error.message}`);
+// The stage a check names, refused unless its phase declares that stage; null without one.
+function checkStage(manifest, check, value) {
+  if (value === undefined) return null;
+  if (Object.hasOwn(phaseOfCheck(manifest, check).stages ?? {}, value)) return value;
+  const staged = manifest.phases.filter((phase) => phase.stages).map((phase) => `${phase.check} --stage ${Object.keys(phase.stages).join("|")}`);
+  throw new UserError(`unknown stage \`${value}\` of check \`${check}\`; the stages are \`${staged.join(", ")}\``);
+}
+
+// The check and the stage a call asks for, refused in the words of the pipeline's manifest.
+function checkRequest(manifest, asked, stageValue) {
+  const check = asked.trim().toLowerCase();
+  const renumbered = manifest.renumbered ?? {};
+  if (Object.hasOwn(renumbered, check)) throw new UserError(`renumbered: use ${renumbered[check]}`);
+  if (!phaseOfCheck(manifest, check)) {
+    const covered = manifest.phases.map((phase) => phase.check).filter((name) => name !== null);
+    throw new UserError(`unknown phase \`${asked}\`; the artifact gate covers: ${covered.join(", ")}`);
   }
+  return { check, stage: checkStage(manifest, check, stageValue) };
 }
 
-// The gate of the implementation artifact, the only one with a fallback: no file list means deriving it from the worktree's own changes and what the run's own wip commits carry.
-function checkFileList(run, path, text, ctx) {
-  if (listsFiles(text)) return "OK";
+// Every file the run changed: the worktree's own changes and what the run's own wip commits carry.
+function changedByRun(run, ctx) {
   const cwd = worktreeOf(run, ctx.env);
   const carried = foldedPaths(cwd, run, ctx.env).map((file) => join(cwd, file));
-  const files = [...new Set([...changedFiles(cwd, ctx.gitImpl ?? defaultGitImpl), ...carried])].sort();
-  if (files.length === 0) return `MISSING: ${FILE_LIST} (no changed files)`;
-  writeFileList(path, files);
-  return "GENERATED";
+  return [...new Set([...changedFiles(cwd, ctx.gitImpl ?? defaultGitImpl), ...carried])].sort();
 }
 
-// Writes a round artifact atomically, naming what was being written when it fails.
-function writeRoundArtifact(path, text, what) {
-  try {
-    writeFileAtomic(path, text);
-  } catch (error) {
-    throw new UserError(`could not write ${what} to ${path}: ${error.message}`);
+// What a check may read of the run: its files, its worktree and, only for a phase that derives a file list and only when asked, what git says changed; such a phase takes no run lock, so git never runs under it.
+function checkFiles(run, phase, ctx) {
+  const base = { read: (name) => readRunFile(run.runDir, name), worktree: () => worktreeOf(run, ctx.env) };
+  if (phase.derivesFileList !== true) return { ...base, changed: null };
+  return {
+    ...base,
+    get changed() {
+      return changedByRun(run, ctx);
+    },
+  };
+}
+
+// The answer of the pipeline's `check` on the state as it is now, validated whole with its artifact writes applied, all under the run lock on a phase with rounds so no concurrent `run append` or check is lost between the read and the write.
+function checkAnswer({ pipeline, request, job, run, ctx }) {
+  const phase = phaseOfCheck(pipeline.manifest, request.check);
+  const files = checkFiles(run, phase, ctx);
+  const evaluate = () => {
+    const state = readRunState({ projectId: run.projectId, slug: run.slug, env: ctx.env });
+    const answer = pipeline.check({ phase: request.check, stage: request.stage, runDir: run.runDir, state, files, run: { slug: run.slug, provisionalSlug: isProvisionalSlug(job, run.slug) }, env: ctx.env });
+    refuseInvalidAnswer(answer, pipeline.manifest);
+    applyLockedWrites(answer.effects, run.runDir);
+    return answer;
+  };
+  if (phase.rounds !== true || !existsSync(run.runDir)) return evaluate();
+  return withRunLock({ projectId: run.projectId, slug: run.slug, env: ctx.env }, evaluate);
+}
+
+// Prints a check's answer: its contract lines, the lines of its effects, the device script so it never breaks the line parsing, and the next action last.
+function printCheck(answer, effects, ctx) {
+  for (const line of [...answer.lines, ...effects]) ctx.out(line);
+  if (answer.script.length > 0) {
+    ctx.out("SCRIPT:");
+    for (const line of answer.script) ctx.out(line);
   }
-}
-
-// Closes, under the run lock, a code fence a round artifact leaves open at its end, and answers the `REPAIRED:` line (null when nothing was open).
-function repairRoundArtifact(run, path, env) {
-  if (readArtifact(path) === "") return null;
-  return withRunLock({ projectId: run.projectId, slug: run.slug, env }, () => {
-    const { text, closed } = withClosedFence(readArtifact(path));
-    if (closed === null) return null;
-    writeRoundArtifact(path, text, "the closing code fence");
-    return repairedLine(basename(path), closed);
-  });
-}
-
-// Writes the consolidated round a full QA's `05-qa.md` still lacks, under the run lock so no prover appends in between; a window with an ill-formed round is never consolidated and answers its `MISSING:` parts.
-function consolidateQa(run, path, env) {
-  if (readArtifact(path) === "") return [];
-  return withRunLock({ projectId: run.projectId, slug: run.slug, env }, () => {
-    const raw = readArtifact(path);
-    const numbers = consolidationNumbersOf(raw);
-    if (numbers === null) return [];
-    const gaps = roundDefectParts(basename(path), raw, numbers);
-    if (gaps.length > 0) return gaps;
-    const consolidation = consolidationOf(raw);
-    if (consolidation === null) return [];
-    writeRoundArtifact(path, validConsolidatedText(basename(path), raw, consolidation), "the QA consolidation");
-    return [];
-  });
-}
-
-// The artifact with the consolidated round appended, refused when the round it builds is one the final check would refuse.
-export function validConsolidatedText(file, raw, consolidation) {
-  const { text } = appendedText(raw, consolidation.number, consolidation.body);
-  const defects = roundDefectParts(file, text, [consolidation.number]);
-  if (defects.length > 0) throw new UserError(`the consolidated round ${consolidation.number} of ${file} would be ill-formed, so nothing was written: ${defects.join("; ")}`);
-  return text;
-}
-
-// The gate of one phase, evaluated against the check contract on the artifact and the run files its rules read; a round artifact gets its open fence closed first.
-function checkArtifact({ run, check, stage, state, ctx }) {
-  const artifact = PHASE_ARTIFACTS.get(check);
-  const path = join(run.runDir, artifact.file);
-  if (artifact.sections[0] === FILE_LIST) {
-    const first = checkFileList(run, path, readArtifact(path), ctx);
-    return fileListResult(first, readArtifact(path));
-  }
-  const repaired = artifact.rounds ? repairRoundArtifact(run, path, ctx.env) : null;
-  const consolidationGaps = check === "05" && stage === null ? consolidateQa(run, path, ctx.env) : [];
-  const files = [...new Set([...CHECK_CONTEXT_FILES, artifact.file])];
-  const texts = Object.fromEntries(files.map((file) => [file, readArtifact(join(run.runDir, file))]));
-  const gaps = stage === "triage" ? citedTestGaps(run, texts[artifact.file], ctx.env) : consolidationGaps;
-  return { ...evaluateCheck({ check, stage, texts, state, gaps }), repaired };
-}
-
-// The stage a check names, refused unless it is a QA stage on check `05`; null without one.
-function checkStage(check, value) {
-  if (value === undefined) return null;
-  if (!Object.hasOwn(QA_STAGES, value) || check !== "05") throw new UserError(`unknown stage \`${value}\` of check \`${check}\`; the stages are \`05 --stage ${Object.keys(QA_STAGES).join("|")}\``);
-  return value;
-}
-
-// Prints a check result: its first line, the `REPAIRED:` line of a fence the runtime closed, its other contract lines, the lines of its chained effects, then the device script last so it never breaks the line parsing.
-function printCheck(result, effects, ctx) {
-  const [first, ...rest] = result.lines;
-  const repaired = result.repaired ? [result.repaired] : [];
-  for (const line of [first, ...repaired, ...rest, ...effects]) ctx.out(line);
-  if (result.script.length === 0) return;
-  ctx.out("SCRIPT:");
-  for (const line of result.script) ctx.out(line);
+  ctx.out(`NEXT: ${answer.next}`);
 }
 
 // Runs `run dir`, which prints the absolute directory of THIS run: `runs/<project_id>/<slug>` under the home.
@@ -202,44 +150,23 @@ async function runDirCommand(argv, ctx) {
   return 0;
 }
 
-// Runs `run check`, which answers whether the artifact of a phase of THIS run is there with the sections the pipeline reads from it.
+// Runs `run check`, which resolves the run's pipeline to its package, has it answer for the artifact of a phase of THIS run, and applies and prints the answer.
 async function runCheck(argv, ctx) {
   const { values, positionals } = parseCommand(argv, { ...RUN_OPTIONS, stage: { type: "string" } });
   checkArgs(positionals, { min: 1, max: 1, usage: USAGE.check });
-  const check = positionals[0].trim().toLowerCase();
-  if (RENUMBERED.has(check)) throw new UserError(`renumbered: use ${RENUMBERED.get(check)}`);
-  if (!PHASE_ARTIFACTS.has(check)) {
-    throw new UserError(`unknown phase \`${positionals[0]}\`; the artifact gate covers: ${[...PHASE_ARTIFACTS.keys()].join(", ")}`);
-  }
-  const stage = checkStage(check, values.stage);
+  const load = ctx.loadPipeline ?? loadPipeline;
+  const job = await callerJobRow(ctx.env);
+  const firstName = job?.pipeline ?? DEFAULT_PIPELINE;
+  const first = await load(firstName);
+  const asked = checkRequest(first.manifest, positionals[0], values.stage);
   const run = await resolveWritableRun(values, ctx);
-  const state = readRunState({ projectId: run.projectId, slug: run.slug, env: ctx.env });
-  const result = checkArtifact({ run, check, stage, state, ctx });
-  printCheck(result, await checkEffectLines({ run, check, stage, result, state, ctx }), ctx);
+  const pinned = pinnedPipelineName(readRunState({ projectId: run.projectId, slug: run.slug, env: ctx.env }));
+  const name = job?.pipeline ?? pinned ?? DEFAULT_PIPELINE;
+  const pipeline = name === firstName ? first : await load(name);
+  const request = name === firstName ? asked : checkRequest(pipeline.manifest, positionals[0], values.stage);
+  const answer = checkAnswer({ pipeline, request, job, run, ctx });
+  printCheck(answer, await checkEffectLines({ answer, run, job, ctx }), ctx);
   return 0;
-}
-
-// Prints why `run commit` staged nothing; answers its exit code.
-function commitRefused(lines, ctx) {
-  for (const line of lines) ctx.out(line);
-  return 1;
-}
-
-// Runs `run commit`, which stages what the implementation artifact declared — and nothing the pipeline never commits — and commits it.
-async function runCommit(argv, ctx) {
-  const options = { "files-from": { type: "string" }, extra: { type: "string", multiple: true }, "message-file": { type: "string" } };
-  const { values, positionals } = parseCommand(argv, { ...RUN_OPTIONS, ...options });
-  checkArgs(positionals, { max: 0, usage: USAGE.commit });
-  const messageFile = requireMessageFile(values["message-file"], USAGE.commit);
-  const run = await resolveWritableRun(values, ctx);
-  const cwd = worktreeOf(run, ctx.env);
-  const { artifact, listed } = listedFromArtifact(run, values["files-from"]);
-  const wips = branchWips(cwd, run, ctx.env);
-  if (wips.problems.length > 0) return commitRefused(wips.problems, ctx);
-  const { paths, refused, fold } = stageable({ cwd, listed, extras: values.extra ?? [], env: ctx.env, fold: wips.fold, runDir: run.runDir });
-  if (refused.length > 0) return commitRefused(refusedLines(refused), ctx);
-  if (nothingToCommit(paths, fold)) throw new UserError(`${artifact} lists no file under \`${FILE_LIST}\`: there is nothing to commit`);
-  return await commitPaths({ run, cwd, paths, messageFile, fold, ctx });
 }
 
 // Refuses a `run pr` call that asks for nothing, or for both the template query and a publication at once.
@@ -343,7 +270,6 @@ async function runIndexSave(argv, ctx) {
 const SUBCOMMANDS = new Map([
   ["check", runCheck],
   ["append", runAppend],
-  ["commit", runCommit],
   ["dir", runDirCommand],
   ["log", runLog],
   ["pr", runPr],
@@ -366,6 +292,7 @@ export async function run(argv, ctx) {
     ctx.out(HELP);
     return 0;
   }
+  if (sub === "commit") throw new UserError(COMMIT_REMOVED);
   const handler = SUBCOMMANDS.get(sub);
   if (!handler) {
     throw new UserError(

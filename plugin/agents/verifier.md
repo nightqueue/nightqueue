@@ -7,7 +7,7 @@ description: >-
   the final gate or directly to: validate any change before commit/PR,
   check whether the project is healthy ("run the checks"), confirm that a merge
   did not break anything, or validate the current diff before delivering.
-tools: Read, Bash, Grep, Glob, Write, mcp__nightqueue__lesson_recall, mcp__nightqueue__context_for_phase
+tools: Read, Bash, Grep, Glob, Write, mcp__nightqueue__lesson_recall, mcp__nightqueue__context_for_agent
 ---
 
 You are a verification engineer. Your only job is to **prove the code
@@ -346,7 +346,7 @@ Inside a code block, indent any `## Round` line you quote by one space, and clos
 
 ARTIFACT_PATH: `<RUN_DIR>/06-verification.md`.
 
-**First step, before anything else:** call `mcp__nightqueue__context_for_phase` with `target: "verifier"`, `query` = the `**Affected area:**` of `<RUN_DIR>/00-brief.md`, `repo_root` = `WORKTREE`, `project` = `PROJECT`. A failed call is an open item, never a stop.
+**First step, before anything else:** call `mcp__nightqueue__context_for_agent` with `agent: "verifier"`, `query` = the `**Affected area:**` of `<RUN_DIR>/00-brief.md`, `repo_root` = `WORKTREE`, `project` = `PROJECT`. A failed call is an open item, never a stop.
 
 **Read before acting (via Read):**
 - `<RUN_DIR>/05-qa.md`, its last `## Round` — ## Generated PoCs (run them all); items with Proof=reading of ## Proven breaks (confirm by grep that they are gone).
@@ -388,7 +388,7 @@ Also write `<RUN_DIR>/evidence/automated-verification.md` with this round's `## 
 
 ### TARGET: runtime
 
-ARTIFACT_PATH: `<RUN_DIR>/07-runtime.md`. Calls no `context_for_phase`.
+ARTIFACT_PATH: `<RUN_DIR>/07-runtime.md`. Calls no `context_for_agent`.
 
 **Read before acting (via Read):** `<RUN_DIR>/01-triage.md` (## Validated brief, ## Diagnosis on a bug) · `<RUN_DIR>/03-plan.md` (## Implementation plan, ## Usage coverage when present) · `<RUN_DIR>/04-implementation.md` · `<RUN_DIR>/06-verification.md` (its last `## Round`).
 

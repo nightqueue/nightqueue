@@ -3,7 +3,8 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { runDir } from "../../src/config/paths.mjs";
-import { isSafeSegment, PHASE_NAMES, readRunState, recordsOfClaim, runFacts } from "../../src/queue/resume.mjs";
+import { phaseNamesOf } from "../../src/queue/pipeline-package.mjs";
+import { isSafeSegment, readRunState, recordsOfClaim, runFacts } from "../../src/queue/resume.mjs";
 import { recordHeldWorktree, recordJobBlock } from "../../src/queue/run-state.mjs";
 import { buildPrompt } from "../../src/queue/spawn.mjs";
 import { FIXED_PROJECT_ID as ALPHA_ID, makeHome } from "../../test-support/memory.mjs";
@@ -32,7 +33,7 @@ function writeState(env, { projectId, slug, content }) {
 }
 
 test("the phase names are the enum of the plugin's contract, in english", () => {
-  assert.deepEqual(PHASE_NAMES, ["triage", "explore", "architecture", "implementation", "qa", "verification", "runtime", "commit"]);
+  assert.deepEqual(phaseNamesOf(null), ["triage", "explore", "architecture", "implementation", "qa", "verification", "runtime", "commit"]);
 });
 
 test("the facts of a state hold its records in the order it recorded them, with the directory given", () => {

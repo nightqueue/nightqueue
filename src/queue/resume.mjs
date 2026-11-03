@@ -8,19 +8,10 @@ import { writeFileAtomic } from "../config/store.mjs";
 // The lock of one run's state.json: a holder only ever keeps it for a single read and write, so a lock this old can only have been left behind by a dead process.
 export const RUN_LOCK = { timeoutMs: 5000, staleAfterMs: 15000 };
 
-// The phase names `state.json` validates with, and nothing more: nothing derives a next phase from this list.
-export const PHASE_NAMES = [
-  "triage",
-  "explore",
-  "architecture",
-  "implementation",
-  "qa",
-  "verification",
-  "runtime",
-  "commit",
-];
-
 export const RESUME_SCHEMA_VERSION = 1;
+
+// The author of the phase entries the runtime writes itself (`run check`, `run publish`).
+export const RUNTIME_AUTHOR = "runtime";
 
 const SEGMENT_RE = /^[A-Za-z0-9][A-Za-z0-9._+-]{0,79}$/;
 

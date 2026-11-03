@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { packageRoot } from "../../src/host/paths.mjs";
 import { COMMIT_TYPES } from "../../src/queue/branch-name.mjs";
-import { briefCommitType, briefGates, briefSlug, briefType, hintPatterns, REQUIRED_FIELDS } from "../../src/queue/triage-brief.mjs";
+import { briefCommitType, briefGates, briefSlug, briefType, hintPatterns, REQUIRED_FIELDS } from "../../plugin/skills/resolve/pipeline/brief.mjs";
 
 const TEMPLATE = readFileSync(join(packageRoot(), "plugin", "agents", "triager.md"), "utf8");
 const FILLED = { "Affected area": "src/a.mjs", Context: "c", Objective: "o", "Expected outcome": "e", "Commit type": "fix" };

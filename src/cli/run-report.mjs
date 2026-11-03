@@ -1,6 +1,6 @@
-import { CHECK_CONTEXT_FILES, evaluateCheck } from "../queue/check-contract.mjs";
-import { openQuestion } from "../queue/gate-question.mjs";
-import { lastRound, PHASE_ARTIFACTS } from "../queue/phase-artifacts.mjs";
+import { CHECK_CONTEXT_FILES, fileOf, openLinesOf as openItemsOf } from "../../plugin/skills/resolve/pipeline/reader.mjs";
+import { openQuestion } from "../queue/question-text.mjs";
+import { lastRound } from "../queue/rounds.mjs";
 import { attemptSince, derivedGateStop, derivedOutcome, recordPipelineRun, statePipelinePhases, verdictIcon, verdictWord } from "../queue/pipeline-record.mjs";
 import { defaultGitImpl } from "../queue/preflight.mjs";
 import { isStateObject } from "../queue/resume.mjs";
@@ -203,7 +203,7 @@ function sectionBullets(section) {
 
 // The suggestions of the QA's last round that ask for a ticket of their own.
 function dedicatedTickets(runDir) {
-  const qa = lastRound(readRunFile(runDir, PHASE_ARTIFACTS.get("05").file));
+  const qa = lastRound(readRunFile(runDir, fileOf("05")));
   return sectionBullets(sectionOf(qa, "## Suggestions"))
     .filter((bullet) => bullet.includes(DEDICATED_TICKET))
     .map((bullet) => `dedicated ticket: ${bullet}`);
@@ -211,13 +211,11 @@ function dedicatedTickets(runDir) {
 
 // The `OPEN:` lines one check answers for its artifact, named by the check; a check that cannot be evaluated is an open item itself.
 function openLinesOf(check, runDir, state) {
-  const file = PHASE_ARTIFACTS.get(check).file;
+  const file = fileOf(check);
   if (readRunFile(runDir, file) === "") return [];
   const texts = Object.fromEntries([...CHECK_CONTEXT_FILES, file].map((name) => [name, readRunFile(runDir, name)]));
   try {
-    return evaluateCheck({ check, texts, state })
-      .lines.filter((line) => line.startsWith("OPEN: "))
-      .map((line) => `${check} open: ${line.slice("OPEN: ".length)}`);
+    return openItemsOf(check, texts, state).map((item) => `${check} open: ${item}`);
   } catch {
     return [`the open items of check ${check} could not be read`];
   }

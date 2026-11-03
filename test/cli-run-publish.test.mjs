@@ -12,11 +12,12 @@ import { classifyJobResult } from "../src/queue/classify.mjs";
 import { provenEditedPrUrls } from "../src/queue/edit-proof.mjs";
 import { listedFiles } from "../src/queue/file-list.mjs";
 import { readRunState } from "../src/queue/resume.mjs";
-import { consumeRunConclusion, recordOutcome, recordPrUrl, recordQaMode, recordRunFields, recordTermination, recordWip } from "../src/queue/run-state.mjs";
+import { consumeRunConclusion, recordJobBlock, recordOutcome, recordPrUrl, recordRunFields, recordRuntimeField, recordTermination, recordWip } from "../src/queue/run-state.mjs";
 import { codeChangePublishedEvent, resultEvent, systemInitEvent, toNdjson } from "../test-support/streams.mjs";
 import { initGitRepo } from "../test-support/git.mjs";
 import { FAKE_GH_PR_URL, isolatedHostVars } from "../test-support/host.mjs";
 import { ensureProject, makeDir, makeHome, registerCheckout } from "../test-support/memory.mjs";
+import { makeSickHome } from "../test-support/sick-home.mjs";
 
 const SLUG = "add-slugify";
 const BRANCH = `worktree-${SLUG}`;
@@ -44,6 +45,11 @@ const BODY = [
 ].join("\n");
 
 const SKIP_REASON = "only documentation text changed.";
+
+// Records the QA mode the way a completed `run check 05 --stage triage` does.
+function recordQaMode({ projectId, slug, mode, reason, env }) {
+  return recordRuntimeField({ projectId, slug, name: "qaMode", value: { mode, reason, at: new Date().toISOString() }, env });
+}
 
 // The body with the line placed right under its QA heading.
 function bodyWithQaLine(line, body = BODY) {
@@ -249,8 +255,8 @@ test("a message with a `Co-Authored-By:` trailer is rejected before anything is 
 
 test("a retry after the commit already happened reuses it instead of committing again", async (t) => {
   const { env, id, worktree, dir } = makeRun(t, "publish-retry");
-  const committed = await runCli(env, id, ["run", "commit", "--message-file", join(dir, "commit-message.txt")]);
-  assert.equal(committed.code, 0, committed.text);
+  git(["-C", worktree, "add", "src/slug.mjs"]);
+  git(["-C", worktree, "-c", "commit.gpgsign=false", "commit", "-q", "-F", join(dir, "commit-message.txt")]);
   const before = commitCount(worktree);
 
   const { code, out } = await runCli(env, id, publishArgs(dir));
@@ -261,16 +267,14 @@ test("a retry after the commit already happened reuses it instead of committing 
   assert.equal(out.at(-2), `PR: ${FAKE_GH_PR_URL}`);
 });
 
-test("a refused path is refused exactly as `run commit` refuses it, and nothing is committed", async (t) => {
+test("a refused path is refused and nothing is committed", async (t) => {
   const { env, id, worktree, dir } = makeRun(t, "publish-refused", { listed: ["src/slug.mjs", ".claude/settings.json"] });
   const before = commitCount(worktree);
 
-  const commit = await runCli(env, id, ["run", "commit", "--message-file", join(dir, "commit-message.txt")]);
   const publish = await runCli(env, id, publishArgs(dir));
 
-  assert.equal(commit.code, 1);
   assert.equal(publish.code, 1);
-  assert.deepEqual(publish.out.slice(0, 2), commit.out);
+  assert.match(publish.out[0], /^REFUSED: \.claude\/settings\.json \(under `\.claude\/`\)/);
   assert.equal(commitCount(worktree), before);
 });
 
@@ -551,7 +555,7 @@ test("a clean retry with an empty list folds what the wip carries, and `run chec
   commitOwnWip(checked.worktree, { "notes.txt": "kept\n", "test/x-QA-probe.mjs": "probe\n", "package-lock.json": "{}\n" });
   const { out } = await runCli(checked.env, checked.id, ["run", "check", "04"]);
   assert.equal(out[0], "GENERATED", out.join("\n"));
-  assert.deepEqual(listedFiles(readFileSync(join(checked.dir, "04-implementation.md"), "utf8")), [join(checked.worktree, "notes.txt")]);
+  assert.deepEqual(listedFiles(readFileSync(join(checked.dir, "04-files.generated.md"), "utf8")), [join(checked.worktree, "notes.txt")]);
 });
 
 test("a wip whose every path is left out and an empty list still refuse as nothing to commit, on the wip", async (t) => {
@@ -600,36 +604,6 @@ test("a job with start_branch folds the wip it inherited, and a human `wip(` com
   openDb(human.env).prepare("UPDATE jobs SET start_branch = ? WHERE id = ?").run(BRANCH, human.id);
   const humanWip = commitWipShaped(human.worktree);
   await assertRefused(human, `REJECTED: the branch carries the wip commit ${humanWip.slice(0, 7)} (wip(${SLUG}): terminated at qa — why), which is not this run's own and is never pushed: stop and record it as an open item; the operator squashes it`);
-});
-
-test("`run commit` folds the run's own wip and `run publish` then reuses that commit", async (t) => {
-  const { env, id, remote, worktree, dir, projectId } = makeRun(t, "commit-wip-fold");
-  commitOwnWip(worktree);
-
-  const committed = await runCli(env, id, ["run", "commit", "--message-file", join(dir, "commit-message.txt")]);
-
-  assert.equal(committed.code, 0, committed.text);
-  assert.ok(committed.out.includes("FOLDED: 1 wip commits (1 files)"), committed.text);
-  assert.equal(aheadOfMain(worktree), 1);
-
-  const published = await runCli(env, id, publishArgs(dir));
-
-  assert.equal(published.code, 0, published.text);
-  assert.match(published.out[1], /^COMMITTED: [0-9a-f]+ \(already committed\)$/);
-  assert.equal(pushedSubjects(remote).some((subject) => subject.startsWith("wip(")), false);
-  assert.deepEqual([...readRunState({ projectId, slug: SLUG, env }).outcome.files].sort(), ["notes.txt", "src/slug.mjs"]);
-});
-
-test("`run commit` refuses a foreign wip and commits nothing", async (t) => {
-  const { env, id, worktree, dir } = makeRun(t, "commit-wip-foreign");
-  commitWipShaped(worktree);
-  const before = commitCount(worktree);
-
-  const { code, out } = await runCli(env, id, ["run", "commit", "--message-file", join(dir, "commit-message.txt")]);
-
-  assert.equal(code, 1);
-  assert.match(out[0], /^REJECTED: the branch carries the wip commit /);
-  assert.equal(commitCount(worktree), before);
 });
 
 test("`run pr` refuses a branch carrying a runtime wip commit, naming `run publish`, and pushes nothing", async (t) => {
@@ -1029,4 +1003,182 @@ test("the existing-PR lookup prefers the open pull request over an older merged 
   ]);
   const spawnSyncImpl = () => ({ status: 0, stdout: list, stderr: "" });
   assert.equal(ghPrUrlOfBranch({ head: "feat/x", spawnSyncImpl }).url, "https://github.com/octocat/hello-world/pull/2");
+});
+
+// Rewrites the run's implementation artifact with these lines under its file list.
+function writeListed(dir, lines) {
+  writeFileSync(join(dir, "04-implementation.md"), `# Implementation\n\n## Modified files\n${lines.join("\n")}\n`);
+}
+
+// Writes one file of the worktree, creating the directory it lives in.
+function writeInWorktree(worktree, path, body = "content\n") {
+  mkdirSync(join(worktree, path, ".."), { recursive: true });
+  writeFileSync(join(worktree, path), body);
+}
+
+// HEAD and what is staged, which a refused call must leave as they were.
+function gitPosition(worktree) {
+  return [git(["-C", worktree, "rev-parse", "HEAD"]).trim(), git(["-C", worktree, "diff", "--cached", "--name-only"])];
+}
+
+test("`run publish` stages exactly the paths the implementation listed, past the prose left in the list, and leaves the rest of the worktree alone", async (t) => {
+  const { env, id, worktree, dir } = makeRun(t, "publish-listed", { listed: ["src/slug.mjs", "docs/b.md"] });
+  writeInWorktree(worktree, "noise.md");
+  writeListed(dir, [join(worktree, "src/slug.mjs"), "", "The list is the whole worktree as `git ls-files --modified` reports it", "(58 paths, `tmp/` excluded).", "", "- `docs/b.md`"]);
+
+  const { code, out, errText } = await runCli(env, id, publishArgs(dir));
+
+  assert.equal(code, 0, `${out.join("\n")}\n${errText}`);
+  assert.match(out[1], /^COMMITTED: [0-9a-f]+ \(2 files\)$/);
+  assert.deepEqual(git(["-C", worktree, "show", "--name-only", "--format=", "HEAD"]).split("\n").filter(Boolean).sort(), ["docs/b.md", "src/slug.mjs"]);
+  assert.match(git(["-C", worktree, "status", "--porcelain"]), /\?\? noise\.md/);
+});
+
+test("[R4] `run publish` refuses `.claude/`, a lockfile, `tmp/` and a path outside the worktree, and `--extra` never overrides it", async (t) => {
+  const { env, id, worktree, dir } = makeRun(t, "publish-refusals");
+  writeInWorktree(worktree, ".claude/settings.json", "{}\n");
+  writeInWorktree(worktree, "tmp/scratch.mjs");
+  writeInWorktree(worktree, "package-lock.json", "{}\n");
+  const position = gitPosition(worktree);
+
+  writeListed(dir, [join(worktree, ".claude/settings.json"), "tmp/scratch.mjs", "/etc/passwd"]);
+  const listed = await runCli(env, id, publishArgs(dir));
+  assert.equal(listed.code, 1);
+  assert.match(listed.out[0], /^REFUSED: \.claude\/settings\.json \(under `\.claude\/`\), tmp\/scratch\.mjs \(under `tmp\/`\), \/etc\/passwd \(outside the worktree /);
+  assert.match(listed.out[1], /`--extra` adds files to the list, it never overrides this refusal/);
+
+  writeListed(dir, ["src/slug.mjs"]);
+  const lockfile = await runCli(env, id, publishArgs(dir, ["--extra", "package-lock.json"]));
+  assert.equal(lockfile.code, 1);
+  assert.equal(lockfile.out[0], "REFUSED: package-lock.json (a dependency lockfile)");
+  assert.match(lockfile.out[1], /never overrides this refusal: stop here and record it as an open item/);
+
+  const everything = await runCli(env, id, publishArgs(dir, ["--extra", "*"]));
+  assert.equal(everything.code, 1);
+  assert.match(everything.out[0], /^REFUSED: .*\.claude\/settings\.json \(under `\.claude\/`\)/);
+
+  assert.deepEqual(gitPosition(worktree), position);
+});
+
+test("[R4] the refusal of `run publish` folds the case, because `.Claude/settings.json` is the very file `.claude/settings.json` on this filesystem", async (t) => {
+  const { env, id, worktree, dir } = makeRun(t, "publish-refusal-case");
+  writeInWorktree(worktree, ".claude/settings.json", "{}\n");
+  writeInWorktree(worktree, "tmp/scratch.mjs");
+  writeInWorktree(worktree, "package-lock.json", "{}\n");
+  const position = gitPosition(worktree);
+
+  writeListed(dir, [join(worktree, ".Claude/settings.json"), "TMP/scratch.mjs", "Package-Lock.json"]);
+  const listed = await runCli(env, id, publishArgs(dir));
+  assert.equal(listed.code, 1);
+  assert.equal(listed.out[0], "REFUSED: .Claude/settings.json (under `.claude/`), TMP/scratch.mjs (under `tmp/`), Package-Lock.json (a dependency lockfile)");
+
+  writeListed(dir, ["src/slug.mjs"]);
+  const extra = await runCli(env, id, publishArgs(dir, ["--extra", ".Claude/*"]));
+  assert.equal(extra.code, 1);
+  assert.equal(extra.out[0], "REFUSED: .Claude/* (under `.claude/`)", "`--extra` in another case walked past the refusal");
+
+  assert.deepEqual(gitPosition(worktree), position);
+});
+
+test("`run publish` inside a job with a job block commits on an unavailable database, the message untouched", async (t) => {
+  const { env, id, worktree, dir, projectId } = makeRun(t, "publish-sick-home");
+  const block = { id, projectKey: "AP", createdAt: new Date().toISOString() };
+  assert.equal(recordJobBlock({ projectId, slug: SLUG, block, env }).status, "written");
+  const sick = makeSickHome(env);
+  t.after(() => sick.restore());
+
+  await runCli(env, id, publishArgs(dir));
+
+  assert.equal(git(["-C", worktree, "log", "-1", "--format=%B"]).trimEnd(), MESSAGE.trimEnd());
+});
+
+test("`run publish` inside a job with no job block on an unavailable database refuses with the store error and commits nothing", async (t) => {
+  const { env, id, worktree, dir } = makeRun(t, "publish-sick-home-no-block");
+  const position = gitPosition(worktree);
+  const sick = makeSickHome(env);
+  t.after(() => sick.restore());
+
+  const { code, errText } = await runCli(env, id, publishArgs(dir));
+
+  assert.equal(code, 1);
+  assert.match(errText, /the nightqueue database at .* is unavailable \(SQLITE_NOTADB/);
+  assert.deepEqual(gitPosition(worktree), position);
+});
+
+test("`run publish` commits the agent's message untouched, a Markdown rule or a bare subject adding no trailer, and never edits its file", async (t) => {
+  const messages = [
+    ["rule", "feat: x\n\nbody\n---\nmore\n"],
+    ["subject", "feat: x"],
+  ];
+  for (const [name, message] of messages) {
+    const { env, id, worktree, dir } = makeRun(t, `publish-untouched-${name}`);
+    writeFileSync(join(dir, "commit-message.txt"), message);
+
+    const { code, out, errText } = await runCli(env, id, publishArgs(dir));
+
+    assert.equal(code, 0, `${out.join("\n")}\n${errText}`);
+    assert.equal(git(["-C", worktree, "log", "-1", "--format=%B"]).trimEnd(), message.trimEnd(), name);
+    assert.equal(git(["-C", worktree, "log", "-1", "--format=%(trailers:key=Refs,valueonly)"]).trim(), "", name);
+    assert.equal(readFileSync(join(dir, "commit-message.txt"), "utf8"), message, `the agent's message file was edited: ${name}`);
+  }
+});
+
+test("a message carrying a `Refs:` line is rejected naming the line, and nothing is staged or committed", async (t) => {
+  const cases = [
+    ["feat: x\n\nRefs: AP-1\n", "line 3 is a `Refs:` trailer, which is reserved and never written by an agent"],
+    ["feat: x\n\nbody\n\n  refs : AP-1  \n", "line 5 is a `Refs:` trailer, which is reserved and never written by an agent"],
+  ];
+  for (const [index, [message, reason]] of cases.entries()) {
+    const { env, id, worktree, dir } = makeRun(t, `publish-refs-${index}`);
+    writeFileSync(join(dir, "commit-message.txt"), message);
+    const position = gitPosition(worktree);
+
+    const refused = await runCli(env, id, publishArgs(dir));
+
+    assert.equal(refused.code, 1);
+    assert.ok(refused.out.includes(`REJECTED: commit message — ${reason}`), refused.out.join("\n"));
+    assert.deepEqual(gitPosition(worktree), position);
+    assert.deepEqual(ghCalls(env), []);
+  }
+});
+
+test("`run publish` refuses a missing or empty message, an empty list, an extra nothing matches and a file git cannot stage", async (t) => {
+  const { env, id, worktree, dir } = makeRun(t, "publish-usage");
+  const body = join(dir, "pr-body.md");
+  const before = commitCount(worktree);
+
+  const noMessage = await runCli(env, id, ["run", "publish", "--body-file", body]);
+  assert.equal(noMessage.code, 1);
+  assert.match(noMessage.errText, /`--message-file <path>` is required: the commit message is the agent's/);
+
+  const empty = join(dir, "empty-message.txt");
+  writeFileSync(empty, "   \n");
+  const emptyMessage = await runCli(env, id, ["run", "publish", "--message-file", empty, "--body-file", body]);
+  assert.match(emptyMessage.errText, /the commit message at .*empty-message\.txt is empty/);
+
+  const emptyList = join(dir, "empty-list.md");
+  writeFileSync(emptyList, "# Implementation\n\n## Modified files\n\n## Notes\n\nnone\n");
+  const nothing = await runCli(env, id, publishArgs(dir, ["--files-from", emptyList]));
+  assert.match(nothing.errText, /lists no file under `## Modified files`: there is nothing to commit/);
+
+  const unmatched = await runCli(env, id, publishArgs(dir, ["--extra", "docs/*.md"]));
+  assert.match(unmatched.errText, /`--extra docs\/\*\.md` matches no file in /);
+
+  writeListed(dir, ["src/missing.mjs"]);
+  const missing = await runCli(env, id, publishArgs(dir));
+  assert.equal(missing.code, 1);
+  assert.match(missing.errText, /git could not stage the list in .*: .*src\/missing\.mjs/);
+  assert.equal(commitCount(worktree), before);
+});
+
+test("`run publish` stages from the list `run check 04` derived when the implementation artifact lists no file", async (t) => {
+  const { env, id, worktree, dir } = makeRun(t, "publish-derived");
+  writeFileSync(join(dir, "04-implementation.md"), "# Implementation\n\n## Done\nno list\n");
+  writeFileSync(join(dir, "04-files.generated.md"), `# Implementation (derived from git)\n\n## Modified files\n${join(worktree, "src/slug.mjs")}\n`);
+
+  const { code, out, errText } = await runCli(env, id, publishArgs(dir));
+
+  assert.equal(code, 0, `${out.join("\n")}\n${errText}`);
+  assert.match(out[1], /^COMMITTED: [0-9a-f]+ \(1 files\)$/);
+  assert.equal(readFileSync(join(dir, "04-implementation.md"), "utf8"), "# Implementation\n\n## Done\nno list\n");
 });

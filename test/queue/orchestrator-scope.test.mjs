@@ -97,7 +97,7 @@ const BASH_TABLE = [
   ["nightqueue run check 04", true],
   ["nightqueue run log", true],
   ["nightqueue run index-save", true],
-  ["nightqueue run commit", true],
+  ["nightqueue run commit", false],
   ["nightqueue run pr", true],
   ["nightqueue run start --type bug/error --commit-type fix --expect-slug fix-x", true],
   ["nightqueue run publish --message-file /runs/p/s/commit-message.txt --body-file /runs/p/s/pr-body.md", true],

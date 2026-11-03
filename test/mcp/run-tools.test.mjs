@@ -10,7 +10,7 @@ import { runDir } from "../../src/config/paths.mjs";
 import { openDb } from "../../src/memory/db.mjs";
 import { addJob, claimJobById, persistRunFacts } from "../../src/memory/jobs.mjs";
 import { saveLesson } from "../../src/memory/lessons.mjs";
-import { openQuestion, questionDigest } from "../../src/queue/gate-question.mjs";
+import { openQuestion, questionDigest } from "../../src/queue/question-text.mjs";
 import { applyRetry } from "../../src/queue/retry.mjs";
 import { recordOutcome, recordPhaseDone, recordPrUrl, recordRunFields } from "../../src/queue/run-state.mjs";
 import { ensureProject, makeHome, makeProject, projectIdOf } from "../../test-support/memory.mjs";
@@ -60,13 +60,10 @@ test("inside a job the run tools resolve the run from the job's own row", async 
   const { env, job } = makeRunningJob(t, "mcp-run-tools-inside");
   const client = await connect(t, { ...env, NIGHTQUEUE_JOB_ID: String(job.id) });
 
-  const done = payloadOf(
-    await client.callTool({ name: "run_phase_done", arguments: { phase: "triage", artifact: "01-triage.md", verdict: "CONFIRMED" } }),
-  );
+  const done = payloadOf(await client.callTool({ name: "run_set", arguments: { type: "bug/error" } }));
   assert.deepEqual({ ok: done.ok, project: done.project, slug: done.slug }, { ok: true, project: "alpha", slug: SLUG });
   assert.equal(done.path, join(runDir(ensureProject(env, "alpha"), SLUG, env), "state.json"));
 
-  payloadOf(await client.callTool({ name: "run_set", arguments: { type: "bug/error" } }));
   payloadOf(await client.callTool({ name: "run_outcome", arguments: { status: "gate", notice: "the operator has to choose" } }));
 
   const state = readState(env, "alpha", SLUG);
@@ -74,29 +71,10 @@ test("inside a job the run tools resolve the run from the job's own row", async 
     { schemaVersion: state.schemaVersion, projectId: state.projectId, slug: state.slug },
     { schemaVersion: 1, projectId: projectIdOf(env, "alpha"), slug: SLUG },
   );
-  assert.deepEqual(state.phases.map((entry) => entry.phase), ["triage"]);
   assert.equal(state.type, "bug/error");
   assert.equal("tier" in state, false, "run_set recorded a tier");
   assert.equal(state.outcome.status, "gate");
   assert.match(state.updatedAt, UTC_ISO);
-  assert.match(state.phases[0].at, UTC_ISO);
-});
-
-test("run_skip records an agent skip of a later phase and refuses a phase that already ran", async (t) => {
-  const { env, job } = makeRunningJob(t, "mcp-run-tools-skip");
-  const client = await connect(t, { ...env, NIGHTQUEUE_JOB_ID: String(job.id) });
-
-  payloadOf(await client.callTool({ name: "run_phase_done", arguments: { phase: "triage", artifact: "01-triage.md" } }));
-  const skipped = payloadOf(await client.callTool({ name: "run_skip", arguments: { phase: "qa", by: "architect", reason: "docs only" } }));
-  assert.deepEqual({ ok: skipped.ok, slug: skipped.slug }, { ok: true, slug: SLUG });
-  const state = readState(env, "alpha", SLUG);
-  assert.deepEqual({ by: state.skips.qa.by, reason: state.skips.qa.reason }, { by: "architect", reason: "docs only" });
-  assert.match(state.skips.qa.at, UTC_ISO);
-  assert.deepEqual(state.phases.map((entry) => entry.phase), ["triage"], "a skip went into phases");
-
-  const refused = await client.callTool({ name: "run_skip", arguments: { phase: "triage", by: "architect", reason: "late" } });
-  assert.equal(refused.isError, true);
-  assert.match(textOf(refused), /`triage` already ran: only a later phase can be skipped/);
 });
 
 test("inside a job a run named from the outside is refused, and nothing is written for it", async (t) => {
@@ -104,8 +82,8 @@ test("inside a job a run named from the outside is refused, and nothing is writt
   const client = await connect(t, { ...env, NIGHTQUEUE_JOB_ID: String(job.id) });
 
   const refused = await client.callTool({
-    name: "run_phase_done",
-    arguments: { phase: "triage", artifact: "01-triage.md", project: "beta", slug: "another-run" },
+    name: "run_terminate",
+    arguments: { phase: "triage", reason: "foreign", project: "beta", slug: "another-run" },
   });
   assert.equal(refused.isError, true);
   assert.match(textOf(refused), /refusing to act on project `beta` and slug `another-run` from inside job `\d+`/);
@@ -131,21 +109,21 @@ test("outside a job the project and the slug are both required, and a registered
   makeProject(t, env, "alpha");
   const client = await connect(t, env);
 
-  const missing = await client.callTool({ name: "run_phase_done", arguments: { phase: "triage", artifact: "01-triage.md" } });
+  const missing = await client.callTool({ name: "run_set", arguments: { type: "bug/error" } });
   assert.equal(missing.isError, true);
   assert.match(textOf(missing), /outside a job, `project` \(the registered NAME\) and `slug`/);
 
-  const unknown = await client.callTool({ name: "run_phase_done", arguments: { phase: "triage", project: "nope", slug: SLUG } });
+  const unknown = await client.callTool({ name: "run_set", arguments: { type: "bug/error", project: "nope", slug: SLUG } });
   assert.equal(unknown.isError, true);
   assert.match(textOf(unknown), /unknown project `nope`/);
 
-  const unsafe = await client.callTool({ name: "run_phase_done", arguments: { phase: "triage", project: "alpha", slug: "../escape" } });
+  const unsafe = await client.callTool({ name: "run_set", arguments: { type: "bug/error", project: "alpha", slug: "../escape" } });
   assert.equal(unsafe.isError, true);
   assert.match(textOf(unsafe), /invalid slug `\.\.\/escape`/);
 
-  const written = payloadOf(await client.callTool({ name: "run_phase_done", arguments: { phase: "triage", project: "alpha", slug: SLUG } }));
+  const written = payloadOf(await client.callTool({ name: "run_set", arguments: { type: "bug/error", project: "alpha", slug: SLUG } }));
   assert.equal(written.ok, true);
-  assert.deepEqual(readState(env, "alpha", SLUG).phases.map((entry) => entry.phase), ["triage"]);
+  assert.equal(readState(env, "alpha", SLUG).type, "bug/error");
 });
 
 test("`run_set` refuses `qa_stage_a` with the removed-input line, and `answers` and `lastClaim` as the runtime's, with nothing written", async (t) => {
@@ -206,9 +184,10 @@ test("`pipeline_log` ignores the sent `phases` and records the run's state.json 
   const reason = "fix loop 1: the lint check failed";
 
   payloadOf(await client.callTool({ name: "run_set", arguments: { type: "feature/refactor" } }));
-  payloadOf(await client.callTool({ name: "run_phase_done", arguments: { phase: "verification", verdict: "FAILED" } }));
-  payloadOf(await client.callTool({ name: "run_phase_done", arguments: { phase: "verification", verdict: "PASSED", reason } }));
-  payloadOf(await client.callTool({ name: "run_phase_done", arguments: { phase: "qa", verdict: "PASSED" } }));
+  const target = { projectId: projectIdOf(env, "alpha"), slug: SLUG, env };
+  recordPhaseDone({ ...target, phase: "verification", verdict: "FAILED" });
+  recordPhaseDone({ ...target, phase: "verification", verdict: "PASSED", reason });
+  recordPhaseDone({ ...target, phase: "qa", verdict: "PASSED" });
 
   const sent = [{ phase: "triage", reason: "sent by an older plugin" }, { phase: "triage" }];
   const logged = payloadOf(await client.callTool({ name: "pipeline_log", arguments: { outcome: "pr_opened", phases: sent, tier_operator: "x" } }));
@@ -228,7 +207,7 @@ test("`pipeline_log` ignores the sent `phases` and records the run's state.json 
 test("inside a job a second `pipeline_log` in the same attempt answers `already_recorded` and adds no row", async (t) => {
   const { env, job } = makeRunningJob(t, "mcp-pipeline-log-once");
   const client = await connect(t, { ...env, NIGHTQUEUE_JOB_ID: String(job.id) });
-  payloadOf(await client.callTool({ name: "run_phase_done", arguments: { phase: "triage", verdict: "PROCEED" } }));
+  recordPhaseDone({ projectId: projectIdOf(env, "alpha"), slug: SLUG, env, phase: "triage", verdict: "PROCEED" });
 
   const first = payloadOf(await client.callTool({ name: "pipeline_log", arguments: { outcome: "no_commit", gate_stop: "triage" } }));
   const second = payloadOf(await client.callTool({ name: "pipeline_log", arguments: { outcome: "pr_opened" } }));
@@ -307,10 +286,9 @@ test("a phase, a status or a call with nothing to record is refused with the acc
   const { env, job } = makeRunningJob(t, "mcp-run-tools-enums");
   const client = await connect(t, { ...env, NIGHTQUEUE_JOB_ID: String(job.id) });
 
-  const phase = await client.callTool({ name: "run_phase_done", arguments: { phase: "triagem", artifact: "01-triagem.md" } });
+  const phase = await client.callTool({ name: "run_terminate", arguments: { phase: "triagem", reason: "a typo" } });
   assert.equal(phase.isError, true);
-  assert.match(textOf(phase), /phase/);
-  assert.match(textOf(phase), /triage \| explore \| architecture \| implementation \| qa \| verification \| runtime \| commit/);
+  assert.match(textOf(phase), /unknown phase `triagem`; accepted: triage, explore, architecture, implementation, qa, verification, runtime, commit/);
 
   const status = await client.callTool({ name: "run_outcome", arguments: { status: "failed" } });
   assert.equal(status.isError, true);
@@ -447,7 +425,7 @@ test("inside a job the recall drops what the run already saw, and gives it back 
   const idsOf = (block) => [...block.matchAll(/\[L(\d+)\]/g)].map((match) => Number(match[1]));
 
   const context = payloadOf(
-    await client.callTool({ name: "context_for_phase", arguments: { target: "coder", query: "worker lease" } }),
+    await client.callTool({ name: "context_for_agent", arguments: { agent: "coder", query: "worker lease" } }),
   );
   assert.equal(context.project, "alpha");
   assert.match(context.block, /^## Applicable lessons\n- \[L\d+\] renew the lease of the worker in a finally block/);
@@ -462,29 +440,29 @@ test("inside a job the recall drops what the run already saw, and gives it back 
   assert.equal(exhausted.length, 8, "the exclusion emptied the recall instead of retrying without it");
 });
 
-test("context_for_phase `reflector` reads the job's own run whatever the call names, and outside a job the pair it names", async (t) => {
+test("context_for_agent `reflector` reads the job's own run whatever the call names, and outside a job the pair it names", async (t) => {
   const { env, job } = makeRunningJob(t, "mcp-context-reflector");
   recordRunFields({ projectId: projectIdOf(env, "alpha"), slug: SLUG, fields: { type: "bug/error" }, env });
   recordPhaseDone({ projectId: projectIdOf(env, "alpha"), slug: SLUG, phase: "triage", env });
-  const ask = { target: "reflector", project: "alpha", slug: SLUG };
+  const ask = { agent: "reflector", project: "alpha", slug: SLUG };
 
   const inside = await connect(t, { ...env, NIGHTQUEUE_JOB_ID: String(job.id) });
-  const own = payloadOf(await inside.callTool({ name: "context_for_phase", arguments: { ...ask, slug: "another-slug" } }));
+  const own = payloadOf(await inside.callTool({ name: "context_for_agent", arguments: { ...ask, slug: "another-slug" } }));
   assert.match(own.block, /## Run timeline\n1\. triage/);
   assert.match(own.block, /## Lessons given to this run\nnone recorded/);
   assert.ok(Array.isArray(own.open_items));
 
   const outside = await connect(t, env);
-  assert.match(payloadOf(await outside.callTool({ name: "context_for_phase", arguments: ask })).block, /## Run timeline\n1\. triage/);
-  const unnamed = await outside.callTool({ name: "context_for_phase", arguments: { target: "reflector", project: "alpha" } });
+  assert.match(payloadOf(await outside.callTool({ name: "context_for_agent", arguments: ask })).block, /## Run timeline\n1\. triage/);
+  const unnamed = await outside.callTool({ name: "context_for_agent", arguments: { agent: "reflector", project: "alpha" } });
   assert.equal(unnamed.isError, true);
   assert.match(textOf(unnamed), /`slug`/);
 });
 
-test("context_for_phase `reflector` outside a job refuses an unsafe slug and an unknown project, and a run never recorded has an empty timeline", async (t) => {
+test("context_for_agent `reflector` outside a job refuses an unsafe slug and an unknown project, and a run never recorded has an empty timeline", async (t) => {
   const { env } = makeRunningJob(t, "mcp-context-reflector-refusals");
   const client = await connect(t, env);
-  const ask = (args) => client.callTool({ name: "context_for_phase", arguments: { target: "reflector", ...args } });
+  const ask = (args) => client.callTool({ name: "context_for_agent", arguments: { agent: "reflector", ...args } });
 
   const unsafe = await ask({ project: "alpha", slug: "../../etc" });
   assert.equal(unsafe.isError, true);
@@ -499,23 +477,23 @@ test("context_for_phase `reflector` outside a job refuses an unsafe slug and an 
   assert.equal(unrecorded.block.includes("1. triage"), false);
 });
 
-test("context_for_phase `reflector` inside a job answers for the job's project even when the call names another", async (t) => {
+test("context_for_agent `reflector` inside a job answers for the job's project even when the call names another", async (t) => {
   const { env, job } = makeRunningJob(t, "mcp-context-reflector-foreign");
   makeProject(t, env, "beta");
   ensureProject(env, "beta");
   const inside = await connect(t, { ...env, NIGHTQUEUE_JOB_ID: String(job.id) });
 
-  const answer = payloadOf(await inside.callTool({ name: "context_for_phase", arguments: { target: "reflector", project: "beta", slug: "of-beta" } }));
+  const answer = payloadOf(await inside.callTool({ name: "context_for_agent", arguments: { agent: "reflector", project: "beta", slug: "of-beta" } }));
 
   assert.equal(answer.project, "alpha");
   assert.match(answer.block, /^## Run timeline\n/);
 });
 
-test("context_for_phase accepts `slug` on any other target and answers that target's block, with no timeline", async (t) => {
+test("context_for_agent accepts `slug` on any other agent and answers that agent's block, with no timeline", async (t) => {
   const { env } = makeRunningJob(t, "mcp-context-slug-other-target");
   const client = await connect(t, env);
 
-  const answer = payloadOf(await client.callTool({ name: "context_for_phase", arguments: { target: "coder", project: "alpha", slug: "../../etc" } }));
+  const answer = payloadOf(await client.callTool({ name: "context_for_agent", arguments: { agent: "coder", project: "alpha", slug: "../../etc" } }));
 
   assert.equal(answer.block.includes("## Run timeline"), false);
   assert.equal(answer.project, "alpha");

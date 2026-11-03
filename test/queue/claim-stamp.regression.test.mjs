@@ -162,7 +162,7 @@ function survivorAtExit(home, write) {
 for (const [name, write, kind] of [
   ["run_outcome", (run) => recordOutcome({ ...run, status: "gate", notice: QUESTION }), "outcome"],
   ["run_terminate", (run) => recordTermination({ ...run, phase: "qa", reason: QUESTION, wip: { commit: "abc" } }), "termination"],
-  ["run_phase_done", (run) => recordPhaseDone({ ...run, phase: "commit", verdict: QUESTION }), "phase"],
+  ["a phase record", (run) => recordPhaseDone({ ...run, phase: "commit", verdict: QUESTION }), "phase"],
   ["run check", (run) => recordCheck({ ...run, check: "05", memo: { line: "VERDICT: PASSED", ok: true, completed: true, digest: "d" }, done: { phase: "qa", verdict: QUESTION } }), "check"],
 ]) {
   test(`${name} from a session of attempt 1 during attempt 2 changes no slot and no phase, and attempt 2's own done still ends done`, async (t) => {
@@ -201,7 +201,6 @@ test("the real MCP tools answer a session of an earlier attempt with an error na
   for (const [name, args] of [
     ["run_outcome", { status: "gate", notice: QUESTION }],
     ["run_terminate", { phase: "qa", reason: QUESTION }],
-    ["run_phase_done", { phase: "qa", verdict: QUESTION }],
   ]) {
     const answer = await client.callTool({ name, arguments: args });
     assert.equal(answer.isError, true, name);
@@ -209,7 +208,7 @@ test("the real MCP tools answer a session of an earlier attempt with an error na
   }
 
   const state = stateOf(home);
-  assert.deepEqual(state.ignoredRecords.map((entry) => entry.kind), ["outcome", "termination", "phase"]);
+  assert.deepEqual(state.ignoredRecords.map((entry) => entry.kind), ["outcome", "termination"]);
   assert.deepEqual(state.outcome, before.outcome);
   assert.equal(state.termination, undefined);
   assert.equal(state.phases, undefined);
@@ -221,7 +220,6 @@ test("a session whose variable matches the row writes normally, with its claim o
   const client = await connectMcp(t, home, "2:host:1");
 
   for (const [name, args] of [
-    ["run_phase_done", { phase: "triage", artifact: "01-triage.md", verdict: "CONFIRMED" }],
     ["run_outcome", { status: "gate", notice: "A real question?" }],
     ["run_terminate", { phase: "qa", reason: "Stopped on purpose." }],
   ]) {
@@ -231,7 +229,7 @@ test("a session whose variable matches the row writes normally, with its claim o
 
   const state = stateOf(home);
   const stamp = { attempt: 2, session: "sess-2" };
-  assert.deepEqual([state.phases[0].claim, state.outcome.claim, state.termination.claim], [stamp, stamp, stamp]);
+  assert.deepEqual([state.outcome.claim, state.termination.claim], [stamp, stamp]);
   assert.equal(state.ignoredRecords, undefined);
 });
 
@@ -352,7 +350,7 @@ test("a late `run publish` is refused before any side effect, with its record se
   assert.deepEqual([state.branch, state.outcome, state.ignoredRecords.map((entry) => entry.kind)], ["job/live", undefined, ["outcome"]]);
 });
 
-test("run_set and run_skip of a session of an earlier attempt answer that it is over and write nothing but the set-aside", async (t) => {
+test("run_set of a session of an earlier attempt answer that it is over and write nothing but the set-aside", async (t) => {
   const home = stampHome(t, "stamp-mcp-fields");
   seedRunning(home, { attempts: 2, worker: "host:1" });
   recordRunFields({ projectId: home.projectId, slug: SLUG, fields: { branch: "job/live" }, env: home.env });
@@ -360,7 +358,6 @@ test("run_set and run_skip of a session of an earlier attempt answer that it is 
   for (const [name, args] of [
     ["run_set", { branch: "job/late" }],
     ["run_set", { type: "bug/error" }],
-    ["run_skip", { phase: "qa", by: "coder", reason: "A late skip." }],
   ]) {
     const answer = await client.callTool({ name, arguments: args });
     assert.equal(answer.isError, true, name);
@@ -368,7 +365,7 @@ test("run_set and run_skip of a session of an earlier attempt answer that it is 
   }
   const state = stateOf(home);
   assert.deepEqual([state.branch, state.type, state.skips], ["job/live", undefined, undefined]);
-  assert.deepEqual(state.ignoredRecords.map((entry) => entry.kind), ["fields", "fields", "skip"]);
+  assert.deepEqual(state.ignoredRecords.map((entry) => entry.kind), ["fields", "fields"]);
 });
 
 test("a late `run_terminate` never reaches the wip commit, and its stop is set aside", (t) => {
@@ -490,28 +487,6 @@ function liveWorktreeHome(t, name) {
 function gitIn(repo, args) {
   return execFileSync("git", args, { cwd: repo, encoding: "utf8" }).trim();
 }
-
-test("a late `run commit` commits nothing in the live worktree and writes nothing, while the live claim's commits", async (t) => {
-  const { home, repo } = liveWorktreeHome(t, "stamp-late-commit");
-  writeFileSync(join(repo, "a.txt"), "the live attempt's work\n");
-  writeFileSync(join(runDir(home.projectId, SLUG, home.env), "04-implementation.md"), `# Implementation\n\n## Modified files\n${join(repo, "a.txt")}\n`);
-  const message = join(makeDir(t, "late-commit-message"), "message.txt");
-  writeFileSync(message, "fix: the worker\n");
-  const head = gitIn(repo, ["rev-parse", "HEAD"]);
-  const before = stateBytes(home);
-
-  const late = await runAsClaim(home, "1:host:1", ["commit", "--message-file", message]);
-
-  assert.equal(late.code, 1);
-  assert.match(late.err[0], OVER_NOTHING_WRITTEN);
-  assert.equal(gitIn(repo, ["rev-parse", "HEAD"]), head);
-  assert.equal(gitIn(repo, ["status", "--porcelain"]), "?? a.txt");
-  assert.equal(stateBytes(home), before);
-
-  const live = await runAsClaim(home, "2:host:1", ["commit", "--message-file", message]);
-  assert.equal(live.code, 0, live.err.join("\n"));
-  assert.notEqual(gitIn(repo, ["rev-parse", "HEAD"]), head);
-});
 
 test("a late `run pr` writes no template and no record, with or without a body, while the live claim's records the template", async (t) => {
   const { home } = liveWorktreeHome(t, "stamp-late-pr");

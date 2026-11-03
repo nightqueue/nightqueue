@@ -1,0 +1,104 @@
+{
+  "name": "resolve",
+  "version": "0.7.0",
+  "phases": [
+    { "id": null, "check": "00", "artifact": "00-brief.md", "sections": ["## Brief"], "verdicts": [], "agents": [] },
+    {
+      "id": "triage",
+      "check": "01",
+      "artifact": "01-triage.md",
+      "sections": ["## Verdict", "## Validated brief", "## Out of scope", "## Request gaps"],
+      "verdicts": ["PROCEED", "NO-CHANGE-NEEDED", "NOT-REPRODUCIBLE"],
+      "agents": ["triager"]
+    },
+    {
+      "id": "explore",
+      "check": "02",
+      "artifact": "02-explore.md",
+      "sections": ["## File map", "## Access map", "## Third-party libraries"],
+      "verdicts": ["OK"],
+      "agents": ["explore"]
+    },
+    {
+      "id": "architecture",
+      "check": "03",
+      "artifact": "03-plan.md",
+      "sections": ["## Implementation plan", "## Assumptions", "## Pre-mortem", "## Identified risks"],
+      "verdicts": ["OK"],
+      "agents": ["architect"]
+    },
+    {
+      "id": "implementation",
+      "check": "04",
+      "artifact": "04-implementation.md",
+      "sections": ["## Modified files"],
+      "verdicts": ["OK", "GENERATED"],
+      "agents": ["coder"],
+      "derivesFileList": true
+    },
+    {
+      "id": "qa",
+      "check": "05",
+      "artifact": "05-qa.md",
+      "sections": ["## Proven breaks", "## Validated risks", "## Invalidated assumptions", "## Generated PoCs", "## Verdict"],
+      "verdicts": ["APPROVED", "NEEDS FIX", "NEEDS DISCUSSION", "SKIPPED"],
+      "agents": ["qa-triage", "qa-analyst", "qa-prover"],
+      "rounds": true,
+      "appendable": true,
+      "stages": {
+        "analyst": { "sections": ["## Proven breaks", "## Break hypotheses", "## Test recipe", "## Validated risks", "## Invalidated assumptions", "## Generated PoCs", "## Verdict"] },
+        "triage": { "sections": ["## Diff classification", "## New risk", "## QA mode"] }
+      }
+    },
+    {
+      "id": "verification",
+      "check": "06",
+      "artifact": "06-verification.md",
+      "sections": ["## Checks run", "## Verification"],
+      "verdicts": ["PASSED", "PASSED-STATIC", "FAILED"],
+      "agents": ["verifier"],
+      "rounds": true
+    },
+    {
+      "id": "runtime",
+      "check": "07",
+      "artifact": "07-runtime.md",
+      "sections": ["## Runtime verdict"],
+      "verdicts": ["CONFIRMED", "NOT-MET", "SYMPTOM-PERSISTS", "NEEDS-DEVICE", "UNAVAILABLE"],
+      "agents": ["verifier"],
+      "rounds": true
+    },
+    { "id": "commit", "check": null, "artifact": null, "sections": [], "verdicts": ["PR opened", "Draft PR opened"], "agents": [] }
+  ],
+  "models": {
+    "triager": "sonnet",
+    "explore": "haiku",
+    "architect": "opus",
+    "coder": "opus",
+    "qa-triage": "sonnet",
+    "qa-analyst": "sonnet",
+    "qa-prover": "haiku",
+    "verifier": "haiku",
+    "reflector": "haiku"
+  },
+  "targets": ["triager", "explore", "architect", "coder", "coder-fix", "verifier", "runtime", "qa-triage", "qa-lite", "qa-analyst", "qa-prover", "reflector"],
+  "recordable": ["type", "commitType", "qaMode", "termination", "slug", "pipelineLoops"],
+  "track": [
+    { "number": 0, "name": "brief", "agent": null, "modelAgent": null, "phase": null },
+    { "number": 1, "name": "triager", "agent": "triager", "modelAgent": "triager", "phase": "triage" },
+    { "number": 2, "name": "explore", "agent": "explore", "modelAgent": "explore", "phase": "explore" },
+    { "number": 3, "name": "architect", "agent": "architect", "modelAgent": "architect", "phase": "architecture" },
+    { "number": 4, "name": "coder", "agent": "coder", "modelAgent": "coder", "phase": "implementation" },
+    { "number": 5, "name": "qa-guardian", "agent": "qaGuardian", "modelAgent": "qa-analyst", "phase": "qa" },
+    { "number": 6, "name": "verifier", "agent": "verifier", "modelAgent": "verifier", "phase": "verification" },
+    { "number": 7, "name": "runtime", "agent": null, "modelAgent": null, "phase": "runtime" },
+    { "number": 8, "name": "commit · PR", "agent": null, "modelAgent": null, "phase": "commit" }
+  ],
+  "constants": {
+    "maxFixIterations": 2,
+    "qaMethods": "automated; + api for an API change; + emulator for a UI change in an Expo repo; + browser for a UI change in a web repo"
+  },
+  "renumbered": { "06.5": "07", "05a": "05" },
+  "gateArtifact": "03-plan.md",
+  "fileListFallback": "04-files.generated.md"
+}

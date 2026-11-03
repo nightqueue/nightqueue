@@ -1,10 +1,9 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { evaluateCheck } from "../../src/queue/check-contract.mjs";
-import { validConsolidatedText } from "../../src/cli/run.mjs";
-import { appendedText, proverRound } from "../../src/cli/run-append.mjs";
-import { lastRound, nextRound, roundDefects, roundsOf, unclosedFenceOf, withClosedFence } from "../../src/queue/phase-artifacts.mjs";
-import { aggregateVerdict, appendRoundText, breakItems, consolidationOf, roundSource } from "../../src/queue/qa-rounds.mjs";
+import { evaluateCheck } from "../../plugin/skills/resolve/pipeline/contract.mjs";
+import { proverRound } from "../../src/cli/run-append.mjs";
+import { appendedText, appendRoundText, lastRound, nextRound, roundDefects, roundsOf, unclosedFenceOf, withClosedFence } from "../../src/queue/rounds.mjs";
+import { aggregateVerdict, breakItems, consolidationOf, roundSource, validConsolidatedText } from "../../plugin/skills/resolve/pipeline/consolidation.mjs";
 
 const ANALYST = "## Round 1\n## Mapped rules\n- rule A\n\n## Proven breaks\nNone\n\n## Break hypotheses\n- H1 · group: g1\n\n## Test recipe\nnode --test\n\n## Validated risks\n- R1 → hypothesis H1\n\n## Invalidated assumptions\nNone\n\n## Generated PoCs\nNone — this request writes no runtime PoC\n\n## Verdict\nAPPROVED\n";
 

@@ -33,12 +33,12 @@ Independent launches go in parallel; the runtime waits for every subagent and ba
 Read at Phase 0 when the prompt carries `RUN FACTS`. The block holds records, never a decision: you decide where to continue, from its verdicts and the artifacts' existence; hand artifact paths to the next agent, never read them to decide.
 
 <!-- generic: moves to the pipeline template in R6 -->
-- Continue after the last recorded phase whose artifact exists in `RUN_DIR` (`run check <NN>` tells, never Read/Glob), by that phase's table for its verdict. A recorded phase whose artifact is missing → redo from that phase; `-` names none to check.
+- Continue after the last recorded phase whose artifact exists in `RUN_DIR` (`run check <NN>` tells, never Read/Glob), by its `NEXT:`. A recorded phase whose artifact is missing → redo from that phase; `-` names none to check.
 - Reuse `Branch`/`Worktree`. A `wip(<slug>)` commit on the branch is the previous attempt's work: start on it, never reset or rewrite it; `run publish` folds it into the delivery commit.
 - Answers apply at the phase that paused.
 
 **Resolve's exceptions:**
-- An answer at Phase 3: `run check 03` first, then its table and answer rule (approved → Phase 4; adjustments → relaunch the architect, `note` = the answer; a Type answer → `run_set` `type`).
+- An answer at Phase 3: `run check 03` first, then its answer rule (approved → Phase 4; adjustments → relaunch the architect, `note` = the answer; a Type answer → `run_set` `type`).
 - A retried `NOT-REPRODUCIBLE`/`NO-CHANGE-NEEDED` triage → relaunch the triager.
 - Phase 5 re-runs whole; a `qa` `SKIPPED` has no artifact, so its triage check decides.
 
@@ -46,7 +46,7 @@ Read at Phase 0 when the prompt carries `RUN FACTS`. The block holds records, ne
 
 ### Phase 0 — Start
 
-1. **Run resume.** When the prompt carries a `RUN FACTS` block, read `## Resume` and follow it before step 2. Its tables are in `references/phases.md`: read that file first.
+1. **Run resume.** When the prompt carries a `RUN FACTS` block, read `references/phases.md`, then `## Resume`, and follow it before step 2.
 
 2. **Start the run**: run `nightqueue run start` (outside a job add
    `--project <project> --slug <a short kebab-case slug of the request>`). It answers one JSON
@@ -64,8 +64,8 @@ Read at Phase 0 when the prompt carries `RUN FACTS`. The block holds records, ne
 
 5. Every agent definition carries the shell rule; every test command a phase runs goes under an explicit `timeout`.
 
-6–7. **After the first subagent returns** read `references/phases.md`, once: the artifact gate,
-   the records and each phase's table.
+6–7. **After every `run check`, do what its last line says: `NEXT: <action>`.** After the first
+   subagent returns read `references/phases.md`, once: the actions and the judgment they leave.
 
 8. No execution log by hand: never time a phase nor keep a table — `run report` derives them.
 
@@ -91,7 +91,7 @@ Read at Phase 0 when the prompt carries `RUN FACTS`. The block holds records, ne
 
 Fill one block and launch it: the filled block, fence removed, is the whole `prompt`, with `subagent_type` = its
 `AGENT` and `model` = its `MODEL`, from the `models` `run start` answered. No other call is needed.
-Never add a line: relaunch context goes in `NOTE:` (the tables' `note`),
+Never add a line: relaunch context goes in `NOTE:` (`note=` of `NEXT:`),
 an empty `STAGE:` is left out. `<RETURN>` is these three lines:
 
 ```

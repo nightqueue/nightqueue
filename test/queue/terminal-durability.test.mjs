@@ -25,7 +25,7 @@ const WRITE_MS = 2000;
 function copyRuntime(t, name) {
   const dir = join(makeDir(t, name), "old-runtime");
   mkdirSync(dir, { recursive: true });
-  for (const entry of RUNTIME_ENTRIES) cpSync(join(PACKAGE_ROOT, entry), join(dir, entry), { recursive: true });
+  for (const entry of [...RUNTIME_ENTRIES, "plugin"]) cpSync(join(PACKAGE_ROOT, entry), join(dir, entry), { recursive: true });
   return realpathSync(dir);
 }
 

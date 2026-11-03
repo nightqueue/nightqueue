@@ -5,7 +5,7 @@ import { laneName, parseAttemptMarker, parseEventLine } from "./stream.mjs";
 import { eachLineYielding } from "./yielding-lines.mjs";
 
 const RECALL_TOOL_RE = /__(lesson_recall|memory_recall|index_recall)$/;
-const CONTEXT_TOOL_RE = new RegExp(`__(${REMOVED_CONTEXT_TOOL}|context_for_phase)$`);
+const CONTEXT_TOOL_RE = new RegExp(`__(${REMOVED_CONTEXT_TOOL}|context_for_phase|context_for_agent)$`);
 export const LESSONS_HEADING = "Applicable lessons";
 export const MEMORY_HEADING = "Project memory";
 const CONTEXT_SECTIONS = new Set([LESSONS_HEADING, MEMORY_HEADING]);
@@ -194,7 +194,8 @@ function callFields(block, lane) {
   }
   const context = CONTEXT_TOOL_RE.exec(name);
   if (!context) return null;
-  const target = typeof block.input?.target === "string" && block.input.target ? block.input.target : null;
+  const asked = block.input?.agent ?? block.input?.target;
+  const target = typeof asked === "string" && asked ? asked : null;
   return { tool: context[1], kind: "context", query: null, target, agent: target ?? agent, phase: PHASES.get(target) ?? lane.phase, calls: 1 };
 }
 

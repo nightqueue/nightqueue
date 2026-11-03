@@ -2,8 +2,9 @@ import assert from "node:assert/strict";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { test } from "node:test";
 import { PHASE_TARGETS } from "../src/mcp/phase-context.mjs";
-import { evaluateCheck } from "../src/queue/check-contract.mjs";
-import { PHASE_NAMES } from "../src/queue/resume.mjs";
+import { PHASE_ARTIFACTS } from "../plugin/skills/resolve/pipeline/artifacts.mjs";
+import { evaluateCheck } from "../plugin/skills/resolve/pipeline/contract.mjs";
+import { phaseNamesOf } from "../src/queue/pipeline-package.mjs";
 import { AGENT_MODELS, PIPELINE_CONSTANTS } from "../src/queue/routing.mjs";
 import { RUN_OUTCOME_STATUSES } from "../src/queue/run-state.mjs";
 import { buildPrompt } from "../src/queue/spawn.mjs";
@@ -20,7 +21,7 @@ const QA_PHASE = readFileSync(new URL("../plugin/skills/resolve/references/qa-ph
 const OPERATOR = readFileSync(new URL("../plugin/agents/operator.md", import.meta.url), "utf8");
 const CLASSIFY = readFileSync(new URL("../src/queue/classify.mjs", import.meta.url), "utf8");
 const TOOLS = readFileSync(new URL("../src/mcp/tools.mjs", import.meta.url), "utf8");
-const CLI_RUN = ["cli/run.mjs", "cli/run-publish.mjs", "cli/run-start.mjs", "cli/run-report.mjs", "queue/phase-artifacts.mjs"].map((file) => readFileSync(new URL(`../src/${file}`, import.meta.url), "utf8")).join("\n");
+const CLI_RUN = ["cli/run.mjs", "cli/run-publish.mjs", "cli/run-start.mjs", "cli/run-report.mjs", "queue/rounds.mjs"].map((file) => readFileSync(new URL(`../src/${file}`, import.meta.url), "utf8")).join("\n");
 const REPORT_LAYOUT = readFileSync(new URL("../plugin/skills/resolve/references/report.md", import.meta.url), "utf8");
 const QA_AGENT = readFileSync(new URL("../plugin/agents/qa-guardian.md", import.meta.url), "utf8");
 
@@ -44,7 +45,7 @@ function resumeSection() {
 
 // The target every per-phase placeholder of a plugin text names, in the order the prompts appear.
 function contextTargets(text) {
-  return [...text.matchAll(/`context_for_phase` \(target: "([a-z]+)"\)/g)].map((match) => match[1]);
+  return [...text.matchAll(/`context_for_(?:phase|agent)` \(target: "([a-z]+)"\)/g)].map((match) => match[1]);
 }
 
 // The `## Inside a run` section of one agent definition.
@@ -56,7 +57,7 @@ function runSection(agent) {
 test("every agent of a run fetches its own context block, with a target the tool accepts", () => {
   const targets = { triager: "triager", explore: "explore", architect: "architect", coder: "coder", verifier: "verifier", "qa-guardian": "qa", reflector: "reflector" };
   for (const [agent, target] of Object.entries(targets)) {
-    assert.ok(runSection(agent).includes(`\`target: "${target}"\``), `${agent} does not fetch its context with \`${target}\``);
+    assert.ok(runSection(agent).includes(`\`agent: "${target}"\``), `${agent} does not fetch its context with \`${target}\``);
     assert.ok(PHASE_TARGETS.includes(target), `${agent} names \`${target}\`, which the context block does not accept`);
   }
   for (const text of [SKILL, QA_PHASE]) {
@@ -117,7 +118,7 @@ test("the fast tracks are gone: no fast block, no tier scoping note, and the fix
   assert.equal(/`routing` row/.test(SKILL), false, "a phase still reads a routing row");
   assert.equal(/Tier scoping/.test(SKILL), false, "a tier scoping note survived");
   assert.match(passageAt("- **Maximum of iterations**:"), /\*\*max 2 fix iterations\*\*/, "the fix loop no longer states its limit");
-  assert.match(passageAt("| `VERDICT: PASSED` |"), /Phase 7 first unless the change is purely static/);
+  assert.match(passageAt("- `VERDICT: PASSED`,"), /a purely static change takes Phase 8 instead/);
   assert.match(
     passageAt("### Phase 7 —").slice(0, 300).replace(/\n> /g, " "),
     /A purely static change \(typo, config, rename, types, pure logic already covered by a test\) → does not execute: the Phase 6 checks are enough\./,
@@ -138,13 +139,13 @@ function phase5Text() {
 test("Phase 5 takes the QA mode from the `QA-MODE:` line of run check 05 --stage triage, and nothing else", () => {
   const phase5 = phase5Text();
   assert.ok(phase5.includes("**Triage first:** 1 qa-guardian with the `qa-triage` block, then `nightqueue run check 05 --stage triage`."), "Phase 5 no longer starts with the triage");
-  assert.ok(phase5.includes("| `QA-MODE: skip — <why>` | recorded by the check; Phase 6, no attack lane |"), "a skip no longer goes to Phase 6 with no attack lane");
-  assert.ok(phase5.includes("| `QA-MODE: lite — <why>` | one qa-guardian with `qa-lite` |"), "lite lost its lane");
-  assert.ok(phase5.includes("| `QA-MODE: full — <why>` | Stage A analyst then N provers, then `run check 05` consolidates |"), "full lost its stages");
-  assert.ok(phase5.includes("| `MISSING` | relaunch once (`note` = the lines); still → `lite`, ⚠️ open item |"), "a persisting triage MISSING no longer falls to lite");
-  assert.ok(phase5.includes("The `QA-MODE:` line decides, and nothing else."), "something else may decide the mode");
+  assert.ok(phase5.includes("`skip` is recorded by the check and has no attack lane"), "a skip no longer goes on with no attack lane");
+  assert.ok(phase5.includes("`lite` is one lane"), "lite lost its lane");
+  assert.ok(phase5.includes("`full` is Stage A analyst then N provers, then `run check 05` consolidates"), "full lost its stages");
+  assert.ok(phase5.includes("A triage that stays `MISSING` falls to `lite`, ⚠️ open item."), "a persisting triage MISSING no longer falls to lite");
+  assert.ok(phase5.includes("The `QA-MODE:` line decides, and nothing else"), "something else may decide the mode");
   assert.match(SKILL, /`CONFIRM:`,\s+`QA-MODE:`,\s+`QA-STAGE:`,\s+`INVALIDATED:`/, "the check line list does not carry the QA-MODE line after CONFIRM");
-  assert.ok(folded(QA_PHASE).includes("Its `QA-MODE:` line decides, and nothing else."), "qa-phase.md no longer reads the mode from the triage check");
+  assert.ok(folded(QA_PHASE).includes("Its `QA-MODE:` line decides, and nothing else"), "qa-phase.md no longer reads the mode from the triage check");
   assert.match(folded(QA_PHASE), /\*\*skip → no attack lane:\*\* the check recorded it; Phase 6, never `run check 05`\./, "qa-phase.md no longer routes a skip");
 });
 
@@ -174,16 +175,13 @@ test("a QA skip leaves the verifier's launch and its gate unconditional", () => 
   assert.equal(/skip/i.test(phase6.slice(0, phase6.indexOf("**Gate and fix loop:**"))), false, "a skip now conditions the verifier's launch");
 });
 
-test("a QA NEEDS FIX opens Phase 6 with coder-fix, and Phase 6 routes the stage and pre-existing lines", () => {
+test("what `NEXT:` leaves to judgment on a QA verdict stays written: the PoCs to turn green, the open items, the pre-existing line", () => {
   const phase5 = SKILL.slice(SKILL.indexOf("### Phase 5 —"), SKILL.indexOf("### Phase 6 —"));
-  const row = phase5.split("\n").find((line) => line.startsWith("| `VERDICT: NEEDS FIX` |"));
-  assert.ok(row.includes("Phase 6 opens with `coder-fix`"), "NEEDS FIX no longer goes to the coder first");
-  assert.ok(row.endsWith("then the verifier |"), "the verifier no longer follows the first fix lane");
-  assert.ok(phase5.includes("| `VERDICT: APPROVED` | Phase 6, with the PoCs as a regression net |"), "the APPROVED row changed");
-  assert.ok(phase5.includes("| `VERDICT: NEEDS DISCUSSION` | ⚠️ mandatory open item of Phase 9, then Phase 6 |"), "the NEEDS DISCUSSION row changed");
+  assert.ok(phase5.includes("`coder-fix` takes `## Proven breaks` to fix and `## Generated PoCs` to turn green"), "the fix lane no longer names what it fixes");
+  assert.ok(phase5.includes("the PoCs of an `APPROVED` stay a regression net"), "APPROVED lost its regression net");
+  assert.ok(phase5.includes("- `VERDICT: NEEDS DISCUSSION` → ⚠️ mandatory open item of Phase 9."), "NEEDS DISCUSSION lost its open item");
   const phase6 = SKILL.slice(SKILL.indexOf("### Phase 6 —"), SKILL.indexOf("### Phase 7 —"));
-  assert.ok(phase6.includes("| `VERDICT: <any> (stage N)` |"), "Phase 6 has no row for a stage round");
-  assert.ok(phase6.includes("| `OPEN: pre-existing-failure — …` |"), "Phase 6 has no row for a pre-existing failure");
+  assert.ok(phase6.includes("- `OPEN: pre-existing-failure — …` → ⚠️ open item of Phase 9 and a `Pre-existing failure:` line"), "Phase 6 lost the pre-existing failure line");
 });
 
 test("the stage-verifier and pre-existing-failure rules live once, in the verifier's definition", () => {
@@ -201,8 +199,8 @@ test("the stage-verifier and pre-existing-failure rules live once, in the verifi
 
 test("Phase 5 pauses nothing and terminates nothing: its findings are routed or open items", () => {
   const phase5 = phase5Text();
-  assert.ok(phase5.includes("| `MISSING` still (Stage A likewise) | Phase 6, ⚠️ open item |"), "a persisting QA MISSING no longer proceeds to Phase 6");
-  assert.ok(phase5.includes("| `OPEN: …` | ⚠️ mandatory open item of Phase 9; the verdict is unchanged |"), "an OPEN line no longer becomes an open item");
+  assert.ok(phase5.includes("- `MISSING` still (Stage A likewise), or a second `INVALIDATED:` recorded in `## Decisions taken` → ⚠️ open item."), "a persisting QA MISSING is no longer an open item");
+  assert.ok(phase5.includes("- `OPEN: …` → ⚠️ mandatory open item of Phase 9; the verdict is unchanged."), "an OPEN line no longer becomes an open item");
   assert.equal(phase5.includes("`GATE:"), false, "Phase 5 still routes a gate check 05 no longer prints");
   assert.equal(phase5.includes("## Identified risks"), false, "a plan without risks still terminates at Phase 5");
   assert.ok(folded(QA_PHASE).includes("if it persists, Phase 6, ⚠️ open item"), "qa-phase.md no longer sends a persisting Stage A MISSING to Phase 6");
@@ -211,29 +209,24 @@ test("Phase 5 pauses nothing and terminates nothing: its findings are routed or 
 
 test("Phase 3 pauses once, on a filled question, and its answer runs the check before Phase 4", () => {
   const phase3 = folded(SKILL.slice(SKILL.indexOf("### Phase 3 —"), SKILL.indexOf("### Phase 4 —")));
-  const missingRow = phase3.slice(phase3.indexOf("| `MISSING` |"), phase3.indexOf("| `OPEN: …` |"));
-  assert.ok(missingRow.includes("still → terminate (⚠️ open item)"), "a persisting MISSING no longer terminates");
-  assert.ok(missingRow.includes("on a re-triage from Phase 7 → Phase 8 with `--draft`"), "a MISSING on a re-triage terminates with code already written");
-  assert.ok(phase3.includes("| `OPEN: …` | ⚠️ open item of Phase 9 |"), "an OPEN line of check 03 is no longer an open item");
-  assert.ok(phase3.includes("| `TYPE-MISMATCH: … — triage: bug/error …` | stays bug/error, Phase 4"), "a Type divergence on a bug still pauses");
-  assert.ok(phase3.includes('the one pause: `run_outcome` with `status: "gate"`'), "the CONFIRM row no longer pauses");
-  assert.ok(phase3.includes("| `CONFIRM: answered (<at>)` | the answer below, then Phase 4 |"), "an answered question has no row");
+  assert.ok(phase3.includes("on `… — triage: bug/error …` it stays bug/error"), "a Type divergence on a bug still pauses");
+  assert.ok(phase3.includes('the one pause: `run_outcome` with `status: "gate"`'), "the gate action no longer pauses");
   assert.ok(phase3.includes("the last entry of `Answers:` in `RUN FACTS` (a job with no run directory yet: the `OPERATOR ANSWER TO THE GATE:` line)"), "the answer paragraph no longer names where the answer arrives");
   assert.equal(phase3.includes("`GATE:"), false, "Phase 3 still routes a gate check 03 no longer prints");
   assert.ok(phase3.includes("run `run check 03` first, before Phase 4, whatever the block says"), "the answer may skip the check, so it never reaches the coder");
   assert.ok(phase3.includes("Any other answer → relaunch the architect once (🔁, `note` = the answer), then `run check 03` again"), "an answer that changes the plan no longer reaches the architect");
   assert.ok(phase3.includes("an interactive run's chat answer counts as `CONFIRM: answered`"), "an interactive answer never prints the answered line, so it would pause forever");
-  assert.ok(resumeSection().includes("An answer at Phase 3: `run check 03` first, then its table and answer rule"), "a resumed run skips the Phase 3 answer rule");
+  assert.ok(resumeSection().includes("An answer at Phase 3: `run check 03` first, then its answer rule"), "a resumed run skips the Phase 3 answer rule");
   const architect = folded(runSection("architect"));
   assert.ok(architect.includes("Each row carries ONE status, `covered` or `not-covered`: the one the plan ships."), "the architect prompt lost the single-status rule");
   assert.ok(architect.includes("An either/or decision is taken by you and recorded in `## Decisions taken`, never left in a row's Status or Reason."), "the architect prompt lets an either/or land in a coverage row");
   assert.ok(architect.includes("drops the answered `## Requires user confirmation`; keep that section only for a NEW question."), "an answered relaunch keeps the settled confirmation");
 });
 
-test("the only literal pause of the skill is the Phase 3 row, and from Phase 5 on nothing pauses or terminates", () => {
+test("the only literal pause of the skill is the Phase 3 gate action, and from Phase 5 on nothing pauses or terminates", () => {
   const pauses = SKILL.split("\n").filter((line) => line.includes('status: "gate"'));
   assert.equal(pauses.length, 1, pauses.join("\n"));
-  assert.ok(pauses[0].startsWith("| `CONFIRM: requires-user-confirmation` |"), pauses[0]);
+  assert.ok(pauses[0].startsWith("- `NEXT: gate <question>` →"), pauses[0]);
   assert.ok(SKILL.slice(SKILL.indexOf("### Phase 3 —"), SKILL.indexOf("### Phase 4 —")).includes(pauses[0]), "the pause left Phase 3");
   const tail = [SKILL.slice(SKILL.indexOf("### Phase 5 —")), QA_PHASE, PHASE_8, PHASE_9.replace(/a\s+terminated run carries `run_terminate`'s `notice` verbatim/, "")].join("\n");
   for (const gone of ["run_terminate", "→ terminate", "never pause twice", "Never pause twice", "same gate code", '"gate"', "ask the user"]) {
@@ -247,11 +240,9 @@ test("a fix limit, a re-triage stop and an unprovable runtime deliver a pull req
   const phase6 = folded(SKILL.slice(SKILL.indexOf("### Phase 6 —"), SKILL.indexOf("### Phase 7 —")));
   const phase7 = folded(SKILL.slice(SKILL.indexOf("### Phase 7 —"), SKILL.indexOf("### Phase 8 —")));
   assert.ok(phase6.includes("Phase 8 with `--draft`, one `Remaining failure: <what>` line per failure or break still open"), "the fix limit no longer opens a draft");
-  assert.ok(phase6.includes("| `MISSING` still | Phase 8 with `--draft`, `Remaining failure: verification produced no verdict` |"), "a persisting verification MISSING no longer opens a draft");
   assert.ok(phase6.includes("Phase 7 not viable (no environment) → Phase 8, `Not tested:` in the body, ⚠️ open item"), "PASSED-STATIC still asks the user");
-  assert.ok(phase7.includes("| `NEEDS-DEVICE` | Phase 8, the device script verbatim in the body, `Not tested:`, ⚠️ open item |"), "NEEDS-DEVICE no longer proceeds to Phase 8");
-  assert.ok(phase7.includes("| `VERDICT: UNAVAILABLE` | Phase 8, `Not tested:` in the body, ⚠️ open item |"), "UNAVAILABLE no longer proceeds to Phase 8");
-  assert.ok(phase7.includes("still → Phase 8, `Not tested:` in the body, ⚠️ open item"), "a persisting runtime-no-attempt no longer proceeds to Phase 8");
+  assert.ok(phase7.includes("- `NEEDS-DEVICE` → the device script verbatim in the body, `Not tested:`, ⚠️ open item."), "NEEDS-DEVICE lost its device script");
+  assert.ok(phase7.includes("- `VERDICT: UNAVAILABLE`, or a `GATE: runtime-no-attempt` still there after its relaunch"), "UNAVAILABLE and a persisting runtime-no-attempt lost their open item");
   assert.ok(phase7.includes("anything but `VERDICT: PROCEED` or stays `MISSING`: Phase 8 with `--draft`"), "a failed re-triage no longer opens a draft");
   assert.ok(folded(PHASE_8).includes("A limit of Phase 6 or 7 adds `--draft`"), "Phase 8 no longer names the draft flag");
   assert.ok(folded(PHASE_8).includes("→ commit it, ⚠️ open item."), "mixed hunks still stop the run");
@@ -260,8 +251,7 @@ test("a fix limit, a re-triage stop and an unprovable runtime deliver a pull req
 
 test("a second INVALIDATED is recorded as a decision, and a further one is bounded by two architect rounds", () => {
   const phase5 = folded(SKILL.slice(SKILL.indexOf("### Phase 5 —"), SKILL.indexOf("### Phase 6 —")));
-  assert.ok(phase5.includes("| `INVALIDATED: …`, the first | relaunch the **architect** once (🔁, `note` = the lines), then Phase 4 with the revised plan |"), "Phase 5 lost the one architect relaunch on INVALIDATED");
-  assert.ok(phase5.includes("| `INVALIDATED: …`, a second on the same assumption or any after two architect rounds | relaunch the architect to record it in `## Decisions taken`, then the `VERDICT:` row, ⚠️ open item |"), "a further INVALIDATED no longer ends in a recorded decision");
+  assert.ok(phase5.includes("a second `INVALIDATED:` recorded in `## Decisions taken` → ⚠️ open item"), "a further INVALIDATED no longer ends in a recorded decision");
   assert.equal(resumeSection().includes("RESTORED WIP"), false, "the Resume section still reads a RESTORED WIP line nothing prints");
   assert.equal(buildPrompt({ job: { prompt: "x" } }).includes("RESTORED WIP"), false, "the prompt still carries a RESTORED WIP line");
   assert.ok(resumeSection().includes("A `wip(<slug>)` commit on the branch is the previous attempt's"), "the Resume section no longer tells the run to start on the kept wip commit");
@@ -317,7 +307,7 @@ test("the run is recorded with the run_* tools, under the argument names the han
       assert.ok(source.includes(`${arg}:`), `the skill sends \`${arg}\` to \`${tool}\`, whose schema has no such argument`);
     }
   }
-  assert.ok(PHASE_NAMES.includes("implementation"), "the resume order lost a canonical phase");
+  assert.ok(phaseNamesOf(null).includes("implementation"), "the resume order lost a canonical phase");
   assert.ok(SKILL.includes("`run check` records each phase and `run publish` the delivery"), "the skill no longer leaves the phase records to the runtime");
 });
 
@@ -338,15 +328,15 @@ test("every artifact gate of the skill is one `nightqueue run check` call the CL
   assert.match(gate, /never\s+with `ls` or Read/, "the gate no longer forbids checking an artifact by hand");
   for (const phase of ["01", "02", "03", "04", "05", "06", "07"]) {
     assert.ok(`${SKILL}${QA_PHASE}`.includes(`nightqueue run check ${phase}`), `the gate of phase ${phase} is not a \`run check\` call`);
-    assert.ok(CLI_RUN.includes(`["${phase}", {`), `the skill calls \`run check ${phase}\`, a phase the CLI does not know`);
+    assert.ok(PHASE_ARTIFACTS.has(phase), `the skill calls \`run check ${phase}\`, a phase the CLI does not know`);
   }
   assert.ok(`${SKILL}${QA_PHASE}`.includes("nightqueue run check 05 --stage analyst"), "the QA stage A gate is not a `run check 05 --stage analyst` call");
   assert.equal(SKILL.includes("run check 00"), false, "the skill still writes the Brief by hand and gates it with `run check 00`");
-  assert.ok(CLI_RUN.includes('["00", {'), "the CLI dropped `run check 00`, which an older plugin still calls");
+  assert.ok(PHASE_ARTIFACTS.has("00"), "the CLI dropped `run check 00`, which an older plugin still calls");
   assert.equal(/existence gate \(step 9\)/.test(SKILL), false, "a phase still applies the gate by hand");
   assert.equal(/ls [`<]*ARTIFACT_PATH/.test(SKILL), false, "a gate still checks an artifact with `ls`");
   assert.equal(/git -C <CWD> diff --name-only/.test(SKILL), false, "the agent still derives the file list of Phase 4 itself");
-  assert.ok(SKILL.includes("`MISSING: ## Modified files (no changed files)`"), "Phase 4 no longer reads the empty-worktree answer");
+  assert.ok(SKILL.includes("`NEXT: terminate MISSING: ## Modified files (no changed files)`"), "Phase 4 no longer reads the empty-worktree answer");
 });
 
 test("the QA echo is gone, and the pair that replaces it is really in the flow", () => {
@@ -354,10 +344,7 @@ test("the QA echo is gone, and the pair that replaces it is really in the flow",
   assert.equal(/echo line per section/.test(QA_AGENT), false, "the qa-guardian agent still returns the echo of the plan");
   assert.equal(SKILL.includes("Validation of the QA echo"), false, "the orchestrator still audits an echo nobody returns");
   assert.ok(runSection("qa-guardian").includes("`<RUN_DIR>/03-plan.md` (open it only AFTER step 0"), "the QA lanes stopped reading the plan");
-  assert.ok(
-    CLI_RUN.includes('sections: ["## Proven breaks", "## Validated risks", "## Invalidated assumptions", "## Generated PoCs", "## Verdict"]'),
-    "`run check 05` no longer requires the sections of the QA report's ## Deliver",
-  );
+  assert.deepEqual(PHASE_ARTIFACTS.get("05").sections, ["## Proven breaks", "## Validated risks", "## Invalidated assumptions", "## Generated PoCs", "## Verdict"], "`run check 05` no longer requires the sections of the QA report's ## Deliver");
 });
 
 test("the QA stage A gate reads whether stage B runs, and records no marker", () => {
@@ -371,7 +358,7 @@ test("the outcome record is documented at its three points and the NO-CHANGE-NEE
     assert.ok(passageAt(anchor, FLOW).includes("run_outcome"), `${anchor} no longer calls \`run_outcome\``);
   }
   assert.ok(passageAt(OUTCOME_ANCHORS[0]).includes("`run_outcome` at its three points"), "the outcome record no longer names its three points");
-  assert.ok(passageAt(OUTCOME_ANCHORS[0]).includes("the Phase 3 pause (its table)"), "the records no longer send the pause to the Phase 3 table");
+  assert.ok(passageAt(OUTCOME_ANCHORS[0]).includes("the Phase 3 pause;"), "the records no longer send the pause to Phase 3");
   assert.ok(passageAt(OUTCOME_ANCHORS[0]).includes('`status: "no_change"`'), "the records no longer name the no_change status");
   assert.ok(passageAt(OUTCOME_ANCHORS[0]).includes("Phase 8's delivery, which `run publish`\n     records itself"), "the records no longer leave the delivery to `run publish`");
   assert.ok(PHASE_8.includes(OUTCOME_ANCHORS[1]), "Phase 8 no longer leaves the delivery record to `run publish`");
@@ -392,7 +379,7 @@ test("the facts block the runtime prints carries every field the Resume section 
   const prompt = buildPrompt({ job: { id: 1, prompt: "p", slug: "demo-slug" }, facts });
 
   assert.ok(prompt.includes("RUN FACTS (slug `demo-slug`)"), prompt);
-  assert.ok(SKILL.includes("When the prompt carries a `RUN FACTS` block, read `## Resume` and follow it before step 2."), "Phase 0 no longer sends a resumed run to the Resume section");
+  assert.ok(SKILL.includes("When the prompt carries a `RUN FACTS` block, read `references/phases.md`, then `## Resume`, and follow it before step 2."), "Phase 0 no longer sends a resumed run to the Resume section");
   for (const field of ["RUN_DIR:", "Branch:", "Worktree:", "Recorded phases:", "Wip commit:", "Answers:"]) {
     assert.ok(prompt.includes(`\n${field} `) || prompt.includes(`  ${field} `), `the runtime stopped emitting \`${field}\` in the facts block`);
   }
@@ -547,14 +534,13 @@ test("the run comes named in the prompt, and Phase 0 writes no Brief, no critiqu
   assert.equal(phase.includes("SLUG:"), false, "Phase 0 still renames the run, which `run check 01` owns");
 });
 
-test("Phase 1 maps the Brief gates and the rename to an action, and no retired verdict pauses", () => {
+test("Phase 1 follows the rename and no retired verdict pauses", () => {
   const start = SKILL.indexOf("### Phase 1 — Triage-Gate");
   const end = SKILL.indexOf("### Phase 2 —", start);
   assert.ok(start >= 0 && end > start, "the skill no longer documents Phase 1");
   const table = SKILL.slice(start, end);
   for (const retired of ["PROPOSE-ALTERNATIVE", "NEEDS-CLARIFICATION"]) assert.equal(table.includes(retired), false, `Phase 1 still routes ${retired}`);
   assert.ok(table.includes("A re-triage from Phase 7 follows Phase 7's rule"), "a re-triage may terminate with code already written");
-  assert.ok(table.includes("`GATE: brief-*`"), "Phase 1 no longer relaunches the triager on a Brief gate");
   assert.ok(table.includes("`recorded: slug … (renamed …; run dir <path>)`"), "Phase 1 no longer follows the run dir the check renamed");
   assert.equal(table.includes("raw_evidence"), false, "Phase 1 still passes the raw evidence the triager no longer receives");
 });
@@ -564,7 +550,7 @@ test("the QA methodology lives in references/qa-phase.md and its method in the q
   assert.match(phase5, /Read `references\/qa-phase\.md`/, "Phase 5 no longer points to the QA reference");
   assert.equal(phase5.includes("_qa-attack-brief.md"), false, "Phase 5 still reads the attack brief the QA prompts already render");
   assert.ok(runSection("qa-guardian").includes("**QA attack brief.**"), "the qa-guardian no longer carries the attack brief");
-  assert.ok(phase5.includes("| `run check 05` answers | Action |"), "Phase 5 no longer maps the answer of `run check 05`");
+  assert.ok(phase5.includes("`nightqueue run check 05` reads the last round"), "Phase 5 no longer gates on `run check 05`");
   assert.equal(phase5.includes("**Validation of the"), false, "Phase 5 still audits the QA coverage by hand");
   assert.equal(/deliverables\/|prompts\//.test(`${SKILL}${QA_PHASE}`), false, "the skill names a removed template directory");
   assert.equal(QA_PHASE.includes("operator hunt"), false, "references/qa-phase.md still describes the operator hunt the operator guard removed");
@@ -583,9 +569,9 @@ test("the QA methodology lives in references/qa-phase.md and its method in the q
   }
 });
 
-test("the resolve skill directory holds only SKILL.md and references/", () => {
+test("the resolve skill directory holds only SKILL.md, references/ and its pipeline package", () => {
   const entries = readdirSync(new URL("../plugin/skills/resolve", import.meta.url)).sort();
-  assert.deepEqual(entries, ["SKILL.md", "references"], "a new top-level entry appeared under plugin/skills/resolve/");
+  assert.deepEqual(entries, ["SKILL.md", "pipeline", "references"], "a new top-level entry appeared under plugin/skills/resolve/");
 });
 
 test("no plugin text names a block or a line the runtime no longer prints", () => {
@@ -626,7 +612,7 @@ test("Phase 10 launches the reflector once at the end of every run and lists its
   assert.ok(phase.includes("BEFORE the final text"));
   assert.ok(phase.includes("a terminated run"));
   assert.match(phase, /It does not run at\s+the Phase 3 pause/);
-  assert.ok(phase.includes("There is no artifact, no `nightqueue run check` and no `run_phase_done`"));
+  assert.ok(phase.includes("There is no artifact and no `nightqueue run check`"));
   assert.ok(phase.includes("`🪞 Reflection: not run — <reason>`"));
   assert.ok(phase.includes("ABOVE `## Notice`: `## Notice` stays\nthe LAST section of the final text"));
   assert.equal(SKILL.includes("gets its `reason` from the check itself"), false, "the skill still restates the relaunch reason `run check` records");
@@ -640,15 +626,17 @@ function gatedPhases() {
   return SKILL.slice(start, end);
 }
 
-test("Phases 1 to 7 act on the lines `run check` answers, and never re-read an artifact nor record a phase by hand", () => {
+test("Phases 1 to 7 follow the `NEXT:` of `run check`, and never re-read an artifact nor record a phase by hand", () => {
   const phases = gatedPhases();
+  for (const table of phases.matchAll(/\| `run check \d\d[^|]*` answers \|/g)) assert.fail(`a phase still maps a check's answers by hand: ${table[0]}`);
+  assert.ok(SKILL_FILE.includes("do what its last line says: `NEXT: <action>`"), "SKILL.md no longer tells the orchestrator to follow `NEXT:`");
+  for (const action of ["`launch <target> [stage=<n>] [note=<text>]`", "`gate <question>`", "`terminate <reason>`", "`publish [--draft] [remaining=<text>]`", "`report`", "`check <NN>`"]) {
+    assert.ok(SKILL.includes(action), `the skill does not say what ${action} asks`);
+  }
   assert.equal(phases.includes("run_phase_done"), false, "a phase still records itself by hand");
   assert.equal(phases.includes("run index-save"), false, "Phase 2 still saves the index by hand");
   for (const line of phases.split("\n").filter((text) => text.includes("via Read"))) {
     assert.ok(line.includes("references/"), `a phase still reads a run artifact via Read: ${line}`);
-  }
-  for (const check of ["01", "03", "05", "06", "07"]) {
-    assert.ok(phases.includes(`| \`run check ${check}\` answers | Action |`), `the answers of \`run check ${check}\` are not mapped to an action`);
   }
   assert.ok(phases.includes('`from_artifact: { file: "03-plan.md", section: "## Requires user confirmation" }`'), "the pause no longer composes its notice from the plan");
   assert.equal(phases.split("from_artifact").length, 2, "a phase other than the Phase 3 pause still composes a gate notice");

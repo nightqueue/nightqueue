@@ -42,13 +42,14 @@ test("the printed model table reads exactly as the fixture", () => {
   assert.equal(modelTable(), TABLE.trim());
 });
 
-test("the model rationale is the header of the module, and the old sonnet-not-opus reasoning is gone", () => {
+test("the model rationale lives in the runtime contract, and the old sonnet-not-opus reasoning is gone", () => {
   const header = SOURCE.split("*/")[0]
     .split("\n")
     .map((line) => line.replace(/^ \* ?/, ""))
     .join("\n");
+  const doc = readFileSync(new URL("../../docs/runtime-contract.md", import.meta.url), "utf8");
   for (const line of RATIONALE.split("\n").filter((text) => text.trim())) {
-    assert.ok(header.includes(line), `the rationale line is missing from routing.mjs: ${line}`);
+    assert.ok(doc.includes(line), `the rationale line is missing from docs/runtime-contract.md: ${line}`);
   }
   assert.doesNotMatch(header, /not `opus`/);
   assert.doesNotMatch(header, /\btier\b/);

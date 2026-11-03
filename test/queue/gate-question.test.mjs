@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { gateQuestion, labelBlock, nestQuestionHeading, openQuestion, plainQuestion, questionDigest, saysNothing, unreadableQuestion } from "../../src/queue/gate-question.mjs";
+import { gateQuestion, labelBlock, nestQuestionHeading, openQuestion, plainQuestion, questionDigest, saysNothing, unreadableQuestion } from "../../src/queue/question-text.mjs";
 
 const planWith = (body, heading = "## Requires user confirmation") => `## Implementation plan\n- x\n\n${heading}\n${body}\n\n## Assumptions\n- none\n`;
 

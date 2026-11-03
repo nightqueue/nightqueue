@@ -570,12 +570,12 @@ every write from outside a job.
 
 The runner pins the claim on the session and its MCP server (`NIGHTQUEUE_JOB_CLAIM`). A session
 whose claim is over (another attempt, another runner, a later claim at the same attempt after a
-park, or a row no longer `running`) that calls `run_outcome`, `run_terminate`, `run_phase_done`,
-`run_skip`, `run_set` or `run publish` is told `attempt N of this job is over, so this
+park, or a row no longer `running`) that calls `run_outcome`, `run_terminate`,
+`run_set` or `run publish` is told `attempt N of this job is over, so this
 record is ignored; end this session`; its record goes to `ignoredRecords` and no slot, phase or
 field moves. A late `run_terminate` commits nothing and makes no wip ref, and a late `run publish`
 stops before the commit, the rename, the push, the pull request and the worktree removal, so the
-live claim's worktree and branch stay as they were. A late `run check`, `run commit` or `run pr` is
+live claim's worktree and branch stay as they were. A late `run check` or `run pr` is
 refused before any side effect, `attempt N of this job is over, so nothing was written; end this
 session`: no brief, slug, termination, commit or template moves. One attempt keeps at most five records in
 `ignoredRecords`, each cut to 4 KB; past that a late write is only counted, on the attempt's last
@@ -783,7 +783,7 @@ no `Retry:` line.
 The next attempt starts on that commit, with a clean tree: a retry without `--fresh`, in the
 same worktree or one recreated from the branch, and a new job queued with `start_branch` on that
 branch. The runner resets nothing and the prompt says nothing about it. `--fresh` leaves the old branch at its wip commit, and names that branch.
-`run publish` and `run commit` fold the run's own wip commits into the single delivery commit,
+`run publish` folds the run's own wip commits into the single delivery commit,
 so the wip is never pushed. `run pr` refuses a branch still carrying one, naming `run publish`.
 The ref stays on the old commit, which is the way back to it. A `wip(` commit that is not the
 run's own, or any commit above an own one, is refused. To clean up, list the refs with

@@ -7,6 +7,7 @@ import { jobLogPath, logsDir, runDir } from "../src/config/paths.mjs";
 import { run } from "../src/cli/index.mjs";
 import { openDb } from "../src/memory/db.mjs";
 import { addJob } from "../src/memory/jobs.mjs";
+import { readRunState } from "../src/queue/resume.mjs";
 import { recordJobBlock, recordPhaseDone, recordRunFields } from "../src/queue/run-state.mjs";
 import { initGitRepo } from "../test-support/git.mjs";
 import { ensureProject, makeDir, makeHome, makeProject, projectIdOf } from "../test-support/memory.mjs";
@@ -46,6 +47,7 @@ async function runCli(env, argv, { jobId = null } = {}) {
     err: (line) => err.push(line),
     stdout: { write: () => {} },
   });
+  if (out.at(-1)?.startsWith("NEXT: ")) out.pop();
   return { code, out, err, text: out.join("\n") };
 }
 
@@ -85,7 +87,7 @@ test("`nightqueue run` refuses a missing and an unknown subcommand, and says it 
   const unknown = await runCli(env, ["run", "logs"]);
 
   assert.equal(empty.code, 1);
-  assert.match(empty.err.join("\n"), /unknown run subcommand ``; use: check, append, commit, dir, log, pr/);
+  assert.match(empty.err.join("\n"), /unknown run subcommand ``; use: check, append, dir, log, pr/);
   assert.equal(unknown.code, 1);
   assert.match(unknown.err.join("\n"), /unknown run subcommand `logs`/);
   assert.match(unknown.err.join("\n"), /acts on the run of the job it is called from/);
@@ -400,12 +402,32 @@ test("`run check 04` generates the file list from the worktree when the coder le
 
   assert.equal(code, 0);
   assert.deepEqual(gateLines(out), ["GENERATED"]);
-  const artifact = readFileSync(join(runDir(ensureProject(env, "alpha"), SLUG, env), "04-implementation.md"), "utf8");
-  assert.match(artifact, /## Modified files\n/);
-  assert.deepEqual(artifact.split("## Modified files\n")[1].trim().split("\n"), [join(repo, "tracked.mjs"), join(repo, "untracked.md")]);
+  const dir = runDir(ensureProject(env, "alpha"), SLUG, env);
+  assert.equal(existsSync(join(dir, "04-implementation.md")), false, "the derived list went over the artifact");
+  const derived = readFileSync(join(dir, "04-files.generated.md"), "utf8");
+  assert.match(derived, /## Modified files\n/);
+  assert.deepEqual(derived.split("## Modified files\n")[1].trim().split("\n"), [join(repo, "tracked.mjs"), join(repo, "untracked.md")]);
 
   const again = await runCli(env, ["run", "check", "04"], { jobId: id });
-  assert.deepEqual(gateLines(again.out), ["OK"]);
+  assert.deepEqual(gateLines(again.out), ["GENERATED"]);
+  const state = readRunState({ projectId: ensureProject(env, "alpha"), slug: SLUG, env });
+  assert.deepEqual(state.phases.map((entry) => [entry.phase, entry.verdict]), [["implementation", "GENERATED"]], "the same derived list was recorded twice");
+});
+
+test("`run check 04` never overwrites an implementation artifact that lists no file", async (t) => {
+  const env = makeQueue(t, "cli-run-check-generate-keep");
+  const id = boundJob(env);
+  const repo = boundWorktree(t, env);
+  writeFileSync(join(repo, "tracked.mjs"), "export const a = 1;\n");
+  const own = "# Implementation\n\n## Modified files\n\n## Done\nthe coder's own words\n";
+  writeArtifact(env, "04-implementation.md", own);
+
+  const { out } = await runCli(env, ["run", "check", "04"], { jobId: id });
+
+  assert.deepEqual(gateLines(out), ["GENERATED"]);
+  const dir = runDir(ensureProject(env, "alpha"), SLUG, env);
+  assert.equal(readFileSync(join(dir, "04-implementation.md"), "utf8"), own);
+  assert.ok(existsSync(join(dir, "04-files.generated.md")));
 });
 
 test("`run check 04` on a clean worktree reports the empty list and writes no artifact", async (t) => {
@@ -459,7 +481,6 @@ test("the top-level help lists `run` under its own heading, saying it acts on th
   assert.match(text, /\n {2}run check <NN> +check the artifact of a phase of THIS run/);
   assert.match(text, /\n {2}run dir +print the absolute directory of THIS run: runs\/<project_id>\/<slug>/);
   assert.match(text, /\n {2}run log \[--json\] +one line per phase of THIS run/);
-  assert.match(text, /\n {2}run commit --message-file <path> +stage what 04-implementation\.md listed/);
   assert.match(text, /\n {2}run pr --body-file <path> +check the body, push THIS run's branch/);
   assert.match(text, /\n {2}queue run \[--job \| --watch\]/);
 });
