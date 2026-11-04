@@ -8,6 +8,13 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A broken pipeline manifest no longer takes the MCP server, `queue …`, `doctor` or `--help` down.**
+  Nothing reads a manifest at import any more. With a missing, non-JSON or invalid `manifest.json` the
+  server still lists every tool and `queue_status`, the queue and memory tools keep answering, while
+  `run_outcome`, `run_terminate`, `run_set`, `context_for_agent` and `run check`/`start`/`report` refuse
+  with one line, `the pipeline \`<name>\` has an invalid manifest: <reason> (<path>)`. `nightqueue doctor`
+  prints a `pipeline` row per installed pipeline, `fail` with the reason and the path.
+
 - **`queue close` no longer merges a draft or a squash that reverts the base; MCP clients restart
   (tool contract 15).** Preflight stops an open draft with `draft` before any check, re-run, rebase
   or merge (``PR #<n> is a draft: review the remaining failures, then `gh pr ready <n>` and close
@@ -21,6 +28,12 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
   with their own resume hint.
 
 ### Changed
+
+- **Agent roles come from the pipeline manifest.** The manifest declares `agents` (`name`, `role`,
+  `lessons`), and the `context_for_agent.agent` and `lesson_*` `target` enums are its roles in order,
+  equal to today's, so the tool contract is unchanged. A role a manifest adds is accepted with no runtime
+  change; `lesson_save` refuses a target no manifest declares, naming the accepted roles, and a lesson
+  stored with one is still recalled without a target.
 
 - **Report and telemetry are read from the recorded phases and the pipeline package.** Each `phases[]`
   entry `run check` and `run publish` write now carries its own `attempt`, `durationS` (wall time since

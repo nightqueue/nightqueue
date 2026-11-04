@@ -9,7 +9,7 @@ import { openDb } from "../src/memory/db.mjs";
 import { addJob } from "../src/memory/jobs.mjs";
 import { readRunState } from "../src/queue/resume.mjs";
 import { setProjectAgents, setProjectDemoRepo } from "../src/memory/registry.mjs";
-import { AGENT_MODELS, modelTable } from "../src/queue/routing.mjs";
+import { defaultAgentModels, modelTable } from "../src/queue/routing.mjs";
 import { recordPhaseDone, recordRunFields } from "../src/queue/run-state.mjs";
 import { ensureProject, makeHome, makeProject, projectPathOf } from "../test-support/memory.mjs";
 
@@ -89,7 +89,7 @@ test("`run start` answers the run, its agent models, and every phase but no task
   assert.equal(answer.slug, SLUG);
   assert.equal(answer.runDir, runDir(ensureProject(env, "alpha"), SLUG, env));
   assert.equal(answer.commitType, "feat");
-  assert.deepEqual(answer.models, { ...AGENT_MODELS });
+  assert.deepEqual(answer.models, { ...defaultAgentModels() });
   assert.deepEqual(answer.phases, EVERY_PHASE);
   assert.equal("tasks" in answer, false, "run start still answers tasks");
   assert.deepEqual(answer.prTemplate, { source: "nightqueue", label: "nightqueue (fallback)", headings: ["## Report", "## Cause", "## Changes", "## QA"] });
@@ -148,7 +148,7 @@ test("a bare `run start` answers every phase with no type nor commit type, and r
 
   assert.equal(answer.type, null);
   assert.equal(answer.commitType, null);
-  assert.deepEqual(answer.models, { ...AGENT_MODELS });
+  assert.deepEqual(answer.models, { ...defaultAgentModels() });
   assert.deepEqual(answer.phases, EVERY_PHASE);
   assert.equal("tasks" in answer, false, "run start still answers tasks");
   const state = readRunState({ projectId: ensureProject(env, "alpha"), slug: SLUG, env });
@@ -166,7 +166,7 @@ test("a bare `run start` answers the type and the commit type `run check 01` alr
 
   assert.equal(answer.type, "bug/error");
   assert.equal(answer.commitType, "fix");
-  assert.deepEqual(answer.models, { ...AGENT_MODELS });
+  assert.deepEqual(answer.models, { ...defaultAgentModels() });
 });
 
 test("`run start` answers the project's agent model overrides over the defaults", async (t) => {

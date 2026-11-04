@@ -1,11 +1,10 @@
 import assert from "node:assert/strict";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { test } from "node:test";
-import { PHASE_TARGETS } from "../src/mcp/phase-context.mjs";
 import { PHASE_ARTIFACTS } from "../plugin/skills/resolve/pipeline/artifacts.mjs";
 import { evaluateCheck } from "../plugin/skills/resolve/pipeline/contract.mjs";
-import { phaseNamesOf } from "../src/queue/pipeline-package.mjs";
-import { AGENT_MODELS, PIPELINE_CONSTANTS } from "../src/queue/routing.mjs";
+import { agentRoles, phaseNamesOf } from "../src/queue/pipeline-package.mjs";
+import { defaultAgentModels, pipelineConstants } from "../src/queue/routing.mjs";
 import { RUN_OUTCOME_STATUSES } from "../src/queue/run-state.mjs";
 import { buildPrompt } from "../src/queue/spawn.mjs";
 import { phasePrompts } from "../test-support/skill-size.mjs";
@@ -58,7 +57,7 @@ test("every agent of a run fetches its own context block, with a target the tool
   const targets = { triager: "triager", explore: "explore", architect: "architect", coder: "coder", verifier: "verifier", "qa-guardian": "qa", reflector: "reflector" };
   for (const [agent, target] of Object.entries(targets)) {
     assert.ok(runSection(agent).includes(`\`agent: "${target}"\``), `${agent} does not fetch its context with \`${target}\``);
-    assert.ok(PHASE_TARGETS.includes(target), `${agent} names \`${target}\`, which the context block does not accept`);
+    assert.ok(agentRoles().includes(target), `${agent} names \`${target}\`, which the context block does not accept`);
   }
   for (const text of [SKILL, QA_PHASE]) {
     assert.deepEqual(contextTargets(text), [], "a hand-filled context placeholder survived outside the templates");
@@ -102,11 +101,11 @@ test("the agent models live in one module, never copied into the skill", () => {
   assert.ok(SKILL.includes("- (d) the harness's subagent launch, with the `subagent_type` and `model` of its block;"), "the launch no longer takes the model of its block");
   assert.equal(SKILL.includes("**Agent models**"), false, "the skill still restates where the models come from");
   assert.deepEqual(
-    [AGENT_MODELS.triager, AGENT_MODELS.explore, AGENT_MODELS.architect, AGENT_MODELS.coder, AGENT_MODELS.verifier],
+    [defaultAgentModels().triager, defaultAgentModels().explore, defaultAgentModels().architect, defaultAgentModels().coder, defaultAgentModels().verifier],
     ["sonnet", "haiku", "opus", "opus", "haiku"],
   );
-  assert.equal(PIPELINE_CONSTANTS.maxFixIterations, 2);
-  for (const method of ["automated", "api", "emulator", "browser"]) assert.match(PIPELINE_CONSTANTS.qaMethods, new RegExp(`\\b${method}\\b`));
+  assert.equal(pipelineConstants().maxFixIterations, 2);
+  for (const method of ["automated", "api", "emulator", "browser"]) assert.match(pipelineConstants().qaMethods, new RegExp(`\\b${method}\\b`));
 });
 
 test("every run shares the full verifier scope, written in the verifier's run section", () => {

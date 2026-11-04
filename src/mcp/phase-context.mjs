@@ -1,14 +1,13 @@
+import { UserError } from "../config/errors.mjs";
 import { resolveProjectRef } from "../config/projects.mjs";
 import { clip, section } from "../hooks/block.mjs";
 import { lessonIdsFromRefs, recordInjected, seenRefs } from "../hooks/state.mjs";
-import { LESSON_TARGETS } from "../memory/lessons.mjs";
 import { resolveCitations } from "../queue/job-citations.mjs";
+import { lessonRoles } from "../queue/pipeline-package.mjs";
 import { readRunState } from "../queue/resume.mjs";
 import { callerJobId } from "../queue/retry.mjs";
 import { openStore } from "../store/open.mjs";
 import { runTimelineLines } from "./run-timeline.mjs";
-
-export const PHASE_TARGETS = [...LESSON_TARGETS, "explore", "reflector"];
 
 const WHOLE_RUN = { reinjectAfter: Number.MAX_SAFE_INTEGER };
 const PHASE_LIMIT = 4;
@@ -51,10 +50,21 @@ function markSeen(sessionId, rows, env) {
   );
 }
 
+// The role a recall filters lessons by: none for no target, a role without lessons, or installed manifests that cannot answer.
+function lessonFilterOf(target) {
+  if (typeof target !== "string" || target === "") return null;
+  try {
+    return lessonRoles().includes(target) ? target : null;
+  } catch (error) {
+    if (error instanceof UserError) return null;
+    throw error;
+  }
+}
+
 // Lessons this run has not seen yet; when the exclusion empties the answer the same query is asked once more without it, because a phase with no lessons is worse than a repeated one.
 export async function recallFreshLessons({ query, projectId, target, excludeIds, sessionId, limit = PHASE_LIMIT }, env) {
   const lessons = openStore(env).lessons;
-  const spec = { query, projectId, target: LESSON_TARGETS.includes(target) ? target : null, limit };
+  const spec = { query, projectId, target: lessonFilterOf(target), limit };
   const excluded = excludedIds(sessionId, excludeIds, env);
   const rows = await lessons.recallLessons({ ...spec, excludeIds: excluded });
   const fresh = rows.length || !excluded.length ? rows : await lessons.recallLessons(spec);

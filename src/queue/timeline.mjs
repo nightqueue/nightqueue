@@ -1,7 +1,6 @@
 import { compactTokens } from "./last-cell.mjs";
-import { agentModels, TRACK_SLOTS } from "./routing.mjs";
-
-const ALL_SLOT_NUMBERS = TRACK_SLOTS.map((slot) => slot.number);
+import { orWhenBroken } from "./pipeline-package.mjs";
+import { agentModels, trackSlots } from "./routing.mjs";
 
 // The elapsed time of a narration event, null when the narrator had no clock for it.
 function offsetOf(event) {
@@ -253,11 +252,12 @@ function readSkips(skips) {
 
 // The phase track of a job as it stands: all nine slots, each with what every attempt so far reached or why it is skipped.
 function snapshotOf(state, { status, skips, models }) {
-  const inTrack = ALL_SLOT_NUMBERS;
+  const slots = orWhenBroken(trackSlots, []);
+  const inTrack = slots.map((slot) => slot.number);
   const lastReachedIndex = Math.max(-1, ...inTrack.map((number, index) => (state.phases.has(number) ? index : -1)));
   const gatePhase = state.current ?? inTrack[0];
-  const context = { state, status, models: models ?? agentModels(null), inTrack, lastReachedIndex, gatePhase, skips: readSkips(skips) };
-  const phases = TRACK_SLOTS.map((slot) => phaseWire(slot, context));
+  const context = { state, status, models: models ?? orWhenBroken(() => agentModels(null), {}), inTrack, lastReachedIndex, gatePhase, skips: readSkips(skips) };
+  const phases = slots.map((slot) => phaseWire(slot, context));
   return { phases, clockMs: clockOf(state) };
 }
 

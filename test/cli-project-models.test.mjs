@@ -5,7 +5,7 @@ import { homeDir } from "../src/config/paths.mjs";
 import { withProviders } from "../src/integrations/registry.mjs";
 import { openDb } from "../src/memory/db.mjs";
 import { projectAgents, projectIntegrations, setProjectAgents, setProjectIntegrations } from "../src/memory/registry.mjs";
-import { AGENT_MODELS } from "../src/queue/routing.mjs";
+import { defaultAgentModels } from "../src/queue/routing.mjs";
 import { makeHome, makeProject, projectIdOf } from "../test-support/memory.mjs";
 import { bindTrackerConnection, originProviders, trackerProvider } from "../test-support/origin-provider.mjs";
 
@@ -39,7 +39,7 @@ async function runCli(env, argv) {
 
 // The lines `project models` prints with every agent on its default, but the ones given.
 function modelLines(overrides = {}) {
-  return Object.entries(AGENT_MODELS).map(([agent, model]) => (overrides[agent] ? `${agent}=${overrides[agent]} (project)` : `${agent}=${model} (default)`));
+  return Object.entries(defaultAgentModels()).map(([agent, model]) => (overrides[agent] ? `${agent}=${overrides[agent]} (project)` : `${agent}=${model} (default)`));
 }
 
 test("`project models` shows every agent on its default, sets and unsets an override, and stores it under `agents`", async (t) => {

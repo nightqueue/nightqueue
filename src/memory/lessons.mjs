@@ -1,9 +1,8 @@
 import { UserError } from "../config/errors.mjs";
+import { lessonRoles, requireRole } from "../queue/pipeline-package.mjs";
 import { openDb, sqliteToIso, vectorToBlob, withWriteRetry } from "./db.mjs";
 import { attachNames, projectIdOrNull } from "./registry.mjs";
 import { normalizeExcludeIds as normalizeIds } from "./search.mjs";
-
-export const LESSON_TARGETS = ["triager", "architect", "coder", "qa", "verifier"];
 
 const STAT_TABLES = [
   ["lessons", "lessons", "WHERE archived = 0"],
@@ -13,12 +12,13 @@ const STAT_TABLES = [
   ["runs", "pipeline_runs", ""],
 ];
 
-// Normalizes the target of a lesson to one of the valid phases, or null.
+// The target of a lesson: null when none was given, else one of the lesson roles the installed manifests declare, refused otherwise.
 function normalizeTarget(target) {
-  return LESSON_TARGETS.includes(target) ? target : null;
+  if (target === undefined || target === null || target === "") return null;
+  return requireRole("target", target, lessonRoles());
 }
 
-// Reduces a raw lesson payload to its storable shape: missing text becomes "", an invalid target becomes null.
+// Reduces a raw lesson payload to its storable shape: missing text becomes "", an undeclared target is refused.
 export function sanitizeLesson(item) {
   return {
     title: String(item?.title ?? ""),

@@ -2,7 +2,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { UserError } from "../config/errors.mjs";
 import { jobRef } from "../memory/refs.mjs";
-import { pipelineManifest } from "./pipeline-package.mjs";
+import { memoized, pipelineManifest } from "./pipeline-package.mjs";
 import { comparableQuestion, gateQuestion, nestQuestionHeading, questionDigest } from "./question-text.mjs";
 import { lastRound } from "./rounds.mjs";
 import { hasGateMarker, sectionOf, sectionOfAnyLevel } from "./stream.mjs";
@@ -14,7 +14,7 @@ const GATE_HEADING = "## Requires user confirmation";
 const ARTIFACT_FILE_RE = /^[A-Za-z0-9][A-Za-z0-9._-]*\.md$/;
 
 // The artifacts whose evaluated text is their last `## Round`.
-const ROUND_FILES = new Set(pipelineManifest().phases.filter((phase) => phase.rounds === true).map((phase) => phase.artifact));
+const roundFiles = memoized(() => new Set(pipelineManifest().phases.filter((phase) => phase.rounds === true).map((phase) => phase.artifact)));
 
 // The text of a sent value, or null when it is absent or blank.
 function sentText(value) {
@@ -26,9 +26,14 @@ function readRunArtifact(runDir, file) {
   if (!ARTIFACT_FILE_RE.test(file)) {
     throw new UserError(`\`from_artifact.file\` must be the bare name of a run artifact (e.g. \`${pipelineManifest().gateArtifact}\`), not \`${file}\`: nothing was recorded`);
   }
+  const text = readArtifactText(runDir, file);
+  return roundFiles().has(file) ? lastRound(text) : text;
+}
+
+// The text of one artifact of the run directory, refusing a file that is not there or cannot be read.
+function readArtifactText(runDir, file) {
   try {
-    const text = readFileSync(join(runDir, file), "utf8");
-    return ROUND_FILES.has(file) ? lastRound(text) : text;
+    return readFileSync(join(runDir, file), "utf8");
   } catch (err) {
     if (err?.code === "ENOENT") throw new UserError(`\`${file}\` does not exist in the run directory ${runDir}: nothing was recorded`);
     throw new UserError(`\`${file}\` could not be read (${err?.message ?? err}): nothing was recorded`);

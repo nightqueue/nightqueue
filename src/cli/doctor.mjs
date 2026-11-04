@@ -52,6 +52,7 @@ import { closesSummary } from "../queue/close-view.mjs";
 import { isStateObject, readRunState } from "../queue/resume.mjs";
 import { canonicalPath, droppedNames, jobWorktreeOwners, lockState, parseWorktreeList, removeEmptyDir, sameDir } from "../queue/worktree.mjs";
 import { compactStamp } from "../queue/runner.mjs";
+import { installedPipelineNames, manifestFailure, orWhenBroken, pipelineManifest } from "../queue/pipeline-package.mjs";
 import { QA_WORKTREE_TTL_MS, listQaWorktrees, sweepQaWorktrees } from "../queue/qa-worktree.mjs";
 import { openStore, openStoreReadOnly, releaseHomeConnections, withReadOnlyStore } from "../store/open.mjs";
 import { checkArgs, parseCommand } from "./args.mjs";
@@ -64,6 +65,7 @@ const CONNECTION_TEST_TIMEOUT_MS = 5000;
 const CONNECTION_TEST_GRACE_MS = 1000;
 const MIN_NODE_MAJOR = 22;
 const GITDIR_PREFIX = "gitdir:";
+const PIPELINE_REINSTALL_HINT = "reinstall the runtime with `nightqueue update`";
 
 // One diagnosis line, with the hint the user needs when it is not `ok`.
 function check(name, status, detail, hint = null) {
@@ -306,6 +308,20 @@ function checkStudioBuild(ctx) {
 // Shows the tool contract this server publishes, the number a client's cached tool definitions are compared with.
 function checkToolContract() {
   return check("tool contract", "ok", `contract ${TOOL_CONTRACT}; a client that cached older tool definitions must be restarted`);
+}
+
+// One row per installed pipeline: its version when its manifest reads, else why it is broken and where.
+function checkPipelines() {
+  const names = orWhenBroken(installedPipelineNames, null);
+  if (names === null) return [check("pipeline", "fail", "the installed pipelines cannot be listed", PIPELINE_REINSTALL_HINT)];
+  return names.map(checkPipeline);
+}
+
+// The row of one installed pipeline, never a throw.
+function checkPipeline(name) {
+  const failure = manifestFailure(name);
+  if (failure !== null) return check("pipeline", "fail", `${name}: ${failure.reason} (${failure.path})`, PIPELINE_REINSTALL_HINT);
+  return check("pipeline", "ok", `${name} v${pipelineManifest(name).version}`);
 }
 
 // Hint for a command name that is not on disk: only an installation that already has the canonical shim can have turned the shortcuts off.
@@ -1560,6 +1576,7 @@ async function collect(ctx, values) {
     checkRuntime(ctx),
     checkStudioBuild(ctx),
     checkToolContract(),
+    ...checkPipelines(),
     ...checkShims(ctx),
     ...checkLegacyShim(ctx),
     ...checkLegacyHome(ctx),

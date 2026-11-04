@@ -664,9 +664,9 @@ of the run's pipeline; contract 15 added `allow_draft` and `allow_revert` to `qu
 
 | tool | parameters |
 |---|---|
-| `lesson_recall` | `query?`, `project?`, `target?`, `exclude_ids?` |
-| `context_for_agent` | `agent` (`triager`, `architect`, `coder`, `qa`, `verifier`, `explore`, `reflector`), `query?`, `project?`, `slug?` (`reflector` outside a job), `repo_root?`, `exclude_ids?` |
-| `lesson_save` | `title`, `root_cause`, `solution`, `prevention`, `attempts?`, `project?`, `target?` (a title the owner already has bumps its `attempts`; answers `deduped` and `violated` - `true` only inside a queue job, on a dedup onto a lesson this run was given, which also bumps the lesson's `violated`) |
+| `lesson_recall` | `query?`, `project?`, `target?` (a lesson role the installed manifests declare), `exclude_ids?` |
+| `context_for_agent` | `agent` (a role the installed manifests declare, in their order: today `triager`, `architect`, `coder`, `qa`, `verifier`, `explore`, `reflector`), `query?`, `project?`, `slug?` (`reflector` outside a job), `repo_root?`, `exclude_ids?` |
+| `lesson_save` | `title`, `root_cause`, `solution`, `prevention`, `attempts?`, `project?`, `target?` (a lesson role the installed manifests declare, else refused naming them; a title the owner already has bumps its `attempts`; answers `deduped` and `violated` - `true` only inside a queue job, on a dedup onto a lesson this run was given, which also bumps the lesson's `violated`) |
 | `memory_recall` | `query?`, `project?` |
 | `lesson_delete` | `id` (`L344` or the plain number), `project` (name or key): deletes one lesson and its search entry; an unknown id or another project's is refused; refused inside a queue job; answers `{id, ref, title, project}` |
 | `memory_delete` | `id` (`M446` or the plain number), `project` (name or key): deletes one memory and its search entry; an unknown id or another project's is refused; refused inside a queue job; answers `{id, ref, key, project}` |
@@ -866,11 +866,21 @@ npm package's own plugin. `resolve` is the only one. Its `manifest.json` declare
 to the plugin's, and pinned on the run as `state.json.pipeline`), the ordered `phases` (`id`, null on the
 Brief's `00`; `check`; `artifact`; `sections`; the `verdicts` it may record; the `agents` that serve it; and
 `rounds`, `appendable`, `derivesFileList`, `stages`, `gateStop`, `delivers` and `precedesDelivery` where
-they apply), `models`, `targets` (the launches a `next` may name), `recordable`, `track`,
+they apply), `agents`, `models`, `targets` (the launches a `next` may name), `recordable`, `track`,
 `constants`, `renumbered`, `gateArtifact`, `fileListFallback`, `gateStops` and `report`. Its `check.mjs` has one export, `check`; the
 other modules are its own. It imports from `src/` only `config/errors`, `config/store`, `host/paths`,
 `memory/runs`, `queue/branch-name`, `queue/file-list`, `queue/orchestrator-scope`, `queue/pipeline-record`,
 `queue/resume`, `queue/rounds`, `queue/question-text` and `queue/stream`.
+
+`agents` is the list of `{name, role, lessons}` of every agent the pipeline launches: `name` is the agent
+a phase's `agents` or a `models` key names, `role` (matching `^[a-z][a-z0-9-]{0,39}$`) is what the agent
+passes to `context_for_agent` as `agent`, and `lessons` (a boolean) says whether that role learns lessons.
+The roles, each once in the order they first appear across the installed pipelines (`resolve` first), are
+the `context_for_agent.agent` enum; the roles with `lessons: true` are the `target` enum of `lesson_save`
+and `lesson_recall`. The list must be consistent, or the manifest is refused: every agent a phase or
+`models` names has an entry, no name appears twice, and no role is declared both with and without
+`lessons`. A role a manifest adds is accepted with no change to the runtime; reordering the list reorders
+the enums.
 
 The optional keys the runtime reads in place of a phase name, each validated at load with one defect line:
 
@@ -902,6 +912,22 @@ is optional:
 `nightqueue run check` resolves the name from the caller's job row (`jobs.pipeline`), else `state.json`'s
 `pipeline.name`, else `resolve`, and refuses a name with no package in one line. `PHASE_NAMES` is gone: the
 phases `state.json` and `run_terminate` accept come from the manifest of the pipeline the state pinned.
+
+**Broken manifest.** No module reads a manifest when it is imported: every value derived from one is read
+when it is used, and a successful read is kept for the process while a failed one is retried only once the
+`manifest.json` file changes (its size or modification time), so a broken manifest is not re-read per call. A missing
+`manifest.json`, one that is not JSON or one whose shape is wrong is refused in one line, `the pipeline
+\`<name>\` has an invalid manifest: <reason> (<path>)` (a pipeline with no package directory keeps `has no
+readable package`). With a broken manifest the MCP server still lists every tool: a role or gate-stop enum
+falls back to a plain string and the `run_outcome` description names a generic artifact. `queue_status`,
+the queue tools, `lesson_save`/`lesson_recall` (a `target` filter is dropped) and `memory_save` keep
+answering; `run_outcome`, `run_terminate`, `run_set`, `context_for_agent` and a `pipeline_log` that sends
+`gate_stop` answer the one line. The run tools refuse only for the installed pipeline the run pinned (a pin
+with no package directory is not refused there), and the roles skip a broken pipeline other than `resolve`. On the CLI, `--help`, `queue …` and `doctor` run, and `run check`, `run
+start` and `run report` refuse with the one line. `nightqueue doctor` prints one `pipeline` row per
+installed pipeline: `ok` with its version, or `fail` with the reason and the path. A lesson stored with a
+`target` no installed manifest declares is still recalled by a call with no target; saving one is refused,
+naming the accepted roles.
 A `check` is synchronous, because it runs under the run lock on a phase with rounds: `check({ phase, stage,
 runDir, state, files, run, env })`, where `phase` is the check key, `files` is `{ read(name), changed,
 worktree() }` (`changed` is what git says only for a `derivesFileList` phase, never under the lock) and `run`

@@ -19,7 +19,7 @@ import {
   PRIORITY_RANGE,
   TIMEOUT_RANGE,
 } from "../memory/jobs.mjs";
-import { LESSON_TARGETS, lessonView } from "../memory/lessons.mjs";
+import { lessonView } from "../memory/lessons.mjs";
 import { memoryView } from "../memory/memory.mjs";
 import { jobRef, parseJobRef, parseRecordId, requireKey } from "../memory/refs.mjs";
 import { startAdvisoryLines } from "../queue/advisory.mjs";
@@ -36,7 +36,7 @@ import { resolveJobRun } from "../queue/job-run.mjs";
 import { composeGateNotice, gateDigestOf } from "../queue/gate-notice.mjs";
 import { runDir as runDirOf } from "../config/paths.mjs";
 import { attemptSince, recordPipelineRun, statePipelinePhases } from "../queue/pipeline-record.mjs";
-import { pipelineManifest } from "../queue/pipeline-package.mjs";
+import { agentRoles, DEFAULT_PIPELINE, isInstalledPipeline, lessonRoles, orWhenBroken, pinnedPipelineName, pipelineManifest, requireRole } from "../queue/pipeline-package.mjs";
 import { applyRetry, callerJobId } from "../queue/retry.mjs";
 import { refuseDependentPrompt } from "../queue/dependent-prompt.mjs";
 import { resolveJobSession } from "../queue/session.mjs";
@@ -53,7 +53,7 @@ import { startQueueRunner } from "../queue/start.mjs";
 import { terminateRun } from "../queue/terminate.mjs";
 import {
   OPERATOR_PIPELINE_OUTCOMES,
-  PIPELINE_GATE_STOPS,
+  pipelineGateStops,
   PIPELINE_OUTCOMES,
   PIPELINE_TASK_TYPES,
 } from "../memory/runs.mjs";
@@ -74,7 +74,7 @@ import {
   trackerRead,
   trackerUpdate,
 } from "../integrations/tracker.mjs";
-import { callerContext, PHASE_TARGETS, phaseContextBlock, recallFreshLessons, runInjectedLessonIds } from "./phase-context.mjs";
+import { callerContext, phaseContextBlock, recallFreshLessons, runInjectedLessonIds } from "./phase-context.mjs";
 import { readVersion } from "../cli/version.mjs";
 import {
   newContractState,
@@ -125,7 +125,6 @@ const JOB_LIST_LIMIT = { min: 1, max: 50, fallback: 10 };
 // One cache of pull request states per server process, shared by every session and request it serves; it never touches the database.
 const serverPrStates = createPrStateCache();
 
-const target = z.enum(LESSON_TARGETS).nullable().optional();
 const optionalText = z.string().nullable().optional();
 const ignoredOldField = z.unknown().optional().describe("ignored: accepted from an older plugin");
 const jobRefInput = z.union([z.number().int().min(1), z.string()]);
@@ -824,8 +823,27 @@ function operatorConsentTool(env) {
   };
 }
 
+// A schema accepting the values a manifest read answers, any string when the installed manifests cannot answer.
+function manifestEnum(read) {
+  const values = orWhenBroken(read, []);
+  return values.length ? z.enum(values) : z.string();
+}
+
+// The artifact a gate notice is usually composed from, named in a tool description; generic text while the manifest is broken.
+function gateArtifactExample() {
+  return orWhenBroken(() => pipelineManifest().gateArtifact, "the plan");
+}
+
+// Refuses a run whose installed pipeline has an invalid manifest, with that pipeline's one line.
+function requireRunPipeline(run, env) {
+  const name = pinnedPipelineName(readRunState({ projectId: run.projectId, slug: run.slug, env })) ?? DEFAULT_PIPELINE;
+  if (isInstalledPipeline(name)) pipelineManifest(name);
+}
+
 // The thirty-two tools of the plugin contract, with the parameter names the plugin actually sends.
 function toolDefinitions(env, state) {
+  const target = manifestEnum(lessonRoles).nullable().optional();
+  const gateArtifact = gateArtifactExample();
   return [
     {
       name: "lesson_recall",
@@ -865,7 +883,7 @@ function toolDefinitions(env, state) {
           "`agent: \"reflector\"` answers `## Run timeline` and `## Lessons given to this run` of the run instead, with `open_items`; outside a job it needs `project` and `slug`. " +
           "Inside a job the project and the already-injected lessons come from the job's own run: the same lesson is not handed to two phases, unless it is all this run has to give.",
         inputSchema: {
-          agent: z.enum(PHASE_TARGETS),
+          agent: manifestEnum(agentRoles),
           query: optionalText,
           project: optionalText,
           slug: optionalText,
@@ -877,7 +895,7 @@ function toolDefinitions(env, state) {
         degradedPhaseContext(args, async () =>
           phaseContextBlock(
             {
-              target: args.agent,
+              target: requireRole("agent", args.agent, agentRoles()),
               query: args.query,
               project: args.project,
               repoRoot: args.repo_root,
@@ -1044,7 +1062,7 @@ function toolDefinitions(env, state) {
           tier_raise_reason: ignoredOldField,
           task_type: z.enum(PIPELINE_TASK_TYPES).nullable().optional(),
           outcome: z.enum(PIPELINE_OUTCOMES),
-          gate_stop: z.enum(PIPELINE_GATE_STOPS).nullable().optional(),
+          gate_stop: manifestEnum(pipelineGateStops).nullable().optional(),
           duration_s: z.number().int().min(0).nullable().optional(),
           phases: ignoredOldField,
         },
@@ -1365,6 +1383,7 @@ function toolDefinitions(env, state) {
       },
       handler: async (args) => {
         const run = await callerRun(args, env);
+        requireRunPipeline(run, env);
         const ended = terminateRun({ ...run, phase: args.phase, reason: args.reason, jobId: callerJobId(env), env });
         return { ...runAnswer(ended, run), wip: wipAnswer(ended.wip), notice: ended.notice };
       },
@@ -1374,7 +1393,7 @@ function toolDefinitions(env, state) {
       config: {
         description:
           "Records how the run ended: `done` when the pull request exists, `gate` with the `notice` the operator has to answer, `no_change` with the run's conclusion as `notice` when the run concluded on purpose that no code change is needed (the job ends `done` with no pull request). " +
-          "A `gate` may instead send `question` and/or `from_artifact: {file, section}` (a run artifact such as `" + pipelineManifest().gateArtifact + "` and a heading such as `## Requires user confirmation`): the runtime composes the whole `## Notice` body - the section verbatim under `## Requires user confirmation`, the question, and the answer line - and returns it as `notice`; then end the turn, with no `## Notice` in the final text. `notice` together with either is refused. " +
+          "A `gate` may instead send `question` and/or `from_artifact: {file, section}` (a run artifact such as `" + gateArtifact + "` and a heading such as `## Requires user confirmation`): the runtime composes the whole `## Notice` body - the section verbatim under `## Requires user confirmation`, the question, and the answer line - and returns it as `notice`; then end the turn, with no `## Notice` in the final text. `notice` together with either is refused. " +
           "A `gate` whose text carries the plan's question records its digest as `gateQuestionDigest`, which lets the resumed `run check 03` print `CONFIRM: answered (<at>)` for that question once an answer was recorded after this pause; any other gate clears it. " +
           "The pull request URL is NOT a parameter: the runtime writes it from what the session really published. " +
           "Inside a job the run is resolved from the job's own row — passing `project` or `slug` there is refused; outside a job both are required.",
@@ -1389,6 +1408,7 @@ function toolDefinitions(env, state) {
       },
       handler: async (args) => {
         const run = await callerRun(args, env);
+        requireRunPipeline(run, env);
         const composed = wantsComposedNotice(args);
         const notice = composed ? composedGateNotice(args, run, env) : args.notice;
         const answer = runAnswer(recordOutcome({ ...run, status: args.status, notice, questionDigest: pausedDigest(args.status, { run, notice, env }), env }), run);
@@ -1412,6 +1432,7 @@ function toolDefinitions(env, state) {
       },
       handler: async (args) => {
         const run = await callerRun(args, env);
+        requireRunPipeline(run, env);
         return runAnswer(recordRunFields({ ...run, fields: runSetFields(args), env }), run);
       },
     },

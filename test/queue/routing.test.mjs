@@ -3,11 +3,11 @@ import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { pipelineManifest } from "../../src/queue/pipeline-package.mjs";
 import {
-  AGENT_MODELS,
+  defaultAgentModels,
   MODEL_NAMES,
-  OVERRIDABLE_AGENTS,
-  PIPELINE_CONSTANTS,
-  TRACK_SLOTS,
+  overridableAgents,
+  pipelineConstants,
+  trackSlots,
   agentGlyph,
   agentModels,
   modelFor,
@@ -24,7 +24,7 @@ const RATIONALE = readFileSync(new URL("../fixtures/skill-templates/routing-rati
 const SOURCE = readFileSync(new URL("../../src/queue/routing.mjs", import.meta.url), "utf8");
 
 test("every agent has its decided default model", () => {
-  assert.deepEqual(AGENT_MODELS, {
+  assert.deepEqual(defaultAgentModels(), {
     triager: "sonnet",
     explore: "haiku",
     architect: "opus",
@@ -37,7 +37,7 @@ test("every agent has its decided default model", () => {
     merger: "sonnet",
   });
   assert.deepEqual(MODEL_NAMES, ["opus", "sonnet", "haiku"]);
-  assert.deepEqual(OVERRIDABLE_AGENTS, ["triager", "explore", "architect", "coder", "qa-triage", "qa-analyst", "qa-prover", "verifier", "reflector"]);
+  assert.deepEqual(overridableAgents(), ["triager", "explore", "architect", "coder", "qa-triage", "qa-analyst", "qa-prover", "verifier", "reflector"]);
 });
 
 test("the printed model table reads exactly as the fixture", () => {
@@ -68,13 +68,13 @@ test("a project override replaces the default of its agent, an invalid stored va
   const models = agentModels({ verifier: { model: "sonnet" } });
   assert.equal(models.verifier, "sonnet");
   assert.equal(models.coder, "opus");
-  assert.deepEqual(Object.keys(models), Object.keys(AGENT_MODELS));
+  assert.deepEqual(Object.keys(models), Object.keys(defaultAgentModels()));
   assert.match(modelTable({ coder: { model: "haiku" } }), /\| ⚙️ coder \| haiku \|/);
 });
 
 test("a stored merger override is ignored: the merger always runs on its default", () => {
-  assert.equal(modelFor("merger", { merger: { model: "opus" } }), AGENT_MODELS.merger);
-  assert.equal(agentModels({ merger: { model: "haiku" } }).merger, AGENT_MODELS.merger);
+  assert.equal(modelFor("merger", { merger: { model: "opus" } }), defaultAgentModels().merger);
+  assert.equal(agentModels({ merger: { model: "haiku" } }).merger, defaultAgentModels().merger);
 });
 
 test("an agent or a model outside the accepted ones is refused, naming them", () => {
@@ -94,8 +94,8 @@ test("every run goes through every phase, and an unknown type is refused", () =>
 });
 
 test("the pipeline constants are the same for every run", () => {
-  assert.equal(PIPELINE_CONSTANTS.maxFixIterations, 2);
-  assert.match(PIPELINE_CONSTANTS.qaMethods, /^automated;/);
+  assert.equal(pipelineConstants().maxFixIterations, 2);
+  assert.match(pipelineConstants().qaMethods, /^automated;/);
 });
 
 test("the glyph of an agent is read from its own map", () => {
@@ -114,7 +114,7 @@ test("the glyph of an agent is read from its own map", () => {
 
 test("the studio track has nine slots in order, each with its agent, the agent whose model it shows and its canonical phase", () => {
   assert.deepEqual(
-    TRACK_SLOTS.map((slot) => [slot.number, slot.name, slot.agent, slot.modelAgent, slot.phase]),
+    trackSlots().map((slot) => [slot.number, slot.name, slot.agent, slot.modelAgent, slot.phase]),
     [
       [0, "brief", null, null, null],
       [1, "triager", "triager", "triager", "triage"],
@@ -129,17 +129,17 @@ test("the studio track has nine slots in order, each with its agent, the agent w
   );
   assert.deepEqual([slotNumberOf("verification"), slotNumberOf("runtime"), slotNumberOf("commit")], [6, 7, 8]);
   assert.throws(() => slotNumberOf("nope"), /no track slot for phase "nope"/);
-  for (const slot of TRACK_SLOTS.filter((candidate) => candidate.modelAgent)) assert.ok(slot.modelAgent in AGENT_MODELS, `${slot.modelAgent} is an agent with a model`);
+  for (const slot of trackSlots().filter((candidate) => candidate.modelAgent)) assert.ok(slot.modelAgent in defaultAgentModels(), `${slot.modelAgent} is an agent with a model`);
 });
 
 test("the model a phase ran on is its track slot's model agent, else its first agent, with the project's override; a phase with no agent has none", () => {
   const manifest = pipelineManifest();
-  assert.equal(phaseModelOf(manifest, "architecture"), AGENT_MODELS.architect);
-  assert.equal(phaseModelOf(manifest, "qa"), AGENT_MODELS["qa-analyst"]);
-  assert.equal(phaseModelOf(manifest, "runtime"), AGENT_MODELS.verifier);
+  assert.equal(phaseModelOf(manifest, "architecture"), defaultAgentModels().architect);
+  assert.equal(phaseModelOf(manifest, "qa"), defaultAgentModels()["qa-analyst"]);
+  assert.equal(phaseModelOf(manifest, "runtime"), defaultAgentModels().verifier);
   assert.equal(phaseModelOf(manifest, "commit"), null);
   assert.equal(phaseModelOf(manifest, "architecture", { architect: { model: "haiku" } }), "haiku");
-  assert.equal(phaseModelOf(manifest, "architecture", { architect: { model: "gpt" } }), AGENT_MODELS.architect);
+  assert.equal(phaseModelOf(manifest, "architecture", { architect: { model: "gpt" } }), defaultAgentModels().architect);
 });
 
 test("a phase of another pipeline answers the model its own manifest names, or null for an agent with none, never a throw", () => {

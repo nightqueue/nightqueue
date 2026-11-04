@@ -3,8 +3,8 @@ import { truncateByCodePoint } from "../memory/jobs.mjs";
 import { clockLabel } from "./hints.mjs";
 import { extractNotice, extractPrUrl, hasGateMarker, laneName, parseEventLine, parseSlugLine, tokensFromEvent } from "./stream.mjs";
 import { jobRef } from "../memory/refs.mjs";
-import { slotNumberOf, TRACK_SLOTS } from "./routing.mjs";
-import { deliveryPhaseOf, pipelineManifest } from "./pipeline-package.mjs";
+import { slotNumberOf, trackSlots } from "./routing.mjs";
+import { deliveryPhaseOf, memoized, orWhenBroken, pipelineManifest } from "./pipeline-package.mjs";
 
 const ATTEMPT_LINE_RE = /^=== attempt (\d+) @ (\S+) ===$/;
 const RATE_PAUSE_LINE_RE = /^=== rate limit until (\S+) @ (\S+) ===$/;
@@ -25,16 +25,25 @@ const RUN_CHECK_RE = /\bnightqueue run check\s+(\S+)/;
 const FILE_TOOLS = new Set(["Read", "Edit", "Write", "NotebookEdit"]);
 const MCP_TARGET_FIELDS = ["file_path", "path", "pattern", "project", "repo_root", "slug", "query", "name", "key", "id"];
 const EDIT_TOOLS = new Set(["Edit", "Write", "NotebookEdit"]);
-export const PHASES = new Map(TRACK_SLOTS.filter((slot) => slot.agent !== null).map((slot) => [slot.name, slot.number]));
+const RUN_START_MARKER = [/nightqueue run start\b/, 0];
 
-const DELIVERY_SLOT = slotNumberOf(deliveryPhaseOf(pipelineManifest()));
+const readPhaseSlots = memoized(() => new Map(trackSlots().filter((slot) => slot.agent !== null).map((slot) => [slot.name, slot.number])));
+
+// The track slot number of each agent's lane by its name, empty while the manifest is broken.
+export function phaseSlots() {
+  return orWhenBroken(readPhaseSlots, new Map());
+}
 
 // `run report` has no slot of its own: it is the tail of commit · PR, like publish.
-const PHASE_MARKERS = [
-  [/nightqueue run start\b/, 0],
-  [/nightqueue run publish\b/, DELIVERY_SLOT],
-  [/nightqueue run report\b/, DELIVERY_SLOT],
-];
+const readPhaseMarkers = memoized(() => {
+  const deliverySlot = slotNumberOf(deliveryPhaseOf(pipelineManifest()));
+  return [RUN_START_MARKER, [/nightqueue run publish\b/, deliverySlot], [/nightqueue run report\b/, deliverySlot]];
+});
+
+// The orchestrator commands that mark a phase with the slot each marks, only the run start while the manifest is broken.
+function phaseMarkers() {
+  return orWhenBroken(readPhaseMarkers, [RUN_START_MARKER]);
+}
 
 // The pattern of a prompt's own `Mode: <mode>` line, at a line start behind an optional BOM or indentation.
 export function promptModeRe(mode) {
@@ -42,12 +51,17 @@ export function promptModeRe(mode) {
   return new RegExp(`^\\uFEFF?[ \\t]*Mode: ${literal}[ \\t]*$`, "m");
 }
 
-const MODE_SLOTS = TRACK_SLOTS.filter((slot) => typeof slot.lane === "string" && typeof slot.promptMode === "string").map((slot) => ({ ...slot, modeRe: promptModeRe(slot.promptMode) }));
+const readModeSlots = memoized(() => trackSlots().filter((slot) => typeof slot.lane === "string" && typeof slot.promptMode === "string").map((slot) => ({ ...slot, modeRe: promptModeRe(slot.promptMode) })));
+
+// The track slots another slot's lane runs, each with the pattern of its `Mode:` line, empty while the manifest is broken.
+function modeSlots() {
+  return orWhenBroken(readModeSlots, []);
+}
 
 // The track phase of a lane: a slot run by another slot's lane is told apart only by its template's own `Mode:` line.
 export function lanePhase(name, prompt) {
-  const moded = typeof prompt === "string" ? MODE_SLOTS.find((slot) => slot.lane === name && slot.modeRe.test(prompt)) : undefined;
-  return moded?.number ?? PHASES.get(name) ?? null;
+  const moded = typeof prompt === "string" ? modeSlots().find((slot) => slot.lane === name && slot.modeRe.test(prompt)) : undefined;
+  return moded?.number ?? phaseSlots().get(name) ?? null;
 }
 
 export const GLYPHS = {
@@ -231,12 +245,12 @@ export function handBackText(text) {
 // The structured fields of a lane event: the agent, its pipeline phase, the model and the lane's tool_use id, each null when unknown.
 function laneFields(lane, laneId = lane?.id ?? null) {
   const agent = lane?.name ?? null;
-  return { agent, phase: lane?.phase ?? PHASES.get(agent) ?? null, model: lane?.model ?? null, laneId };
+  return { agent, phase: lane?.phase ?? phaseSlots().get(agent) ?? null, model: lane?.model ?? null, laneId };
 }
 
 // The phase an orchestrator Bash command marks (`nightqueue run start|publish|report`), or null.
 function markedPhase(command) {
-  const marker = PHASE_MARKERS.find(([pattern]) => pattern.test(String(command ?? "")));
+  const marker = phaseMarkers().find(([pattern]) => pattern.test(String(command ?? "")));
   return marker ? marker[1] : null;
 }
 
@@ -404,7 +418,7 @@ function reportedArtifact(name, input) {
   if (name === "Bash") {
     const match = RUN_CHECK_RE.exec(String(input?.command ?? ""));
     const check = match?.[1].toLowerCase();
-    return pipelineManifest().phases.find((phase) => phase.check === check)?.artifact ?? null;
+    return orWhenBroken(() => pipelineManifest().phases.find((phase) => phase.check === check)?.artifact ?? null, null);
   }
   if (toolLabel(name) !== "run_phase_done") return null;
   const artifact = input?.artifact;
@@ -799,7 +813,7 @@ function isoOf(ms) {
 
 // Position of a pipeline phase in the track as { phase, phases }, a null phase when the phase is unknown.
 function trackPosition(number) {
-  const numbers = TRACK_SLOTS.map((slot) => slot.number);
+  const numbers = orWhenBroken(trackSlots, []).map((slot) => slot.number);
   const index = Number.isFinite(number) ? numbers.indexOf(number) : -1;
   return { phase: index >= 0 ? index + 1 : null, phases: numbers.length };
 }

@@ -6,21 +6,22 @@
 
 import { UserError } from "../config/errors.mjs";
 import { PIPELINE_TASK_TYPES } from "../memory/runs.mjs";
-import { phaseIdsOf, pipelineManifest } from "./pipeline-package.mjs";
-
-const MANIFEST = pipelineManifest();
+import { memoized, phaseIdsOf, pipelineManifest } from "./pipeline-package.mjs";
 
 // The model aliases an agent may run on.
 export const MODEL_NAMES = Object.freeze(["opus", "sonnet", "haiku"]);
 
-// One line per agent with its default model: the pipeline's roles, then the merger, which runs in the close outside it.
-export const AGENT_MODELS = Object.freeze({ ...MANIFEST.models, merger: "sonnet" });
+// The model of the merger, which the runtime owns and runs in the close, outside any pipeline.
+export const MERGER_MODEL = "sonnet";
+
+// One line per agent with its default model: the pipeline's roles, then the merger.
+export const defaultAgentModels = memoized(() => Object.freeze({ ...pipelineManifest().models, merger: MERGER_MODEL }));
 
 // The agents a project may override: every agent the pipeline launches (the merger runs in the close, outside it).
-export const OVERRIDABLE_AGENTS = Object.freeze(Object.keys(AGENT_MODELS).filter((agent) => agent !== "merger"));
+export const overridableAgents = memoized(() => Object.freeze(Object.keys(defaultAgentModels()).filter((agent) => agent !== "merger")));
 
 // The values every run shares, whatever its project.
-export const PIPELINE_CONSTANTS = Object.freeze({ ...MANIFEST.constants });
+export const pipelineConstants = memoized(() => Object.freeze({ ...pipelineManifest().constants }));
 
 const GLYPHS = Object.freeze({
   triager: "🔍",
@@ -33,8 +34,9 @@ const GLYPHS = Object.freeze({
 
 // Refuses an agent a project cannot override, naming the accepted ones.
 export function requireAgent(agent) {
-  if (OVERRIDABLE_AGENTS.includes(agent)) return agent;
-  throw new UserError(`unknown agent \`${String(agent)}\`; accepted: ${OVERRIDABLE_AGENTS.join(", ")}`);
+  const accepted = overridableAgents();
+  if (accepted.includes(agent)) return agent;
+  throw new UserError(`unknown agent \`${String(agent)}\`; accepted: ${accepted.join(", ")}`);
 }
 
 // Refuses a model outside the accepted aliases, naming them.
@@ -51,11 +53,12 @@ function requireType(type) {
 
 // The model an agent runs on: the project's valid override of an overridable agent, else the default; an unknown agent is a programming error.
 export function modelFor(agent, projectAgents = null) {
-  if (!Object.hasOwn(AGENT_MODELS, agent)) throw new Error(`no default model for agent \`${String(agent)}\``);
-  const overridable = OVERRIDABLE_AGENTS.includes(agent) && projectAgents && Object.hasOwn(projectAgents, agent);
+  const defaults = defaultAgentModels();
+  if (!Object.hasOwn(defaults, agent)) throw new Error(`no default model for agent \`${String(agent)}\``);
+  const overridable = overridableAgents().includes(agent) && projectAgents && Object.hasOwn(projectAgents, agent);
   const entry = overridable ? projectAgents[agent] : null;
   const override = entry?.model;
-  return MODEL_NAMES.includes(override) ? override : AGENT_MODELS[agent];
+  return MODEL_NAMES.includes(override) ? override : defaults[agent];
 }
 
 // The agent a phase of a manifest runs on: its track slot's model agent, else the first agent it declares, else null.
@@ -79,7 +82,7 @@ export function phaseModelOf(manifest, phaseId, projectAgents = null) {
 
 // The model of every agent, the project's overrides applied.
 export function agentModels(projectAgents = null) {
-  return Object.fromEntries(Object.keys(AGENT_MODELS).map((agent) => [agent, modelFor(agent, projectAgents)]));
+  return Object.fromEntries(Object.keys(defaultAgentModels()).map((agent) => [agent, modelFor(agent, projectAgents)]));
 }
 
 // The agent model table as markdown, which `nightqueue run start --routing` prints.
@@ -94,15 +97,17 @@ export function modelTable(projectAgents = null) {
 // The canonical phases every run goes through, in order; a type, when given, must be one of the pipeline's.
 export function phasesFor(type) {
   if (type !== undefined && type !== null && type !== "") requireType(type);
-  return phaseIdsOf(MANIFEST);
+  return phaseIdsOf(pipelineManifest());
 }
 
 // The slots of the studio track, in order: the number, the label, the agent, the agent whose model it shows and the canonical phase of each.
-export const TRACK_SLOTS = MANIFEST.track;
+export function trackSlots() {
+  return pipelineManifest().track;
+}
 
 // The track slot number of a canonical phase; throws on a phase with no slot.
 export function slotNumberOf(phase) {
-  const slot = TRACK_SLOTS.find((candidate) => candidate.phase === phase);
+  const slot = trackSlots().find((candidate) => candidate.phase === phase);
   if (!slot) throw new Error(`no track slot for phase "${phase}"`);
   return slot.number;
 }
