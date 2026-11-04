@@ -7,6 +7,7 @@ import { mergerSettings } from "../host/settings.mjs";
 import { CLOSE_WORKER_ENV } from "./close-deps.mjs";
 import { MERGER_MODEL } from "./routing.mjs";
 import { compactStamp } from "./runner.mjs";
+import { profileArgs } from "./session-profile.mjs";
 import { pluginDir, spawnClaude } from "./spawn.mjs";
 import { extractResultText } from "./stream.mjs";
 
@@ -14,28 +15,7 @@ const MERGER_STOP_POLL_MS = 1000;
 
 // The argv of the merger agent: Read and Edit only, its default model, no MCP server, and only the guard's settings.
 export function mergerArgs({ prompt, env = process.env }) {
-  return [
-    "-p",
-    String(prompt ?? ""),
-    "--agent",
-    "nightqueue:merger",
-    "--model",
-    MERGER_MODEL,
-    "--tools",
-    "Read,Edit",
-    "--permission-mode",
-    "acceptEdits",
-    "--output-format",
-    "stream-json",
-    "--verbose",
-    "--plugin-dir",
-    pluginDir(),
-    "--strict-mcp-config",
-    "--setting-sources",
-    "project",
-    "--settings",
-    JSON.stringify(mergerSettings(env)),
-  ];
+  return profileArgs({ kind: "merger", prompt, model: MERGER_MODEL, pluginDir: pluginDir(), settings: mergerSettings(env) });
 }
 
 // The environment of the merger: the close's own, plus the fence its guard reads, without the job id nor the lease token.

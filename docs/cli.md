@@ -823,7 +823,7 @@ delete nothing in those cases and are refused inside a queue job. A deleted row 
 nightqueue doctor                  # one line per check: ok, warn or fail
 nightqueue doctor --json           # the same report, as the only thing on stdout
 nightqueue doctor --check-updates  # ...plus the newest version published in the registry
-nightqueue doctor --fix            # ...and git worktree repair the job worktrees whose checkout or home moved, drop the stale qa worktrees, remove the shm orphans and repair the database files
+nightqueue doctor --fix            # ...and git worktree repair the job worktrees whose checkout or home moved, remove the shm orphans and repair the database files
 nightqueue doctor --db             # ...plus the database files, a quick_check and the jobs on disk the table lost
 ```
 
@@ -840,7 +840,7 @@ a `studio build` line: `ok` with the stamp's sha, a `warn` when the runtime has 
 was written for another version than the runtime.
 
 `nightqueue doctor` reads the host and the home and writes nothing, except `git worktree
-repair`, the drop of the stale qa worktrees, the removal of the `db shm` orphans and the database actions with `--fix` (below): it never creates
+repair`, the removal of the `db shm` orphans and the database actions with `--fix` (below): it never creates
 the database, never touches `settings.json` and never asks `claude` about
 anything but its version. It checks the Node version, the `claude`, `gh` and `eas`
 CLIs, `config.json`, the mode of `secrets.json`, each of the three shims (a
@@ -1014,22 +1014,12 @@ A directory under `<NIGHTQUEUE_HOME>/worktrees/` named after an id no registered
 checkout has (a project removed with `--purge` leaves it) is one `warn` row
 `worktrees <id>` `project not registered`, with `inspect '<dir>'`.
 
-The operator's QA worktrees live at `<NIGHTQUEUE_HOME>/qa/<project_id>/<id>`, apart from
-every job's (see [Sandbox](#sandbox)); one row `qa <project>/<id>` is printed per entry:
-
-- stale (older than 6 hours, its session's pid gone, or its directory gone while git still
-  registers it): a `warn` `stale (age <n>h | session pid <N> gone | its directory is gone):
-  dropped by the next nightqueue open or nightqueue doctor --fix`, hint `nightqueue doctor
-  --fix`; with `--fix` it is dropped and the row reads `ok` `removed: stale qa worktree` (or
-  `pruned: …` for a gone directory), or stays a `warn` with git's reason;
-- held by a live session: `ok` `in use by pid <N> (age <n>m)`;
-- young and unlocked: `ok` `age <n>m, no session recorded`;
-- locked by hand: a `warn` with the `git -C '<checkout>' worktree unlock '<dir>'` command;
-- anything else under `qa/` (a name that is not an id, an id no registered project has, a
-  directory git does not register): a `warn` `not a qa worktree; inspect <path> (<reason>)`,
-  never removed, `--fix` included.
-
-Without `--fix` the qa rows write nothing.
+QA worktrees the removed `nightqueue sandbox worktree` made live at
+`<NIGHTQUEUE_HOME>/qa/<project_id>/<id>`. Nothing creates them any more; each directory there
+is a read-only leftover row `qa (legacy) <project>/<id>` with the same cleanup commands as above
+(`git -C '<checkout>' worktree remove '<dir>'`, or `unlock … && remove …` when it is locked by
+a pid that is gone), one a live session holds locked is skipped, and an id no registered project
+has is one `warn` row `qa (legacy) <id>` `project not registered`. `--fix` never touches them.
 
 QA worktrees an operator made before the generalist operator live at
 `<NIGHTQUEUE_HOME>/operator-qa/<project_id>/<slug>`. Nothing creates them any more; each
@@ -1216,8 +1206,7 @@ Both run the current runtime's CLI (`node <runtime>/bin/nightqueue.mjs`), which 
 `NIGHTQUEUE_STUDIO_*` variable, so the studio's token never reaches `claude` or the tools it
 runs. Both go through the operator launcher, so opening a terminal runs `git worktree prune`
 in every registered checkout, with no `--expire` (every stale worktree entry, one whose
-directory is gone, is dropped at once, not after git's own expiry), and drops the stale qa
-worktrees. At most 6 terminals
+directory is gone, is dropped at once, not after git's own expiry). At most 6 terminals
 are open at once; the 7th is a `409` (`6 terminals are open, the cap; close one first`). A
 create from inside a job against the runner's own home is a `403`. An optional `instruction`
 (at most 1000 characters, refused above, never cut; control characters and newlines become
@@ -1267,32 +1256,9 @@ signal number when the child was killed by one, or `127` with a message on
 stderr when the command itself could not be spawned (for example, an unknown
 binary).
 
-```sh
-nightqueue sandbox worktree my-app                 # QA_WORKTREE: <home>/qa/<project id>/<id>
-nightqueue sandbox worktree --drop <path>          # dropped <path> (or: gone <path>)
-```
-
-`nightqueue sandbox worktree <project> | --drop <path>` is the one exception to the verbatim
-forwarding: a first argument `worktree` manages ephemeral QA worktrees, a CLI facility for
-reproducing a behavior away from the checkout, instead of running a program of that name. `<project>` (a registered name,
-else id; an unknown one is refused, and git's first line is the error when the checkout cannot
-give a worktree) gets a worktree detached at the checkout's `HEAD` under
-`<NIGHTQUEUE_HOME>/qa/<project id>/<id>`, `<id>` a fresh ULID; exactly one line
-`QA_WORKTREE: <path>` is printed. Inside an operator session (`NIGHTQUEUE_OPERATOR_PID` set) the
-worktree is locked with `git worktree lock --reason "nightqueue qa (pid <N>)"`, which records
-the session that owns it. `--drop <path>` accepts only a path that is exactly
-`<qa>/<project id>/<id>` of this home, unlocks it, runs `git worktree remove --force` and
-`git worktree prune`, removes a leftover directory only when it is empty, and prints
-`dropped <path>`, or `gone <path>` when there was nothing to drop. `--drop` refuses a worktree
-whose lock names a live pid other than `NIGHTQUEUE_OPERATOR_PID`, so one session never drops
-another's; an unlocked one, one this session holds or one whose owner is gone is dropped. Both
-are refused from inside a job against the runner's own home.
-
-A qa worktree is stale when git registers it and either its id says it is older than 6 hours
-or its lock names a pid that is gone; a worktree locked by hand (no pid in the reason) is never
-stale. `nightqueue open` drops the stale ones; `nightqueue doctor` lists them and
-`nightqueue doctor --fix` drops them. A worktree another live session holds is never dropped.
-Nothing under `qa/` that git does not register is ever removed, except an empty directory.
+`nightqueue sandbox worktree` was removed: it exits 1 with a pointer, since a job's worktree
+(`queue add`) or a run's own worktree covers QA, and `nightqueue doctor` lists what it left
+under `<NIGHTQUEUE_HOME>/qa/` as read-only `qa (legacy)` rows.
 
 Inside an operator session, `nightqueue sandbox worktree` is in the never band, and
 `nightqueue sandbox <cmd>` is a `run` that needs the person's consent (see [Open](#open)).
@@ -1326,8 +1292,7 @@ open): <name>`, even when the project has no memory yet, and the memory hooks an
 read that project. The block also carries a `Registered projects` section (`name · key · <n>
 pending`, pending jobs only, the preselected project first, at most 30 lines), so with no project
 the operator lists the registered ones from it and asks which, in an opening message with no tool call.
-`NIGHTQUEUE_OPERATOR_PID` carries the pid of the `nightqueue open` process, which owns the qa
-worktrees the session creates. `NIGHTQUEUE_OPERATOR_SESSION` carries a fresh ULID each launch
+`NIGHTQUEUE_OPERATOR_PID` carries the pid of the `nightqueue open` process. `NIGHTQUEUE_OPERATOR_SESSION` carries a fresh ULID each launch
 mints (a resume is a new launch, so a new id), pinned both in claude's env (the hooks read it)
 and in the MCP server's env inside `--mcp-config`: it keys the session's consents (below). A
 `NIGHTQUEUE_PROJECT`, `NIGHTQUEUE_MODE`, `NIGHTQUEUE_OPERATOR_PID` or
@@ -1344,10 +1309,13 @@ claude only resumes a session from the directory it was born in.
 
 Before claude starts, `git worktree prune` runs in every registered checkout that exists, with
 no `--expire`: every stale worktree entry (one whose directory is gone) is dropped at once, not
-after git's own expiry; a failure is one warning line. Then the stale qa worktrees are dropped
-(see [Sandbox](#sandbox)) and, when there were any, one line says
-`operator · dropped <n> stale qa worktree(s)`. `queue session` and a studio terminal run both
-too, through the same launcher.
+after git's own expiry; a failure is one warning line. `queue session` and a studio terminal
+run it too, through the same launcher.
+
+**Spawn profile.** The operator's argv comes from the same builder as a queued job's and the
+merger's: `profileArgs({ kind: "operator" })` in `src/queue/session-profile.mjs`, the
+`operator` kind carrying `--permission-mode default`, `--setting-sources user,project,local`
+and no `--strict-mcp-config` (see `Spawn profile` in [the runtime contract](runtime-contract.md)).
 
 **The guard.** The operator investigates, plans, queues, and makes a small change on the
 person's checkout once the person consented to it. The PreToolUse hook of an operator session

@@ -15,6 +15,7 @@ import {
   removeHooks,
   spacedRootWarning,
 } from "../../src/host/settings.mjs";
+import { makeHome } from "../../test-support/memory.mjs";
 
 const ENV = { NIGHTQUEUE_HOME: join(tmpdir(), "nightqueue-settings-fixture") };
 const [SESSION_START, PROMPT, AGENT_FOREGROUND] = desiredHooks(ENV);
@@ -319,4 +320,9 @@ test("the removal takes the PreToolUse entry out, event key included", () => {
   const [status] = removeHooks(data, ENV).filter((entry) => entry.event === "PreToolUse");
   assert.equal(status.status, "removed");
   assert.equal(data.hooks.PreToolUse, undefined);
+});
+
+test("operatorSettings wires no SubagentStop hook: no agent announces a qa worktree any more", (t) => {
+  const env = makeHome(t, "qa-settings");
+  assert.equal(operatorSettings(env).hooks.SubagentStop, undefined);
 });
