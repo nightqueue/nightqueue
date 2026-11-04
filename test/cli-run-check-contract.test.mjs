@@ -17,6 +17,7 @@ import { applyRetry } from "../src/queue/retry.mjs";
 import { provisionalSlug } from "../src/queue/run-slug.mjs";
 import { recordOutcome, recordPhaseDone, recordRunFields, recordTermination, RUNTIME_AUTHOR } from "../src/queue/run-state.mjs";
 import { ensureProject, makeDir, makeHome, makeProject } from "../test-support/memory.mjs";
+import { phasePrompts } from "../test-support/skill-size.mjs";
 
 const FIXTURES = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "check");
 const SLUG = "check-contract";
@@ -867,9 +868,9 @@ test("`run_set` refuses the QA mode, whole or dotted, and `--stage` accepts no i
 });
 
 test("the round shape the lane is asked for is the one the skip fixture proves", () => {
-  const template = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "plugin", "agents", "qa-guardian.md"), "utf8");
+  const template = phasePrompts().blocks["qa-triage"];
   const round = readFixture("qa-triage-skip").texts["05-qa.md"].split("\n").slice(1);
-  for (const line of round.filter((text) => text !== "")) assert.ok(template.split("\n").includes(line), `the prompt lost the line: ${line}`);
+  for (const line of round.filter((text) => text !== "")) assert.ok(template.includes(line), `the qa-triage block lost the line: ${line}`);
 });
 
 test("a `###` confirmation heading the check announces is the section the gate notice composes", async (t) => {

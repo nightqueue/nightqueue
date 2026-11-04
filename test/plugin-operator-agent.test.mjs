@@ -7,6 +7,7 @@ import { test } from "node:test";
 import { OPERATOR_AGENT, OPERATOR_MODE_AGENT, operatorAgentPath, operatorArgs, operatorEnv } from "../src/host/operator.mjs";
 import { OPERATOR_CLI_COMMANDS, PIPELINE_AGENTS } from "../src/queue/operator-scope.mjs";
 import { pluginDir, resolveClaudeBin } from "../src/queue/spawn.mjs";
+import { phasePrompts } from "../test-support/skill-size.mjs";
 
 const AGENTS_DIR = join(pluginDir(), "agents");
 const OPERATOR = readFileSync(operatorAgentPath(), "utf8");
@@ -234,9 +235,9 @@ test("PIPELINE_AGENTS is the plugin's agents but the operator, every agent name 
 });
 
 test("the triager's request opens its verdict with `Evidence level: <1-4>`, and the 0-4 scale is gone", () => {
-  const lines = TRIAGER.slice(TRIAGER.indexOf("## Inside a run")).split("\n");
+  const lines = phasePrompts().blocks.triager;
   const verdict = lines.findIndex((line) => line.startsWith("## Verdict:"));
-  assert.notEqual(verdict, -1, "the triager's run section has no `## Verdict:` template");
+  assert.notEqual(verdict, -1, "the triager's block has no `## Verdict:` template");
   const firstLine = lines.slice(verdict + 1).find((line) => line.trim() !== "");
   assert.equal(firstLine, "Evidence level: <1-4>");
   assert.equal(TRIAGER.includes("0-4"), false);

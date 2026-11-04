@@ -2,8 +2,8 @@
 
 Read via Read by the /resolve orchestrator in Phase 5, before launching any qa-guardian. It is
 the single home of the Stage A gate and the consolidation. The launches are the `qa-triage`,
-`qa-lite`, `qa-analyst` and `qa-prover` blocks of `## Phase prompts` of `SKILL.md`; the attack
-brief and the report format are in `plugin/agents/qa-guardian.md`. Every lane writes into ONE
+`qa-lite`, `qa-analyst` and `qa-prover` blocks of `## Phase prompts` of `SKILL.md`, holding
+the report format; the method is in `plugin/agents/qa-guardian.md`. Every lane writes into ONE
 artifact, `05-qa.md`, one `## Round <n>` per launch.
 
 **Triage first:** launch 1 qa-guardian — the `qa-triage` block —

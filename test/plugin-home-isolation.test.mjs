@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readdirSync, readFileSync } from "node:fs";
 import { test } from "node:test";
+import { phasePrompts } from "../test-support/skill-size.mjs";
 
 const AGENTS = new URL("../plugin/agents/", import.meta.url);
 
@@ -16,7 +17,7 @@ const GUARD_RULES_BLOCK = [
   "**Real pull requests and nightqueue guards — hard rules.**",
   "",
   "- **(a)** Never unset, stub, override or work around a nightqueue guard or its environment variables (`NIGHTQUEUE_JOB_ID`, `NIGHTQUEUE_JOB_HOME`, `NIGHTQUEUE_JOB_CLAUDE_DIR`, `NIGHTQUEUE_JOB_CLAIM`, or any refusal nightqueue prints) — not in a child env, not by calling the internal function behind the refusing command, not by a 'simulation'. A refusal is the guard working. A verification that can only proceed by bypassing one stops and is reported as an open item, never worked around.",
-  "- **(b)** Any verification that creates, merges or closes a real pull request runs only in the configured demo repository (the request names it; `nightqueue project demo-repo <project>` shows it) — never in the project's own repository or any other remote. With none configured, no real pull request is created, merged or closed: the scenario is reported as an open item. The only publication ever made to the project's own origin is `nightqueue run publish`, which opens it through the `nightqueue run pr` path.",
+  "- **(b)** Any verification that creates, merges or closes a real pull request runs only in the configured demo repository (the request names it; `nightqueue project demo-repo <project>` shows it) — never in the project's own repository or any other remote. With none configured, no real pull request is created, merged or closed: the scenario is reported as an open item. The only publication ever made to the project's own origin is the runtime's own publish step, which opens it through the runtime's pull-request path.",
 ].join("\n");
 
 const GUARD_RULE_FILES = { "verifier agent": VERIFIER, "qa-guardian agent": QA_AGENT, "qa-guardian skill": QA_SKILL };
@@ -73,6 +74,6 @@ test("the agents a run launches and their blocks keep the home isolation: no han
     assert.equal(/NIGHTQUEUE_HOME=/.test(text), false, `${name} tells a subagent to export a home`);
     assert.equal(/NIGHTQUEUE_JOB_(ID|HOME|CLAUDE_DIR)=/.test(text), false, `${name} tells a subagent to override a nightqueue guard`);
   }
-  const runtime = VERIFIER.slice(VERIFIER.indexOf("### TARGET: runtime"));
+  const runtime = phasePrompts().blocks.runtime.join("\n");
   assert.ok(runtime.includes("nightqueue sandbox <cmd>"), "the runtime lane lost the sandbox rule");
 });

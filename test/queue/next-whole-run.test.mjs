@@ -11,10 +11,9 @@ import { runCycle } from "../../src/queue/runner.mjs";
 import { fakeJobWorktree } from "../../test-support/job-worktree.mjs";
 import { ensureProject, makeDir, makeHome, makeProject } from "../../test-support/memory.mjs";
 import { useFakeClaude } from "../../test-support/queue-fake.mjs";
-import { phasePrompts } from "../../test-support/skill-size.mjs";
+import { fillBlock, phasePrompts } from "../../test-support/skill-size.mjs";
 import { agentToolUseEvent, assistantEvent, noticeText, PR_URL, recordedDone, resultEvent, slugEvent, SLUG, systemInitEvent, taskNotificationEvent, toNdjson, toolResultEvent } from "../../test-support/streams.mjs";
 
-const PLACEHOLDER_RE = /<[^<>]+>/g;
 const MAX_STEPS = 40;
 
 const TRIAGE = "# Triage\n\n## Brief\n**Affected area:** src/a.mjs\n**Context:** the listing\n**Objective:** list the jobs\n**Expected outcome:** the jobs are listed\n**Commit type:** feat\n\n## Verdict: PROCEED\n\nEvidence level: 3\n\n## Validated brief\nFix it.\n\n## Out of scope\n- None.\n\n## Request gaps\n- None.\n";
@@ -123,11 +122,6 @@ function shortened(actions) {
   return actions.map((action) => action.replace(/ (?:note|remaining)=.*$/, ""));
 }
 
-// One block filled the way the orchestrator does, every placeholder a value.
-function filledBlock(lines) {
-  return lines.map((line) => (line.startsWith("RETURN-") || line.startsWith("## Did") ? line : line.replace(PLACEHOLDER_RE, "value"))).join("\n");
-}
-
 // The stream of the lanes a followed run launched, each from its own SKILL block, ending on a delivered pull request.
 function streamOf(actions) {
   const { blocks } = phasePrompts();
@@ -137,7 +131,7 @@ function streamOf(actions) {
     assert.ok(blocks[target], `\`${target}\` is not a block of SKILL.md`);
     const [, agent] = /AGENT: (\S+) ·/.exec(blocks[target][0]);
     return [
-      agentToolUseEvent({ id: `lane${index}`, subagentType: agent, model: "sonnet", description: target, prompt: filledBlock(blocks[target]) }),
+      agentToolUseEvent({ id: `lane${index}`, subagentType: agent, model: "sonnet", description: target, prompt: fillBlock(blocks[target]).join("\n") }),
       taskNotificationEvent({ toolUseId: `lane${index}`, durationMs: 1000 }),
       toolResultEvent({ toolUseId: `lane${index}`, content: "VERDICT: DONE · ARTIFACT: x.md · OPEN: 0" }),
     ];

@@ -17,6 +17,7 @@ import { fakeJobWorktree } from "../../test-support/job-worktree.mjs";
 import { ensureProject, makeDir, makeHome, makeProject } from "../../test-support/memory.mjs";
 import { argValue, fakeCalls, useFakeClaude } from "../../test-support/queue-fake.mjs";
 import { rateLimitEvent, resultEvent, SLUG, slugEvent, systemInitEvent, toNdjson, transientFailureStream } from "../../test-support/streams.mjs";
+import { phasePrompts } from "../../test-support/skill-size.mjs";
 
 const SILENT = toNdjson([systemInitEvent(), slugEvent(SLUG), resultEvent({ text: "" })]);
 const FAILED = { stdout: SILENT, exitCode: 1 };
@@ -30,6 +31,11 @@ const PRS = [{ title: "Fix the worker", url: "https://github.com/acme/app/pull/7
 function agentText(agent) {
   const text = readFileSync(new URL(`../../plugin/agents/${agent}.md`, import.meta.url), "utf8");
   return text.slice(text.indexOf("## Inside a run")).replace(/\s+/g, " ");
+}
+
+// One launched block of the resolve skill, on one line.
+function blockText(target) {
+  return phasePrompts().blocks[target].join("\n").replace(/\s+/g, " ");
 }
 
 // A git double for the preflight: a clean checkout of the default branch.
@@ -170,8 +176,8 @@ test("every answer reaches the triager and the architect through state.json, old
   await applyRetry({ id: home.id, note: "second answer", env: home.env });
 
   assert.deepEqual(readRunState(runOf(home)).answers.map((entry) => entry.text), ["first answer", "second answer"]);
-  assert.ok(agentText("triager").includes("every entry of `answers` of `<RUN_DIR>/state.json`, oldest first"));
-  assert.ok(agentText("architect").includes("Read `type` and `answers` of `<RUN_DIR>/state.json`"));
+  assert.ok(blockText("triager").includes("every entry of `answers` of state.json, oldest first"));
+  assert.ok(blockText("architect").includes("Read `type` and `answers` of state.json"));
   assert.equal(agentText("coder").includes("`answers`"), false, "the coder reads the answers");
 });
 
@@ -403,7 +409,7 @@ test("7: open pull requests found at claim are in origin/open-prs.md and the tri
   assert.equal(prompt.includes("open-prs"), false, prompt);
   const file = join(origin, "open-prs.md");
   assert.ok(readFileSync(file, "utf8").includes("- Fix the worker · https://github.com/acme/app/pull/7 · fix/worker"));
-  assert.ok(agentText("triager").includes("Read every file of `<RUN_DIR>/origin/`, when the directory exists, `open-prs.md` included"), "the triager no longer reads the open pull requests");
+  assert.ok(blockText("triager").includes("Read every file of origin/, when the directory exists, `open-prs.md` included"), "the triager no longer reads the open pull requests");
 
   await applyRetry({ id: home.id, env: home.env });
   await runJob(home, { prListImpl: () => null });
