@@ -10,7 +10,7 @@ import { DEFAULT_PIPELINE, phaseIdsOf, phasesBeforeDeliveryOf, pipelineManifest,
 import { installedPipelineVersion, pipelineVersionBlock } from "../queue/pipeline-version.mjs";
 import { isSafeSegment, isStateObject, readRunState } from "../queue/resume.mjs";
 import { callerJobId } from "../queue/retry.mjs";
-import { agentModels, modelTable, phasesFor } from "../queue/routing.mjs";
+import { agentModels, DEFAULT_MODEL_LABEL, modelTable, orchestratorModel, phasesFor } from "../queue/routing.mjs";
 import { isProvisionalSlug } from "../queue/run-slug.mjs";
 import { recordPipeline, recordPipelineUnpinned, recordPrTemplate, recordRunFields } from "../queue/run-state.mjs";
 import { openStore } from "../store/open.mjs";
@@ -57,13 +57,13 @@ function startOptions(argv) {
   return { values, type, commitType, expected };
 }
 
-// The agent models of the run's project, its overrides applied; a store failure answers the defaults and says so on stderr.
-async function runModels(run, ctx) {
+// The agent model overrides of the run's project; a store failure answers none (the defaults) and says so on stderr.
+async function runAgents(run, ctx) {
   try {
-    return agentModels(run.projectId ? await openStore(ctx.env).projects.agents(run.projectId) : null);
+    return run.projectId ? await openStore(ctx.env).projects.agents(run.projectId) : null;
   } catch (error) {
     ctx.err(`nightqueue: the project's agent models could not be read, answering the defaults: ${error?.message ?? String(error)}`);
-    return agentModels(null);
+    return null;
   }
 }
 
@@ -257,6 +257,7 @@ export async function runStart(argv, ctx) {
   const promptFile = await writePromptFile(run, ctx);
   const state = readRunState({ projectId: run.projectId, slug: run.slug, env: ctx.env });
   const drafts = settleDeliveryDrafts(run, state, ctx);
+  const agents = await runAgents(run, ctx);
   const answer = {
     project: run.project,
     slug: run.slug,
@@ -267,7 +268,8 @@ export async function runStart(argv, ctx) {
     branch: stateText(state, "branch"),
     type,
     commitType: options.commitType ?? stateText(state, "commitType"),
-    models: await runModels(run, ctx),
+    models: agentModels(agents),
+    orchestratorModel: orchestratorModel(agents) ?? DEFAULT_MODEL_LABEL,
     phases: phaseIdsOf(pipelineManifest(pipeline)),
     prTemplate,
     commitConvention: commitConvention(cwd, ctx.env),

@@ -18,7 +18,7 @@ import { changeProjectIntegrations, integrationLines, integrationsView } from ".
 import { requireKey } from "../memory/refs.mjs";
 import { refuseHomeWriteInsideJob } from "../queue/home-guard.mjs";
 import { effectiveRisk, requireRiskPattern } from "../queue/merger-risk.mjs";
-import { agentModels, requireAgent, requireModel } from "../queue/routing.mjs";
+import { agentModels, DEFAULT_MODEL_LABEL, ORCHESTRATOR_AGENT, orchestratorModel, requireAgent, requireModel } from "../queue/routing.mjs";
 import { openRegistryReader, openRegistryWriter, openStore } from "../store/open.mjs";
 import { checkArgs, parseCommand } from "./args.mjs";
 import { askKey, choose } from "./prompt.mjs";
@@ -250,12 +250,16 @@ async function runIntegrations(argv, ctx) {
 
 const MODELS_USAGE = "nightqueue project models <project> [--set <agent>=<model>]... [--unset <agent>]... [--json]";
 
-// Each agent's model for a project and where it comes from (`project` override or `default`).
+// Each agent's model for a project and where it comes from (`project` override or `default`), the orchestrator last.
 function modelView(projectAgents) {
   const models = agentModels(projectAgents);
-  return Object.fromEntries(
-    Object.entries(models).map(([agent, model]) => [agent, { model, source: model === projectAgents?.[agent]?.model ? "project" : "default" }]),
-  );
+  const orchestrator = orchestratorModel(projectAgents);
+  return {
+    ...Object.fromEntries(
+      Object.entries(models).map(([agent, model]) => [agent, { model, source: model === projectAgents?.[agent]?.model ? "project" : "default" }]),
+    ),
+    [ORCHESTRATOR_AGENT]: orchestrator === null ? { model: DEFAULT_MODEL_LABEL, source: "default" } : { model: orchestrator, source: "project" },
+  };
 }
 
 // Prints a project's agent models, as lines or as the JSON answer.

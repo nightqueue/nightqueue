@@ -3,7 +3,7 @@ import { mkdirSync } from "node:fs";
 import { test } from "node:test";
 import { defaultContext, run } from "../../src/cli/index.mjs";
 import { runDir } from "../../src/config/paths.mjs";
-import { openDb } from "../../src/memory/db.mjs";
+import { closeDb, openDb } from "../../src/memory/db.mjs";
 import {
   addJob,
   cancelRunningJob,
@@ -197,6 +197,78 @@ test("the late measures of a cancelled attempt land once, however many times the
   assert.deepEqual([view.tokens_out, view.cost_usd, view.bash_timeouts], [7, 0.25, 1]);
   assert.equal(view.attempts_log[0].tokens_out, 7);
   assert.throws(() => recordAttemptMeasures(id, { usage: {} }, env), /positive integer `attempt`/);
+});
+
+test("an attempt records the orchestrator's route and init model once, outside the job's numeric totals", (t) => {
+  const env = makeQueue(t, "attempts-orchestrator-model");
+  const plain = enqueue(env);
+  claim(env, plain);
+  finishJob(plain, { worker: WORKER, status: "done", result: { status: "done" }, orchestrator: { turns: 1 } }, env);
+  const routed = enqueue(env);
+  claim(env, routed);
+  const orchestrator = { turns: 1, route: "sonnet", model: "claude-sonnet-5-5" };
+  finishJob(routed, { worker: WORKER, status: "done", result: { status: "done" }, orchestrator }, env);
+  const row = viewOf(env, routed).attempts_log[0];
+  assert.deepEqual([row.orchestrator_route, row.orchestrator_model], ["sonnet", "claude-sonnet-5-5"]);
+  assert.deepEqual([viewOf(env, plain).attempts_log[0].orchestrator_route, viewOf(env, plain).attempts_log[0].orchestrator_model], [null, null]);
+  assert.equal(viewOf(env, routed).orch_turns, viewOf(env, plain).orch_turns, "the text measures moved the numeric totals");
+});
+
+test("queue status prints the orchestrator of an attempt as its route or default with the init model, and nothing when none was recorded", async (t) => {
+  const env = makeQueue(t, "attempts-orchestrator-status");
+  const finished = (orchestrator) => {
+    const id = enqueue(env);
+    claim(env, id);
+    finishJob(id, { worker: WORKER, status: "done", result: { status: "done" }, orchestrator }, env);
+    return id;
+  };
+  const routed = finished({ turns: 1, route: "sonnet", model: "claude-sonnet-5-5" });
+  const plain = finished({ turns: 1, model: "claude-opus-5-5" });
+  const unrecorded = finished({ turns: 1 });
+  const attemptOf = async (id) => (await statusLines(env, [`J-${id}`])).find((line) => line.startsWith("  #1 ")) ?? "";
+  assert.match(await attemptOf(routed), /orchestrator: sonnet \(claude-sonnet-5-5\)/);
+  assert.match(await attemptOf(plain), /orchestrator: default \(claude-opus-5-5\)/);
+  assert.doesNotMatch(await attemptOf(unrecorded), /orchestrator/);
+});
+
+test("a replayed orchestrator record lands its counters once, a route outside the aliases is stored as none, and a later write only fills what is still empty", (t) => {
+  const env = makeQueue(t, "attempts-orchestrator-replay");
+  const id = enqueue(env);
+  claim(env, id);
+  cancelRunningJob(id, { worker: WORKER }, env);
+  const spec = { attempt: 1, orchestrator: { turns: 2, route: "gpt", model: "claude-opus-5-5" } };
+  assert.equal(recordAttemptMeasures(id, spec, env), true);
+  assert.deepEqual([viewOf(env, id).attempts_log[0].orchestrator_route, viewOf(env, id).attempts_log[0].orchestrator_model], [null, "claude-opus-5-5"]);
+  assert.equal(recordAttemptMeasures(id, { attempt: 1, orchestrator: { turns: 2, route: "haiku", model: "other" } }, env), false);
+  const row = viewOf(env, id).attempts_log[0];
+  assert.deepEqual([row.orchestrator_route, row.orchestrator_model], ["haiku", "claude-opus-5-5"]);
+  assert.equal(viewOf(env, id).orch_turns, 2, "the replay counted the turns twice");
+});
+
+test("a usage-only write first never hides the route and model a later write of the same attempt carries", (t) => {
+  const env = makeQueue(t, "attempts-orchestrator-usage-first");
+  const id = enqueue(env);
+  claim(env, id);
+  cancelRunningJob(id, { worker: WORKER }, env);
+  assert.equal(recordAttemptMeasures(id, { attempt: 1, usage: { tokensIn: 10, tokensOut: 2 } }, env), true);
+  recordAttemptMeasures(id, { attempt: 1, usage: { tokensIn: 10, tokensOut: 2 }, orchestrator: { route: "sonnet", model: "claude-sonnet-5-5" } }, env);
+  const row = viewOf(env, id).attempts_log[0];
+  assert.deepEqual([row.orchestrator_route, row.orchestrator_model, row.tokens_in], ["sonnet", "claude-sonnet-5-5", 10]);
+});
+
+test("a database whose attempts lack the orchestrator columns still lists them, and a writer open adds the columns back", (t) => {
+  const env = makeQueue(t, "attempts-orchestrator-columns");
+  const id = enqueue(env);
+  claim(env, id);
+  finishJob(id, { worker: WORKER, status: "done", result: { status: "done" } }, env);
+  const db = openDb(env);
+  db.exec("ALTER TABLE job_attempts DROP COLUMN orchestrator_route");
+  db.exec("ALTER TABLE job_attempts DROP COLUMN orchestrator_model");
+  const row = viewOf(env, id).attempts_log[0];
+  assert.deepEqual([row.attempt, row.orchestrator_route, row.orchestrator_model], [1, null, null]);
+  closeDb(env);
+  const columns = openDb(env).prepare("PRAGMA table_info(job_attempts)").all().map((column) => column.name);
+  assert.deepEqual(columns.filter((name) => name.startsWith("orchestrator_")), ["orchestrator_route", "orchestrator_model"]);
 });
 
 test("a park and an interrupted release keep the claim as `released`, and a --fresh retry marks only the next row", (t) => {

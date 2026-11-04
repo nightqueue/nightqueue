@@ -55,7 +55,7 @@ recorded (it never creates a worktree), `type` (the recorded one, else the reque
 one, else null), `commitType` (the requested one, else the recorded one, else null),
 `models` (`{<agent>: <model>}`, the defaults of `src/queue/routing.mjs` with the
 project's overrides of `project models` applied; a store that cannot be read answers
-the defaults and says so on stderr), `needsSlug` (whether the run still holds the slug the runtime
+the defaults and says so on stderr), `orchestratorModel` (the alias the project routes its orchestrator to, `default` when none), `needsSlug` (whether the run still holds the slug the runtime
 derived), `demoRepo` (or `none configured`), `baseRef` (`HEAD` plus a stderr line when no base
 branch resolves), `pluginRoot`, `stages` (the numbered stages of `00-brief.md`), `drafts` (the `commit-message.txt` and `pr-body.md` kept
 for a run that recorded Phase 6 or 7; any other run's are deleted), the `phases` (every phase of the one
@@ -165,7 +165,9 @@ only in `recorded`), never a non-zero exit.
 After the report comes `## Facts for the report`, what the orchestrator would otherwise have to read
 from the run's artifacts, and it is never pasted into the final text. `--json` carries it as `facts`.
 Each list line is clipped to 220 characters and each list holds its own limit, ending in `+N more`,
-so one artifact cannot push another's facts out (at most about 226 lines): the Brief's expected
+so one artifact cannot push another's facts out (at most about 227 lines): first the runtime's
+`orchestrator: <alias|default> (<init model>)` line (the route the job's last attempt row recorded, else
+`default`, and the model the last attempt's `system/init` reported in the job log); the Brief's expected
 outcome and commit type; 6 lines of the validated brief; the triager's diagnosis (the root cause
 first, a long line spanning up to 3 lines); the plan's `not-covered` rows; the QA mode; the last QA
 round's verdict, breaks, risks, PoCs, prevention and `dedicated ticket: yes` items; the last
@@ -454,7 +456,7 @@ nightqueue project remove api --purge [--yes]      # delete it and every row it 
 nightqueue project integrations api show [--json] # one <kind>.<key>=<value> line per setting, or "no integrations"
 nightqueue project integrations api set <kind>.<key>=<value> ...   # validated against the provider that declares the key
 nightqueue project integrations api unset <kind>.<key> ...         # the last key removed leaves the project without integrations
-nightqueue project models api [--json]             # one <agent>=<model> (default|project) line per agent
+nightqueue project models api [--json]             # one <agent>=<model> (default|project) line per agent, orchestrator last
 nightqueue project models api --set coder=sonnet   # the project's coder runs on sonnet; --set repeats
 nightqueue project models api --unset coder        # back to the default model; --unset repeats
 nightqueue project demo-repo api [--json]          # the demo repository, or "none configured"
@@ -537,14 +539,20 @@ integrations`); detection only reports, it never sets `expo.ota`.
 that project. The defaults live in `src/queue/routing.mjs` (`run start --routing` prints
 them): triager `sonnet`, explore `haiku`, architect `opus`, coder `opus`, qa-triage
 `sonnet`, qa-analyst `sonnet`, qa-prover `haiku`, verifier `haiku`, reflector `haiku`, merger
-`sonnet` (the close's conflict resolver, which reads its override once per close). With no option it prints one `<agent>=<model>
-(default|project)` line per agent; `--json` gives `{project, agents: {<agent>: {model,
-source}}}`. `--set` takes an agent of that list and a model among `opus`, `sonnet` and
+`sonnet` (the close's conflict resolver, which reads its override once per close), and
+orchestrator `default` (the job session, which with no override runs on the user's own model
+and otherwise gets `--model <alias>` on every spawn). With no option it prints one `<agent>=<model>
+(default|project)` line per agent, `orchestrator=default (default)` or
+`orchestrator=<alias> (project)` last; `--json` gives `{project, agents: {<agent>: {model,
+source}}}`, `orchestrator` its last key. `--set` takes an agent of that list and a model among `opus`, `sonnet` and
 `haiku` - anything else is refused naming the accepted values, and one invalid argument
 changes nothing; `--unset` brings the agent back to its default. The override is stored in
 the project's settings under `agents.<agent>.model`, apart from what `project integrations`
 shows and keeps (a `set`/`unset` of integrations never drops it). `run start` answers the
-resolved model of each agent under `models`. `--set` and
+resolved model of each agent under `models` and the orchestrator's under `orchestratorModel`.
+Each attempt of a job records the orchestrator's route and the model its `system/init` reported,
+and `queue status <job>` prints them on the attempt's line as
+`orchestrator: <alias|default> (<init model>)` (nothing for an attempt not yet measured). `--set` and
 `--unset` are refused from inside a job.
 
 **Project demo repository.** `project demo-repo <project> [--set <path>] [--json]` shows

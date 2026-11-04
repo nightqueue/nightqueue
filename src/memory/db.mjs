@@ -169,6 +169,8 @@ function migrate(db) {
   addColumnIfMissing(db, "pipeline_phases", "reason", "TEXT");
   addColumnIfMissing(db, "jobs", "start_branch", "TEXT");
   addColumnIfMissing(db, "jobs", "start_worktree", "TEXT");
+  addColumnIfMissing(db, "job_attempts", "orchestrator_route", "TEXT");
+  addColumnIfMissing(db, "job_attempts", "orchestrator_model", "TEXT");
   addColumnIfMissing(db, "jobs", JOBS_PIPELINE_COLUMN, JOBS_PIPELINE_TYPE);
   ensureDefaultOrg(db);
   if (version < DB_USER_VERSION) db.exec(`PRAGMA user_version = ${DB_USER_VERSION}`);

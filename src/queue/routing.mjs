@@ -17,8 +17,14 @@ export const MERGER_MODEL = "sonnet";
 // One line per agent with its default model: the pipeline's roles, then the merger.
 export const defaultAgentModels = memoized(() => Object.freeze({ ...pipelineManifest().models, merger: MERGER_MODEL }));
 
-// The agents a project may override: every agent the pipeline launches, plus the merger the close launches.
-export const overridableAgents = memoized(() => Object.freeze(Object.keys(defaultAgentModels())));
+// The runtime-owned role of the job session, with no default model: it runs on the user's own unless the project routes it.
+export const ORCHESTRATOR_AGENT = "orchestrator";
+
+// The label of a session that runs on the user's own model.
+export const DEFAULT_MODEL_LABEL = "default";
+
+// The agents a project may override: every agent the pipeline launches, the merger the close launches, plus the orchestrator the runner launches.
+export const overridableAgents = memoized(() => Object.freeze([...Object.keys(defaultAgentModels()), ORCHESTRATOR_AGENT]));
 
 // The values every run shares, whatever its project.
 export const pipelineConstants = memoized(() => Object.freeze({ ...pipelineManifest().constants }));
@@ -85,13 +91,27 @@ export function agentModels(projectAgents = null) {
   return Object.fromEntries(Object.keys(defaultAgentModels()).map((agent) => [agent, modelFor(agent, projectAgents)]));
 }
 
+// The orchestrator's model: the project's valid override alias, else null (the user's own model).
+export function orchestratorModel(projectAgents = null) {
+  const routed = projectAgents && typeof projectAgents === "object" && Object.hasOwn(projectAgents, ORCHESTRATOR_AGENT);
+  const override = routed ? projectAgents[ORCHESTRATOR_AGENT]?.model : null;
+  return MODEL_NAMES.includes(override) ? override : null;
+}
+
+// The orchestrator of an attempt as one label: the routed alias or `default`, then the model its session reported.
+export function orchestratorLabel({ route = null, model = null } = {}) {
+  const head = route ?? DEFAULT_MODEL_LABEL;
+  return typeof model === "string" && model.trim() !== "" ? `${head} (${model})` : head;
+}
+
 // The agent model table as markdown, which `nightqueue run start --routing` prints.
 export function modelTable(projectAgents = null) {
   const rows = Object.entries(agentModels(projectAgents)).map(([agent, model]) => {
     const glyph = agentGlyph(agent);
     return `| ${glyph ? `${glyph} ${agent}` : agent} | ${model} |`;
   });
-  return ["| Agent | Model |", "| --- | --- |", ...rows].join("\n");
+  const orchestrator = `| ${ORCHESTRATOR_AGENT} | ${orchestratorModel(projectAgents) ?? DEFAULT_MODEL_LABEL} |`;
+  return ["| Agent | Model |", "| --- | --- |", ...rows, orchestrator].join("\n");
 }
 
 // The canonical phases every run goes through, in order; a type, when given, must be one of the pipeline's.

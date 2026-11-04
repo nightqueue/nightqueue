@@ -10,3 +10,4 @@
 | ✅ verifier | haiku |
 | reflector | haiku |
 | merger | sonnet |
+| orchestrator | default |

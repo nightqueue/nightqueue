@@ -25,7 +25,7 @@ function recordedRoot(state) {
 }
 
 // One fact as a list line on one line, clipped to its own width, so no artifact text can open a heading of the report.
-function factLine(fact) {
+export function factLine(fact) {
   const wide = fact !== null && typeof fact === "object";
   const text = String(wide ? fact.text : fact).replace(/\s+/g, " ").trim();
   const max = wide && Number.isInteger(fact.max) && fact.max > 0 ? fact.max : FACT_LINE_MAX;

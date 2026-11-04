@@ -6,9 +6,12 @@ import { defaultGitImpl } from "../queue/preflight.mjs";
 import { isStateObject } from "../queue/resume.mjs";
 import { draftLine, refusedDraftLine } from "../queue/run-state.mjs";
 import { renderSkillTemplate, skillReferencesDir } from "../queue/skill-template.mjs";
+import { orchestratorLabel } from "../queue/routing.mjs";
+import { extractInitModel, lastAttemptStream } from "../queue/stream.mjs";
 import { runDurationS } from "../queue/telemetry.mjs";
+import { openStore } from "../store/open.mjs";
 import { checkArgs, parseCommand } from "./args.mjs";
-import { FACTS_HEADING, reportFacts } from "./report-facts.mjs";
+import { FACTS_HEADING, factLine, reportFacts } from "./report-facts.mjs";
 import { changedFiles, durationCell, readJobLog, readRunFile, requireRunState, resolveRun, RUN_OPTIONS, worktreeOf } from "./run-context.mjs";
 
 export const REPORT_USAGE = "nightqueue run report [--json] [--facts] [--project <name> --slug <slug>]";
@@ -275,6 +278,25 @@ async function reportPackageOf(state, ctx) {
   }
 }
 
+// The orchestrator alias the job's last attempt was spawned on, as its attempt row recorded it, or null for the user's default; a store failure answers null and says so on stderr.
+async function orchestratorRouteOf(run, ctx) {
+  try {
+    const job = run.jobId ? await openStore(ctx.env).jobs.getJob(run.jobId) : null;
+    const rows = Array.isArray(job?.attempt_rows) ? job.attempt_rows : [];
+    return rows.at(-1)?.orchestrator_route ?? null;
+  } catch (error) {
+    ctx.err(`nightqueue: the attempt's orchestrator route could not be read, reporting the default: ${error?.message ?? String(error)}`);
+    return null;
+  }
+}
+
+// The orchestrator of the run: the route its last attempt recorded, the model its last attempt's `system/init` reported, and the label both make.
+async function orchestratorOf(run, log, ctx) {
+  const route = await orchestratorRouteOf(run, ctx);
+  const model = extractInitModel(lastAttemptStream(log));
+  return { route, model, label: orchestratorLabel({ route, model }) };
+}
+
 // Runs `run report`, which renders the tables of the final report from the run's own records, then the facts of its artifacts; `--facts` prints only those and records nothing.
 export async function runReport(argv, ctx) {
   const { values, positionals } = parseCommand(argv, { ...RUN_OPTIONS, json: { type: "boolean" }, facts: { type: "boolean" } });
@@ -282,11 +304,14 @@ export async function runReport(argv, ctx) {
   const run = await resolveRun(values, ctx);
   const state = requireRunState(run, ctx.env);
   const { pipeline, unreadable } = await reportPackageOf(state, ctx);
-  const facts = await reportFacts({ runDir: run.runDir, state, worktree: worktreeChanges(run, ctx), ...pipeline });
+  const log = readJobLog(run.jobId, ctx.env);
+  const orchestrator = await orchestratorOf(run, log, ctx);
+  const packageFactLines = await reportFacts({ runDir: run.runDir, state, worktree: worktreeChanges(run, ctx), ...pipeline });
+  const facts = [factLine(`orchestrator: ${orchestrator.label}`), ...packageFactLines];
   if (values.facts === true) return printFacts(facts, values, ctx);
   const openItems = [...unreadable, ...runOpenItems(run.runDir, state, pipeline.report)];
   const recorded = await recordRun(run, state, { env: ctx.env, openItems, manifest: pipeline.manifest });
-  const report = { ...buildReport({ run, state, log: readJobLog(run.jobId, ctx.env) }, pipeline), openItems, recorded, facts };
+  const report = { ...buildReport({ run, state, log }, pipeline), orchestrator, openItems, recorded, facts };
   if (values.json === true) ctx.out(JSON.stringify(report));
   else for (const line of [...reportLines(report), ...factLines(facts)]) ctx.out(line);
   return 0;

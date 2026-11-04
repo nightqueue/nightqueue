@@ -251,6 +251,8 @@ export function jobAttemptsDdl(name) {
   measured INTEGER NOT NULL DEFAULT 0,
   fresh INTEGER NOT NULL DEFAULT 0,
   backfilled INTEGER NOT NULL DEFAULT 0,
+  orchestrator_route TEXT,
+  orchestrator_model TEXT,
   PRIMARY KEY (job_id, attempt)
 );`;
 }

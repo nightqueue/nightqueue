@@ -15,7 +15,7 @@ import { ensureProject, makeDir, makeHome, makeProject } from "../test-support/m
 const SLUG = "add-slugify";
 const WORKTREE = "/tmp/facts-worktree";
 const HEADING = "## Facts for the report";
-const FACTS_WORST_CASE = 226;
+const FACTS_WORST_CASE = 227;
 const UNLISTED_MAX = 30;
 const REFERENCES = ["phase-8.md", "phase-9.md", "pr-template.md"].map((name) => new URL(`../plugin/skills/resolve/references/${name}`, import.meta.url));
 

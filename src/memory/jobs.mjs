@@ -11,7 +11,7 @@ import {
   withFullSync,
   withWriteRetry,
 } from "./db.mjs";
-import { applyMeasures, attachAttemptRows, attemptViewKeys, closeOpenAttempt, countSpawn, noteAttemptSession, openAttempt, settleMeasures } from "./attempts.mjs";
+import { applyMeasures, attachAttemptRows, attemptViewKeys, closeOpenAttempt, countSpawn, noteAttemptRoute as noteRouteOnAttempt, noteAttemptSession, openAttempt, settleMeasures } from "./attempts.mjs";
 import { refuseMissingJob } from "./job-row.mjs";
 import { jobRef } from "./refs.mjs";
 import * as registry from "./registry.mjs";
@@ -495,6 +495,11 @@ export function noteRespawn(id, { worker } = {}, env = process.env) {
     countSpawn(db, values[0]);
     return true;
   });
+}
+
+// Records the orchestrator route of the attempt this worker runs, before its spawn; false when the route is not an alias or the worker holds no open attempt.
+export function noteAttemptRoute(id, { worker, route } = {}, env = process.env) {
+  return noteRouteOnAttempt(openDb(env), { jobId: requireId(id), worker: requireText("worker", worker), route });
 }
 
 // Liveness seam of the sweep by default: without an implementation nothing is protected from being failed.

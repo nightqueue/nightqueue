@@ -976,6 +976,51 @@ export function extractBaselineCtx(log) {
   return null;
 }
 
+const INIT_MODEL_MAX = 200;
+const INIT_MODEL_CONTROL = /[\u0000-\u001f\u007f-\u009f\u2028\u2029]/g;
+const LEADING_BOM = /^\uFEFF/;
+
+// The model the orchestrator's LAST `system/init` reported (never a subagent's, never a fenced line), without control characters, trimmed and clipped; null when none.
+export function extractInitModel(log) {
+  let model = null;
+  for (const entry of linesOutsideClosedFences(log)) {
+    if (!isMarkerCandidate(entry)) continue;
+    const event = parseEventLine(entry.line.replace(LEADING_BOM, ""));
+    if (event?.type !== "system" || event.subtype !== "init" || isSubagentEvent(event)) continue;
+    const reported = typeof event.model === "string" ? event.model.replace(INIT_MODEL_CONTROL, "").trim() : "";
+    if (reported !== "") model = reported.slice(0, INIT_MODEL_MAX);
+  }
+  return model;
+}
+
+// The lines of a text flagged with whether they lie inside a fence that closes; a fence opener that never closes is taken as one stray line, so it hides nothing after it.
+function linesOutsideClosedFences(text) {
+  const lines = String(text ?? "").replace(/\r\n?/g, "\n").split("\n");
+  const scanned = [];
+  let from = 0;
+  while (from < lines.length) {
+    const { entries, unclosedAt } = scanFencesFrom(lines, from);
+    if (unclosedAt === -1) return [...scanned, ...entries];
+    scanned.push(...entries.slice(0, unclosedAt - from), { line: lines[unclosedAt], inFence: true });
+    from = unclosedAt + 1;
+  }
+  return scanned;
+}
+
+// The fence state of the lines from an index on, with the index of the opener of a fence still open at the end (-1 when every fence closes).
+function scanFencesFrom(lines, from) {
+  const entries = [];
+  let open = null;
+  let openerAt = -1;
+  for (let at = from; at < lines.length; at += 1) {
+    const step = fenceStep(open, lines[at]);
+    if (open === null && step.open !== null) openerAt = at;
+    entries.push({ line: lines[at], inFence: step.fenceLine || open !== null });
+    open = step.open;
+  }
+  return { entries, unclosedAt: open === null ? -1 : openerAt };
+}
+
 // Consolidates the host command counts of several attempts into one total, the same way `sumUsage` does for tokens.
 export function sumHostCommandCounts(counts) {
   const list = (Array.isArray(counts) ? counts : []).filter((entry) => entry && typeof entry === "object");

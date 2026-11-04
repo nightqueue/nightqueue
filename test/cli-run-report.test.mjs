@@ -421,8 +421,34 @@ test("the json report carries the rows and the verdict of the one table, nothing
 
   const json = JSON.parse((await report(env, id, ["--json"]))[0]);
 
-  assert.deepEqual(Object.keys(json), ["slug", "rows", "happy", "reason", "durationS", "openItems", "recorded", "facts"]);
+  assert.deepEqual(Object.keys(json), ["slug", "rows", "happy", "reason", "durationS", "orchestrator", "openItems", "recorded", "facts"]);
   assert.deepEqual(Object.keys(json.rows[0]), ["phase", "step", "agent", "launch", "icon", "word", "note", "durationS"]);
+});
+
+// Runs `run report` as the job with the given flags and answers every line it printed, the facts included.
+async function reportAll(env, id, argv = []) {
+  const out = [];
+  const code = await run(["run", "report", ...argv], { env: { ...env, NIGHTQUEUE_JOB_ID: String(id) }, out: (line) => out.push(line), err: () => {}, stdout: { write: () => {} } });
+  assert.equal(code, 0);
+  return out;
+}
+
+test("the facts open with the orchestrator: `default` with no log, the attempt row's route and the init model with one, whatever the project routes now", async (t) => {
+  const { env, id, run: target } = makeRun(t, "report-orchestrator");
+  recordPhases(target, COMPLEX_CLEAN);
+  recordDelivery(target);
+  const firstFact = (lines) => lines[lines.indexOf("## Facts for the report") + 2];
+  assert.equal(firstFact(await reportAll(env, id, ["--facts"])), "- orchestrator: default");
+
+  const db = openDb(env);
+  db.prepare("INSERT INTO job_attempts (job_id, attempt, worker, started_at, fresh, orchestrator_route) VALUES (?, 1, 'w', datetime('now'), 0, 'sonnet')").run(id);
+  db.prepare("UPDATE projects SET integrations = ? WHERE id = ?").run(JSON.stringify({ agents: { orchestrator: { model: "haiku" } } }), target.projectId);
+  mkdirSync(logsDir(env), { recursive: true });
+  writeFileSync(jobLogPath(id, env), toNdjson([{ type: "system", subtype: "init", session_id: "s", model: "claude-sonnet-5-5" }]));
+  assert.equal(firstFact(await reportAll(env, id)), "- orchestrator: sonnet (claude-sonnet-5-5)");
+  const json = JSON.parse((await reportAll(env, id, ["--json"]))[0]);
+  assert.deepEqual(json.orchestrator, { route: "sonnet", model: "claude-sonnet-5-5", label: "sonnet (claude-sonnet-5-5)" });
+  assert.equal(json.facts[0], "- orchestrator: sonnet (claude-sonnet-5-5)");
 });
 
 test("the report carries no lesson audit, even when the stream has `lesson_save` calls: Phase 10's reflector reports the saves", async (t) => {

@@ -19,6 +19,7 @@ import { holdJobAwake } from "./keep-awake.mjs";
 import { PLUGIN_DIR_ENV } from "./orchestrator-scope.mjs";
 import { DEFAULT_PIPELINE, PIPELINE_NAME_RE } from "./pipeline-package.mjs";
 import { isRunPath, isSafeSegment } from "./resume.mjs";
+import { MODEL_NAMES } from "./routing.mjs";
 import { profileArgs } from "./session-profile.mjs";
 import { isSessionIdSafe } from "./stream.mjs";
 export { provisionalSlug, slugCandidates } from "./run-slug.mjs";
@@ -265,12 +266,13 @@ export function buildPrompt({ job, facts = null, env = process.env } = {}) {
   return `${base}${originBlock(job, env)}${factsBlock(facts, job)}${operatorBlock(job?.operator_note, job?.prompt)}`;
 }
 
-// Builds the argv of the child: an array, never a shell, fenced off from the operator's own environment unless inheritUserEnvironment is true, with --resume only behind the session id gate.
-export function buildArgs({ prompt, resumeSessionId = null, env = process.env, jobId = null, claim = null, inheritUserEnvironment = false } = {}) {
+// Builds the argv of the child: an array, never a shell, fenced off from the operator's own environment unless inheritUserEnvironment is true, with --resume only behind the session id gate and --model only for a known alias.
+export function buildArgs({ prompt, resumeSessionId = null, env = process.env, jobId = null, claim = null, inheritUserEnvironment = false, model = null } = {}) {
   const fenced = inheritUserEnvironment !== true;
   return profileArgs({
     kind: "job",
     prompt,
+    model: MODEL_NAMES.includes(model) ? model : null,
     pluginDir: pluginDir(),
     mcpConfig: mcpConfigArg(env, jobId, { claim }),
     ...(fenced ? { settings: jobSettings(env) } : { strictMcp: false, settingSources: null, settings: null }),
@@ -364,6 +366,7 @@ export function spawnClaude({
   bashTimeoutS = BASH_TIMEOUT_DEFAULT,
   pendingMarginS = PENDING_TOOL_MARGIN_S,
   inheritUserEnvironment = false,
+  model = null,
   args: argsOverride = null,
 } = {}) {
   return new Promise((settle) => {
@@ -372,7 +375,7 @@ export function spawnClaude({
     stream.on("error", (err) => reportLogFailure(logPath, err));
     const resolved = resolveBinImpl(env);
     const claim = { attempt, worker, ordinal };
-    const args = argsOverride ?? buildArgs({ prompt, resumeSessionId, env, jobId, claim, inheritUserEnvironment });
+    const args = argsOverride ?? buildArgs({ prompt, resumeSessionId, env, jobId, claim, inheritUserEnvironment, model });
     const runtimeEnv = { ...BG_WAIT_CEILING_ENV, ...noOrphanTaskEnv(bashTimeoutS), [PLUGIN_DIR_ENV]: pluginDir() };
     const baseEnv = withoutOperatorSession(env);
     const childEnv = jobId === null ? { ...baseEnv, ...runtimeEnv } : { ...baseEnv, ...jobIdentity(env, jobId, claim), ...runtimeEnv };
