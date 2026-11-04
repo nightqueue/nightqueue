@@ -11,11 +11,9 @@ import { registerCheckout } from "../test-support/memory.mjs";
 import { loadConfig, saveConfig } from "../src/config/store.mjs";
 import { OPERATOR_AGENT, OPERATOR_OPENING_PROMPT } from "../src/host/operator.mjs";
 import { operatorSettings } from "../src/host/settings.mjs";
-import { createQaWorktree } from "../src/queue/qa-worktree.mjs";
 import { pluginDir } from "../src/queue/spawn.mjs";
 import { initGitRepo } from "../test-support/git.mjs";
 import { makeDir, makeHome } from "../test-support/memory.mjs";
-import { deadPid } from "../test-support/worktrees.mjs";
 
 const FAKE_CLAUDE = fileURLToPath(new URL("../test-support/fake-claude-open.mjs", import.meta.url));
 
@@ -194,23 +192,6 @@ test("`nightqueue open` from outside every checkout prunes a registered checkout
 
   assert.equal(result.code, 0, result.err.join("\n"));
   assert.equal(listed().includes(stale), false);
-});
-
-test("`nightqueue open` drops a qa worktree whose session is gone, says so once, and keeps one a live session holds", async (t) => {
-  const home = openHome(t, "open-qa-sweep");
-  const project = { id: home.project.id, name: "alpha", path: home.checkout };
-  const orphan = createQaWorktree({ project, env: { ...home.env, NIGHTQUEUE_OPERATOR_PID: String(deadPid()) } });
-  const held = createQaWorktree({ project, env: { ...home.env, NIGHTQUEUE_OPERATOR_PID: String(process.pid) } });
-
-  const result = await runOpen(home.env, [], home.base);
-
-  assert.equal(result.code, 0, result.err.join("\n"));
-  assert.deepEqual(result.out, ["operator · dropped 1 stale qa worktree(s)", `operator · ${homeDir(home.env)} · project none · agent ${OPERATOR_AGENT}`]);
-  assert.equal(existsSync(orphan), false);
-  assert.ok(existsSync(held));
-
-  const again = await runOpen(home.env, [], home.base);
-  assert.deepEqual(again.out, [`operator · ${homeDir(home.env)} · project none · agent ${OPERATOR_AGENT}`], "a sweep with nothing to drop printed a line");
 });
 
 test("`--resume` runs in the transcript's recorded directory, else the current one inside the checkout, else the home", async (t) => {

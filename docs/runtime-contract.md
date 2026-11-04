@@ -481,6 +481,21 @@ a 404, and a malformed escape is a 400. `GET /api/jobs/<ref>/log?from=<byte>` an
 integer is a 400. Without `from` the route answers the last MiB, as before. All of these are
 read-only and sit behind the same token gate as the rest of `/api`.
 
+**Spawn profile.** Every `claude` argv nightqueue builds comes from one declarative builder,
+`profileArgs({ kind, ... })` in `src/queue/session-profile.mjs`, a module with no imports; each
+caller computes the environment-dependent values (settings object, MCP config, plugin dir, agent
+body) with its own helpers and passes them in. A kind declares its defaults and its flag order,
+kept per kind so the argv stays byte-identical to what each launcher built before:
+
+| Kind | Caller | Permission mode | Setting sources | Strict MCP | MCP config | Settings from | Stream JSON | Prompt form |
+|---|---|---|---|---|---|---|---|---|
+| `job` | `buildArgs` (spawn.mjs) | `bypassPermissions` | `project` | yes | `mcpConfigArg(env, jobId)` | `jobSettings` | yes | `-p <prompt>` |
+| `merger` | `mergerArgs` (merger-spawn.mjs) | `acceptEdits` | `project` | yes | none | `mergerSettings` | yes | `-p <prompt>`, `--agent nightqueue:merger`, `--tools Read,Edit` |
+| `operator` | `operatorArgs` (host/operator.mjs) | `default` | `user,project,local` | no | `mcpConfigArg(env, null, { operator })` | `operatorSettings` | no | interactive operand (the opening prompt, `--prompt`, or none on a bare `--resume`) |
+
+With `queue.inheritUserEnvironment` on, a job drops `--strict-mcp-config`, `--setting-sources` and
+`--settings`. An unknown kind throws.
+
 **Operator sessions.** `nightqueue open` (and `nightqueue queue session`, and a studio
 terminal through them) starts `claude` with `NIGHTQUEUE_MODE=operator`,
 `NIGHTQUEUE_OPERATOR_PID=<pid of the launcher>`, `NIGHTQUEUE_OPERATOR_SESSION=<a ULID minted

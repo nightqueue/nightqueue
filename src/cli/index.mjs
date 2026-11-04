@@ -125,7 +125,6 @@ commands:
   verify [--scope touched|full|+poc]        run the project's own checks in a fixed order, one line per check; exits 1 on any failure
   verify [--files <list>]                   narrow the checks that accept a file list to those paths (comma-separated, repeatable)
   sandbox <command> [args...]               run one command against a throwaway NIGHTQUEUE_HOME and CLAUDE_CONFIG_DIR
-  sandbox worktree <project> | --drop <path>  create a detached qa worktree of a project under the home's qa/ (prints QA_WORKTREE: <path>), or drop one
   libs <name>...                            print the version of each lib INSTALLED here, read from the lockfile, never the range
   run index-save <artifact> [--project]     save the \`## File map\` and \`## Third-party libraries\` of an explore artifact in the index
   run index-save [--repo-root <path>]       index the artifact's paths relative to <path>, the repository root (default: .)

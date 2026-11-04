@@ -35,6 +35,11 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
   change; `lesson_save` refuses a target no manifest declares, naming the accepted roles, and a lesson
   stored with one is still recalled without a target.
 
+- **One spawn profile builds the argv of a job, the merger and the operator.** `buildArgs`,
+  `mergerArgs` and `operatorArgs` now call `profileArgs({ kind })` of the new
+  `src/queue/session-profile.mjs`, a declarative entry per kind (permission mode, setting sources,
+  strict MCP, flag order); the argv of each is unchanged, byte for byte, and the operator guard
+  (`NIGHTQUEUE_MODE=operator`, its `--settings` and PreToolUse hook) is untouched.
 - **Report and telemetry are read from the recorded phases and the pipeline package.** Each `phases[]`
   entry `run check` and `run publish` write now carries its own `attempt`, `durationS` (wall time since
   the previous record of the attempt, orchestrator time included) and `model`, and `run report`, `run log`,
@@ -624,6 +629,13 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Removed
 
+- **`nightqueue sandbox worktree`, the `nightqueue open` qa sweep and the `doctor --fix` qa
+  sweep.** `sandbox worktree` now exits 1 with a pointer: a job's worktree (`queue add`) or a
+  run's own worktree covers QA, and `nightqueue sandbox <command>` is unchanged. `nightqueue open`
+  (and `queue session`, a studio terminal) no longer drops qa worktrees nor prints `operator ·
+  dropped <n> stale qa worktree(s)`. `nightqueue doctor` lists what is left under
+  `<NIGHTQUEUE_HOME>/qa/` as read-only `qa (legacy) <project>/<id>` rows with their `git worktree
+  remove` hint, like the `operator-qa (legacy)` ones, and `--fix` never deletes them.
 - **The gates that forced a pause or a relaunch by paperwork.** `run check` no longer answers
   `coverage-not-covered-without-confirmation`, `usage-coverage-cond-1` to `-cond-4`,
   `symptom-coverage-n-mismatch`, `symptom-coverage-omitted-empty`,

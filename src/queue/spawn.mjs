@@ -18,6 +18,7 @@ import { holdJobAwake } from "./keep-awake.mjs";
 import { PLUGIN_DIR_ENV } from "./orchestrator-scope.mjs";
 import { DEFAULT_PIPELINE, PIPELINE_NAME_RE } from "./pipeline-package.mjs";
 import { isRunPath, isSafeSegment } from "./resume.mjs";
+import { profileArgs } from "./session-profile.mjs";
 import { isSessionIdSafe } from "./stream.mjs";
 export { provisionalSlug, slugCandidates } from "./run-slug.mjs";
 import { jobRef } from "../memory/refs.mjs";
@@ -263,24 +264,15 @@ export function buildPrompt({ job, facts = null, env = process.env } = {}) {
 
 // Builds the argv of the child: an array, never a shell, fenced off from the operator's own environment unless inheritUserEnvironment is true, with --resume only behind the session id gate.
 export function buildArgs({ prompt, resumeSessionId = null, env = process.env, jobId = null, claim = null, inheritUserEnvironment = false } = {}) {
-  const args = [
-    "-p",
-    String(prompt ?? ""),
-    "--permission-mode",
-    "bypassPermissions",
-    "--output-format",
-    "stream-json",
-    "--verbose",
-    "--plugin-dir",
-    pluginDir(),
-    "--mcp-config",
-    mcpConfigArg(env, jobId, { claim }),
-  ];
-  if (inheritUserEnvironment !== true) {
-    args.push("--strict-mcp-config", "--setting-sources", "project", "--settings", JSON.stringify(jobSettings(env)));
-  }
-  if (isSessionIdSafe(resumeSessionId)) args.push("--resume", resumeSessionId);
-  return args;
+  const fenced = inheritUserEnvironment !== true;
+  return profileArgs({
+    kind: "job",
+    prompt,
+    pluginDir: pluginDir(),
+    mcpConfig: mcpConfigArg(env, jobId, { claim }),
+    ...(fenced ? { settings: jobSettings(env) } : { strictMcp: false, settingSources: null, settings: null }),
+    resume: isSessionIdSafe(resumeSessionId) ? resumeSessionId : null,
+  });
 }
 
 // Opens the accumulated log of the job in append mode, separating the attempt that is about to start.

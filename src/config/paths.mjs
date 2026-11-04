@@ -226,14 +226,9 @@ export function legacyOperatorQaDir(env = process.env) {
   return join(homeDir(env), "operator-qa");
 }
 
-// Directory holding the ephemeral QA worktrees `nightqueue sandbox worktree` creates, one sub-directory per project id.
+// Directory where `nightqueue sandbox worktree` (removed) left QA worktrees; doctor only reports it.
 export function qaDir(env = process.env) {
   return join(homeDir(env), "qa");
-}
-
-// Path of one ephemeral QA worktree, keyed by the project's id and the worktree's own id.
-export function qaWorktreePath(projectId, id, env = process.env) {
-  return join(qaDir(env), projectId, id);
 }
 
 // Path of the marker saying the run directories were moved from project names to project ids.

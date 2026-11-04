@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { chmodSync, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, rmSync, writeFileSync } from "node:fs";
-import { basename, delimiter, join } from "node:path";
+import { delimiter, join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { defaultContext, run } from "../src/cli/index.mjs";
+import { newId } from "../src/config/ids.mjs";
 import { dbPath, legacyOperatorQaDir, qaDir, queuePausedPath, resolvedRuntimeDir, runnerRegistryPath, secretsPath, worktreesDir } from "../src/config/paths.mjs";
 import { moveProject } from "../src/memory/registry.mjs";
 import { ensureHome } from "../src/config/store.mjs";
@@ -13,7 +14,6 @@ import { closeDb, openDb } from "../src/memory/db.mjs";
 import { acquireClose, addJob, claimJobById, failClose } from "../src/memory/jobs.mjs";
 import { saveLesson } from "../src/memory/lessons.mjs";
 import { shimContent } from "../src/host/runtime.mjs";
-import { createQaWorktree } from "../src/queue/qa-worktree.mjs";
 import { writeRunnerRecord } from "../src/queue/registry.mjs";
 import { recordRunFields } from "../src/queue/run-state.mjs";
 import { buildLegacyHome } from "../test-support/legacy-home.mjs";
@@ -998,37 +998,36 @@ test("a QA worktree an operator before the generalist operator left under the ho
   assert.equal(existsSync(path), true, "the diagnosis deleted the QA worktree");
 });
 
-test("doctor flags a qa worktree whose session is gone and a directory that is not a qa worktree; --fix drops only the first, and the legacy operator-qa row stays reported", async (t) => {
+test("doctor lists a qa worktree left by the removed `sandbox worktree` and a foreign directory under qa/ once each as legacy leftovers, and --fix deletes neither", async (t) => {
   const host = makeHostEnv(t, "doctor-qa-worktrees");
   const checkout = registerRealCheckout(t, host.env, "doctor-qa-worktrees");
   const projectId = projectIdOf(host.env, "alpha");
-  const pid = deadPid();
-  const orphan = createQaWorktree({ project: { id: projectId, name: "alpha", path: checkout }, env: { ...host.env, NIGHTQUEUE_OPERATOR_PID: String(pid) } });
-  const foreign = join(qaDir(host.env), projectId, "notes");
-  mkdirSync(foreign, { recursive: true });
-  writeFileSync(join(foreign, "keep.txt"), "x");
+  const id = newId();
+  const orphan = join(qaDir(host.env), projectId, id);
+  git(["-C", checkout, "worktree", "add", "-q", "--detach", orphan, "main"]);
+  const lockReason = `nightqueue qa (pid ${deadPid()})`;
+  git(["-C", checkout, "worktree", "lock", "--reason", lockReason, orphan]);
+  const stray = join(qaDir(host.env), "01J9Z00000000000000000000A");
+  mkdirSync(join(stray, "notes"), { recursive: true });
   const legacy = join(legacyOperatorQaDir(host.env), projectId, "qa-hunt");
   git(["-C", checkout, "worktree", "add", "-q", "--detach", legacy, "main"]);
-  const orphanName = `qa alpha/${basename(orphan)}`;
-  const foreignName = `qa ${projectId}/notes`;
+  const orphanName = `qa (legacy) alpha/${id}`;
+  const strayName = "qa (legacy) 01J9Z00000000000000000000A";
+  const remove = `git -C '${checkout}' worktree remove '${orphan}'`;
+  const expectedOrphan = check(orphanName, "warn", `left over: registered in git and locked (${lockReason}), no open job owns it`, `git -C '${checkout}' worktree unlock '${orphan}' && ${remove}`);
   closeDb(host.env);
 
-  const { report } = await diagnose(host.env);
+  for (const args of [[], ["--fix"]]) {
+    const { report } = await diagnose(host.env, {}, args);
 
-  assert.deepEqual(checkOf(report, orphanName), check(orphanName, "warn", `stale (session pid ${pid} gone): dropped by the next \`nightqueue open\` or \`nightqueue doctor --fix\``, "nightqueue doctor --fix"));
-  assert.equal(checkOf(report, foreignName).status, "warn");
-  assert.match(checkOf(report, foreignName).detail, /^not a qa worktree; inspect /);
-  assert.equal(statusOf(report, "operator-qa (legacy) alpha/qa-hunt"), "warn");
-  assert.ok(existsSync(orphan), "doctor without --fix dropped a qa worktree");
-
-  const fixed = (await diagnose(host.env, {}, ["--fix"])).report;
-
-  assert.deepEqual(checkOf(fixed, orphanName), check(orphanName, "ok", "removed: stale qa worktree", null));
-  assert.equal(existsSync(orphan), false);
-  assert.equal(checkOf(fixed, foreignName).status, "warn");
-  assert.ok(existsSync(join(foreign, "keep.txt")), "doctor --fix touched a directory that is not a qa worktree");
-  assert.equal(statusOf(fixed, "operator-qa (legacy) alpha/qa-hunt"), "warn");
-  assert.ok(existsSync(legacy), "doctor --fix removed a legacy operator-qa worktree");
+    assert.deepEqual(report.checks.filter((row) => row.name === orphanName), [expectedOrphan], args.join(" "));
+    assert.deepEqual(checkOf(report, strayName), check(strayName, "warn", "project not registered (no registered project with a checkout has this id)", `inspect '${stray}'`));
+    assert.equal(report.checks.filter((row) => row.name === strayName).length, 1);
+    assert.equal(statusOf(report, "operator-qa (legacy) alpha/qa-hunt"), "warn");
+    assert.ok(existsSync(orphan), `doctor ${args.join(" ")} deleted a qa leftover`);
+    assert.ok(existsSync(join(stray, "notes")), `doctor ${args.join(" ")} deleted a foreign directory under qa/`);
+    assert.ok(existsSync(legacy), `doctor ${args.join(" ")} removed a legacy operator-qa worktree`);
+  }
 });
 
 // One report row, in the shape the diagnosis prints.
