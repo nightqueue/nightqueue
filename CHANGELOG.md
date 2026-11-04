@@ -65,6 +65,18 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
   `--model` (a project with none, or whose settings cannot be read, keeps `sonnet`), and `run
   start` shows it like every other agent's.
 
+- **The phase contract lives in the SKILL blocks; the agents keep only their method.** Each block of
+  `## Phase prompts` now carries its `ARTIFACT_PATH`, its `INPUTS` with the sections to read, a
+  `## Deliver` whose headings sit in a `~~~` fence, its `## Found` extras and the shared `<RETURN>`,
+  `<LANE>` (long commands and the shell rule) and `<ROUND>` (append-only round) snippets, in at most 32
+  written lines; the orchestrator fills placeholders only up to `NOTE:`. The `## Inside a run` section
+  is gone from the triager, explore, architect, coder, qa-guardian, verifier and reflector, whose method
+  is reworded with no run file, run directory or phase name, so a direct (operator) launch and a run
+  launch read the same agent. Tests hold each Deliver to the pipeline manifest's mandatory sections,
+  guard every sentence of the removed run sections, and cap J-277's 21 launches under 90,000
+  characters. The orchestrator now loads a larger SKILL.md before its first launch (32,650 bytes,
+  1.66 times main's).
+
 - **Report and telemetry are read from the recorded phases and the pipeline package.** Each `phases[]`
   entry `run check` and `run publish` write now carries its own `attempt`, `durationS` (wall time since
   the previous record of the attempt, orchestrator time included) and `model`, and `run report`, `run log`,

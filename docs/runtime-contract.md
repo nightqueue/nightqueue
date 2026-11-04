@@ -821,13 +821,20 @@ names, outside one the `project` and `slug` it names.
 
 ### Launching a subagent
 
-The agent definition knows how; the prompt says what this run wants and the return syntax.
-Each `plugin/agents/<agent>.md` ends in a `## Inside a run` section, applied when the request
-carries a `RUN_DIR:` line: its first-step fetches (`context_for_agent` with its own role, the
-triager's request from `<RUN_DIR>/00-prompt.md`, the origin from `<RUN_DIR>/origin/`, the answers from
-`state.json`), its method and the layout of the artifact it writes. `coder-fix`, `runtime` and
-`qa-prover` fetch no context. `## Phase prompts` of the SKILL holds one block of at most 12 lines per
-target, and the filled block is the whole `prompt` of the `Agent` call; no other call is needed.
+The contract has one home per concern. The block of `## Phase prompts` in the resolve SKILL is the
+contract of one launch: its `ARTIFACT_PATH`, its `INPUTS` (the run files with the sections to read,
+the `state.json` fields and the `context_for_agent` parameters), its `## Deliver` (the headings
+inside a `~~~` fence, each with a one-line purpose, and the round, stage or fix-loop append rule),
+its `## Found` extras and its return. The agent file `plugin/agents/<agent>.md` is the method only:
+how to judge, attack, prove or write, worded for any request, with no run file, run directory or
+phase name - an agent file holds no run section. The pipeline manifest
+(`plugin/skills/resolve/pipeline/manifest.json`) lists the mandatory sections each `run check`
+reads, and a test holds every block's Deliver to it. `coder-fix`, `runtime` and `qa-prover` fetch
+no context. A block has at most 32 written lines; its `<RETURN>`, `<LANE>` (long commands and the
+shell rule) and `<ROUND>` (the append-only round rule) lines are the shared fences of those names,
+written out in their place. The orchestrator fills the `<…>` of every line up to and including
+`NOTE:` and copies every later line as written, so the agent-side placeholders of a Deliver survive.
+The filled block is the whole `prompt` of the `Agent` call; no other call is needed.
 A pipeline picks a model from the `models` that `nightqueue run start` answers: `subagent_type` and
 `model` are the block's `AGENT` and `MODEL`. `run start` also answers the values a block needs that
 only the run knows: `needsSlug`, `demoRepo`, `baseRef` (`HEAD` when none resolves), `pluginRoot` and

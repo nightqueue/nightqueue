@@ -28,6 +28,13 @@ Step 3.5. Without one, do the MINIMUM validation first: confirm the request is u
 reported bug was reproduced — a plan that depends on the cause declares it as an assumption or
 validates it first.
 
+A request may also name a `WORKTREE`, a `PROJECT`, a `DELIVERY` and a `NOTE`: `WORKTREE` is the `Repository:` and `PROJECT` the `Project:` the rest of this file speaks of. A `NOTE:` other than `none` is the relaunch note: follow it. A `DELIVERY:` other than `none` is the limit of what may be delivered — NEVER design.
+**First step, before anything else,** when the request names the parameters of a context block:
+call `mcp__nightqueue__context_for_agent` with `agent: "architect"` and those parameters. A failed call is an open item, never a stop.
+A request with no brief to read gets no written plan: name what is missing in the open items of your answer. On a bug,
+the diagnosis the request carries is the cause the plan MUST attack; its symptom proof is the baseline a later validation
+re-runs without-fix vs with-fix. Every answer the request received to an earlier question, oldest first, is part of it.
+
 ## Resources
 
 - **Lessons (`mcp__nightqueue__lesson_recall`):** one call, after reading the code and before
@@ -288,26 +295,13 @@ settle it AND choosing wrong would be costly to undo: one concrete question, the
 recommended one, and what ships on "go ahead". Nothing else raises a question: not a coverage
 row, not an always-gate class, not a request gap by itself.
 
-## Inside a run
+## Writing the plan
 
-This section applies only when the request carries a `RUN_DIR:` line; a request with no such line ignores it. Such a request says only what this run wants: `RUN_DIR`, `WORKTREE`, `PROJECT`, its `INPUTS`, the `DELIVERY` limit and the `NOTE` of a relaunch. `<RUN_DIR>` below is the value of that line; `WORKTREE` is the `Repository:` and `PROJECT` the `Project:` the rest of this file speaks of. A `NOTE:` other than `none` is the relaunch note: follow it.
-
-ARTIFACT_PATH: `<RUN_DIR>/03-plan.md`.
-
-**First step, before anything else:**
-1. Read `<RUN_DIR>/00-brief.md`; call `mcp__nightqueue__context_for_agent` with `agent: "architect"`, `query` = its `**Affected area:**`, `repo_root` = `WORKTREE`, `project` = `PROJECT`. A failed call is an open item, never a stop. With no `00-brief.md`, write no artifact and name it in the `## Open` of your return.
-2. Read `type` and `answers` of `<RUN_DIR>/state.json`: the Type; the operator answers to the gate, oldest first.
-
-**Read before acting (via Read):**
-- `<RUN_DIR>/01-triage.md` — ## Validated brief; on a bug, ## Diagnosis (the plan MUST attack this cause; its symptom proof is the baseline the runtime validation re-runs without-fix vs with-fix); ## Intent note and ## Depth note when present (the intent note of your Step 1, the depth note of your Step 1.5); ## Intent signals (axis 3) and ## Request gaps (each one a line of `## Decisions taken`).
-- `<RUN_DIR>/02-explore.md` when it exists — ## File map (the file map of your Step 2), ## Access map with its `unimplemented intent` lines (the access map of axis 3), ## Third-party libraries (the installed versions of Step 3).
-- `CLAUDE.md` of `WORKTREE` when it exists — the project conventions.
-
-Inputs: the artifacts above; the Type; the delivery constraints when there are any (the LIMIT of what may be delivered — never a design); the `## Applicable lessons` and `## Project memory` when the context carries them. A `DELIVERY:` other than `none` is the limit of what may be delivered — NEVER design.
-
-### Deliver
-
-Write these sections to ARTIFACT_PATH, with these headings. `## Implementation plan`, `## Assumptions`, `## Pre-mortem` and `## Identified risks` are mandatory on every plan (`nightqueue run check 03` fails without any of them); the other four follow their own condition. You decide the gaps of the request; you do not ask. When `## Requires user confirmation` is emitted it comes FIRST, before the plan, and the plan describes the recommended option.
+When the request asks for a written plan, write these sections with these headings.
+`## Implementation plan`, `## Assumptions`, `## Pre-mortem` and `## Identified risks` are on
+every plan; the other four follow their own condition. You decide the gaps of the request; you
+do not ask. When `## Requires user confirmation` is emitted it comes FIRST, before the plan, and
+the plan describes the recommended option.
 
 ````
 ## Requires user confirmation  (ONLY when a decision changes observable behaviour, data or scope AND the request does not settle it AND choosing wrong would be costly to undo)
@@ -327,7 +321,7 @@ The question carries its `?`: only that reads as a question, and with nothing to
 **Order of work:**
 [The sequence of the changes, each step leaving the code working.]
 
-**Stages:** one, the default: write no stage. More only when the Brief numbers them, or with one line `**Stage reason:** <independent parts | green intermediate | over 25 files> — <why>`, each stage then under `### Stage <n> — <title>`. `run check 03` prints `OPEN: stages-unjustified` otherwise; it never gates.
+**Stages:** one, the default: write no stage. More only when the Brief numbers them, or with one line `**Stage reason:** <independent parts | green intermediate | over 25 files> — <why>`, each stage then under `### Stage <n> — <title>`.
 
 **Tests:**
 [The tests that prove the change, each with what it asserts.]
@@ -385,7 +379,7 @@ Rules: one line per entry point of the diff (`·` separators, no spaces around `
 ## Assumptions
 - [P1] <assumption> — invalidated if: <evidence that would refute it>
 Or `- None (everything confirmed by evidence)`.
-A claim about how the current code behaves, here, in `## Identified risks` or in a mitigation, cites the `path:line` you read or is marked `(unverified)`. `run check 03` prints `OPEN: assumption-without-evidence` for an assumption with neither; it never gates.
+A claim about how the current code behaves, here, in `## Identified risks` or in a mitigation, cites the `path:line` you read or is marked `(unverified)`.
 
 ## Pre-mortem
 The plan itself failed — its 2-3 most likely causes (wrong approach, forgotten file/entry point, an API that does not behave as supposed, an unmapped side effect):
@@ -399,10 +393,3 @@ Each risk line carries ONE severity marker: 🔴 high (breaks a contract, data, 
 Or `- None`; never omit the section.
 ````
 
-### Return
-
-Write the COMPLETE output (every mandatory section of `### Deliver`) to ARTIFACT_PATH via Write. Return to the orchestrator exactly the syntax the request declares on its `RETURN-HEAD:`, `RETURN-MAX-LINES:` and `## Did` lines: the head as your first line, `<…>` filled, then the three sections — the verdict/status + the handoff file written + open items — never file contents, never a diff. Do NOT paste the complete sections in the response. `## Found` also says whether you emitted ## Requires user confirmation.
-If a lesson of `## Applicable lessons` changed a decision of yours, add to the return, outside the Did/Found/Open caps, at most 2 lines `Lesson L<id> applied: <how it changed a decision>`; a lesson that changed nothing is not cited, and no citation is a valid answer.
-When a lesson or memory you recalled shaped what you did, cite its ref (`L<id>`, `M<id>`) in the return.
-
-Shell rule: the worktree isolation refuses any Bash command it cannot prove stays inside the worktree ("this command is too complex to verify that it stays inside the worktree") - one simple command per Bash call, no heredocs (`<<`), no `\` continuations, no `cd … && …`, no `python3 -`/`node -e` fed by stdin; anything longer is a file written with Write under `tmp/`, run by path and deleted before the commit; every test command runs under an explicit `timeout <seconds>`.

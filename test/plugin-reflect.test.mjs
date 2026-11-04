@@ -78,7 +78,7 @@ test("the reflect skill documents that an interactive recurrence bumps attempts 
 
 const AGENT_TEXT = readFileSync(join(pluginDir(), "agents/reflector.md"), "utf8");
 const AGENT = AGENT_TEXT.replace(/\s+/g, " ");
-const RUN_SECTION = AGENT_TEXT.slice(AGENT_TEXT.indexOf("## Inside a run"));
+const BLOCK = phasePrompts().blocks.reflector.join("\n").replace(/\s+/g, " ");
 
 test("the reflector agent is granted exactly Read, the three lesson/memory tools and its run's context", () => {
   const tools = /^tools: (.+)$/m.exec(AGENT_TEXT)?.[1];
@@ -95,14 +95,14 @@ test("the reflector reads every round and fix loop, never the job's stream or lo
   assert.equal(AGENT.includes("decision_save"), false);
 });
 
-test("the reflector's run section has no artifact handoff and names the rubric, state.json, the timeline and the rounds rule", () => {
-  assert.equal(RUN_SECTION.includes("ARTIFACT_PATH"), false);
-  assert.ok(RUN_SECTION.includes("RUBRIC: `<PLUGIN_ROOT>/skills/reflect/references/rubric.md`"));
-  assert.ok(RUN_SECTION.includes("`state.json`"));
-  assert.ok(RUN_SECTION.includes('`agent: "reflector"`'));
-  assert.ok(RUN_SECTION.includes("`## Run timeline`"));
-  assert.ok(RUN_SECTION.includes("`## Lessons given to this run`"));
-  assert.ok(RUN_SECTION.includes("Read every round and every fix-loop block; never the job's stream/log."));
+test("the reflector's block has no artifact handoff and names the rubric, state.json and the rounds rule; its agent fetches the timeline", () => {
+  assert.equal(BLOCK.includes("ARTIFACT_PATH"), false);
+  assert.ok(BLOCK.includes("RUBRIC: <pluginRoot>/skills/reflect/references/rubric.md"));
+  assert.ok(BLOCK.includes("state.json"));
+  assert.ok(BLOCK.includes('`agent: "reflector"`') && AGENT.includes('`agent: "reflector"`'));
+  assert.ok(AGENT.includes("`## Run timeline`"));
+  assert.ok(AGENT.includes("`## Lessons given to this run`"));
+  assert.ok(BLOCK.includes("Read every round and every fix-loop block; never the job's stream/log."));
 });
 
 test("the reflector's block names its run, its plugin root and its own return head", () => {
@@ -112,9 +112,8 @@ test("the reflector's block names its run, its plugin root and its own return he
   }
 });
 
-test("the reflector's run section reads qaMode and points a QA skip to the rubric's rule", () => {
-  const folded = RUN_SECTION.replace(/\s+/g, " ");
-  assert.ok(folded.includes("`state.json` (`termination`, `answers`, `lastClaim.attempt`, `qaMode`)"), folded);
-  assert.ok(folded.includes("a QA skip follows the rubric's `## A QA skip`"), folded);
-  assert.match(folded, /later defect in the skipped area is a lesson with `target: qa`, a skip that held saves nothing/);
+test("the reflector's block reads qaMode and its agent points a QA skip to the rubric's rule", () => {
+  assert.ok(BLOCK.includes("state.json — `termination`, `answers`, `lastClaim.attempt`, `qaMode`"), BLOCK);
+  assert.ok(AGENT.includes("a QA skip follows the rubric's `## A QA skip`"), AGENT);
+  assert.match(AGENT, /later defect in the skipped area is a lesson with `target: qa`, a skip that held saves nothing/);
 });

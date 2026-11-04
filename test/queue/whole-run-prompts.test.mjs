@@ -11,7 +11,7 @@ import { runCycle } from "../../src/queue/runner.mjs";
 import { ensureProject, makeDir, makeHome, makeProject } from "../../test-support/memory.mjs";
 import { useFakeClaude } from "../../test-support/queue-fake.mjs";
 import { fakeJobWorktree } from "../../test-support/job-worktree.mjs";
-import { phasePrompts } from "../../test-support/skill-size.mjs";
+import { fillBlock, phasePrompts } from "../../test-support/skill-size.mjs";
 import { agentToolUseEvent, assistantEvent, noticeText, PR_URL, recordedDone, resultEvent, SESSION_ID, SLUG, slugEvent, systemInitEvent, taskNotificationEvent, toNdjson, toolResultEvent, toolUseEvent } from "../../test-support/streams.mjs";
 
 const WORKTREE = "/tmp/whole-run-worktree";
@@ -19,6 +19,7 @@ const CONTEXT_TOOL = "mcp__nightqueue__context_for_agent";
 const REMOVED_TOOL = "mcp__nightqueue__phase_prompt";
 const PLUGIN_ROOT = join(packageRoot(), "plugin");
 const REFERENCES = join(PLUGIN_ROOT, "skills", "resolve", "references");
+const MANIFEST = JSON.parse(readFileSync(join(PLUGIN_ROOT, "skills", "resolve", "pipeline", "manifest.json"), "utf8"));
 const PLACEHOLDER_RE = /<[^<>]+>/g;
 
 // The lanes of one whole run in phase order: each block, the target of its own context fetch, and the phase that recall lands on.
@@ -35,24 +36,8 @@ const LANES = [
   { target: "runtime", context: null, phase: 7 },
   { target: "reflector", context: "reflector", phase: 10 },
 ];
-const VALUES = { runDir: null, worktree: WORKTREE, project: "alpha", needsSlug: "false", baseRef: "main", pluginRoot: PLUGIN_ROOT, demoRepo: "none configured" };
-
-// The model the `models` map of `run start` answers for a placeholder of a block, unique per role so a swap cannot pass.
-function modelOf(key) {
-  return `model-${key}`;
-}
-
-// A block filled in the way the orchestrator does: every placeholder a value, the return syntax left as declared.
-function fillBlock(lines, values) {
-  return lines.map((line) => (line.startsWith("RETURN-") || line.startsWith("## Did") ? line : line.replace(PLACEHOLDER_RE, (placeholder) => placeholderValue(placeholder, values))));
-}
-
-// The value of one placeholder of a block.
-function placeholderValue(placeholder, values) {
-  const key = placeholder.slice(1, -1);
-  if (key.startsWith("models.")) return modelOf(key.slice("models.".length));
-  return values[key] ?? "none";
-}
+const MODELS = Object.fromEntries(Object.keys(MANIFEST.models).map((role) => [role, `model-${role}`]));
+const VALUES = { runDir: null, worktree: WORKTREE, project: "alpha", needsSlug: "false", baseRef: "main", pluginRoot: PLUGIN_ROOT, demoRepo: "none configured", models: MODELS };
 
 // The agent and the model a filled block's first line names.
 function launchOf(filled) {
