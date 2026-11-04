@@ -14,6 +14,7 @@ import { jobSettings } from "../host/settings.mjs";
 import { OPERATOR_NOTE_LIMIT, RECOVERED_PROMPT, recoveredPromptRefusal, truncateByCodePoint } from "../memory/jobs.mjs";
 import { escapePromptMarkers } from "../memory/prompt-safety.mjs";
 import { JOB_CLAUDE_DIR_ENV, JOB_HOME_ENV } from "./home-guard.mjs";
+import { createPendingTools } from "./pending-tools.mjs";
 import { holdJobAwake } from "./keep-awake.mjs";
 import { PLUGIN_DIR_ENV } from "./orchestrator-scope.mjs";
 import { DEFAULT_PIPELINE, PIPELINE_NAME_RE } from "./pipeline-package.mjs";
@@ -26,6 +27,8 @@ import { jobRef } from "../memory/refs.mjs";
 
 // Silence of the stream that means a dead process: no event at all for this long ends the attempt.
 export const IDLE_TIMEOUT_S = 1200;
+// Seconds of silence past the Bash ceiling a pending tool is given before the idle timer ends the attempt.
+export const PENDING_TOOL_MARGIN_S = 300;
 // The CLI's own wait for a background subagent task gets no ceiling here: `timeout_s` and the idle timeout above already bound the attempt, so a ceiling of its own would only kill a subagent the run is still waiting for.
 const BG_WAIT_CEILING_ENV = { CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS: "0" };
 // Env vars pinned on every child so a command it runs can never become an orphan background task, with the configured bash timeouts converted to ms.
@@ -321,6 +324,23 @@ function seconds(value, fallback) {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
+// Silence allowed before an idle kill: the idle timeout, widened past the Bash ceiling (else to the total budget) while a tool is pending.
+export function idleWindowS({ idleTimeoutS, pending, bashTimeoutS, timeoutS, marginS }) {
+  const idle = seconds(idleTimeoutS, IDLE_TIMEOUT_S);
+  if (!pending) return idle;
+  const bashMax = seconds(bashTimeoutS?.max, null);
+  if (bashMax === null) return Math.max(idle, seconds(timeoutS, DEFAULT_TIMEOUT_S));
+  return Math.max(idle, bashMax + seconds(marginS, PENDING_TOOL_MARGIN_S));
+}
+
+// Log line naming why the idle timer fired, with the pending tools when there are any.
+function idleKillNote({ windowS, idleS, pendingTools }) {
+  const count = pendingTools.size();
+  if (count === 0) return `idle kill: no output for ${windowS} s, no tool pending`;
+  const bound = windowS > idleS ? "tool bound" : "idle timeout";
+  return `idle kill: no output for ${windowS} s with ${count} tool(s) pending (oldest ${pendingTools.oldest()?.name ?? "tool"}, past the ${windowS} s ${bound})`;
+}
+
 // Runs the headless claude CLI (prompt through argv, never a shell) and resolves with the outcome of the attempt.
 export function spawnClaude({
   prompt,
@@ -342,6 +362,7 @@ export function spawnClaude({
   resolveBinImpl = resolveClaudeBin,
   holdJobAwakeImpl = holdJobAwake,
   bashTimeoutS = BASH_TIMEOUT_DEFAULT,
+  pendingMarginS = PENDING_TOOL_MARGIN_S,
   inheritUserEnvironment = false,
   args: argsOverride = null,
 } = {}) {
@@ -367,22 +388,35 @@ export function spawnClaude({
     let stopTimer = null;
     let pausedSince = null;
     let pausedMs = 0;
-    const budgetMs = seconds(timeoutS, DEFAULT_TIMEOUT_S) * 1000;
+    let killNote = null;
+    const pendingTools = createPendingTools();
+    const budgetS = seconds(timeoutS, DEFAULT_TIMEOUT_S);
+    const budgetMs = budgetS * 1000;
     const startedAt = Date.now();
     let totalTimer = armTotal(budgetMs);
     // Arms what is left of the total budget of the attempt; a span waited out under a rate limit is given back to it, never spent.
     function armTotal(remainingMs) {
-      return setTimeout(() => triggerKill("timeout"), Math.max(0, remainingMs));
+      return setTimeout(() => triggerKill("timeout", `timeout kill: total budget of ${budgetS} s spent`), Math.max(0, remainingMs));
     }
-    function triggerKill(reason) {
+    function triggerKill(reason, note = null) {
       if (killed) return;
       killed = true;
       if (reason === "stop") stopped = true;
       else timedOut = true;
       if (reason === "idle") idleTimedOut = true;
       clearTimers();
+      if (note) noteKill(note);
       child.kill("SIGTERM");
       killTimer = setTimeout(() => child.kill("SIGKILL"), KILL_GRACE_MS);
+    }
+    // Records in the log of the job why a timer ended the attempt, as a marker the narration renders.
+    function noteKill(note) {
+      killNote = note;
+      try {
+        appendFileSync(logPath, `=== ${note} @ ${new Date().toISOString()} ===\n`);
+      } catch {
+        return;
+      }
     }
     function clearTimers() {
       clearTimeout(totalTimer);
@@ -392,7 +426,9 @@ export function spawnClaude({
     function armIdle() {
       if (killed || pausedSince !== null) return;
       if (idleTimer) clearTimeout(idleTimer);
-      idleTimer = setTimeout(() => triggerKill("idle"), seconds(idleTimeoutS, IDLE_TIMEOUT_S) * 1000);
+      const windowS = idleWindowS({ idleTimeoutS, pending: pendingTools.size() > 0, bashTimeoutS, timeoutS, marginS: pendingMarginS });
+      const idleS = seconds(idleTimeoutS, IDLE_TIMEOUT_S);
+      idleTimer = setTimeout(() => triggerKill("idle", idleKillNote({ windowS, idleS, pendingTools })), windowS * 1000);
     }
     // Suspends the two timers that would end the child while the provider's limit is waited out; the child itself is never signalled.
     function enterPause() {
@@ -432,7 +468,10 @@ export function spawnClaude({
     child.stderr.on("data", capture);
     child.stdout.pipe(stream, { end: false });
     child.stderr.pipe(stream, { end: false });
-    const flushLines = attachLineEmitter(child, onLine);
+    const flushLines = attachLineEmitter(child, (line) => {
+      if (pendingTools.observe(line)) armIdle();
+      if (typeof onLine === "function") onLine(line);
+    });
     // One tick, two polls: the rate limit pause, which only suspends the timers, and the ownership heartbeat, which may end the child.
     async function poll() {
       if (typeof pauseSignalImpl === "function") applyPause(await pauseSignalImpl());
@@ -467,6 +506,7 @@ export function spawnClaude({
         timedOut,
         idleTimedOut,
         stopped,
+        killNote,
         spawnError: null,
         log: Buffer.concat(chunks).toString("utf8"),
       });
@@ -474,7 +514,7 @@ export function spawnClaude({
     child.on("error", (err) => {
       const reason = err?.code === "ENOENT" ? CLAUDE_MISSING_MESSAGE : `spawn error: ${err?.message ?? String(err)}`;
       appendFileSync(logPath, `${reason}\n`);
-      finish({ exitCode: -1, timedOut: false, idleTimedOut: false, stopped: false, spawnError: reason, log: reason });
+      finish({ exitCode: -1, timedOut: false, idleTimedOut: false, stopped: false, killNote: null, spawnError: reason, log: reason });
     });
   });
 }

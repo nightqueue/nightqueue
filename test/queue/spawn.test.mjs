@@ -16,7 +16,9 @@ import {
   buildPrompt,
   cliEntrypoint,
   IDLE_TIMEOUT_S,
+  idleWindowS,
   mcpConfigArg,
+  PENDING_TOOL_MARGIN_S,
   pluginDir,
   provisionalSlug,
   resolveClaudeBin,
@@ -466,6 +468,8 @@ test("a run that says nothing for too long dies of the idle timeout, which defau
 
   assert.equal(result.idleTimedOut, true, "the silent child was left running");
   assert.notEqual(result.exitCode, 0);
+  assert.match(result.killNote, /no tool pending/);
+  assert.match(readFileSync(jobLogPath(1, env), "utf8"), /^=== idle kill: no output for 0\.4 s, no tool pending @ \S+ ===$/m);
 });
 
 test("a run that never ends dies of the total timeout, however talkative it is", async (t) => {
@@ -475,6 +479,65 @@ test("a run that never ends dies of the total timeout, however talkative it is",
 
   assert.deepEqual({ timedOut: result.timedOut, idleTimedOut: result.idleTimedOut }, { timedOut: true, idleTimedOut: false });
   assert.notEqual(result.exitCode, 0);
+});
+
+const pendingBash = (id, parent = null) =>
+  `${JSON.stringify({ type: "assistant", parent_tool_use_id: parent, message: { content: [{ type: "tool_use", id, name: "Bash", input: { command: "npm test" } }] } })}\n`;
+const bashResult = (id, parent = null) =>
+  `${JSON.stringify({ type: "user", parent_tool_use_id: parent, message: { content: [{ type: "tool_result", tool_use_id: id, content: "ok" }] } })}\n`;
+
+test("the idle window is the idle timeout with nothing pending, and past the Bash ceiling while a tool is pending", () => {
+  const base = { idleTimeoutS: 1200, bashTimeoutS: { default: 900, max: 3600 }, timeoutS: 14400 };
+  assert.equal(PENDING_TOOL_MARGIN_S, 300);
+  assert.equal(idleWindowS({ ...base, pending: false }), 1200);
+  assert.equal(idleWindowS({ ...base, pending: true }), 3900);
+  assert.equal(idleWindowS({ ...base, pending: true, bashTimeoutS: { max: "nope" } }), 14400, "an unusable Bash ceiling did not fall back to the total budget");
+  assert.equal(idleWindowS({ ...base, pending: true, bashTimeoutS: null }), 14400);
+  assert.equal(idleWindowS({ ...base, pending: true, bashTimeoutS: { max: 60 }, marginS: 30 }), 1200, "a Bash bound below the idle timeout shortened the window");
+});
+
+test("a silent Bash call still pending past the idle timeout is not killed as idle", async (t) => {
+  const { env } = makeSpawnHome(t, "spawn-pending-main", [{ stdout: pendingBash("toolu_long"), holdMs: 1200, tail: bashResult("toolu_long"), exitCode: 0 }]);
+
+  const result = await spawnClaude({ prompt: "run it", timeoutS: 30, idleTimeoutS: 0.4, bashTimeoutS: { default: 0.5, max: 1 }, pendingMarginS: 0.5, logPath: jobLogPath(1, env), env });
+
+  assert.deepEqual({ exitCode: result.exitCode, idleTimedOut: result.idleTimedOut, timedOut: result.timedOut, killNote: result.killNote }, { exitCode: 0, idleTimedOut: false, timedOut: false, killNote: null });
+});
+
+test("a subagent's silent tool call alone keeps the idle timer from firing", async (t) => {
+  const { env } = makeSpawnHome(t, "spawn-pending-sub", [{ stdout: pendingBash("toolu_sub", "toolu_agent"), holdMs: 1200, tail: bashResult("toolu_sub", "toolu_agent"), exitCode: 0 }]);
+
+  const result = await spawnClaude({ prompt: "run it", timeoutS: 30, idleTimeoutS: 0.4, bashTimeoutS: { default: 0.5, max: 1 }, pendingMarginS: 0.5, logPath: jobLogPath(1, env), env });
+
+  assert.deepEqual({ exitCode: result.exitCode, idleTimedOut: result.idleTimedOut }, { exitCode: 0, idleTimedOut: false });
+});
+
+test("a tool pending past the Bash ceiling plus the margin is killed, and the log names the tool bound", async (t) => {
+  const { env } = makeSpawnHome(t, "spawn-pending-bound", [{ stdout: pendingBash("toolu_hung"), holdMs: 4000, exitCode: 0 }]);
+
+  const result = await spawnClaude({ prompt: "run it", timeoutS: 30, idleTimeoutS: 0.2, bashTimeoutS: { default: 0.2, max: 0.3 }, pendingMarginS: 0.2, logPath: jobLogPath(1, env), env });
+
+  assert.equal(result.idleTimedOut, true, "the hung tool was left running");
+  assert.match(result.killNote, /1 tool\(s\) pending \(oldest Bash, past the 0\.5 s tool bound\)/);
+  assert.match(readFileSync(jobLogPath(1, env), "utf8"), /^=== idle kill: no output for 0\.5 s with 1 tool\(s\) pending \(oldest Bash, past the 0\.5 s tool bound\) @ \S+ ===$/m);
+});
+
+test("a pending tool killed by an idle timeout wider than the tool bound is logged as past the idle timeout", async (t) => {
+  const { env } = makeSpawnHome(t, "spawn-pending-wide-idle", [{ stdout: pendingBash("toolu_wide"), holdMs: 4000, exitCode: 0 }]);
+
+  const result = await spawnClaude({ prompt: "run it", timeoutS: 30, idleTimeoutS: 0.6, bashTimeoutS: { default: 0.2, max: 0.2 }, pendingMarginS: 0.1, logPath: jobLogPath(1, env), env });
+
+  assert.equal(result.idleTimedOut, true);
+  assert.match(result.killNote, /1 tool\(s\) pending \(oldest Bash, past the 0\.6 s idle timeout\)/);
+});
+
+test("the total timeout still ends a run whose tool is pending, and says so in the log", async (t) => {
+  const { env } = makeSpawnHome(t, "spawn-pending-total", [{ stdout: pendingBash("toolu_total"), holdMs: 4000, exitCode: 0 }]);
+
+  const result = await spawnClaude({ prompt: "run it", timeoutS: 0.6, idleTimeoutS: 0.2, bashTimeoutS: { default: 30, max: 30 }, logPath: jobLogPath(1, env), env });
+
+  assert.deepEqual({ timedOut: result.timedOut, idleTimedOut: result.idleTimedOut }, { timedOut: true, idleTimedOut: false });
+  assert.match(readFileSync(jobLogPath(1, env), "utf8"), /^=== timeout kill: total budget of 0\.6 s spent @ \S+ ===$/m);
 });
 
 test("a rate limit pause suspends the idle timer and gives the whole wait back to the total budget, without signalling the child", async (t) => {

@@ -15,6 +15,14 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
   with one line, `the pipeline \`<name>\` has an invalid manifest: <reason> (<path>)`. `nightqueue doctor`
   prints a `pipeline` row per installed pipeline, `fail` with the reason and the path.
 
+- **A long tool call is no longer killed as idle.** The 1200 s idle timeout now applies only while
+  no tool call is pending: the runner tracks every `tool_use` until its `tool_result`, on the main
+  thread and in subagents, and every background task until it ends, and while one is pending the
+  silence allowed widens to `queue.bashTimeoutS.max + 300` s (3900 s by default, else the total
+  `timeout_s`), which still caps the run. The job log names each kill: `idle kill: ... no tool
+  pending`, `idle kill: ... with <n> tool(s) pending (oldest <name>, past the <S> s tool bound|idle timeout)` or
+  `timeout kill: total budget of <S> s spent`.
+
 - **`queue close` no longer merges a draft or a squash that reverts the base; MCP clients restart
   (tool contract 15).** Preflight stops an open draft with `draft` before any check, re-run, rebase
   or merge (``PR #<n> is a draft: review the remaining failures, then `gh pr ready <n>` and close
@@ -40,6 +48,23 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
   `src/queue/session-profile.mjs`, a declarative entry per kind (permission mode, setting sources,
   strict MCP, flag order); the argv of each is unchanged, byte for byte, and the operator guard
   (`NIGHTQUEUE_MODE=operator`, its `--settings` and PreToolUse hook) is untouched.
+
+- **The close's merger risk list is per project.** `nightqueue project merger-risk <project>
+  [--add <glob>]... [--remove <glob>]... [--list] [--json]` shows or edits the globs whose
+  conflicts the merger never resolves (stored under `merger.risk` in the project's settings,
+  hidden from and kept by `project integrations`; refused inside a job and for the operator
+  agent). A project with no list runs on the generic default `package.json`, `*-lock.json`,
+  `*.lock`, `pnpm-lock.yaml`, `bun.lockb`, `Cargo.lock`, `go.sum`, `poetry.lock`,
+  `Gemfile.lock`, and a list the close cannot read keeps every conflict from the merger.
+  Upgrade note: `src/memory/schema.mjs` and `src/memory/migration/**` are no longer
+  hardcoded; the nightqueue checkout keeps them protected with
+  `nightqueue project merger-risk nightqueue --add src/memory/schema.mjs --add 'src/memory/migration/**'`.
+
+- **The merger's model is overridable per project.** `nightqueue project models <project> --set
+  merger=<opus|sonnet|haiku>` now applies: the close reads it once and passes it as the merger's
+  `--model` (a project with none, or whose settings cannot be read, keeps `sonnet`), and `run
+  start` shows it like every other agent's.
+
 - **Report and telemetry are read from the recorded phases and the pipeline package.** Each `phases[]`
   entry `run check` and `run publish` write now carries its own `attempt`, `durationS` (wall time since
   the previous record of the attempt, orchestrator time included) and `model`, and `run report`, `run log`,

@@ -1025,7 +1025,7 @@ The agent models below are the single source. The dominant capability of the age
 The merger keeps `sonnet`. A project overrides any of them with `nightqueue project models`.
 Phases 0/8/9 run in the orchestrator, on the skill's model. Every run executes every phase.
 
-A project overrides any agent but the merger with
+A project overrides any agent, the merger included, with
 `nightqueue project models <project> --set <agent>=<model>` (`opus`, `sonnet` or `haiku`;
 `--unset <agent>` brings the default back). The override is stored as
 `agents.<agent>.model` in the project's settings JSON (the `projects.integrations` column,

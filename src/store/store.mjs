@@ -145,6 +145,8 @@
  * @property {(id: string, value: object|null) => Promise<object|null>} setAgents writes the project's agent model overrides, keeping its integrations; null or an empty object removes them
  * @property {(id: string) => Promise<string|null>} demoRepo the project's demo repository path (`verification.demoRepo` in the same JSON, never shown by `integrations`); null when none is configured
  * @property {(id: string, value: string) => Promise<string|null>} setDemoRepo writes the project's demo repository path, keeping every other setting
+ * @property {(id: string) => Promise<string[]|null>} mergerRisk the project's merger risk globs (`merger.risk` in the same JSON, never shown by `integrations`); null when it has none and runs on the default list
+ * @property {(id: string, value: string[]|null) => Promise<string[]|null>} setMergerRisk writes the project's merger risk globs, each one validated, keeping every other setting; null removes them
  * @property {(cwd: string) => Promise<object|null>} at the project whose checkout contains the directory
  * @property {(orgId: string) => Promise<object[]>} ofOrg
  * @property {(spec: {name: string, path: string|null, orgId: string, key?: string|null}) => Promise<object>} add the key asked for, or a free one derived from the name
@@ -281,7 +283,7 @@ export const STORE_CONTRACT = Object.freeze({
   memory: ["saveMemory", "saveMemoryDeduped", "deleteMemory","recentMemories", "searchMemories", "memoryByKey", "recallMemories"],
   index: ["saveProjectIndex", "fillProjectIndex", "recallProjectIndex"],
   orgs: ["list", "byName", "byId", "add", "rename", "setKey", "suggestKey", "keyAliases", "remove"],
-  projects: ["list", "byName", "byId", "integrations", "setIntegrations", "agents", "setAgents", "demoRepo", "setDemoRepo", "at", "ofOrg", "add", "rename", "setKey", "suggestKey", "keyAliases", "move", "remove", "footprint", "purge"],
+  projects: ["list", "byName", "byId", "integrations", "setIntegrations", "agents", "setAgents", "demoRepo", "setDemoRepo", "mergerRisk", "setMergerRisk", "at", "ofOrg", "add", "rename", "setKey", "suggestKey", "keyAliases", "move", "remove", "footprint", "purge"],
   db: ["files", "quickCheck", "quickCheckMainAlone", "integrityCheck", "checkpointTruncate"],
   "": ["health", "connect", "close", "checkpoint", "requireCurrentSchema"],
 });
@@ -323,6 +325,7 @@ export const READ_ONLY_METHODS = Object.freeze([
   "projects.integrations",
   "projects.agents",
   "projects.demoRepo",
+  "projects.mergerRisk",
   "projects.at",
   "projects.ofOrg",
   "projects.keyAliases",

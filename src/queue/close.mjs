@@ -7,7 +7,9 @@ import { closedLine, parseCloseChecklist, postCloseLine, resolvedLine } from "./
 import { readRunState } from "./resume.mjs";
 import { noChangeConclusion, runOwnNotice } from "./run-notice.mjs";
 import { isNoChangeJob } from "../memory/jobs.mjs";
-import { resolveConflictedRebase } from "./merger.mjs";
+import { gitPathNames, resolveConflictedRebase } from "./merger.mjs";
+import { effectiveRisk } from "./merger-risk.mjs";
+import { MERGER_MODEL, modelFor } from "./routing.mjs";
 import { releaseJobWorktree } from "./worktree.mjs";
 import { findRevertedPaths, revertNoteLines } from "./revert-guard.mjs";
 import { checkoutOfJob } from "../memory/registry-access.mjs";
@@ -867,7 +869,7 @@ function mergerRecord(merger) {
 // Records the conflict of a stopped rebase and hands it to the merger; what the merger does not resolve is aborted and answered naming the conflicted files.
 async function stopConflictedRebase(ctx, deps, work) {
   const unmerged = await git(ctx, deps, ["diff", "--name-only", "--diff-filter=U"], { cwd: work.dir });
-  const files = linesOf(unmerged.stdout);
+  const files = gitPathNames(unmerged.stdout);
   const prFiles = await deps.gh.prDiffNames(ctx.prUrl, bounded(ctx, GH_TIMEOUT_MS));
   work.data.conflict = { files, prFiles: prFiles?.ok ? prFiles.files : null, base: work.base, head: work.head, headSha: work.headShaBefore };
   const merger = files.length ? await resolveConflictedRebase(ctx, deps, { ...work, files, reserveMs: TEST_RESERVE_MS }) : null;
@@ -1330,7 +1332,7 @@ function armDeadline({ timeoutS, signal, now }) {
 
 // The context every step reads: the job, its pull request, the deadline and the data recorded by earlier steps.
 function buildContext(run, stepName) {
-  const { job, checkout, checklist, deadline, now, force, allowDraft, allowRevert } = run;
+  const { job, checkout, checklist, deadline, now, force, allowDraft, allowRevert, merger } = run;
   return {
     progress: (note) => reportProgress(run, stepName, note),
     jobId: job.id,
@@ -1350,6 +1352,7 @@ function buildContext(run, stepName) {
     signal: deadline.controller.signal,
     warning: checklist.data.fetchWarning ?? null,
     data: checklist.data,
+    merger,
   };
 }
 
@@ -1721,6 +1724,30 @@ async function runPostClosePhase(base, steps, signal) {
   }
 }
 
+// The risk list of a project, null when it could not be read so no conflict reaches the merger.
+async function mergerRiskOf(store, projectId) {
+  try {
+    return effectiveRisk(await store.projects.mergerRisk(projectId));
+  } catch {
+    return null;
+  }
+}
+
+// The merger model of a project, its default when the project's agents could not be read.
+async function mergerModelOf(store, projectId) {
+  try {
+    return modelFor("merger", await store.projects.agents(projectId));
+  } catch {
+    return MERGER_MODEL;
+  }
+}
+
+// What the merger runs with for the job's project: its risk list and its model.
+export async function mergerProfileOf(store, job) {
+  if (!job?.project_id) return { risk: effectiveRisk(null), model: MERGER_MODEL };
+  return { risk: await mergerRiskOf(store, job.project_id), model: await mergerModelOf(store, job.project_id) };
+}
+
 // Runs one attempt of a close over its steps, resuming from the stored checklist, then its post-close steps once the job is closed; a step failure is an outcome, never an exception.
 export async function runClosePipeline({ store, job, worker, env = process.env, deps = null, timeoutS, signal = null, now = Date.now, onStep = null, checkout, force = false, allowDraft = false, allowRevert = false, steps = CLOSE_STEPS, again = false }) {
   if (!job) throw new UserError("runClosePipeline needs the job it closes");
@@ -1729,7 +1756,7 @@ export async function runClosePipeline({ store, job, worker, env = process.env, 
   const base = { store, job, worker, env, deps: deps ?? defaultCloseDeps(env), now, onStep, force, allowDraft, allowRevert, again, checkout: checkout ?? resolveCheckout(job, env) };
   if (!pre.length && post.length) return await runPostClose(base, post, signal);
   const deadline = armDeadline({ timeoutS: requireTimeoutS(timeoutS), signal, now });
-  const run = { ...base, checklist: startingChecklist(job), deadline };
+  const run = { ...base, merger: await mergerProfileOf(store, job), checklist: startingChecklist(job), deadline };
   let outcome;
   try {
     outcome = await walkSteps(run, preStepsFor(job, pre));
