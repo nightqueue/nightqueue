@@ -111,12 +111,12 @@ async function runCyclesInProcesses(env, count) {
   });
 }
 
-// The recorded calls of the given jobs, in job order, failing when a job has no call or more than one.
-function callsOf(logPath, ids) {
+// The recorded calls of the given jobs, in job order, failing when a job has no call or more than one, with what the runners reported.
+function callsOf(logPath, ids, cycles = null) {
   const calls = readCalls(logPath);
   return ids.map((id) => {
     const own = calls.filter((call) => Number(call.jobId) === id);
-    assert.equal(own.length, 1, `job ${id} should have run exactly once: ${JSON.stringify(calls)}`);
+    assert.equal(own.length, 1, `job ${id} should have run exactly once: ${JSON.stringify(calls)}; the runners reported ${JSON.stringify(cycles)}`);
     assert.equal(own[0].ok, true, `a real git worktree add failed: ${JSON.stringify(own[0])}`);
     return own[0];
   });
@@ -150,7 +150,7 @@ async function assertTwoRunnersOverlap(env, logPath, ids) {
     ids,
     `across both runner processes each job should have run exactly once: ${JSON.stringify(cycles)}`,
   );
-  const [first, second] = callsOf(logPath, ids);
+  const [first, second] = callsOf(logPath, ids, cycles);
   assert.ok(overlaps(first, second), `two runner processes ran their jobs one strictly after the other: ${JSON.stringify([first, second])}`);
   assert.notEqual(first.runnerPid, second.runnerPid, `both jobs were run by the same runner process: ${JSON.stringify([first, second])}`);
 }

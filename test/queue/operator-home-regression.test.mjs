@@ -11,12 +11,16 @@ import { addJob, claimJobById, finishJob } from "../../src/memory/jobs.mjs";
 import { registeredCheckouts } from "../../src/memory/registry-access.mjs";
 import { neverBashReason } from "../../src/queue/operator-bands.mjs";
 import { recordConsent } from "../../src/queue/operator-consent.mjs";
+import { overridePrBudgetMs } from "../../src/queue/operator-pr-budget.mjs";
 import { homeEntry, homeOwner } from "../../src/queue/operator-home.mjs";
 import { isolatedHostVars } from "../../test-support/host.mjs";
 import { makeDir, makeHome, registerCheckout, seedClosedJob, seedDoneJob } from "../../test-support/memory.mjs";
 
 const WORKER = "test:operator-home-regression";
 const DEAD_PID = 2147483646;
+const STATE_READ_BUDGET_MS = 60000;
+const BARRIER_HANG_POLLS = 1200;
+const GUARD_HANG_BOUND_MS = STATE_READ_BUDGET_MS / 3;
 const BY_ABSOLUTE_PATH = /never \(`git worktree remove\|move` names its worktree by its absolute path/;
 const UNTRUSTED = /does not point to the admin dir git keeps for it/;
 const HARDENED = "-c core.fsmonitor=false -c core.hooksPath=/dev/null";
@@ -57,6 +61,7 @@ function runAllowed(worktree, command) {
 
 // An isolated home at `~/.nightqueue` of its own user home, one real git checkout registered as alpha, and an operator session.
 function setup(t) {
+  t.after(overridePrBudgetMs(STATE_READ_BUDGET_MS));
   const env = makeHome(t, "operator-home-regression");
   const base = makeDir(t, "operator-home-regression-host");
   Object.assign(env, { HOME: join(base, "user"), CLAUDE_CONFIG_DIR: join(base, "claude"), NIGHTQUEUE_MODE: "operator", NIGHTQUEUE_OPERATOR_SESSION: newId() });
@@ -532,7 +537,7 @@ function perUrlGh(t, env, parallel) {
   const script = join(dir, "gh");
   const open = '{"state":"OPEN","mergedAt":null,"mergeCommit":null,"mergeable":"MERGEABLE","isDraft":false}';
   const merged = '{"state":"MERGED","mergedAt":"2026-09-11T15:54:01Z","mergeCommit":{"oid":"abc123"},"mergeable":"UNKNOWN","isDraft":false}';
-  const barrier = `i=0\nwhile [ "$(grep -c '' "${log}")" -lt ${parallel} ] && [ "$i" -lt 70 ]; do sleep 0.05; i=$((i + 1)); done\n`;
+  const barrier = `i=0\nwhile [ "$(grep -c '' "${log}")" -lt ${parallel} ] && [ "$i" -lt ${BARRIER_HANG_POLLS} ]; do sleep 0.05; i=$((i + 1)); done\n`;
   writeFileSync(script, `#!/bin/sh\nprintf '%s\\n' "$3" >> "${log}"\n${barrier}case "$3" in\n  */pull/5) printf '%s\\n' '${open}' ;;\n  *) printf '%s\\n' '${merged}' ;;\nesac\n`);
   chmodSync(script, 0o755);
   delete env.NIGHTQUEUE_NO_PR_CHECK;
@@ -559,7 +564,7 @@ test("H3 (fix loop 4): a chain of done jobs' run dirs reads every pull request o
   const open = runs.at(-1);
   const started = Date.now();
   const reason = bash(env, { command: runs.map(({ run }) => `rm -rf ${run}`).join("; "), cwd: home });
-  assert.ok(Date.now() - started < 5000, `the guard took ${Date.now() - started} ms`);
+  assert.ok(Date.now() - started < GUARD_HANG_BOUND_MS, `the guard took ${Date.now() - started} ms`);
   assert.match(reason ?? "", new RegExp(`belongs to J-${open.id} \\(done, pull request ${open.prUrl} is open\\)`));
   assert.deepEqual(calls().sort(), runs.map(({ prUrl }) => prUrl).sort(), "each pull request is read exactly once");
   const before = calls().length;

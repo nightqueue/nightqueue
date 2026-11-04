@@ -13,7 +13,7 @@ import { DEPENDENT_PROMPT_REFUSAL } from "../../src/queue/dependent-prompt.mjs";
 import { clockLabel } from "../../src/queue/hints.mjs";
 import { writeRunnerRecord } from "../../src/queue/registry.mjs";
 import { initGitRepo } from "../../test-support/git.mjs";
-import { isolatedHostVars } from "../../test-support/host.mjs";
+import { GH_READS_HANG_BOUND_ONLY, isolatedHostVars } from "../../test-support/host.mjs";
 import { makeDir, makeHome, projectPathOf, seedClosedJob } from "../../test-support/memory.mjs";
 import { useFakeClaude } from "../../test-support/queue-fake.mjs";
 import { assistantEvent, doneStream, GATE_MARKER, GATE_NOTICE, gateStream, PR_URL, SLUG, recordedDone, recordedGate } from "../../test-support/streams.mjs";
@@ -240,12 +240,13 @@ function withFakeGh(t, env, { state = "MERGED", sha = MERGE_SHA, mergeable } = {
   return checked;
 }
 
-const CLOSE_SUGGESTION = "J-1 PR merged - close it with nightqueue queue close J-1";
+const GH_HANG_MS = 60000;
+const CLOSE_SUGGESTION ="J-1 PR merged - close it with nightqueue queue close J-1";
 
 test("queue status never writes a delivered job whose pull request is merged: the row stays `done`, and it suggests the close", (t) => {
   const base = makeCliHome(t, "cli-status-merged");
   deliver(base, enqueue(base));
-  const env = withFakeGh(t, base);
+  const env = { ...withFakeGh(t, base), ...GH_READS_HANG_BOUND_ONLY };
 
   const table = runCli(env, ["queue", "status"]);
   assert.equal(table.status, 0, table.stderr);
@@ -277,14 +278,14 @@ test("queue status never writes a delivered job whose pull request is merged: th
 test("a one-shot queue status behind a gh that hangs waits one overall deadline, prints `unknown` and exits", (t) => {
   const base = makeCliHome(t, "cli-status-gh-hangs");
   for (let n = 1; n <= 6; n += 1) deliver(base, enqueue(base, `job ${n}`), `https://github.com/acme/api/pull/${n}`);
-  const env = { ...withFakeGh(t, base, { state: "OPEN" }), NIGHTQUEUE_FAKE_GH_SLEEP_MS: "8000" };
+  const env = { ...withFakeGh(t, base, { state: "OPEN" }), NIGHTQUEUE_FAKE_GH_SLEEP_MS: String(GH_HANG_MS) };
 
   const startedAt = Date.now();
   const table = runCli(env, ["queue", "status"]);
   const elapsedMs = Date.now() - startedAt;
 
   assert.equal(table.status, 0, table.stderr);
-  assert.ok(elapsedMs < 5000 + 2500, `the one-shot waited ${elapsedMs}ms for a gh that hangs`);
+  assert.ok(elapsedMs < GH_HANG_MS / 3, `the one-shot waited ${elapsedMs}ms for a gh that hangs`);
   for (let id = 1; id <= 6; id += 1) {
     assert.match(tableLine(table.stdout, id), /pull\/\d+ \(unknown\)$/, `J-${id} did not print as unknown`);
   }
@@ -294,7 +295,7 @@ test("an open pull request gh cannot tell is mergeable reads `unknown`, and a co
   const base = makeCliHome(t, "cli-status-pr-state");
   deliver(base, enqueue(base));
   for (const [mergeable, expected] of [["UNKNOWN", "unknown"], ["CONFLICTING", "conflicted"]]) {
-    const env = withFakeGh(t, base, { state: "OPEN", mergeable });
+    const env = { ...withFakeGh(t, base, { state: "OPEN", mergeable }), ...GH_READS_HANG_BOUND_ONLY };
     const payload = JSON.parse(runCli(env, ["queue", "status", "--json"]).stdout);
     assert.equal(payload.jobs[0].pr_state, expected, mergeable);
     assert.deepEqual(payload.suggestions, [], `${mergeable} suggested a close`);

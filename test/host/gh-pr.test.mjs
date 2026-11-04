@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { ghPrChecks, ghPrDetail, ghPrDiffNames, ghPrMerge, ghPrRequiredChecks, ghRunRerun, parseRunId, parseRunRepo } from "../../src/host/gh.mjs";
+import { ghPrChecks, ghPrDetail, ghPrDiffNames, ghPrList, ghPrMerge, ghPrRequiredChecks, ghPrViewAsync, ghReadTimeoutMs, ghRunRerun, parseRunId, parseRunRepo } from "../../src/host/gh.mjs";
 
 const URL = "https://github.com/acme/api/pull/7";
 
@@ -198,4 +198,20 @@ test("ghPrDiffNames lists the files of the pull request, and ok:false when gh fa
   assert.deepEqual(await ghPrDiffNames(URL, { env: {}, execFileImpl }), { ok: true, files: ["src/a.mjs", "src/b.mjs"] });
   assert.deepEqual(execFileImpl.calls[0].args, ["pr", "diff", URL, "--name-only"]);
   assert.equal((await ghPrDiffNames(URL, { env: {}, execFileImpl: fakeExecFile({ err: timeoutError() }) })).ok, false);
+});
+
+test("a gh read keeps its own deadline unless NIGHTQUEUE_GH_READ_TIMEOUT_MS is a finite number above 0, and pr view and pr list hand it to gh", async () => {
+  assert.equal(ghReadTimeoutMs({}, 5000), 5000);
+  assert.equal(ghReadTimeoutMs({ NIGHTQUEUE_GH_READ_TIMEOUT_MS: "60000" }, 5000), 60000);
+  for (const raw of ["", "0", "-1", "abc", "Infinity"]) assert.equal(ghReadTimeoutMs({ NIGHTQUEUE_GH_READ_TIMEOUT_MS: raw }, 5000), 5000, raw);
+  const env = { NIGHTQUEUE_GH_READ_TIMEOUT_MS: "60000" };
+  const view = fakeExecFile({ stdout: JSON.stringify(OPEN_PR) });
+  await ghPrViewAsync(URL, { env, execFileImpl: view });
+  assert.equal(view.calls[0].options.timeout, 60000);
+  const list = fakeExecFile({ stdout: "[]" });
+  await ghPrList("key", { env, execFileImpl: list });
+  assert.equal(list.calls[0].options.timeout, 60000);
+  const quick = fakeExecFile({ stdout: JSON.stringify(OPEN_PR) });
+  await ghPrViewAsync(URL, { env: {}, execFileImpl: quick });
+  assert.equal(quick.calls[0].options.timeout, 5000);
 });

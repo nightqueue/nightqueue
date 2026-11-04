@@ -7,7 +7,7 @@ import { addJob, getJob } from "../../src/memory/jobs.mjs";
 import { runDir } from "../../src/config/paths.mjs";
 import { openPrsForJob, prSearchKey, runCycle } from "../../src/queue/runner.mjs";
 import { buildPrompt, openPrsMarkdown } from "../../src/queue/spawn.mjs";
-import { isolatedHostVars } from "../../test-support/host.mjs";
+import { GH_READS_HANG_BOUND_ONLY, isolatedHostVars } from "../../test-support/host.mjs";
 import { ensureProject, makeDir, makeHome, makeProject } from "../../test-support/memory.mjs";
 import { argValue, fakeCalls, useFakeClaude } from "../../test-support/queue-fake.mjs";
 import { doneStream, recordedDone } from "../../test-support/streams.mjs";
@@ -110,9 +110,16 @@ test("gh pr list never spawns anything for an empty search key and names a field
 });
 
 test("gh pr list answers without ever blocking the event loop, so a slow gh cannot freeze the dispatch of another job", async () => {
-  const slow = (bin, args, options, callback) => setTimeout(() => callback(null, "[]", ""), 20);
   const ticks = [];
-  const ticking = setInterval(() => ticks.push(Date.now()), 2);
+  let answerGh = null;
+  const ticking = setInterval(() => {
+    if (!answerGh) return;
+    ticks.push(Date.now());
+    if (ticks.length === 3) answerGh();
+  }, 2);
+  const slow = (bin, args, options, callback) => {
+    answerGh = () => callback(null, "[]", "");
+  };
 
   const found = await ghPrList("key", { env: {}, execFileImpl: slow });
   clearInterval(ticking);
@@ -123,7 +130,7 @@ test("gh pr list answers without ever blocking the event loop, so a slow gh cann
 
 test("gh pr list reads the list the fake gh binary prints, without touching the network", async (t) => {
   const dir = makeDir(t, "pr-list-fake-gh");
-  const env = { ...process.env, ...isolatedHostVars(dir), NIGHTQUEUE_FAKE_GH_PR_LIST: JSON.stringify([{ title: "Fix the worker", url: "https://github.com/acme/app/pull/7", headRefName: "fix/worker" }]) };
+  const env = { ...process.env, ...isolatedHostVars(dir), ...GH_READS_HANG_BOUND_ONLY, NIGHTQUEUE_FAKE_GH_PR_LIST: JSON.stringify([{ title: "Fix the worker", url: "https://github.com/acme/app/pull/7", headRefName: "fix/worker" }]) };
 
   const found = await ghPrList("fix the worker", { env });
 

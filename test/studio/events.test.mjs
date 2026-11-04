@@ -8,6 +8,7 @@ import { addJob, bindRunSlug, claimJobById, countsByStatus, finishJob, retryJob 
 import { setProjectAgents } from "../../src/memory/registry.mjs";
 import { saveRunState } from "../../src/queue/resume.mjs";
 import { snapshotPatch } from "../../src/studio/events.mjs";
+import { loopStallProbe } from "../../test-support/cpu-time.mjs";
 import { ensureProject, makeHome, makeProject } from "../../test-support/memory.mjs";
 import { agentToolUseEvent, assistantEvent, attemptMarker, LANE_TOOL_USE_ID, resultEvent, secondsIntoAttempt, systemInitEvent, taskNotificationEvent, toNdjson, toolResultEvent, toolUseEvent } from "../../test-support/streams.mjs";
 import { readEvents, startStudio, studioCookie } from "../../test-support/studio.mjs";
@@ -491,21 +492,6 @@ function writeLargeTwoAttemptLog(env, id) {
   writeFileSync(path, `${attemptMarker(1)}\n${toNdjson(opening)}${filler}${toNdjson(closing)}${attemptMarker(2, SECOND_ATTEMPT_ISO)}\n${toNdjson(second)}`);
 }
 
-// Measures the longest stall of the event loop until `stop` is called.
-function loopLagProbe() {
-  let last = performance.now();
-  let worst = 0;
-  const timer = setInterval(() => {
-    const now = performance.now();
-    worst = Math.max(worst, now - last);
-    last = now;
-  }, 10);
-  return () => {
-    clearInterval(timer);
-    return Math.max(worst, performance.now() - last);
-  };
-}
-
 test("a resumed job with a large earlier attempt streams its full timeline without stalling the server's event loop", async (t) => {
   const env = makeHome(t, "studio-events-large-log");
   makeProject(t, env, "alpha");
@@ -514,7 +500,7 @@ test("a resumed job with a large earlier attempt streams its full timeline witho
   writeLargeTwoAttemptLog(env, id);
   finishJob(id, { worker: "host:1", status: "done", prUrl: "https://github.com/acme/api/pull/9" }, env);
   const { port } = await startStudio(t, env);
-  const stopProbe = loopLagProbe();
+  const stopProbe = loopStallProbe();
   const events = await readEvents(port, { path: `/events?job=J-${id}`, headers: { cookie: studioCookie(port) }, until: (list) => list.some((event) => event.name === "end"), timeoutMs: 60000 });
   const worstGap = stopProbe();
   assert.ok(worstGap < MAX_LOOP_GAP_MS, `the event loop stalled ${Math.round(worstGap)} ms while the history replayed`);

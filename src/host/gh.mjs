@@ -7,7 +7,6 @@ export const GUARD_PR_VIEW_TIMEOUT_MS = 3000;
 const GUARD_PR_CONCURRENCY = 6;
 const PR_BATCH_MARGIN_MS = 500;
 const PR_BATCH_SCRIPT = fileURLToPath(new URL("./gh-pr-batch.mjs", import.meta.url));
-const GUARD_PR_UNANSWERED = `gh did not answer within ${GUARD_PR_VIEW_TIMEOUT_MS / 1000} s`;
 const GUARD_PR_BUDGET_SPENT = `the guard's ${GUARD_PR_VIEW_TIMEOUT_MS / 1000} s for gh were spent on other pull requests`;
 const PR_VIEW_FIELDS = "state,mergedAt,mergeCommit,mergeable,isDraft";
 const PR_LIST_TIMEOUT_MS = 5000;
@@ -26,6 +25,12 @@ const ACCOUNT_STATUS_TIMEOUT_MS = 10000;
 export function ghBin(env = process.env) {
   const raw = typeof env?.NIGHTQUEUE_GH_BIN === "string" ? env.NIGHTQUEUE_GH_BIN.trim() : "";
   return raw || "gh";
+}
+
+// How long a gh read may take: the caller's default, or `NIGHTQUEUE_GH_READ_TIMEOUT_MS` when it is a finite number above 0 (a slow machine).
+export function ghReadTimeoutMs(env, defaultMs) {
+  const raw = Number(env?.NIGHTQUEUE_GH_READ_TIMEOUT_MS);
+  return Number.isFinite(raw) && raw > 0 ? raw : defaultMs;
 }
 
 // Runs the GitHub CLI and never throws: a missing binary or a failure is a result the caller decides about.
@@ -149,15 +154,20 @@ function prViewArgs(url) {
 }
 
 // State of one pull request, read without blocking the event loop and never rejecting: `ok: false` means nobody could tell.
-export async function ghPrViewAsync(url, { env = process.env, execFileImpl = execFile, timeoutMs = PR_VIEW_TIMEOUT_MS, signal } = {}) {
+export async function ghPrViewAsync(url, { env = process.env, execFileImpl = execFile, timeoutMs = ghReadTimeoutMs(env, PR_VIEW_TIMEOUT_MS), signal } = {}) {
   const result = await runGhAsync(prViewArgs(url), { env, execFileImpl, timeoutMs, signal });
   return result.ok ? parsePrView(result.stdout) : { ok: false };
+}
+
+// Words a gh call that ran out of the time it was given, in seconds to one decimal.
+function ghUnanswered(timeoutMs) {
+  return `gh did not answer within ${Math.round(timeoutMs / 100) / 10} s`;
 }
 
 // Why a gh call that did not succeed gave no answer, in words a refusal can carry.
 function ghFailure(result, timeoutMs) {
   if (result.missing) return "gh is not installed";
-  if (result.unfinished) return `gh did not answer within ${timeoutMs / 1000} s`;
+  if (result.unfinished) return ghUnanswered(timeoutMs);
   return `gh failed: ${firstLine(result.stderr)}`;
 }
 
@@ -168,10 +178,10 @@ function prViewBefore(url, { env, deadline }) {
   return runGhAsync(prViewArgs(url), { env, timeoutMs: left });
 }
 
-// The raw gh answers to `gh pr view` of several pull requests, a few at a time and all within one deadline, never rejecting.
-export async function ghPrViewResults(urls, { env = process.env, timeoutMs = GUARD_PR_VIEW_TIMEOUT_MS, concurrency = GUARD_PR_CONCURRENCY } = {}) {
+// The raw gh answers to `gh pr view` of several pull requests, a few at a time and all within one deadline (an absolute one when given), never rejecting.
+export async function ghPrViewResults(urls, { env = process.env, timeoutMs = GUARD_PR_VIEW_TIMEOUT_MS, deadline: givenDeadline, concurrency = GUARD_PR_CONCURRENCY } = {}) {
   const list = Array.isArray(urls) ? urls : [];
-  const deadline = Date.now() + timeoutMs;
+  const deadline = Number.isFinite(givenDeadline) ? givenDeadline : Date.now() + timeoutMs;
   const results = new Array(list.length);
   let next = 0;
   const worker = async () => {
@@ -194,20 +204,20 @@ function unreadStates(urls, why) {
 function runPrBatch(urls, { env, spawnSyncImpl, timeoutMs }) {
   let result;
   try {
-    const input = JSON.stringify({ urls, timeoutMs });
+    const input = JSON.stringify({ urls, deadline: Date.now() + timeoutMs });
     result = spawnSyncImpl(process.execPath, [PR_BATCH_SCRIPT], { input, encoding: "utf8", env, timeout: timeoutMs + PR_BATCH_MARGIN_MS });
   } catch (err) {
     return { ok: false, why: `the gh batch could not start: ${err?.message ?? String(err)}` };
   }
-  if (result?.error?.code === "ETIMEDOUT" || result?.signal) return { ok: false, why: GUARD_PR_UNANSWERED };
+  if (result?.error?.code === "ETIMEDOUT" || result?.signal) return { ok: false, why: ghUnanswered(timeoutMs) };
   const results = parseJson(result?.stdout);
   if (result?.status === 0 && Array.isArray(results) && results.length === urls.length) return { ok: true, results };
   return { ok: false, why: `the gh batch failed: ${firstLine(result?.stderr ?? result?.error?.message)}` };
 }
 
 // The state one raw gh answer of the batch gives, or why it gives none.
-function readPrResult(result) {
-  if (result?.ok !== true) return { ok: false, why: ghFailure(result ?? {}, GUARD_PR_VIEW_TIMEOUT_MS) };
+function readPrResult(result, timeoutMs) {
+  if (result?.ok !== true) return { ok: false, why: ghFailure(result ?? {}, timeoutMs) };
   const view = parsePrView(result.stdout);
   return view.ok ? view : { ok: false, why: "gh answered no readable pull request state" };
 }
@@ -220,7 +230,7 @@ export function ghPrStatesSync(urls, { env = process.env, spawnSyncImpl = spawnS
   if (list.length === 0) return new Map();
   const batch = runPrBatch(list, { env, spawnSyncImpl, timeoutMs });
   if (!batch.ok) return unreadStates(list, batch.why);
-  return new Map(list.map((url, index) => [url, readPrResult(batch.results[index])]));
+  return new Map(list.map((url, index) => [url, readPrResult(batch.results[index], timeoutMs)]));
 }
 
 // Parses a json text, answering null instead of throwing.
@@ -434,7 +444,7 @@ function parsePrList(text) {
 // Open pull requests matching a search, or null when nobody could tell: a missing, unauthenticated or slow gh is never "there
 // are none". The call is asynchronous on purpose - it sits on the hot path of the runner, where a synchronous spawn would
 // freeze the dispatch loop and every sibling job's I/O for as long as gh takes to answer.
-export async function ghPrList(query, { env = process.env, execFileImpl = execFile, timeoutMs = PR_LIST_TIMEOUT_MS } = {}) {
+export async function ghPrList(query, { env = process.env, execFileImpl = execFile, timeoutMs = ghReadTimeoutMs(env, PR_LIST_TIMEOUT_MS) } = {}) {
   const search = typeof query === "string" ? query.trim() : "";
   if (!search) return null;
   const args = ["pr", "list", "--search", search, "--state", "open", "--json", "title,url,headRefName", "--limit", PR_LIST_LIMIT];

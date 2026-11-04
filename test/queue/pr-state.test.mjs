@@ -3,7 +3,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { test } from "node:test";
 import { ghPrViewAsync } from "../../src/host/gh.mjs";
 import { createPrStateCache, flattenPrState, PR_REFRESH_CONCURRENCY, PR_STATES, prStateKey } from "../../src/queue/pr-state.mjs";
-import { isolatedHostVars } from "../../test-support/host.mjs";
+import { GH_READS_HANG_BOUND_ONLY, isolatedHostVars } from "../../test-support/host.mjs";
 import { makeDir, makeHome } from "../../test-support/memory.mjs";
 
 const PR = "https://github.com/acme/api/pull/42";
@@ -253,9 +253,9 @@ test("keys still waiting for a slot when the cache is disposed never start a rea
   assert.equal(view.calls.length, PR_REFRESH_CONCURRENCY, "a key queued behind the cap started a gh after the dispose");
 });
 
-// The environment of the real fake gh, answering the pull request the way the test asked.
+// The environment of the real fake gh, answering the pull request the way the test asked, its read time only bounding a hang.
 function fakeGhEnv(t, name, fields = {}) {
-  return { ...makeHome(t, name), ...isolatedHostVars(makeDir(t, `${name}-host`)), ...fields };
+  return { ...makeHome(t, name), ...isolatedHostVars(makeDir(t, `${name}-host`)), ...GH_READS_HANG_BOUND_ONLY, ...fields };
 }
 
 // The argv of every call the fake gh recorded.

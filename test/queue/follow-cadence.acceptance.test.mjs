@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import { defaultContext, run } from "../../src/cli/index.mjs";
 import { openDb } from "../../src/memory/db.mjs";
 import { addJob } from "../../src/memory/jobs.mjs";
-import { isolatedHostVars } from "../../test-support/host.mjs";
+import { GH_READS_HANG_BOUND_ONLY, isolatedHostVars } from "../../test-support/host.mjs";
 import { ensureProject, makeDir, makeHome, makeProject } from "../../test-support/memory.mjs";
 
 // ACCEPTANCE of decisions #24/#25: a follow behind a gh that takes 2s to fail redraws as often as one with the checks off.
@@ -31,9 +31,9 @@ function seedHome(t, name, jobs) {
   };
 }
 
-// The same home behind the fake gh, which sleeps before it fails because no pull request state was given to it.
+// The same home behind the fake gh, which sleeps before it fails because no pull request state was given to it; its read time only bounds a hang.
 function withSlowFailingGh(t, env, name) {
-  const slow = { ...env, ...isolatedHostVars(makeDir(t, `${name}-host`)), NIGHTQUEUE_FAKE_GH_SLEEP_MS: String(SLOW_GH_MS) };
+  const slow = { ...env, ...isolatedHostVars(makeDir(t, `${name}-host`)), ...GH_READS_HANG_BOUND_ONLY, NIGHTQUEUE_FAKE_GH_SLEEP_MS: String(SLOW_GH_MS) };
   delete slow.NIGHTQUEUE_NO_PR_CHECK;
   return slow;
 }
