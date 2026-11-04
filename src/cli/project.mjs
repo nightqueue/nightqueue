@@ -17,6 +17,7 @@ import { loadConfig } from "../config/store.mjs";
 import { changeProjectIntegrations, integrationLines, integrationsView } from "../integrations/settings.mjs";
 import { requireKey } from "../memory/refs.mjs";
 import { refuseHomeWriteInsideJob } from "../queue/home-guard.mjs";
+import { effectiveRisk, requireRiskPattern } from "../queue/merger-risk.mjs";
 import { agentModels, requireAgent, requireModel } from "../queue/routing.mjs";
 import { openRegistryReader, openRegistryWriter, openStore } from "../store/open.mjs";
 import { checkArgs, parseCommand } from "./args.mjs";
@@ -370,6 +371,60 @@ async function runDemoRepo(argv, ctx) {
   await changeDemoRepo(ctx, { name: positionals[0], path: values.set, json });
 }
 
+const MERGER_RISK_USAGE = "nightqueue project merger-risk <project> [--add <glob>]... [--remove <glob>]... [--list] [--json]";
+
+// Prints a project's merger risk list and whether it is its own or the default, as lines or as the JSON answer.
+function printMergerRisk(ctx, { project, stored, json }) {
+  const source = stored === null ? "default" : "project";
+  const risk = effectiveRisk(stored);
+  if (json) {
+    ctx.out(JSON.stringify({ project: project.name, source, risk }));
+    return;
+  }
+  ctx.out(`source: ${source}`);
+  if (risk.length === 0) ctx.out("no risk patterns: every conflicted path may reach the merger");
+  for (const pattern of risk) ctx.out(pattern);
+}
+
+// The risk list after the adds and then the removes, every pattern validated before anything is written.
+function changedRisk(current, { add, remove }) {
+  const next = [...new Set([...current, ...add.map(requireRiskPattern)])];
+  for (const pattern of remove.map(requireRiskPattern)) {
+    if (!next.includes(pattern)) throw new UserError(`\`${pattern}\` is not on the merger risk list; nothing was changed`);
+    next.splice(next.indexOf(pattern), 1);
+  }
+  return next;
+}
+
+// Runs `project merger-risk <project>` without changes: reads only, a home without a database knowing no project.
+async function showMergerRisk(ctx, { name, json }) {
+  const store = await openRegistryReader(ctx.env);
+  if (!store) throw new UserError(`unknown project \`${name}\`; no project is registered yet`);
+  const project = await requireProject(store, name);
+  printMergerRisk(ctx, { project, stored: await store.projects.mergerRisk(project.id), json });
+}
+
+// Runs `project merger-risk <project> --add/--remove`: starts from the list in effect, validates everything, then writes once; refused inside a job.
+async function changeMergerRisk(ctx, { name, add, remove, json }) {
+  refuseHomeWriteInsideJob(ctx.env);
+  const store = await openRegistryWriter(ctx.env);
+  const project = await requireProject(store, name);
+  const next = changedRisk(effectiveRisk(await store.projects.mergerRisk(project.id)), { add, remove });
+  printMergerRisk(ctx, { project, stored: await store.projects.setMergerRisk(project.id, next), json });
+}
+
+// Runs `project merger-risk`: shows or changes the globs whose conflicts the merger never resolves.
+async function runMergerRisk(argv, ctx) {
+  const options = { add: { type: "string", multiple: true }, remove: { type: "string", multiple: true }, list: { type: "boolean" }, json: { type: "boolean" } };
+  const { values, positionals } = parseCommand(argv, options);
+  checkArgs(positionals, { min: 1, max: 1, usage: MERGER_RISK_USAGE });
+  const add = values.add ?? [];
+  const remove = values.remove ?? [];
+  const json = values.json === true;
+  if (add.length === 0 && remove.length === 0) return await showMergerRisk(ctx, { name: positionals[0], json });
+  await changeMergerRisk(ctx, { name: positionals[0], add, remove, json });
+}
+
 const SUBCOMMANDS = new Map([
   ["add", runAdd],
   ["list", runList],
@@ -380,6 +435,7 @@ const SUBCOMMANDS = new Map([
   ["integrations", runIntegrations],
   ["models", runModels],
   ["demo-repo", runDemoRepo],
+  ["merger-risk", runMergerRisk],
 ]);
 
 export const SUBCOMMAND_NAMES = Object.freeze([...SUBCOMMANDS.keys()]);

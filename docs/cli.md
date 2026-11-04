@@ -459,6 +459,9 @@ nightqueue project models api --set coder=sonnet   # the project's coder runs on
 nightqueue project models api --unset coder        # back to the default model; --unset repeats
 nightqueue project demo-repo api [--json]          # the demo repository, or "none configured"
 nightqueue project demo-repo api --set ../demo     # where verifications may open real pull requests
+nightqueue project merger-risk api [--list] [--json]          # source: default|project, then one glob per line
+nightqueue project merger-risk api --add 'db/migrations/**'   # conflicts there never reach the merger; --add repeats
+nightqueue project merger-risk api --remove package.json      # starts from the list in effect; --remove repeats
 
 echo "$SENTRY_AUTH_TOKEN" | nightqueue connection add sn --type sentry --set org=acme [--set url=https://sentry.example.com]
 nightqueue connection test sn                      # prints org=<slug>, never the token
@@ -533,8 +536,8 @@ integrations`); detection only reports, it never sets `expo.ota`.
 <agent>]... [--json]` shows or changes the model each agent of the pipeline runs on for
 that project. The defaults live in `src/queue/routing.mjs` (`run start --routing` prints
 them): triager `sonnet`, explore `haiku`, architect `opus`, coder `opus`, qa-triage
-`sonnet`, qa-analyst `sonnet`, qa-prover `haiku`, verifier `haiku`, reflector `haiku` (the merger runs on
-`sonnet` and is not overridable). With no option it prints one `<agent>=<model>
+`sonnet`, qa-analyst `sonnet`, qa-prover `haiku`, verifier `haiku`, reflector `haiku`, merger
+`sonnet` (the close's conflict resolver, which reads its override once per close). With no option it prints one `<agent>=<model>
 (default|project)` line per agent; `--json` gives `{project, agents: {<agent>: {model,
 source}}}`. `--set` takes an agent of that list and a model among `opus`, `sonnet` and
 `haiku` - anything else is refused naming the accepted values, and one invalid argument
@@ -556,6 +559,27 @@ under `verification.demoRepo`, kept by `project models` and `project integration
 and never shown by `project integrations`. The verifier, runtime and QA requests render
 it as `{{DEMO_REPO}}` (`none configured` without one: no real pull request, the scenario
 is reported as an open item).
+
+**Project merger risk list.** `project merger-risk <project> [--add <glob>]... [--remove
+<glob>]... [--list] [--json]` shows or changes the globs whose conflicts the close's merger
+never resolves: a conflicted path that matches one stops as a `real-conflict` with
+`risk-list file: <path>`. A project with no list of its own runs on the default
+`package.json`, `*-lock.json`, `*.lock`, `pnpm-lock.yaml`, `bun.lockb`, `Cargo.lock`,
+`go.sum`, `poetry.lock`, `Gemfile.lock`. With no `--add`/`--remove` it prints `source:
+default|project` and one glob per line; `--json` gives `{project, source, risk}`. A glob
+without `/` matches a file or directory name at any depth, one with `/` the repo-relative
+path from its root; a glob that matches a directory protects every file under it, so
+`src/memory/migration`, `src/memory/migration/` and `./src/memory/migration` all protect
+the files of that directory (a leading `./` and a trailing `/` are dropped when stored);
+`*` and `?` stay inside a segment, `**` crosses them. A change starts from the list in
+effect (the default the first time), applies the adds and then the removes, and writes once:
+an empty, absolute, `..` or over-200-character glob, or a remove of a glob not on the list,
+is refused by name and changes nothing. It is stored in the project's settings under
+`merger.risk`, kept by `project models` and `project integrations` writes and never shown by
+`project integrations`; it is refused from inside a job, and the operator agent may not run
+it. The nightqueue checkout's own schema and migrations are protected by registering them
+once: `nightqueue project merger-risk nightqueue --add src/memory/schema.mjs --add
+'src/memory/migration/**'`.
 
 A path that starts with `-` has to come after `--` (`nightqueue init -- -weird-dir`),
 otherwise it is parsed as an unknown option and rejected.
@@ -758,7 +782,8 @@ close`), and one merged by hand is recorded as `merged outside a close`. `--forc
 pull request checks and the rebase suite and nothing else: status and attribution
 (`pr-not-the-job-branch`) still stop the close, and a conflict always stops a forced close:
 the merger never runs under `--force`. Without it, a small textual conflict may be resolved by
-the bounded merger agent before the suite runs. An open draft pull request stops at preflight
+the bounded merger agent before the suite runs, never in a file on the project's
+`project merger-risk` list. An open draft pull request stops at preflight
 with `draft` unless `--allow-draft`, which runs `gh pr ready` once; the merge stops with
 `reverts-base`, listing each path and the base commit it would undo, when the squash would put
 back an older version of a file the base changed since, unless `--allow-revert`. `--force`

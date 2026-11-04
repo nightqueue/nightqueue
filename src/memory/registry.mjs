@@ -2,6 +2,7 @@ import { UserError } from "../config/errors.mjs";
 import { isId, newId } from "../config/ids.mjs";
 import { projectContaining } from "../config/projects.mjs";
 import { DEFAULT_ORG_NAME } from "../config/schema.mjs";
+import { requireRiskPattern } from "../queue/merger-risk.mjs";
 import { requireAgent, requireModel } from "../queue/routing.mjs";
 import { hasColumn } from "./columns.mjs";
 import { DATA_TABLES } from "./ddl.mjs";
@@ -24,7 +25,9 @@ const AGENTS_KEY = "agents";
 
 const VERIFICATION_KEY = "verification";
 
-const RESERVED_KEYS = [AGENTS_KEY, VERIFICATION_KEY];
+const MERGER_KEY = "merger";
+
+const RESERVED_KEYS = [AGENTS_KEY, VERIFICATION_KEY, MERGER_KEY];
 
 // Tells whether a SQLite failure is the violation of a UNIQUE constraint on the given column.
 function isUniqueViolation(err, column) {
@@ -142,7 +145,7 @@ function withoutKeys(settings, keys) {
   return Object.keys(rest).length > 0 ? rest : null;
 }
 
-// Only the reserved keys of a settings object (agents, verification), as stored.
+// Only the reserved keys of a settings object (agents, verification, merger), as stored.
 function reservedOf(settings) {
   return Object.fromEntries(Object.entries(settings ?? {}).filter(([key]) => RESERVED_KEYS.includes(key)));
 }
@@ -205,6 +208,26 @@ export function setProjectDemoRepo(db, { id, value }) {
   const verification = isFilledObject(settings[VERIFICATION_KEY]) ? settings[VERIFICATION_KEY] : {};
   writeProjectSettings(db, { id, settings: { ...settings, [VERIFICATION_KEY]: { ...verification, demoRepo: value } } });
   return projectDemoRepo(db, id);
+}
+
+// The merger risk list a project stored, or null when it has none; a stored value that is not a list of texts is refused.
+export function projectMergerRisk(db, id) {
+  const risk = projectSettings(db, id)?.[MERGER_KEY]?.risk;
+  if (risk === undefined || risk === null) return null;
+  if (!Array.isArray(risk) || !risk.every((pattern) => typeof pattern === "string")) {
+    throw new UserError(`the stored merger risk list of project id \`${id}\` is not a list of globs`);
+  }
+  return risk;
+}
+
+// Writes a project's merger risk list, every pattern validated and deduplicated, keeping every other setting; null removes it.
+export function setProjectMergerRisk(db, { id, value }) {
+  requireSettingsWritable(db, id);
+  if (value !== null && !Array.isArray(value)) throw new UserError("the merger risk list must be a list of globs");
+  const others = withoutKeys(projectSettings(db, id), [MERGER_KEY]) ?? {};
+  const settings = value === null ? others : { ...others, [MERGER_KEY]: { risk: [...new Set(value.map(requireRiskPattern))] } };
+  writeProjectSettings(db, { id, settings });
+  return projectMergerRisk(db, id);
 }
 
 // Tells whether a value is a plain object with at least one key.

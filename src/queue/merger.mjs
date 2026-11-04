@@ -1,4 +1,5 @@
 import { basename, join } from "node:path";
+import { DEFAULT_MERGER_RISK, riskPatternMatches } from "./merger-risk.mjs";
 
 export const MERGER_CEILING_MS = 1_200_000;
 export const MERGER_FLOOR_MS = 60_000;
@@ -8,7 +9,6 @@ export const MERGER_FILE_BUDGET = 6;
 const GIT_OWN_MS = 120000;
 const REASON_CHARS = 200;
 const HEADER_LINES = 5;
-const RISK_NAMES = new Set(["package.json", "package-lock.json"]);
 const GENERATED_NAMES = new Set(["pnpm-lock.yaml", "npm-shrinkwrap.json", "bun.lockb"]);
 const GENERATED_SEGMENTS = new Set(["dist", "build", "generated", "__generated__", "vendor", "node_modules", "coverage"]);
 const GENERATED_SUFFIXES = [".min.js", ".min.css", ".map", ".snap"];
@@ -16,11 +16,14 @@ const GENERATED_HEADER = /@generated|DO NOT EDIT/i;
 const HUNK_START = /^<{7}( |$)/gm;
 const ANY_MARKER = /^(<{7}|={7}|>{7}|\|{7})( |$)/m;
 const TIME_FLOOR_REASON = "not enough of the close's timeout left for the merger and the suite; raise queue.closeTimeoutS";
+const UNREADABLE_RISK_REASON = "the project's merger risk list could not be read";
+const GIT_ESCAPE = /\\([0-7]{3}|[abtnvfr"\\])/g;
+const GIT_ESCAPE_BYTES = Object.freeze({ a: 7, b: 8, t: 9, n: 10, v: 11, f: 12, r: 13, '"': 34, "\\": 92 });
 
-// Tells whether a conflicted path is on the risk list the merger never touches.
-export function riskFile(path) {
-  const name = basename(path);
-  return RISK_NAMES.has(name) || name.endsWith(".lock") || path === "src/memory/schema.mjs" || path.startsWith("src/memory/migration/");
+// Tells whether a conflicted path, as given or as git-unquoted, is on the risk list the merger never touches.
+export function riskFile(path, patterns = DEFAULT_MERGER_RISK) {
+  const names = [path, unquoteGitPath(path)];
+  return patterns.some((pattern) => names.some((name) => riskPatternMatches(name, pattern)));
 }
 
 // Tells whether a path names a generated file by its name, a directory on the way or its suffix.
@@ -87,6 +90,30 @@ function linesOf(text) {
   return String(text ?? "").split("\n").map((line) => line.trim()).filter(Boolean);
 }
 
+// The byte one C-style escape of a git-quoted name stands for.
+function escapedByte(escape) {
+  return escape.length === 3 ? Number.parseInt(escape, 8) & 0xff : GIT_ESCAPE_BYTES[escape];
+}
+
+// A path as git prints it, unquoted when git wrapped it in C-style quotes (a non-ASCII byte, a control character, a quote).
+export function unquoteGitPath(name) {
+  if (typeof name !== "string" || name.length < 2 || !name.startsWith('"') || !name.endsWith('"')) return name;
+  const body = name.slice(1, -1);
+  const parts = [];
+  let last = 0;
+  for (const match of body.matchAll(GIT_ESCAPE)) {
+    parts.push(Buffer.from(body.slice(last, match.index), "utf8"), Buffer.from([escapedByte(match[1])]));
+    last = match.index + match[0].length;
+  }
+  parts.push(Buffer.from(body.slice(last), "utf8"));
+  return Buffer.concat(parts).toString("utf8");
+}
+
+// The paths of a `git diff --name-only` output, each unquoted.
+export function gitPathNames(text) {
+  return linesOf(text).map(unquoteGitPath);
+}
+
 // Runs git in the stopped rebase's worktree, never past the close's deadline.
 async function mergerGit(ctx, deps, work, args) {
   return await deps.git(args, { cwd: work.dir, timeoutMs: Math.max(1, Math.min(GIT_OWN_MS, ctx.remainingMs())), signal: ctx.signal });
@@ -110,9 +137,16 @@ async function attrGenerated(ctx, deps, work, files) {
   return { files: marked.map((line) => line.slice(0, line.lastIndexOf(": linguist-generated: "))) };
 }
 
+// The risk patterns of the close's project: the default list when the context carries none, null when the project's list was unreadable.
+function riskPatternsOf(ctx) {
+  const risk = ctx.merger?.risk;
+  if (risk === undefined) return DEFAULT_MERGER_RISK;
+  return Array.isArray(risk) ? risk : null;
+}
+
 // Why one stop's files are not for the merger by their path, or null.
-function pathProblem(files) {
-  const risky = files.find(riskFile);
+function pathProblem(files, patterns) {
+  const risky = files.find((file) => riskFile(file, patterns));
   if (risky) return `risk-list file: ${risky}`;
   const generated = files.find(generatedByPath);
   return generated ? `generated file: ${generated}` : null;
@@ -139,7 +173,9 @@ async function stopEligibility(ctx, deps, state) {
   const { work, stopFiles } = state;
   if (ctx.force) return { reason: "--force never runs the merger" };
   if (!deps.fs.readTestScript(work.dir)) return { reason: "no scripts.test" };
-  const byPath = pathProblem(stopFiles);
+  const patterns = riskPatternsOf(ctx);
+  if (!patterns) return { reason: UNREADABLE_RISK_REASON };
+  const byPath = pathProblem(stopFiles, patterns);
   if (byPath) return { reason: byPath };
   const attr = await attrGenerated(ctx, deps, work, stopFiles);
   if (attr.problem) return { reason: attr.problem };
@@ -159,7 +195,7 @@ async function runAgent(ctx, deps, state, timeoutMs) {
   const { work, stopFiles } = state;
   try {
     const prompt = mergerPrompt({ files: stopFiles, base: work.base, head: work.head });
-    return await deps.merger({ cwd: work.dir, files: stopFiles, prompt, timeoutMs, signal: ctx.signal, jobId: ctx.jobId });
+    return await deps.merger({ cwd: work.dir, files: stopFiles, prompt, timeoutMs, signal: ctx.signal, jobId: ctx.jobId, model: ctx.merger?.model });
   } catch (err) {
     return { spawnError: `the merger could not run (${err?.message ?? String(err)})` };
   }
@@ -183,7 +219,7 @@ async function verificationProblem(ctx, deps, state) {
   if (marked.length) return `conflict markers left in: ${marked.join(", ")}`;
   const changed = await mergerGit(ctx, deps, work, ["diff", "--name-only"]);
   if (!changed.ok) return `git diff --name-only failed (${firstLine(changed.stderr)})`;
-  const outside = linesOf(changed.stdout).filter((file) => !stopFiles.includes(file));
+  const outside = gitPathNames(changed.stdout).filter((file) => !stopFiles.includes(file));
   return outside.length ? `the resolution touched files outside the conflict: ${outside.join(", ")}` : null;
 }
 
@@ -196,7 +232,7 @@ async function continueRebase(ctx, deps, state) {
   const continued = await mergerGit(ctx, deps, work, ["-c", "core.editor=true", "rebase", "--continue"]);
   if (continued.ok) return { done: true };
   const unmerged = await mergerGit(ctx, deps, work, ["diff", "--name-only", "--diff-filter=U"]);
-  const next = linesOf(unmerged.stdout);
+  const next = gitPathNames(unmerged.stdout);
   return next.length ? { next } : { reason: `git rebase --continue failed (${firstLine(continued.stderr)})` };
 }
 

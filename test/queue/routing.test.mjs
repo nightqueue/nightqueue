@@ -37,7 +37,7 @@ test("every agent has its decided default model", () => {
     merger: "sonnet",
   });
   assert.deepEqual(MODEL_NAMES, ["opus", "sonnet", "haiku"]);
-  assert.deepEqual(overridableAgents(), ["triager", "explore", "architect", "coder", "qa-triage", "qa-analyst", "qa-prover", "verifier", "reflector"]);
+  assert.deepEqual(overridableAgents(), ["triager", "explore", "architect", "coder", "qa-triage", "qa-analyst", "qa-prover", "verifier", "reflector", "merger"]);
 });
 
 test("the printed model table reads exactly as the fixture", () => {
@@ -72,15 +72,17 @@ test("a project override replaces the default of its agent, an invalid stored va
   assert.match(modelTable({ coder: { model: "haiku" } }), /\| ⚙️ coder \| haiku \|/);
 });
 
-test("a stored merger override is ignored: the merger always runs on its default", () => {
-  assert.equal(modelFor("merger", { merger: { model: "opus" } }), defaultAgentModels().merger);
-  assert.equal(agentModels({ merger: { model: "haiku" } }).merger, defaultAgentModels().merger);
+test("a stored merger override applies like any agent's, an invalid one falls back to the default", () => {
+  assert.equal(modelFor("merger", { merger: { model: "opus" } }), "opus");
+  assert.equal(agentModels({ merger: { model: "haiku" } }).merger, "haiku");
+  assert.equal(modelFor("merger", { merger: { model: "gpt" } }), defaultAgentModels().merger);
 });
 
 test("an agent or a model outside the accepted ones is refused, naming them", () => {
   assert.equal(requireAgent("coder"), "coder");
+  assert.equal(requireAgent("merger"), "merger");
   assert.equal(requireModel("haiku"), "haiku");
-  assert.throws(() => requireAgent("merger"), /unknown agent `merger`; accepted: triager, explore, architect, coder, qa-triage, qa-analyst, qa-prover, verifier, reflector/);
+  assert.throws(() => requireAgent("nobody"), /unknown agent `nobody`; accepted: triager, explore, architect, coder, qa-triage, qa-analyst, qa-prover, verifier, reflector, merger/);
   assert.throws(() => requireModel("gpt"), /unknown model `gpt`; accepted: opus, sonnet, haiku/);
 });
 

@@ -66,11 +66,19 @@ test("`project models` shows every agent on its default, sets and unsets an over
   assert.equal(storedSettings(env, projectId), null, "the last unset leaves the column NULL");
 });
 
-test("an unknown agent, the merger, a model outside the aliases or a bad assignment is refused, and nothing is stored", async (t) => {
+test("`project models --set merger=<model>` stores the merger override and shows it as the project's", async (t) => {
+  const { env, projectId } = makeModelsHome(t, "models-merger");
+  const set = await runCli(env, ["project", "models", "alpha", "--set", "merger=opus"]);
+  assert.equal(set.code, 0, set.err.join("\n"));
+  assert.deepEqual(set.out, modelLines({ merger: "opus" }));
+  assert.deepEqual(storedSettings(env, projectId), { agents: { merger: { model: "opus" } } });
+});
+
+test("an unknown agent, a model outside the aliases or a bad assignment is refused, and nothing is stored", async (t) => {
   const { env, projectId } = makeModelsHome(t, "models-refusals");
   const cases = [
-    [["--set", "nobody=opus"], "unknown agent `nobody`; accepted: triager, explore, architect, coder, qa-triage, qa-analyst, qa-prover, verifier, reflector"],
-    [["--set", "merger=opus"], "unknown agent `merger`"],
+    [["--set", "nobody=opus"], "unknown agent `nobody`; accepted: triager, explore, architect, coder, qa-triage, qa-analyst, qa-prover, verifier, reflector, merger"],
+    [["--set", "merger=gpt"], "unknown model `gpt`; accepted: opus, sonnet, haiku"],
     [["--set", "coder=gpt"], "unknown model `gpt`; accepted: opus, sonnet, haiku"],
     [["--set", "coder"], "`coder` is not <agent>=<model>"],
     [["--unset", "nobody"], "unknown agent `nobody`"],

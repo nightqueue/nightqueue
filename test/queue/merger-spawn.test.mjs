@@ -47,6 +47,17 @@ test("the merger argv carries the agent, sonnet, Read and Edit only and the guar
   assert.deepEqual(JSON.parse(flag("--settings")), mergerSettings({ NIGHTQUEUE_HOME: "/h" }));
 });
 
+test("the merger argv carries the project's model, and an absent or invalid one falls back to sonnet", () => {
+  const modelOf = (model) => {
+    const args = mergerArgs({ prompt: "p", env: { NIGHTQUEUE_HOME: "/h" }, model });
+    return args[args.indexOf("--model") + 1];
+  };
+  assert.equal(modelOf("opus"), "opus");
+  assert.equal(modelOf("haiku"), "haiku");
+  assert.equal(modelOf(undefined), "sonnet");
+  assert.equal(modelOf("gpt"), "sonnet");
+});
+
 test("the merger settings hold only the merger-guard PreToolUse hook, so no memory hook runs in its session", () => {
   const settings = mergerSettings({ NIGHTQUEUE_HOME: "/h" });
   assert.deepEqual(Object.keys(settings.hooks), ["PreToolUse"]);
@@ -80,9 +91,10 @@ test("runMerger spawns the merger argv in the stopped worktree and answers the f
     spawned.push({ args, options });
     return fakeChild({ lines: [JSON.stringify({ type: "result", result: "done\nRESOLVED" })] });
   };
-  const run = await runMerger({ cwd: "/tmp/w", files: ["a.mjs"], prompt: "p", timeoutMs: 120000, signal: new AbortController().signal, jobId: 3, env, spawnImpl });
+  const run = await runMerger({ cwd: "/tmp/w", files: ["a.mjs"], prompt: "p", timeoutMs: 120000, signal: new AbortController().signal, jobId: 3, model: "opus", env, spawnImpl });
   assert.deepEqual(run, { exitCode: 0, timedOut: false, stopped: false, spawnError: null, resultText: "done\nRESOLVED" });
   assert.equal(spawned[0].options.cwd, "/tmp/w");
+  assert.equal(spawned[0].args[spawned[0].args.indexOf("--model") + 1], "opus");
   assert.equal(spawned[0].args[spawned[0].args.indexOf("--agent") + 1], "nightqueue:merger");
   assert.equal(spawned[0].options.env.NIGHTQUEUE_JOB_ID, undefined);
   assert.deepEqual(JSON.parse(spawned[0].options.env.NIGHTQUEUE_MERGER_FILES), ["/tmp/w/a.mjs"]);

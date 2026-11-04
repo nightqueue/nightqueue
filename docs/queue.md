@@ -553,6 +553,19 @@ decide nothing. The first row that matches wins:
 | 7 | a `termination` with a reason | `cancelled` | the reason, plus `nothing to close: the run produced no pull request` when there is no pull request |
 | 8 | anything else | `failed` | starts `no outcome recorded:`; a gate recorded with no notice reads `the run stopped at a gate but recorded no notice carrying the question` |
 
+**The idle timeout never kills a tool that is still running.** A session that prints nothing for
+1200 s is killed as idle, but only while no tool call is pending. The runner reads the session's
+stream and counts a call as pending from its `tool_use` until its `tool_result`, on the main
+thread and in every subagent, plus every background task from `task_started` until it ends.
+While one is pending the silence allowed widens to `queue.bashTimeoutS.max + 300` s (3900 s by
+default; the total `timeout_s` when no Bash ceiling is set), so a legitimate 20-minute command
+runs to its end, and the total `timeout_s` still caps everything. The job log names every kill:
+`=== idle kill: no output for <S> s, no tool pending @ <iso> ===`, `=== idle kill: no output for
+<S> s with <n> tool(s) pending (oldest <name>, past the <S> s tool bound) @ <iso> ===` (`idle
+timeout` instead of `tool bound` when the idle timeout is the wider window) or
+`=== timeout kill: total budget of <S> s spent @ <iso> ===`. The tool name is kept to one line
+of at most 80 characters.
+
 A `failed` attempt that had recorded a gate with its question or a termination with its reason
 quotes it after its own text, so the question never stays only in `state.json`: `the session
 exited with code N after recording a gate: <question>`, and the same after a time limit or a CLI
@@ -1345,12 +1358,18 @@ agent, never a second job, never queue work:
    pass there, and only then the rebased head is pushed with
    `--force-with-lease` against the head the close read (with `--force`, the push follows the
    rebase without running the suite). A rebase that stops on conflicts may be handed, while
-   it is still stopped, to the bounded **merger** agent (`plugin/agents/merger.md`, sonnet,
-   Read and Edit only, Edit fenced to the conflicted files by the `merger-guard` hook, no
+   it is still stopped, to the bounded **merger** agent (`plugin/agents/merger.md`, sonnet
+   unless `nightqueue project models <project> --set merger=<model>` overrides it, read once
+   per close; Read and Edit only, Edit fenced to the conflicted files by the `merger-guard` hook, no
    shell, no MCP server). Code decides first whether the conflict is eligible: never under
-   `--force`; the project has a `scripts.test`; no file on the risk list (`package.json`,
-   `package-lock.json`, `*.lock`, `src/memory/schema.mjs`, `src/memory/migration/**`); no
-   generated file (`pnpm-lock.yaml`, `npm-shrinkwrap.json`, `bun.lockb`, a path under
+   `--force`; the project has a `scripts.test`; no file on the project's risk list, read once
+   per close from `nightqueue project merger-risk <project>` (a project with none runs on the
+   default `package.json`, `*-lock.json`, `*.lock`, `pnpm-lock.yaml`, `bun.lockb`,
+   `Cargo.lock`, `go.sum`, `poetry.lock`, `Gemfile.lock`; a list that cannot be read keeps
+   every conflict away from the merger with `the project's merger risk list could not be
+   read`; the nightqueue checkout itself protects its schema and migrations with
+   `nightqueue project merger-risk nightqueue --add src/memory/schema.mjs --add
+   'src/memory/migration/**'`); no generated file (`pnpm-lock.yaml`, `npm-shrinkwrap.json`, `bun.lockb`, a path under
    `dist/`, `build/`, `generated/`, `__generated__/`, `vendor/`, `node_modules/` or
    `coverage/`, a `.min.js`, `.min.css`, `.map` or `.snap` file, a file `.gitattributes`
    marks `linguist-generated`, or one whose first five lines say `@generated` or `DO NOT

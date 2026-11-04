@@ -17,8 +17,8 @@ export const MERGER_MODEL = "sonnet";
 // One line per agent with its default model: the pipeline's roles, then the merger.
 export const defaultAgentModels = memoized(() => Object.freeze({ ...pipelineManifest().models, merger: MERGER_MODEL }));
 
-// The agents a project may override: every agent the pipeline launches (the merger runs in the close, outside it).
-export const overridableAgents = memoized(() => Object.freeze(Object.keys(defaultAgentModels()).filter((agent) => agent !== "merger")));
+// The agents a project may override: every agent the pipeline launches, plus the merger the close launches.
+export const overridableAgents = memoized(() => Object.freeze(Object.keys(defaultAgentModels())));
 
 // The values every run shares, whatever its project.
 export const pipelineConstants = memoized(() => Object.freeze({ ...pipelineManifest().constants }));

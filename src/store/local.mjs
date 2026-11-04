@@ -161,6 +161,8 @@ function projectsDomain(db) {
     setAgents: async (id, value) => registry.setProjectAgents(db(), { id, value }),
     demoRepo: async (id) => registry.projectDemoRepo(db(), id),
     setDemoRepo: async (id, value) => registry.setProjectDemoRepo(db(), { id, value }),
+    mergerRisk: async (id) => registry.projectMergerRisk(db(), id),
+    setMergerRisk: async (id, value) => registry.setProjectMergerRisk(db(), { id, value }),
     at: async (cwd) => registry.projectAt(db(), cwd),
     ofOrg: async (orgId) => registry.projectsOfOrg(db(), orgId),
     add: async (spec) => registry.insertProject(db(), spec),

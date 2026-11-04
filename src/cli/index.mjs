@@ -96,6 +96,7 @@ commands:
   project integrations <name> show|set|unset  show or change the project's per-provider settings (set <kind.key>=<value>, unset <kind.key>)
   project models <name> [--set|--unset]     show or change the model each agent runs on for the project (--set <agent>=<model>, --unset <agent>)
   project demo-repo <name> [--set <path>]   show or set the demo repository where verifications may open real pull requests
+  project merger-risk <name> [--add|--remove <glob>]  show or change the globs whose conflicts the close's merger never resolves
   connection add <name> --type <type>       store a secret read from stdin and bind it to a free org slot; a home-wide type (linear) binds nothing
   connection bind <name> --org <name>       bind (or rebind) a stored connection to an org slot (org-scoped types only)
   connection test <name>                    check a stored connection against its service
