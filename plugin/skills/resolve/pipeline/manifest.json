@@ -101,7 +101,7 @@
     { "name": "reflector", "role": "reflector", "lessons": false }
   ],
   "targets": ["triager", "explore", "architect", "coder", "coder-fix", "verifier", "runtime", "qa-triage", "qa-lite", "qa-analyst", "qa-prover", "reflector"],
-  "recordable": ["type", "commitType", "qaMode", "termination", "slug", "pipelineLoops"],
+  "recordable": ["type", "commitType", "qaMode", "termination", "slug", "pipelineLoops", "decisions"],
   "track": [
     { "number": 0, "name": "brief", "agent": null, "modelAgent": null, "phase": null },
     { "number": 1, "name": "triager", "agent": "triager", "modelAgent": "triager", "phase": "triage" },

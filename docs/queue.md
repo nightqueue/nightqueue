@@ -759,10 +759,11 @@ records it again, and `run publish` can: it edits the existing pull request. A r
 run is handed its recorded phases, as an answered gate is. A refused retry changes nothing.
 
 **The progress guard.** At each claim that reaches a spawn the runner records `lastClaim: {attempt,
-phases, answers}`. A retry with neither `--note` nor `--fresh` of a run whose state shows the same
+phases, answers, decisions}`. A retry with neither `--note` nor `--fresh` of a run whose state shows the same
 counts as its last two claims is refused with ``J-<n> made no progress in its last two attempts (same
 <n> phases, no new answer): answer with a note, or retry --fresh``, nothing written. Progress is a new
-recorded phase or a new answer and nothing else: a wip commit is none. A note, `--fresh` or a preflight
+recorded phase, a new answer or a new loop decision of `run check` (`decisions[]`; a claim recorded
+before decisions were counted reads as having found none) and nothing else: a wip commit is none. A note, `--fresh` or a preflight
 gate (`blocked_code` set, whose fixed cause is all it asks) always passes.
 
  A record that cannot be

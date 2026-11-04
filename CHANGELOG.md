@@ -21,6 +21,18 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- **A retried run keeps every loop.** `run check` now appends a `decisions[]` record to `state.json`
+  when `NEXT:` launches `coder-fix`, `architect` or `triager`, or when a loop fact changes, in the same
+  write as the `pipelineLoops` cache. A retry replays the fix, architect and re-triage counts, the stage,
+  the fix owed, the QA row owed and every invalidated assumption from those records, so a retry no longer
+  forgets a coder-fix launched right before the attempt ended, re-proposes a rejected assumption, or
+  re-counts a fix iteration. `pipelineLoops` is only the cache of the current attempt: the floor that
+  raised the replayed counts to the previous attempt's cache is gone, and a run with no record replays
+  `phases[]` alone. `--fresh` starts from zero. Whether a record is still the last check run comes from
+  the check sequence `seq` that the runtime stamps on every memo and record, not from their time. A
+  held count, stage or action outside its range or off the `NEXT:` grammar reads as none. A new loop
+  decision counts as progress for the retry guard.
+
 - **A broken pipeline manifest no longer takes the MCP server, `queue …`, `doctor` or `--help` down.**
   Nothing reads a manifest at import any more. With a missing, non-JSON or invalid `manifest.json` the
   server still lists every tool and `queue_status`, the queue and memory tools keep answering, while

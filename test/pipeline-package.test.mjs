@@ -27,7 +27,7 @@ const CLI = join(ROOT, "bin", "nightqueue.mjs");
 const PACKAGE_DIR = join(ROOT, "plugin", "skills", "resolve", "pipeline");
 const SLUG = "package-run";
 const ACCEPTANCE_RE = /"(triage|explore|architecture|implementation|qa|verification|runtime|commit)"|0[1-7]-[a-z-]+\.md/;
-const IMPORT_ALLOW_LIST = ["config/errors", "config/store", "host/paths", "memory/runs", "queue/branch-name", "queue/file-list", "queue/orchestrator-scope", "queue/pipeline-record", "queue/resume", "queue/rounds", "queue/question-text", "queue/stream"];
+const IMPORT_ALLOW_LIST = ["config/errors", "config/store", "host/paths", "memory/runs", "queue/branch-name", "queue/file-list", "queue/orchestrator-scope", "queue/pipeline-answer", "queue/pipeline-record", "queue/resume", "queue/rounds", "queue/question-text", "queue/stream"];
 
 // A job bound to the run slug, with the run directory ready and these files in it.
 function seedRun(t, name, files = {}) {
@@ -193,6 +193,9 @@ test("a job whose row names a pipeline with no package is refused by name and wr
 const INVALID_ANSWERS = [
   ["an unknown effect", answerWith({ effects: [{ kind: "deleteRun" }] }), /unknown effect `deleteRun`/],
   ["an undeclared field", answerWith({ effects: [{ kind: "recordFields", fields: { branch: "x" } }] }), /field `branch` is not recordable/],
+  ["the decisions as a field", answerWith({ effects: [{ kind: "recordFields", fields: { decisions: [] } }] }), /field `decisions` is not recordable/],
+  ["a decision with no decision", answerWith({ effects: [{ kind: "recordDecision", decision: { check: "06" }, loops: {} }] }), /recordDecision has no decision/],
+  ["a decision with no loops", answerWith({ effects: [{ kind: "recordDecision", decision: { check: "06", next: "report" }, loops: [1] }] }), /recordDecision has no loops/],
   ["a run file off the run directory", answerWith({ effects: [{ kind: "writeRunFile", name: "../x", text: "y", locked: true }] }), /run file `\.\.\/x` is not a bare file name/],
   ["a verdict off the manifest", answerWith({ record: { phase: "explore", artifact: "02-explore.md", verdict: "MAYBE" } }), /verdict `MAYBE` is not one the phase `explore` may record/],
   ["a phase off the manifest", answerWith({ record: { phase: "critique", verdict: "OK" } }), /record of unknown phase `critique`/],
@@ -313,6 +316,13 @@ test("an install whose manifest is not JSON keeps the CLI running and refuses `r
 test("a manifest that declares a field the runtime has no writer for is still refused", () => {
   const manifest = { ...pipelineManifest(), recordable: ["brand-new"] };
   assert.throws(() => refuseInvalidAnswer(answerWith({ effects: [{ kind: "recordFields", fields: { "brand-new": 1 } }] }), manifest), /field `brand-new` is not recordable/);
+});
+
+test("a decision record is refused for a pipeline whose manifest does not declare `decisions`", () => {
+  const manifest = { ...pipelineManifest(), recordable: ["pipelineLoops"] };
+  const effect = { kind: "recordDecision", decision: { check: "06", next: "report" }, loops: {} };
+  assert.throws(() => refuseInvalidAnswer(answerWith({ effects: [effect] }), manifest), /`decisions` is not recordable/);
+  assert.doesNotThrow(() => refuseInvalidAnswer(answerWith({ effects: [effect] }), pipelineManifest()));
 });
 
 test("the phase names of a run come from the pipeline its state pinned", () => {

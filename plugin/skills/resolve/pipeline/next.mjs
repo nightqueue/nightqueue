@@ -1,5 +1,6 @@
 import { MANIFEST, PHASE_ARTIFACTS } from "./artifacts.mjs";
 import { beforeQa, CONFIRM_LINE, flatLine, planStageNumbers, sectionItems } from "./contract.mjs";
+import { nextDefect } from "../../../../src/queue/pipeline-answer.mjs";
 import { capped, terminationReason } from "./effects.mjs";
 
 // What `run check` tells the orchestrator to do next, from the check's answer and the loops the run has been through.
@@ -21,10 +22,23 @@ const QA_PHASE = PHASE_ARTIFACTS.get("05").phase;
 const VERIFICATION_PHASE = PHASE_ARTIFACTS.get("06").phase;
 const RUNTIME_PHASE = PHASE_ARTIFACTS.get("07").phase;
 const RUNTIME_FIX_VERDICTS = new Set(["NOT-MET", "SYMPTOM-PERSISTS"]);
+const DURABLE_LOOPS = ["fix", "architect", "retriage", "stage", "fixPending", "invalidated", "pendingQaRow", "counted"];
+const DECIDING_LAUNCH_RE = /^launch (?:coder-fix|architect|triager)\b/;
+const ISO_AT_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/;
 
-// A count of a held state, zero for anything that is not a finite number.
+// Whether a held value is a count: a non-negative safe integer.
+function isCount(value) {
+  return Number.isSafeInteger(value) && value >= 0;
+}
+
+// A count of a held state, zero for anything that is not a count.
 function countOf(value) {
-  return Number.isFinite(value) ? value : 0;
+  return isCount(value) ? value : 0;
+}
+
+// A held action when it is one the closed grammar accepts, else null.
+function actionOf(value) {
+  return typeof value === "string" && nextDefect(value, MANIFEST) === null ? value : null;
 }
 
 // Whether a recorded phase entry is one the next lane owes a fix to, given the fix count when it landed.
@@ -64,32 +78,82 @@ function phaseLoops(phases) {
   return { fix: replay.fix, architect: replay.architect, retriage: replay.retriage, fixPending: replay.fixPending };
 }
 
-// The replayed counts, raised to what an earlier attempt's cache counted that no phase entry records: a re-triage before its triage entry, a fix lane that left 04 unchanged.
-function replayedLoops(state, held) {
-  const replayed = phaseLoops(state?.phases);
-  const earlier = held !== null && typeof held === "object" ? held : {};
-  return { ...replayed, fix: Math.max(replayed.fix, countOf(earlier.fix)), retriage: Math.max(replayed.retriage, countOf(earlier.retriage)) };
+// The loop facts a decision record keeps, picked in a fixed order so two snapshots compare as text.
+function durableOf(loops) {
+  return Object.fromEntries(DURABLE_LOOPS.map((name) => [name, loops?.[name] ?? null]));
 }
 
-// The loops of this attempt from its cache, else the counts replayed from the recorded phases when the cache holds none or another attempt's.
+// The decision records the runtime kept for this run, skipping any entry of a hostile shape.
+function decisionsOf(state) {
+  const entries = Array.isArray(state?.decisions) ? state.decisions : [];
+  return entries.filter((entry) => isObject(entry) && isObject(entry.loops));
+}
+
+// Whether a value is a plain object.
+function isObject(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+// Every assumption any decision recorded as invalidated, once each.
+function replayedInvalidated(decisions) {
+  const items = decisions.flatMap((entry) => (Array.isArray(entry.loops.invalidated) ? entry.loops.invalidated : []));
+  return [...new Set(items.filter((item) => typeof item === "string"))];
+}
+
+// The time of a runtime stamp in the ISO form the runtime writes, or null for any other value.
+function isoTime(value) {
+  const time = typeof value === "string" && ISO_AT_RE.test(value) ? Date.parse(value) : Number.NaN;
+  return Number.isFinite(time) ? time : null;
+}
+
+// Whether a check memo was written at or after a decision: by the runtime's check sequence when both carry it, else by time, an unreadable order counting as after.
+function writtenSince(memo, decision) {
+  if (isCount(memo?.seq) && isCount(decision.seq)) return memo.seq >= decision.seq;
+  const memoTime = isoTime(memo?.at);
+  const decisionTime = isoTime(decision.at);
+  return memoTime === null || decisionTime === null || memoTime >= decisionTime;
+}
+
+// Whether a decision is the last thing the run checked: its own check not since run on another text, and no other check since.
+function isLatestCheck(state, decision) {
+  const checks = isObject(state?.checks) ? state.checks : {};
+  if (Object.hasOwn(checks, decision.check) && checks[decision.check]?.digest !== decision.digest) return false;
+  return !Object.entries(checks).some(([key, memo]) => key !== decision.check && key !== "lastFailure" && writtenSince(memo, decision));
+}
+
+// The loops another attempt left, from the last decision record, else replayed from the recorded phases of a run with none.
+function replayedLoops(state) {
+  const decisions = decisionsOf(state);
+  const last = decisions.at(-1);
+  if (last === undefined) return phaseLoops(state?.phases);
+  return { ...durableOf(last.loops), invalidated: replayedInvalidated(decisions), lastNext: isLatestCheck(state, last) ? last.next : null };
+}
+
+// The loops of this attempt from its cache, else the ones replayed from the run's records when the cache holds none or another attempt's.
 function loopsOf(state) {
   const attempt = state?.lastClaim?.attempt ?? null;
   const held = state?.pipelineLoops;
   const usable = held !== null && typeof held === "object" && (held.attempt ?? null) === attempt;
-  const loops = usable ? held : replayedLoops(state, held ?? null);
+  const loops = usable ? held : replayedLoops(state);
   return {
     attempt,
     missing: loops.missing !== null && typeof loops.missing === "object" ? loops.missing : {},
     fix: countOf(loops.fix),
     architect: countOf(loops.architect),
     retriage: countOf(loops.retriage),
-    stage: Number.isFinite(loops.stage) ? loops.stage : null,
-    lastNext: typeof loops.lastNext === "string" ? loops.lastNext : null,
+    stage: isCount(loops.stage) ? loops.stage : null,
+    lastNext: actionOf(loops.lastNext),
     fixPending: loops.fixPending === true,
     invalidated: Array.isArray(loops.invalidated) ? loops.invalidated : [],
-    pendingQaRow: typeof loops.pendingQaRow === "string" ? loops.pendingQaRow : null,
-    counted: loops.counted ?? null,
+    pendingQaRow: actionOf(loops.pendingQaRow),
+    counted: countedOf(loops.counted),
   };
+}
+
+// The counted row a re-run repeats, or null when the held one is not of its shape or its action is off the grammar.
+function countedOf(held) {
+  if (!isObject(held) || typeof held.key !== "string" || actionOf(held.next) === null) return null;
+  return { ...held, unchanged: countOf(held.unchanged) };
 }
 
 // A `launch` action with its optional stage and note.
@@ -373,14 +437,23 @@ function settledLoops(ctx, step) {
   };
 }
 
-// The `NEXT:` action of a check's answer and the loops it leaves; a re-run of a counted row on the same text repeats its action and burns no iteration, and the same text after another check ran relaunches its lane once, then ends in a draft.
+// The record a step leaves for a later attempt: on a launch of coder-fix, architect or triager, or when a loop fact it keeps changed; null otherwise.
+function decisionOf(ctx, step, settled) {
+  const after = durableOf(settled);
+  const changed = JSON.stringify(durableOf(ctx.loops)) !== JSON.stringify(after);
+  if (!changed && !DECIDING_LAUNCH_RE.test(step.action)) return null;
+  return { check: ctx.key, digest: ctx.digest, next: step.action, loops: after };
+}
+
+// The `NEXT:` action of a check's answer, the loops it leaves and the decision it records; a re-run of a counted row on the same text repeats its action, burns no iteration and records nothing, and the same text after another check ran relaunches its lane once, then ends in a draft.
 export function nextOf({ result, repaired, state, memo, plan }) {
   const loops = loopsOf(state);
   const { key, digest } = memo;
   const sameText = loops.counted?.key === key && loops.counted?.digest === digest;
   const unchanged = sameText ? countOf(loops.counted.unchanged) : 0;
-  if (sameText && unchanged === 0 && loops.lastNext === loops.counted.next) return { action: loops.counted.next, loops };
+  if (sameText && unchanged === 0 && loops.lastNext === loops.counted.next) return { action: loops.counted.next, loops, decision: null };
   const ctx = { result, repaired, state, loops, key, digest, still: countOf(loops.missing[key]) >= 1, stages: planStageNumbers(plan) };
   const step = sameText ? unchangedStep(ctx, unchanged) : ROWS[key](ctx);
-  return { action: step.action, loops: settledLoops(ctx, step) };
+  const settled = settledLoops(ctx, step);
+  return { action: step.action, loops: settled, decision: decisionOf(ctx, step, settled) };
 }

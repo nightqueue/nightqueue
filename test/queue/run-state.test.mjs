@@ -7,6 +7,7 @@ import { runDir } from "../../src/config/paths.mjs";
 import {
   clearTermination,
   recordCheck,
+  recordLoopDecision,
   recordOutcome,
   recordPhaseDone,
   recordPrTemplate,
@@ -48,6 +49,36 @@ for (const [label, name, value, reason] of [
     assert.equal(existsSync(join(runDir(RUN.projectId, RUN.slug, env), "state.json")), false);
   });
 }
+
+test("a loop decision is appended stamped with its time and claim, and the loops cache is written in the same write", (t) => {
+  const env = makeHome(t, "run-state-decision");
+  const decision = { check: "06", digest: "d", next: "launch coder-fix note=iteration 1: x", loops: { fix: 1 } };
+  assert.equal(recordLoopDecision({ ...RUN, decision, loops: { attempt: 1, fix: 1 }, claim: { attempt: 1, session: "s" }, env }).status, "written");
+  assert.equal(recordLoopDecision({ ...RUN, decision: { ...decision, digest: "e" }, loops: { attempt: 1, fix: 2 }, env }).status, "written");
+  const state = readState(env);
+  assert.deepEqual(state.pipelineLoops, { attempt: 1, fix: 2 });
+  assert.equal(state.decisions.length, 2);
+  assert.deepEqual(state.decisions[0].claim, { attempt: 1, session: "s" });
+  assert.match(state.decisions[0].at, UTC_ISO);
+  assert.deepEqual([state.decisions[1].digest, state.decisions[1].claim], ["e", undefined]);
+});
+
+test("a loop decision of a claim that is over sets both the record and the cache aside", (t) => {
+  const env = makeHome(t, "run-state-decision-late");
+  const written = recordLoopDecision({ ...RUN, decision: { check: "06", next: "report", loops: {} }, loops: { fix: 1 }, claim: { attempt: 1, over: true }, env });
+  assert.equal(written.status, "kept");
+  assert.match(written.reason, /attempt 1 of this job is over/);
+  const state = readState(env);
+  assert.deepEqual([state.decisions, state.pipelineLoops, state.ignoredRecords[0].kind], [undefined, undefined, "decision"]);
+});
+
+test("a loop decision or loops that are not an object are refused, and no pipeline writer can set the decisions", (t) => {
+  const env = makeHome(t, "run-state-decision-refused");
+  assert.match(recordLoopDecision({ ...RUN, decision: "x", loops: {}, env }).reason, /a loop decision must be an object/);
+  assert.match(recordLoopDecision({ ...RUN, decision: {}, loops: [1], env }).reason, /the pipeline loops must be an object/);
+  assert.equal(existsSync(join(runDir(RUN.projectId, RUN.slug, env), "state.json")), false);
+  assert.deepEqual(recordRunFields({ ...RUN, fields: { decisions: [] }, env }), { status: "kept", path: null, reason: "`decisions` is written by the runtime only" });
+});
 
 test("only the runtime's own termination is cleared, of the named phase, and a held lock keeps the file as it was", (t) => {
   const env = makeHome(t, "run-state-clear-termination");
