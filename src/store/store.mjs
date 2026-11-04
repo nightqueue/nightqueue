@@ -24,6 +24,7 @@
  * @property {(id: number, spec: object) => Promise<boolean>} parkJob back to pending, due only at the instant a rate limit resets
  * @property {(id: number, spec: object) => Promise<boolean>} renewLease
  * @property {(id: number, spec: object) => Promise<boolean>} noteRespawn
+ * @property {(id: number, spec: {worker: string, route: string|null}) => Promise<boolean>} noteAttemptRoute records on the open attempt row the model alias the orchestrator is spawned on, before the spawn; false when the route is not an alias or the worker holds no open attempt
  * @property {(options?: object) => Promise<{failed: number}>} sweepOrphans
  * @property {(id: number, facts: object) => Promise<boolean>} persistRunFacts
  * @property {(id: number, spec: {worker: string, candidates: string[]}) => Promise<{status: "bound"|"taken"|"lost", slug?: string, heldBy?: number}>} bindRunSlug claims the first run slug no other job of the project holds
@@ -141,7 +142,7 @@
  * @property {(id: string) => Promise<object|null>} byId
  * @property {(id: string) => Promise<object|null>} integrations the project's `integrations` (schema v21 column) as an object; null when it has none or the column is not there yet
  * @property {(id: string, value: object|null) => Promise<object|null>} setIntegrations writes the project's `integrations`; null or an empty object stores NULL, the project without integrations again
- * @property {(id: string) => Promise<object|null>} agents the project's agent model overrides (`{ <agent>: { model } }`, kept under `agents` in the same JSON, never shown by `integrations`); null when it has none
+ * @property {(id: string, options?: {strict?: boolean}) => Promise<object|null>} agents the project's agent model overrides (`{ <agent>: { model } }`, kept under `agents` in the same JSON, never shown by `integrations`); null when it has none; `strict` throws instead when the settings column is missing or the stored value is not a JSON object
  * @property {(id: string, value: object|null) => Promise<object|null>} setAgents writes the project's agent model overrides, keeping its integrations; null or an empty object removes them
  * @property {(id: string) => Promise<string|null>} demoRepo the project's demo repository path (`verification.demoRepo` in the same JSON, never shown by `integrations`); null when none is configured
  * @property {(id: string, value: string) => Promise<string|null>} setDemoRepo writes the project's demo repository path, keeping every other setting
@@ -214,6 +215,7 @@ export const STORE_CONTRACT = Object.freeze({
     "parkJob",
     "renewLease",
     "noteRespawn",
+    "noteAttemptRoute",
     "sweepOrphans",
     "persistRunFacts",
     "bindRunSlug",

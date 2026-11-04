@@ -155,10 +155,20 @@ export function projectIntegrations(db, id) {
   return withoutKeys(projectSettings(db, id), RESERVED_KEYS);
 }
 
-// The agent model overrides of a project (`{ <agent>: { model } }`), or null when it has none.
-export function projectAgents(db, id) {
-  const agents = projectSettings(db, id)?.[AGENTS_KEY];
+// The agent model overrides of a project (`{ <agent>: { model } }`), or null when it has none; `strict` refuses settings it cannot read.
+export function projectAgents(db, id, { strict = false } = {}) {
+  const agents = (strict ? readableSettings(db, id) : projectSettings(db, id))?.[AGENTS_KEY];
   return isFilledObject(agents) ? agents : null;
+}
+
+// The whole settings JSON of a project, or null when it has none; refuses a missing settings column or a stored value that is not a JSON object.
+function readableSettings(db, id) {
+  if (!hasColumn(db, "projects", "integrations")) throw new UserError("this database has no project settings column; run `nightqueue update` to migrate it");
+  const text = db.prepare("SELECT integrations FROM projects WHERE id = ?").get(String(id ?? ""))?.integrations;
+  if (text === null || text === undefined || text === "") return null;
+  const settings = parseSettingsObject(text);
+  if (settings === null) throw new UserError(`the stored settings of project id \`${id}\` are not a JSON object; rewrite them with \`nightqueue project models\``);
+  return settings;
 }
 
 // Writes the whole settings JSON of a project; an empty object stores NULL.
@@ -238,9 +248,15 @@ function isFilledObject(value) {
 // A stored integrations value as a non-empty plain object, or null.
 function parseIntegrations(text) {
   if (typeof text !== "string" || !text) return null;
+  const parsed = parseSettingsObject(text);
+  return isFilledObject(parsed) ? parsed : null;
+}
+
+// A settings text parsed as a plain object, or null when it is not valid JSON or not an object.
+function parseSettingsObject(text) {
   try {
     const parsed = JSON.parse(text);
-    return isFilledObject(parsed) ? parsed : null;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : null;
   } catch {
     return null;
   }

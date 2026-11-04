@@ -39,7 +39,8 @@ async function runCli(env, argv) {
 
 // The lines `project models` prints with every agent on its default, but the ones given.
 function modelLines(overrides = {}) {
-  return Object.entries(defaultAgentModels()).map(([agent, model]) => (overrides[agent] ? `${agent}=${overrides[agent]} (project)` : `${agent}=${model} (default)`));
+  const defaults = { ...defaultAgentModels(), orchestrator: "default" };
+  return Object.entries(defaults).map(([agent, model]) => (overrides[agent] ? `${agent}=${overrides[agent]} (project)` : `${agent}=${model} (default)`));
 }
 
 test("`project models` shows every agent on its default, sets and unsets an override, and stores it under `agents`", async (t) => {
@@ -74,10 +75,30 @@ test("`project models --set merger=<model>` stores the merger override and shows
   assert.deepEqual(storedSettings(env, projectId), { agents: { merger: { model: "opus" } } });
 });
 
+test("`project models --set orchestrator=<model>` routes the orchestrator, `--unset` gives it back to the default, and a hand-edited value shows as default", async (t) => {
+  const { env, projectId } = makeModelsHome(t, "models-orchestrator");
+  const set = await runCli(env, ["project", "models", "alpha", "--set", "orchestrator=sonnet"]);
+  assert.equal(set.code, 0, set.err.join("\n"));
+  assert.deepEqual(set.out, modelLines({ orchestrator: "sonnet" }));
+  assert.equal(set.out.at(-1), "orchestrator=sonnet (project)");
+  assert.deepEqual(storedSettings(env, projectId), { agents: { orchestrator: { model: "sonnet" } } });
+  const json = JSON.parse((await runCli(env, ["project", "models", "alpha", "--json"])).out[0]);
+  assert.deepEqual(json.agents.orchestrator, { model: "sonnet", source: "project" });
+  assert.equal(Object.keys(json.agents).at(-1), "orchestrator");
+
+  const cleared = await runCli(env, ["project", "models", "alpha", "--unset", "orchestrator"]);
+  assert.deepEqual(cleared.out, modelLines());
+  assert.equal(cleared.out.at(-1), "orchestrator=default (default)");
+
+  openDb(env).prepare("UPDATE projects SET integrations = ? WHERE id = ?").run(JSON.stringify({ agents: { orchestrator: { model: "gpt-5" } } }), projectId);
+  assert.equal((await runCli(env, ["project", "models", "alpha"])).out.at(-1), "orchestrator=default (default)");
+});
+
 test("an unknown agent, a model outside the aliases or a bad assignment is refused, and nothing is stored", async (t) => {
   const { env, projectId } = makeModelsHome(t, "models-refusals");
   const cases = [
-    [["--set", "nobody=opus"], "unknown agent `nobody`; accepted: triager, explore, architect, coder, qa-triage, qa-analyst, qa-prover, verifier, reflector, merger"],
+    [["--set", "nobody=opus"], "unknown agent `nobody`; accepted: triager, explore, architect, coder, qa-triage, qa-analyst, qa-prover, verifier, reflector, merger, orchestrator"],
+    [["--set", "orchestrator=gpt"], "unknown model `gpt`; accepted: opus, sonnet, haiku"],
     [["--set", "merger=gpt"], "unknown model `gpt`; accepted: opus, sonnet, haiku"],
     [["--set", "coder=gpt"], "unknown model `gpt`; accepted: opus, sonnet, haiku"],
     [["--set", "coder"], "`coder` is not <agent>=<model>"],

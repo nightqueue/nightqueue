@@ -86,7 +86,7 @@ test("a second pipeline's run is reported from its own layout and records: its r
 test("a second pipeline's facts are the ones its package states over its own fact files", async (t) => {
   const { out } = await duoReport(makeDuoRun(t), ["--facts"]);
 
-  assert.deepEqual(out, ["## Facts for the report", "", "- Note: the duo notes"]);
+  assert.deepEqual(out, ["## Facts for the report", "", "- orchestrator: default", "- Note: the duo notes"]);
 });
 
 // Runs `run report` as the job through the real package loader, answering its exit code and printed lines.

@@ -21,7 +21,7 @@ const profile = (entry) => Object.freeze({ ...entry, order: Object.freeze([...en
 
 export const SESSION_PROFILES = Object.freeze({
   job: profile({
-    order: ["print", "permissionMode", "stream", "pluginDir", "mcpConfig", "strictMcp", "settingSources", "settings", "resume"],
+    order: ["print", "model", "permissionMode", "stream", "pluginDir", "mcpConfig", "strictMcp", "settingSources", "settings", "resume"],
     permissionMode: "bypassPermissions",
     strictMcp: true,
     settingSources: "project",

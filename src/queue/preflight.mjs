@@ -17,6 +17,7 @@ export const BLOCK_CODES = {
   PIPELINE_VERSION_CHANGED: "pipeline-version-changed",
   PIPELINE_VERSION_UNKNOWN: "pipeline-version-unknown",
   FOREIGN_RUN: "foreign-run",
+  UNREADABLE_SETTINGS: "unreadable-settings",
 };
 
 const GIT_TIMEOUT_MS = 5000;

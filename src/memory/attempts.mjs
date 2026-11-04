@@ -1,4 +1,8 @@
+import { MODEL_NAMES } from "../queue/routing.mjs";
+import { hasColumn } from "./columns.mjs";
 import { sqliteToIso } from "./schema.mjs";
+
+const TEXT_MAX = 200;
 
 const ROW_MEASURES = Object.freeze([
   ["tokens_in", (m) => m.usage?.tokensIn],
@@ -19,9 +23,18 @@ const JOB_TOTALS = Object.freeze([
   ["orch_bash_explore", (m) => m.orchestrator?.bashExplore],
 ]);
 
+const ROW_TEXTS = Object.freeze([
+  ["orchestrator_route", (m) => routeOf(m.orchestrator?.route)],
+  ["orchestrator_model", (m) => m.orchestrator?.model],
+]);
+
 const MARK_MEASURED = `UPDATE job_attempts
     SET ${ROW_MEASURES.map(([column]) => `${column} = ?`).join(", ")}, measured = 1
   WHERE job_id = ? AND attempt = ? AND measured = 0`;
+
+const FILL_TEXTS = `UPDATE job_attempts
+    SET ${ROW_TEXTS.map(([column]) => `${column} = COALESCE(${column}, ?)`).join(", ")}
+  WHERE job_id = ? AND attempt = ?`;
 
 const ADD_TO_TOTALS = `UPDATE jobs
     SET ${JOB_TOTALS.map(([column]) => `${column} = COALESCE(${column} + ?, ?, ${column})`).join(", ")},
@@ -33,8 +46,12 @@ const CLOSE_OPEN_ATTEMPT = `UPDATE job_attempts
   WHERE job_id = ? AND finished_at IS NULL
   RETURNING attempt`;
 
-const ATTEMPT_ROWS = `SELECT job_id, attempt, worker, session_id, started_at, finished_at, outcome, exit_reason, spawns,
-       tokens_in, tokens_out, cache_read, cache_creation, cost_usd, fresh, backfilled,
+const ORCHESTRATOR_COLUMNS = "orchestrator_route, orchestrator_model";
+const NO_ORCHESTRATOR_COLUMNS = "NULL AS orchestrator_route, NULL AS orchestrator_model";
+
+// The attempt rows select, naming the orchestrator columns or nulls in their place on a database not yet migrated.
+const attemptRowsSql = (orchestratorColumns) => `SELECT job_id, attempt, worker, session_id, started_at, finished_at, outcome, exit_reason, spawns,
+       tokens_in, tokens_out, cache_read, cache_creation, cost_usd, fresh, backfilled, ${orchestratorColumns},
        CASE WHEN finished_at IS NULL THEN NULL
             ELSE CAST(ROUND((julianday(finished_at) - julianday(started_at)) * 86400) AS INTEGER) END AS duration_s,
        CAST(ROUND((julianday(COALESCE(finished_at, datetime('now'))) - julianday(started_at)) * 86400) AS INTEGER) AS elapsed_s,
@@ -46,6 +63,18 @@ const ATTEMPT_ROWS = `SELECT job_id, attempt, worker, session_id, started_at, fi
 function measureOf(read, measures) {
   const value = read(measures);
   return Number.isFinite(value) ? value : null;
+}
+
+// The orchestrator route when it is a known model alias, null otherwise.
+function routeOf(route) {
+  return MODEL_NAMES.includes(route) ? route : null;
+}
+
+// The value of one text measure when it is a non-blank string, trimmed and clipped, null otherwise.
+function textOf(read, measures) {
+  const value = read(measures);
+  const text = typeof value === "string" ? value.trim() : "";
+  return text === "" ? null : text.slice(0, TEXT_MAX);
 }
 
 // Tells whether a write carries any measure at all; a gate before the spawn carries none.
@@ -87,17 +116,24 @@ export function noteAttemptSession(db, { jobId, worker, sessionId }) {
   db.prepare("UPDATE job_attempts SET session_id = ? WHERE job_id = ? AND worker = ? AND finished_at IS NULL").run(sessionId.trim(), jobId, worker);
 }
 
+// Records on the open attempt row of a job this worker runs the model alias its orchestrator was routed to; false when there is none to record.
+export function noteAttemptRoute(db, { jobId, worker, route }) {
+  const alias = routeOf(route);
+  if (alias === null) return false;
+  return db.prepare("UPDATE job_attempts SET orchestrator_route = ? WHERE job_id = ? AND worker = ? AND finished_at IS NULL").run(alias, jobId, worker).changes === 1;
+}
+
 // Adds the measures of one attempt to the job's totals, the last orchestrator context replacing the stored one.
 function addToTotals(db, jobId, measures) {
   const totals = JOB_TOTALS.flatMap(([, read]) => [measureOf(read, measures), measureOf(read, measures)]);
   db.prepare(ADD_TO_TOTALS).run(...totals, measureOf((m) => m.orchestrator?.ctxLast, measures), jobId);
 }
 
-// Stores the measures of one attempt on its row and adds them to the job's totals, once: false when the row is gone, already measured, or nothing was measured.
+// Stores the measures of one attempt on its row and adds them to the job's totals, once, while its route and model fill whichever is still empty: false when the row is gone, already measured, or nothing was measured.
 export function applyMeasures(db, jobId, attempt, measures) {
   if (!Number.isInteger(attempt) || !hasMeasures(measures)) return false;
-  const rowValues = ROW_MEASURES.map(([, read]) => measureOf(read, measures));
-  if (db.prepare(MARK_MEASURED).run(...rowValues, jobId, attempt).changes !== 1) return false;
+  db.prepare(FILL_TEXTS).run(...ROW_TEXTS.map(([, read]) => textOf(read, measures)), jobId, attempt);
+  if (db.prepare(MARK_MEASURED).run(...ROW_MEASURES.map(([, read]) => measureOf(read, measures)), jobId, attempt).changes !== 1) return false;
   addToTotals(db, jobId, measures);
   return true;
 }
@@ -115,7 +151,8 @@ export function attachAttemptRows(db, rows) {
   const jobs = rows.filter((row) => row && Number.isInteger(row.id));
   if (jobs.length === 0) return rows;
   const byJob = new Map(jobs.map((row) => [row.id, []]));
-  for (const attempt of db.prepare(ATTEMPT_ROWS).all(JSON.stringify([...byJob.keys()]))) byJob.get(attempt.job_id)?.push(attempt);
+  const columns = hasColumn(db, "job_attempts", "orchestrator_model") ? ORCHESTRATOR_COLUMNS : NO_ORCHESTRATOR_COLUMNS;
+  for (const attempt of db.prepare(attemptRowsSql(columns)).all(JSON.stringify([...byJob.keys()]))) byJob.get(attempt.job_id)?.push(attempt);
   for (const row of jobs) row.attempt_rows = byJob.get(row.id);
   return rows;
 }
@@ -139,6 +176,8 @@ function attemptEntry(row) {
     cost_usd: row.cost_usd ?? null,
     fresh: row.fresh === 1,
     backfilled: row.backfilled === 1,
+    orchestrator_route: row.orchestrator_route ?? null,
+    orchestrator_model: row.orchestrator_model ?? null,
   };
 }
 

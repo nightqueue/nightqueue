@@ -71,6 +71,7 @@ test("`run start` answers the run, its agent models, and every phase but no task
     "type",
     "commitType",
     "models",
+    "orchestratorModel",
     "phases",
     "prTemplate",
     "commitConvention",
@@ -90,6 +91,7 @@ test("`run start` answers the run, its agent models, and every phase but no task
   assert.equal(answer.runDir, runDir(ensureProject(env, "alpha"), SLUG, env));
   assert.equal(answer.commitType, "feat");
   assert.deepEqual(answer.models, { ...defaultAgentModels() });
+  assert.equal(answer.orchestratorModel, "default");
   assert.deepEqual(answer.phases, EVERY_PHASE);
   assert.equal("tasks" in answer, false, "run start still answers tasks");
   assert.deepEqual(answer.prTemplate, { source: "nightqueue", label: "nightqueue (fallback)", headings: ["## Report", "## Cause", "## Changes", "## QA"] });
@@ -149,6 +151,7 @@ test("a bare `run start` answers every phase with no type nor commit type, and r
   assert.equal(answer.type, null);
   assert.equal(answer.commitType, null);
   assert.deepEqual(answer.models, { ...defaultAgentModels() });
+  assert.equal(answer.orchestratorModel, "default");
   assert.deepEqual(answer.phases, EVERY_PHASE);
   assert.equal("tasks" in answer, false, "run start still answers tasks");
   const state = readRunState({ projectId: ensureProject(env, "alpha"), slug: SLUG, env });
@@ -167,17 +170,20 @@ test("a bare `run start` answers the type and the commit type `run check 01` alr
   assert.equal(answer.type, "bug/error");
   assert.equal(answer.commitType, "fix");
   assert.deepEqual(answer.models, { ...defaultAgentModels() });
+  assert.equal(answer.orchestratorModel, "default");
 });
 
 test("`run start` answers the project's agent model overrides over the defaults", async (t) => {
   const env = makeQueue(t, "run-start-models");
   const id = boundJob(env);
-  setProjectAgents(openDb(env), { id: ensureProject(env, "alpha"), value: { coder: { model: "sonnet" } } });
+  setProjectAgents(openDb(env), { id: ensureProject(env, "alpha"), value: { coder: { model: "sonnet" }, orchestrator: { model: "sonnet" } } });
 
   const answer = answerOf(await runCli(env, START, { jobId: id }));
 
   assert.equal(answer.models.coder, "sonnet");
   assert.equal(answer.models.architect, "opus");
+  assert.equal(answer.orchestratorModel, "sonnet");
+  assert.equal(Object.hasOwn(answer.models, "orchestrator"), false);
 });
 
 test("`run start --routing` prints the agent model table and resolves no run, inside a job or outside", async (t) => {
@@ -186,6 +192,7 @@ test("`run start --routing` prints the agent model table and resolves no run, in
   assert.equal(outside.code, 0, outside.errText);
   assert.equal(outside.text, modelTable());
   assert.match(outside.text, /^\| Agent \| Model \|/);
+  assert.match(outside.text, /\| orchestrator \| default \|$/);
   const id = boundJob(env);
   const inside = await runCli(env, ["run", "start", "--routing"], { jobId: id });
   assert.equal(inside.code, 0, inside.errText);

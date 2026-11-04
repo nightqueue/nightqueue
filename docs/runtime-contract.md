@@ -489,7 +489,7 @@ kept per kind so the argv stays byte-identical to what each launcher built befor
 
 | Kind | Caller | Permission mode | Setting sources | Strict MCP | MCP config | Settings from | Stream JSON | Prompt form |
 |---|---|---|---|---|---|---|---|---|
-| `job` | `buildArgs` (spawn.mjs) | `bypassPermissions` | `project` | yes | `mcpConfigArg(env, jobId)` | `jobSettings` | yes | `-p <prompt>` |
+| `job` | `buildArgs` (spawn.mjs) | `bypassPermissions` | `project` | yes | `mcpConfigArg(env, jobId)` | `jobSettings` | yes | `-p <prompt>`, then `--model <alias>` only when the project routes the orchestrator |
 | `merger` | `mergerArgs` (merger-spawn.mjs) | `acceptEdits` | `project` | yes | none | `mergerSettings` | yes | `-p <prompt>`, `--agent nightqueue:merger`, `--tools Read,Edit` |
 | `operator` | `operatorArgs` (host/operator.mjs) | `default` | `user,project,local` | no | `mcpConfigArg(env, null, { operator })` | `operatorSettings` | no | interactive operand (the opening prompt, `--prompt`, or none on a bare `--resume`) |
 
@@ -1003,7 +1003,7 @@ failing gate, the outcome and draft lines, the total and the fact clipping stay 
 ### Agent models and pipeline constants
 
 `src/queue/routing.mjs` reads the model each agent runs on from the `models` of the pipeline's
-manifest, plus the merger, which is the runtime's own (`nightqueue run start --routing` prints the
+manifest, plus the merger and the orchestrator, which are the runtime's own (`nightqueue run start --routing` prints the
 table):
 
 | Agent | Default model |
@@ -1018,6 +1018,7 @@ table):
 | verifier | haiku |
 | reflector | haiku |
 | merger | sonnet |
+| orchestrator | default (the user's) |
 
 The rationale of the defaults:
 
@@ -1030,14 +1031,30 @@ The agent models below are the single source. The dominant capability of the age
   (explore maps files the triage already scoped; provers write and run one PoC for one pre-analysed
   hypothesis; verifier runs the project's checks and the PoCs; reflector distils lessons from written artifacts).
 The merger keeps `sonnet`. A project overrides any of them with `nightqueue project models`.
-Phases 0/8/9 run in the orchestrator, on the skill's model. Every run executes every phase.
+Phases 0/8/9 run in the orchestrator, on the project's orchestrator model (`project models --set orchestrator=<m>`), else the user's default. Every run executes every phase.
 
-A project overrides any agent, the merger included, with
+A project overrides any agent, the merger and the orchestrator included, with
 `nightqueue project models <project> --set <agent>=<model>` (`opus`, `sonnet` or `haiku`;
 `--unset <agent>` brings the default back). The override is stored as
 `agents.<agent>.model` in the project's settings JSON (the `projects.integrations` column,
-under the reserved `agents` key that `project integrations` never shows nor drops).
-`run start` answers the resolved models as `models`, and each block of `## Phase prompts`
+under the reserved `agents` key that `project integrations` never shows nor drops); a stored
+value outside the aliases reads as no override.
+
+The orchestrator has no default model: with no override the job session is spawned with no
+`--model` (its argv byte-identical to a build without the role) and runs on the user's own model;
+with one, the runner reads it once per claim and passes `--model <alias>` right after `-p <prompt>`
+to every spawn of that claim. The read goes through the outage backoff; project settings it cannot
+read (no settings column, or a stored value that is not a JSON object) gate the job unspawned with
+the code `unreadable-settings` and no attempt spent, never a run on the default model.
+Each attempt records `orchestrator_route` (the alias passed, null for the default; written on the
+attempt row before the spawn) and `orchestrator_model` (the model the session's `system/init`
+reported, control characters stripped, a full id such as `claude-sonnet-5-5`) when it is measured;
+a later measures write only fills whichever of the two is still empty. `queue status` prints them as
+`orchestrator: <alias|default> (<init model>)` and `run report` opens its facts with the same label,
+the route read from the job's last attempt row, never from the project's current settings.
+
+`run start` answers the resolved models as `models` and the orchestrator's as `orchestratorModel`
+(`default` when none), and each block of `## Phase prompts`
 names its own: `coder` and `coder-fix` take the coder's,
 `verifier` and `runtime` the verifier's, `qa-triage` its own, `qa-lite` and `qa-analyst` the qa-analyst's,
 `qa-prover` the qa-prover's, `reflector` the reflector's.
@@ -1110,7 +1127,7 @@ SELECTs only: `attempts_log`, one entry per claim of the job in order (`attempt`
 `outcome` among `gate|done|failed|cancelled|released|timed_out|lost` or null while open,
 `exit_reason`, `spawns` - the host spawns inside that claim, above 1 when the runner
 re-spawned after a transient failure -, `tokens_in`, `tokens_out`, `cache_read`,
-`cache_creation`, `cost_usd`, `fresh`, `backfilled`); `active_s`, the sum of the attempts'
+`cache_creation`, `cost_usd`, `fresh`, `backfilled`, `orchestrator_route` - the alias the runner passed as `--model`, null for the user's default -, `orchestrator_model` - the model the session's `system/init` reported -; the route is written before the spawn, the model when the attempt is measured); `active_s`, the sum of the attempts'
 durations with the open one counted up to the read; and `wall_s`, from the job's first start
 to the end of its last attempt (the read, while one is open); the three are null/empty for a
 job that never ran. `started_at` is the first claim of the job and `attempt_started_at` the

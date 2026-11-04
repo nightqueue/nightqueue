@@ -7,7 +7,7 @@ import { jobLogPath, runDir } from "../../src/config/paths.mjs";
 import { loadConfig, saveConfig } from "../../src/config/store.mjs";
 import { openDb, sqliteToIso } from "../../src/memory/db.mjs";
 import { packageRoot } from "../../src/host/paths.mjs";
-import { addJob, claimJobById, countsByStatus, getJob, retryJob } from "../../src/memory/jobs.mjs";
+import { addJob, claimJobById, countsByStatus, getJob, jobView, retryJob } from "../../src/memory/jobs.mjs";
 import { logPipelineRun } from "../../src/memory/runs.mjs";
 import { clearOwnPause, PAUSE_GRACE_S, readOwnPause } from "../../src/queue/rate-limit.mjs";
 import { writeRunnerRecord } from "../../src/queue/registry.mjs";
@@ -17,7 +17,7 @@ import { reconcileFromWitness } from "../../src/queue/reconcile.mjs";
 import { openStore } from "../../src/store/open.mjs";
 import { dropCheckout, ensureProject, makeDir, makeHome, makeProject, projectIdOf } from "../../test-support/memory.mjs";
 import { argValue, fakeCalls, useFakeClaude } from "../../test-support/queue-fake.mjs";
-import { agentToolUseEvent, assistantEvent, codeChangePublishedEvent, doneStream, failureStream, GATE_NOTICE, gateStream, noticeText, PR_URL, providerErrorResult, rateLimitEvent, resultEvent, SESSION_ID, SLUG, slugEvent, slugTypeEvent, systemInitEvent, taskNotificationEvent, toNdjson, transientFailureStream, recordedDone, recordedGate } from "../../test-support/streams.mjs";
+import { agentToolUseEvent, assistantEvent, codeChangePublishedEvent, doneStream, failureStream, GATE_NOTICE, gateStream, noticeText, PR_URL, providerErrorResult, rateLimitEvent, resultEvent, SESSION_ID, SLUG, slugEvent, slugTypeEvent, systemInitEvent, taskNotificationEvent, toNdjson, transientFailureStream, recordedDone, recordedGate, MODEL as INIT_MODEL } from "../../test-support/streams.mjs";
 import { fakeJobWorktree } from "../../test-support/job-worktree.mjs";
 
 const PROMPT = "fix the worker";
@@ -321,6 +321,41 @@ test("a run that stops at the gate ends as gate and keeps the notice for the ope
   assert.equal(row.status, "gate");
   assert.equal(row.pr_url, null);
   assert.equal(row.slug, SLUG);
+});
+
+// Runs one done job of `alpha` with the given agent overrides stored, answering its spawn argv and its attempt row.
+async function orchestratorRun(t, name, agents) {
+  const { env, planPath } = makeRunnerHome(t, name, [{ stdout: doneStream(), runState: recordedDone(), exitCode: 0 }]);
+  if (agents !== null) openDb(env).prepare("UPDATE projects SET integrations = ? WHERE id = ?").run(JSON.stringify({ agents }), projectIdOf(env, "alpha"));
+  const id = enqueue(env);
+  const cycle = await runJobCycle(env, id);
+  assert.equal(cycle.processed[0].status, "done");
+  return { argv: fakeCalls(planPath)[0].argv, attempt: jobView(getJob(id, env)).attempts_log[0] };
+}
+
+test("a project that routes its orchestrator spawns the job with --model right after the prompt and records the route and the init model", async (t) => {
+  const { argv, attempt } = await orchestratorRun(t, "runner-orchestrator-routed", { orchestrator: { model: "sonnet" } });
+  assert.equal(argValue(argv, "--model"), "sonnet");
+  assert.equal(argv.indexOf("--model"), argv.indexOf("-p") + 2);
+  assert.deepEqual([attempt.orchestrator_route, attempt.orchestrator_model], ["sonnet", INIT_MODEL]);
+});
+
+test("a project with no orchestrator route, or an invalid stored one, spawns with no --model and records the init model alone", async (t) => {
+  for (const [name, agents] of [["runner-orchestrator-none", null], ["runner-orchestrator-invalid", { orchestrator: { model: "gpt-5" } }]]) {
+    const { argv, attempt } = await orchestratorRun(t, name, agents);
+    assert.equal(argv.includes("--model"), false, `${name} carried --model`);
+    assert.deepEqual([attempt.orchestrator_route, attempt.orchestrator_model], [null, INIT_MODEL]);
+  }
+});
+
+test("a project whose stored settings cannot be read gates the job unspawned instead of running its orchestrator on the default model", async (t) => {
+  const { env, planPath } = makeRunnerHome(t, "runner-orchestrator-unreadable", [{ stdout: doneStream(), runState: recordedDone(), exitCode: 0 }]);
+  openDb(env).prepare("UPDATE projects SET integrations = ? WHERE id = ?").run('{"agents":{"orchestrator":{"model":"sonnet"}', projectIdOf(env, "alpha"));
+  const id = enqueue(env);
+  const cycle = await runJobCycle(env, id);
+  assert.deepEqual([cycle.processed[0].status, cycle.processed[0].code], ["gated", "unreadable-settings"]);
+  assert.equal(fakeCalls(planPath).length, 0);
+  assert.match(getJob(id, env).notice_md, /orchestrator model could not be read/);
 });
 
 test("a failure that no retry would fix ends the job at once, without a second attempt", async (t) => {

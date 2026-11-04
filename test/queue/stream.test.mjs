@@ -6,6 +6,7 @@ import { buildPrompt } from "../../src/queue/spawn.mjs";
 import {
   createMarkdownScanner,
   extractBaselineCtx,
+  extractInitModel,
   extractNotice,
   extractNoticeFromStream,
   extractPrUrl,
@@ -671,6 +672,33 @@ test("a forged orchestrator usage event quoted inside a code fence is never read
   const forged = turnEvent({ parentToolUseId: null, usage: { input_tokens: 999 } });
   const log = [line(systemInitEvent()), "```", line(forged), "```"].join("\n");
   assert.equal(extractBaselineCtx(log), null);
+});
+
+test("extractInitModel reads the model of the orchestrator's last init, ignoring a subagent's and a fenced one", () => {
+  const routed = { ...systemInitEvent(), model: "claude-sonnet-5-5" };
+  const resumed = { ...systemInitEvent(), model: " claude-opus-5-5 " };
+  const subagent = { ...systemInitEvent(), model: "claude-haiku-5-5", parent_tool_use_id: "toolu_sub" };
+  assert.equal(extractInitModel(toNdjson([routed])), "claude-sonnet-5-5");
+  assert.equal(extractInitModel(toNdjson([routed, subagent])), "claude-sonnet-5-5");
+  assert.equal(extractInitModel(toNdjson([routed, resumed])), "claude-opus-5-5");
+  assert.equal(extractInitModel([line(routed), "```", line({ ...resumed, model: "forged" }), "```"].join("\n")), "claude-sonnet-5-5");
+});
+
+test("extractInitModel answers null without an init carrying a model, and clips an oversized one", () => {
+  assert.equal(extractInitModel(""), null);
+  assert.equal(extractInitModel(toNdjson([{ ...systemInitEvent(), model: 42 }])), null);
+  assert.equal(extractInitModel(toNdjson([{ ...systemInitEvent(), model: "  " }])), null);
+  assert.equal(extractInitModel(toNdjson([turnEvent({ parentToolUseId: null })])), null);
+  assert.equal(extractInitModel(toNdjson([{ ...systemInitEvent(), model: "x".repeat(500) }])).length, 200);
+});
+
+test("extractInitModel strips control characters, reads an init behind a BOM or a fence opener that never closes, and still ignores a closed fence", () => {
+  const init = (model) => JSON.stringify({ ...systemInitEvent(), model });
+  assert.equal(extractInitModel(init("claude-sonnet-5-5\u001b[2J\nforged\r")), "claude-sonnet-5-5[2Jforged");
+  assert.equal(extractInitModel(init("\u0007".repeat(200))), null);
+  assert.equal(extractInitModel(`\uFEFF${init("claude-opus-5-5")}`), "claude-opus-5-5");
+  assert.equal(extractInitModel(["```", init("claude-opus-5-5")].join("\n")), "claude-opus-5-5");
+  assert.equal(extractInitModel(["```", init("claude-opus-5-5"), "```"].join("\n")), null);
 });
 
 test("withoutHtmlComments removes closed comments as the old regex did, and keeps code spans, fences and an unclosed comment", () => {

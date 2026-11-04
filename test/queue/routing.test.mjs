@@ -12,6 +12,8 @@ import {
   agentModels,
   modelFor,
   modelTable,
+  orchestratorLabel,
+  orchestratorModel,
   phaseModelOf,
   phasesFor,
   requireAgent,
@@ -37,7 +39,7 @@ test("every agent has its decided default model", () => {
     merger: "sonnet",
   });
   assert.deepEqual(MODEL_NAMES, ["opus", "sonnet", "haiku"]);
-  assert.deepEqual(overridableAgents(), ["triager", "explore", "architect", "coder", "qa-triage", "qa-analyst", "qa-prover", "verifier", "reflector", "merger"]);
+  assert.deepEqual(overridableAgents(), ["triager", "explore", "architect", "coder", "qa-triage", "qa-analyst", "qa-prover", "verifier", "reflector", "merger", "orchestrator"]);
 });
 
 test("the printed model table reads exactly as the fixture", () => {
@@ -78,11 +80,33 @@ test("a stored merger override applies like any agent's, an invalid one falls ba
   assert.equal(modelFor("merger", { merger: { model: "gpt" } }), defaultAgentModels().merger);
 });
 
+test("the orchestrator is overridable with no default: a valid alias routes it, anything else leaves it on the user's model", () => {
+  assert.equal(requireAgent("orchestrator"), "orchestrator");
+  assert.equal(orchestratorModel(), null);
+  assert.equal(orchestratorModel(null), null);
+  assert.equal(orchestratorModel({ orchestrator: { model: "sonnet" } }), "sonnet");
+  assert.equal(orchestratorModel({ orchestrator: { model: "gpt-5" } }), null);
+  assert.equal(orchestratorModel({ orchestrator: "sonnet" }), null);
+  assert.equal(orchestratorModel("not an object"), null);
+  assert.equal(Object.hasOwn(agentModels({ orchestrator: { model: "sonnet" } }), "orchestrator"), false);
+  assert.throws(() => modelFor("orchestrator"), /no default model for agent `orchestrator`/);
+  assert.match(modelTable({ orchestrator: { model: "haiku" } }), /\| orchestrator \| haiku \|$/);
+  assert.match(modelTable({ orchestrator: { model: "gpt" } }), /\| orchestrator \| default \|$/);
+});
+
+test("the orchestrator label names the route or default, then the model the session reported", () => {
+  assert.equal(orchestratorLabel(), "default");
+  assert.equal(orchestratorLabel({}), "default");
+  assert.equal(orchestratorLabel({ route: "sonnet", model: "claude-sonnet-5-5" }), "sonnet (claude-sonnet-5-5)");
+  assert.equal(orchestratorLabel({ model: "claude-opus-5-5" }), "default (claude-opus-5-5)");
+  assert.equal(orchestratorLabel({ route: "haiku", model: " " }), "haiku");
+});
+
 test("an agent or a model outside the accepted ones is refused, naming them", () => {
   assert.equal(requireAgent("coder"), "coder");
   assert.equal(requireAgent("merger"), "merger");
   assert.equal(requireModel("haiku"), "haiku");
-  assert.throws(() => requireAgent("nobody"), /unknown agent `nobody`; accepted: triager, explore, architect, coder, qa-triage, qa-analyst, qa-prover, verifier, reflector, merger/);
+  assert.throws(() => requireAgent("nobody"), /unknown agent `nobody`; accepted: triager, explore, architect, coder, qa-triage, qa-analyst, qa-prover, verifier, reflector, merger, orchestrator/);
   assert.throws(() => requireModel("gpt"), /unknown model `gpt`; accepted: opus, sonnet, haiku/);
 });
 

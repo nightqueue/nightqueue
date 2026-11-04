@@ -6,6 +6,19 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ## Unreleased
 
+### Added
+
+- **The orchestrator's model is routable per project and recorded per attempt.** `orchestrator` is a
+  runtime-owned role of `project models` (`--set orchestrator=<opus|sonnet|haiku>`, `--unset
+  orchestrator`) with no default: with no override the job argv is unchanged (no `--model`, the
+  user's own model); with one, every spawn of the claim gets `--model <alias>` right after the
+  prompt; project settings the runner cannot read gate the job (`unreadable-settings`) instead of
+  running it on the default. Each attempt records the route and the model its `system/init` reported
+  (`orchestrator_route`, `orchestrator_model` in `attempts_log`); `queue status` prints
+  `orchestrator: <alias|default> (<init model>)`, `run report` opens its facts with the same line
+  and carries `orchestrator` in `--json`, `run start` answers `orchestratorModel` and
+  `run start --routing` ends with the orchestrator's row.
+
 ### Fixed
 
 - **A broken pipeline manifest no longer takes the MCP server, `queue …`, `doctor` or `--help` down.**

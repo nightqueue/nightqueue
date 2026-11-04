@@ -70,6 +70,20 @@ test("job argv inheriting the user environment still resumes", (t) => {
   assert.deepEqual(args, [...jobHead(env), "--resume", SAFE_RESUME]);
 });
 
+test("job argv routed to a model carries --model right after the prompt", (t) => {
+  const env = makeHome(t, "pin-job-model");
+  const [print, prompt, ...rest] = jobHead(env);
+  const routed = [print, prompt, "--model", "sonnet", ...rest];
+  assert.deepEqual(buildArgs({ prompt: "work", env, model: "sonnet" }), [...routed, ...jobFence(env)]);
+  assert.deepEqual(buildArgs({ prompt: "work", env, model: "sonnet", resumeSessionId: SAFE_RESUME }), [...routed, ...jobFence(env), "--resume", SAFE_RESUME]);
+});
+
+test("job argv with a model outside the aliases carries no --model", (t) => {
+  const env = makeHome(t, "pin-job-bad-model");
+  assert.deepEqual(buildArgs({ prompt: "work", env, model: "gpt-5" }), [...jobHead(env), ...jobFence(env)]);
+  assert.deepEqual(buildArgs({ prompt: "work", env, model: "default" }), [...jobHead(env), ...jobFence(env)]);
+});
+
 test("merger argv is pinned", (t) => {
   const env = makeHome(t, "pin-merger");
   assert.deepEqual(mergerArgs({ prompt: "merge", env }), [

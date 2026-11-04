@@ -47,6 +47,7 @@ import {
 import { logOnlyTail } from "../queue/lost-rows.mjs";
 import { reclassifyFromLog, recoverFromDisk, replayPending } from "../queue/repair.mjs";
 import { applyRetry, callerJobId } from "../queue/retry.mjs";
+import { orchestratorLabel } from "../queue/routing.mjs";
 import { runCycle, runDrain, runWatch, WATCH_INTERVAL_DEFAULT_S } from "../queue/runner.mjs";
 import { resolveJobSession } from "../queue/session.mjs";
 import { stopReport, stopRunners } from "../queue/stop.mjs";
@@ -604,7 +605,13 @@ function attemptDuration(attempt, nowMs) {
   return formatDuration(nowMs - Date.parse(String(attempt.started_at ?? "")));
 }
 
-// One line of the attempts block: ordinal, start, duration, outcome, inner spawns, tokens, cost and its marks.
+// The orchestrator part of an attempt line, or null for an attempt that recorded none.
+function attemptOrchestrator(attempt) {
+  if (!attempt.orchestrator_route && !attempt.orchestrator_model) return null;
+  return `orchestrator: ${orchestratorLabel({ route: attempt.orchestrator_route, model: attempt.orchestrator_model })}`;
+}
+
+// One line of the attempts block: ordinal, start, duration, outcome, inner spawns, tokens, cost, the orchestrator's model and its marks.
 function attemptLine(attempt, nowMs) {
   const parts = [
     `#${attempt.attempt}`,
@@ -614,6 +621,7 @@ function attemptLine(attempt, nowMs) {
     attempt.spawns > 1 ? `${attempt.spawns} spawns` : null,
     `in ${compactTokens(attempt.tokens_in)} out ${compactTokens(attempt.tokens_out)}`,
     Number.isFinite(attempt.cost_usd) ? `$${attempt.cost_usd.toFixed(2)}` : null,
+    attemptOrchestrator(attempt),
     attempt.fresh ? "fresh" : null,
     attempt.backfilled ? "backfilled" : null,
   ];

@@ -43,9 +43,11 @@ import { commitWipAsync, WIP_SKIP_REASONS, wipAtHead, wipKeptLine, wipNoticeLine
 export { DISABLED_BACKGROUND_ESCAPE_LINE } from "./run-notice.mjs";
 import { buildPrompt, IDLE_TIMEOUT_S, openPrsMarkdown, provisionalSlug, slugCandidates, spawnClaude } from "./spawn.mjs";
 import { orchestratorRoots, sessionTranscriptPath } from "./orchestrator-scope.mjs";
+import { orchestratorModel } from "./routing.mjs";
 import {
   extractBaselineCtx,
   extractHostCommandCounts,
+  extractInitModel,
   extractOrchestratorCounts,
   extractOrchestratorSessionIds,
   extractRateLimitFromEventLine,
@@ -483,6 +485,34 @@ function tallyAttempt(tally, log, ctx, { resumed = false, baselines = null } = {
   tally.usages.push(extractUsage(log, { baselines }));
   tally.hostCommands.push(extractHostCommandCounts(log));
   tally.orchestrator.push(extractOrchestratorCounts(log, { roots: attemptOrchestratorRoots(log, ctx.env), cwd: ctx.cwd }));
+  tally.models.push(extractInitModel(log));
+}
+
+// The route of a claim's orchestrator, recorded on its attempt row: `{ route }` (null for the user's default), `{ blocked }` when the project's settings cannot be read, or `{ outageStopped }`.
+async function routeClaim(job, ctx) {
+  const routing = await orchestratorRouteOf(job, ctx);
+  if (!routing.route) return routing;
+  const noted = await untilStoreAnswers(ctx, () => ctx.store.jobs.noteAttemptRoute(job.id, { worker: job.worker, route: routing.route }));
+  return noted === OUTAGE_STOPPED ? { outageStopped: true } : routing;
+}
+
+// The model alias the project routes its orchestrator to, read through the outage backoff; an unreadable stored value blocks the claim instead of running it on the default.
+async function orchestratorRouteOf(job, ctx) {
+  if (!job.project_id) return { route: null };
+  try {
+    const agents = await untilStoreAnswers(ctx, () => ctx.store.projects.agents(job.project_id, { strict: true }));
+    return agents === OUTAGE_STOPPED ? { outageStopped: true } : { route: orchestratorModel(agents) };
+  } catch (err) {
+    return { blocked: unreadableRouteBlock(err) };
+  }
+}
+
+// The gate of a claim whose project's orchestrator model cannot be read: nothing was spawned and no attempt was spent.
+function unreadableRouteBlock(err) {
+  return {
+    code: BLOCK_CODES.UNREADABLE_SETTINGS,
+    message: `the project's orchestrator model could not be read (${err?.message ?? String(err)}); nothing was spawned on the default model and no attempt was spent. Fix it with nightqueue project models`,
+  };
 }
 
 // Says in the job log when a resumed session had no earlier result to net its cost against, so a cost left unknown is never silent.
@@ -497,7 +527,11 @@ function attemptTotals(tally) {
   return {
     usage: sumUsage(tally.usages),
     hostCommands: sumHostCommandCounts(tally.hostCommands),
-    orchestrator: sumOrchestratorCounts(tally.orchestrator),
+    orchestrator: {
+      ...sumOrchestratorCounts(tally.orchestrator),
+      route: tally.route,
+      model: tally.models.findLast((model) => model !== null) ?? null,
+    },
     baselineCtx: tally.baselineCtx,
   };
 }
@@ -522,8 +556,11 @@ async function runAttempts(job, ctx) {
   const pauseSignalImpl = deps.pauseSignalImpl ?? (() => ownPauseUntilMs(env) ?? pauseUntilMs(facts.pause));
   const resumeForced = resumeSessionEnabled(env) || wasRateLimitParked(job);
   const ownership = { lost: false };
-  const tally = { usages: [], hostCommands: [], orchestrator: [], baselineCtx: null };
   const attempt = job.attempts;
+  const routing = await routeClaim(job, ctx);
+  if (!("route" in routing)) return { lost: false, ...routing, facts, attempt, outcome: null, result: null };
+  const { route } = routing;
+  const tally = { usages: [], hostCommands: [], orchestrator: [], models: [], route, baselineCtx: null };
   let respawns = 0;
   while (true) {
     const renewed = await untilStoreAnswers(ctx, () => renew(job, env));
@@ -553,6 +590,7 @@ async function runAttempts(job, ctx) {
       holdJobAwakeImpl: deps.holdJobAwakeImpl,
       bashTimeoutS: deps.bashTimeoutS,
       inheritUserEnvironment: deps.inheritUserEnvironment,
+      model: route,
     });
     await facts.registryWrites;
     await syncRunSlug(job, facts, ctx, { askRow: true });
