@@ -602,7 +602,10 @@ command lands in one of three bands:
   never like `#`: under EXTENDED_GLOB zsh reads it as a pattern operator (`--^x` expands to the
   cwd's file names opening with `--`, `HEAD^` to `HEAD…`); `'^main'` and `"HEAD^"` stay allowed.
   The orchestrator's closed list refuses such a blank, control character and `^` too, and a
-  backslash outside single quotes, which zsh removes or reads as an escape. A git command run after a
+  backslash anywhere, which zsh removes or reads as an escape. On both paths `; & | < >` inside
+  `'…'`, `"…"` or `$'…'` are literal text; an unquoted one, an unquoted `$` or backtick (`$` and a
+  backtick count inside `"…"`), an unclosed quote, or quoted words the guard cannot align with
+  its tokens are a shape refusal, the unclosed quote with its own message. A git command run after a
   `cd` into a job worktree is never, and its reason names `git -C <worktree>`. A `git grep` that is not the hardened free spelling is
   never: without the hardening pair and `--no-lazy-fetch` in that order, once each (the reason
   shows the spelling), with any other global option (`--no-optional-locks`, `--no-pager`), with

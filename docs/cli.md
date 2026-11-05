@@ -1405,8 +1405,8 @@ refusal with one line starting `operator guard:`:
   `.env*` file (`.env`, `.env.local`, …); a `Grep` whose `path` is the home or a parent of it is
   refused because the sweep would read `secrets.json`, a path that cannot be resolved is
   refused, and an absolute Glob `pattern` or Grep `glob` is judged by its static prefix. The
-  main thread's free Bash is one bare command (no `;`, `&&`, `|`, redirection, substitution or
-  backslash) that is either `nightqueue|nq <command> …` with `<command>` one of `queue`,
+  main thread's free Bash is one bare command (no unquoted `;`, `&&`, `|`, redirection or
+  substitution, no unclosed quote, no backslash) that is either `nightqueue|nq <command> …` with `<command>` one of `queue`,
   `project`, `org`, `connection`, `doctor`, `memory`, `lesson`, `libs`, `version` - never
   `queue session`, `project add|move` or `doctor --fix`, never `--follow` or `--foreground` -
   or `git -C <dir> [--no-optional-locks] <read> …` on a registered checkout, `<read>` one

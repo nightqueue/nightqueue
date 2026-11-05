@@ -1138,12 +1138,13 @@ carries one - inside a job (`NIGHTQUEUE_JOB_ID` set):
   `gh pr view|list|status|checks|create` and `nightqueue run check|log|index-save|commit|pr`.
   Each is the bare program name followed by its subcommand: a path to the binary or a
   global flag before the subcommand (`git -C <dir>`, `-c`, `--git-dir`, `--work-tree`) is
-  refused. A command carrying a newline or any of ``; & | ` < > $`` is refused: the skill
-  never chains, substitutes or redirects. So is a command with an unquoted `( ) * ? [ ] { } # ^`
+  refused. A command carrying a newline, a backslash anywhere, an unclosed quote, or any of
+  ``; & | ` < > $`` outside `'…'`, `"…"` (where `$` and a backtick still count) and `$'…'` is
+  refused: the skill never chains, substitutes or redirects. So is a command with an unquoted `( ) * ? [ ] { } # ^`
   (outside `'…'`, `"…"` and `$'…'`), which zsh expands before the program runs (`=(cmd)`,
   `git push {--receive-pack=<prog>,origin}`, `--^x` matching a file named `--force` under
   EXTENDED_GLOB) or reads as a comment (`git diff # --stat`): quote it. So is a command with a
-  backslash outside single quotes, a blank other than a space or a tab between words (form feed,
+  blank other than a space or a tab between words (form feed,
   no-break space, …), or a control character other than a tab, quoted or not: zsh cuts a word
   at a NUL byte, so `--force<NUL>x` would run as `--force`.
 - Any other Bash command is denied (`permissionDecision: "deny"`) with a reason that starts

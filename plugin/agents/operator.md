@@ -60,7 +60,7 @@ Free, in detail:
 - **Read** is the only file tool: anything on disk except the home's `secrets.json` and any `.env*`
   file, always with an absolute `path` (your cwd is the home). List files with `git -C <checkout> ls-files`
   (untracked: `ls-files -o`, then Read); search with the hardened `grep` below.
-- **Bash**, one bare command with no `&&`, `|`, `;`, redirection, `$(…)` or `\`, nor an unquoted `( ) * ? [ ] { } # ^`: quote it, e.g. `'HEAD@{1}'`, `'HEAD^'`:
+- **Bash**, one bare command with no unquoted `&&`, `|`, `;`, redirection or `$`, no `\`, no unclosed quote, nor an unquoted `( ) * ? [ ] { } # ^`: quote it, e.g. `'HEAD@{1}'`, `'HEAD^'`, `-m 'a; b'`:
   - `nightqueue|nq queue|project|org|connection|doctor|memory|lesson|libs|version …`, never
     `queue session`, `project add|move`, `--follow` or `--foreground`; `doctor --fix` only after a `run` consent.
   - `git -C <absolute path of a registered checkout> [--no-optional-locks] <read>`, where

@@ -1,6 +1,6 @@
 import { existsSync } from "node:fs";
 import { isAbsolute, resolve } from "node:path";
-import { consentBash, neverBashReason, neverWriteReason } from "../queue/operator-bands.mjs";
+import { UNTERMINATED_QUOTE_SHAPE, consentBash, neverBashReason, neverWriteReason } from "../queue/operator-bands.mjs";
 import { consentCovers, operatorSession } from "../queue/operator-consent.mjs";
 import { withPrBudget } from "../queue/operator-pr-budget.mjs";
 import { globStaticPrefix, insideRoots, isOrchestratorCall, readTarget } from "../queue/orchestrator-scope.mjs";
@@ -16,6 +16,7 @@ import {
   hasUnquotedForeignBlank,
   hasUnquotedHash,
   hasUnquotedParen,
+  hasUnterminatedQuote,
   mainBashAllowed,
   pipelineAgent,
   readRefusal,
@@ -99,10 +100,17 @@ function freeBash(command, { mainThread, env }) {
   return mainThread ? mainBashAllowed(command, roots) : readonlySubagentBashAllowed(command, roots);
 }
 
+// The refusal of a Bash command with no consentable shape, naming the free commands of the thread that runs it.
+function shapeReason(shape, mainThread) {
+  const free = mainThread ? describeMainBashList() : describeSubagentBashList();
+  return `${OPERATOR_GUARD}: ${shape}; run one bare command as \`cd <registered checkout> && <command>\` after the person's consent, or one of the free commands: ${free}`;
+}
+
 // Deny reason of a Bash call: never in the never band, free on the thread's list, else only the consented command in a registered checkout.
 function bashReason(input, { mainThread, env }) {
   const command = input.tool_input.command;
   if (typeof command !== "string" || command.trim() === "") return `${OPERATOR_GUARD}: this Bash call carries no command`;
+  if (hasUnterminatedQuote(command)) return shapeReason(UNTERMINATED_QUOTE_SHAPE, mainThread);
   if (hasUnquotedForeignBlank(command)) return `${OPERATOR_GUARD}: never (a blank other than a space or a tab outside quotes, such as a form feed or a no-break space, joins words in zsh that the guard reads apart: separate words with plain spaces): no consent covers it`;
   if (hasControlChar(command)) return `${OPERATOR_GUARD}: never (a control character other than a tab or a newline, such as a NUL byte at which zsh cuts a word short of the one the guard judged: drop it): no consent covers it`;
   const never = neverBashReason(command, { cwd: input.cwd, env });
@@ -113,10 +121,7 @@ function bashReason(input, { mainThread, env }) {
   if (freeBash(command, { mainThread, env })) return null;
   const request = consentBash(command, { cwd: input.cwd, env });
   if (request.free) return null;
-  if (request.shape) {
-    const free = mainThread ? describeMainBashList() : describeSubagentBashList();
-    return `${OPERATOR_GUARD}: ${request.shape}; run one bare command as \`cd <registered checkout> && <command>\` after the person's consent, or one of the free commands: ${free}`;
-  }
+  if (request.shape) return shapeReason(request.shape, mainThread);
   if (!mainThread && (request.kind === HOME_MAINTENANCE || request.home === true)) return `${OPERATOR_GUARD}: never (home maintenance runs on the operator's own thread): no consent covers it`;
   return consentCovers(operatorSession(env), request, env) ? null : needsConsent(request.kind, request.shown);
 }

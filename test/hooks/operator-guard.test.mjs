@@ -172,6 +172,31 @@ test("a quoted paren keeps its band: free stays free and a consented command sti
   assert.match(decide(main("Bash", { command: `cd ${checkout} && npm test -- '(x)'` }), env) ?? "", /^operator guard: needs consent \(run /);
 });
 
+test("a quoted shell operator is literal on both threads, and an unquoted one, an unclosed quote or an ANSI-C force flag is not", (t) => {
+  const { env, checkout } = operatorFixture(t);
+  const hardenedGrep = `git -C ${checkout} -c core.fsmonitor=false -c core.hooksPath=/dev/null --no-lazy-fetch grep -e 'a<b' -- 'src/*.mjs' ':(top,exclude,glob)**/.env*'`;
+  for (const command of [`git -C ${checkout} log --format='%h %an <%ae>' -3`, hardenedGrep]) {
+    for (const input of [main("Bash", { command }), sub("nightqueue:explore", "Bash", { command })]) assertAllowed(input, env);
+  }
+  assert.match(decide(main("Bash", { command: `git -C ${checkout} commit -m 'a; b'` }), env) ?? "", /^operator guard: needs consent \(git-write /);
+  assert.match(decide(main("Bash", { command: `git -C ${checkout} commit -m 'a; b` }), env) ?? "", /a quote .* is never closed/);
+  for (const command of [`git -C ${checkout} log $HOME`, `cd ${checkout} && git status; rm x`]) {
+    for (const input of [main("Bash", { command }), sub("nightqueue:explore", "Bash", { command })]) assertDenied(input, env);
+  }
+  assert.match(decide(main("Bash", { command: `cd ${checkout} && git push origin $'--force'` }), env) ?? "", /never \(a force push/);
+  assert.match(decide(main("Bash", { command: `cd ${checkout} && sh -c 'git status; git push -f origin x'` }), env) ?? "", /never \(a force push/);
+  for (const command of [`git -C ${checkout} show HEAD^`, `git -C ${checkout} show HEAD@{1}`, `git -C ${checkout} log (x)`, `git -C ${checkout} log #x`]) {
+    assertDenied(main("Bash", { command }), env);
+  }
+});
+
+test("a run consent whose scope quotes a `;` parses to the words it covers, and no other body", (t) => {
+  const { env, checkout } = operatorFixture(t);
+  consent(env, { kind: "run", scope: "gh pr create --title t --body 'a; b'" });
+  assertAllowed(main("Bash", { command: `cd ${checkout} && gh pr create --title t --body 'a; b'` }), env);
+  assert.match(decide(main("Bash", { command: `cd ${checkout} && gh pr create --title t --body 'a; c'` }), env) ?? "", /^operator guard: needs consent \(run /);
+});
+
 test("a consent scope with an unquoted paren is never recorded", (t) => {
   const { env } = operatorFixture(t);
   assert.throws(() => consent(env, { kind: "run", scope: "npm test =(id)" }), /one bare command/);

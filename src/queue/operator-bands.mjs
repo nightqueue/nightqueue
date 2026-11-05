@@ -35,6 +35,7 @@ import {
   gitGrepIndex,
   gitReadAllowed,
   grepSpellingNever,
+  hasUnterminatedQuote,
   isDoctorFix,
   isDoctorFixForm,
   refusedNightqueueForm,
@@ -73,6 +74,9 @@ const GREP_BACKSLASH = "a backslash in a `git grep`, which no guard can read the
 const GREP_DOLLAR = "a `$` in a `git grep`, which the free list refuses even quoted: drop it from the pattern";
 const GREP_UNALIGNED = "a `git grep` whose quoting no guard can align with its words: quote each pattern as one word";
 const GLOB_SHAPE = "the command carries a glob or brace character (`* ? [ ] { }`), so no consent can name what it touches";
+export const UNTERMINATED_QUOTE_SHAPE = "a quote (`'`, `\"` or `$'`) is never closed, so zsh would read the rest of the command as quoted text: close it";
+export const CHAIN_SHAPE =
+  "the command chains, pipes or redirects outside quotes (an unquoted `; & | < > $` or backtick), carries a backslash, or quotes words the guard cannot align";
 const UNQUOTED_GLOB_SHAPE =
   "the command carries a glob or brace character (`* ? [ ] { }`) or a leading `^` that zsh expands unquoted: it is not free and no consent can name what it touches; quote it (`'HEAD@{1}'`, `-- '*.md'`)";
 const WORKTREE_CD_NEVER = `a worktree under the nightqueue home is read only through \`git -C <worktree>\`, never after a \`cd\` into it: ${WORKTREE_READ_SPELLING}`;
@@ -515,10 +519,11 @@ function freeGrepRead(words, anchor, env) {
 // What consent a Bash command needs (`{ kind, dir, argv, shown }`, `home: true` for `doctor --fix` from any directory), `{ free: true }` for a git read of a checkout, or `{ shape }` when it has no consentable form.
 export function consentBash(command, { cwd = null, env = process.env } = {}) {
   if (typeof command !== "string" || command.trim() === "") return { shape: "the command is empty" };
+  if (hasUnterminatedQuote(command)) return { shape: UNTERMINATED_QUOTE_SHAPE };
   const anchor = commandAnchor(command.trim(), cwd);
   if (anchor.shape) return anchor;
   const words = bareTokens(anchor.rest);
-  if (words === null || words.length === 0) return { shape: "the command chains, pipes or redirects, or carries a backslash" };
+  if (words === null || words.length === 0) return { shape: CHAIN_SHAPE };
   if (hasGlob(anchor.rest)) return freeGrepRead(words, anchor, env) ?? { shape: globShape(anchor.rest, words) };
   if (isWrappedGuarded(words)) return { shape: WRAPPED_GUARDED };
   const argv = withoutTimeout(words);
