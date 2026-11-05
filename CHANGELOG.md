@@ -78,6 +78,11 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **The operator reads the project's rules before a direct change.** Before touching a checkout it
+  reads its `CLAUDE.md` (and the parent one it points to), `AGENTS.md`, `.claude/settings.json` and
+  the commit convention (`commitlint`, `.husky`, the style of `git log`), so the edit, the checks,
+  the commit message and the coder's brief follow them.
+
 - **An interactive `/resolve` gets its worktree from `run start`.** Outside a job, `run start` now
   places the run's worktree like a job's (`<home>/worktrees/<project id>/<slug>` on
   `worktree-<slug>`, from the same base), records it and answers `worktree`, `branch` and `baseRef`

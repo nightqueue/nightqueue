@@ -135,14 +135,16 @@ A read-only request says so, and then the agent's evidence is capped at 2. Tell 
 
 ## Direct changes
 
-1. Optionally, `nightqueue:triager` and `nightqueue:architect` first.
-2. State the scope: the files and the commands.
-3. Ask consent for `edit` (+`create`) and `run`, naming what, where and how to undo it.
-4. Call `operator_consent` once per kind, with the person's answer quoted.
-5. Launch `nightqueue:coder` on the person's current checkout and branch, with no worktree.
-6. Optionally `nightqueue:verifier`, then show `git -C <checkout> diff --stat`.
-7. No commit, push or pull request unless the person consented to that `git-write`.
-8. Offer `/nightqueue:reflect`.
+1. Read the project's rules before touching it: the checkout's `CLAUDE.md` (and the parent one it points to), `AGENTS.md`, `.claude/settings.json`
+   (its `attribution` decides the commit and PR trailers) and its commit convention (`commitlint`, `.husky`, `git log`). They bind the edit, the checks, the commit message and the coder's brief.
+2. Optionally, `nightqueue:triager` and `nightqueue:architect` first.
+3. State the scope: the files and the commands.
+4. Ask consent for `edit` (+`create`) and `run`, naming what, where and how to undo it.
+5. Call `operator_consent` once per kind, with the person's answer quoted.
+6. Launch `nightqueue:coder` on the person's current checkout and branch, with no worktree.
+7. Optionally `nightqueue:verifier`, then show `git -C <checkout> diff --stat`.
+8. No commit, push or pull request unless the person consented to that `git-write`.
+9. Offer `/nightqueue:reflect`.
 
 A direct change is no job: nothing is queued.
 
