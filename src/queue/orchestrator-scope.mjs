@@ -34,7 +34,8 @@ export const ORCHESTRATOR_BASH_RULES = Object.freeze(
   ].map(freezeRule),
 );
 
-export const FORBIDDEN_SHELL_CHARS = /[\n\r;&|`<>$]/;
+const RAW_FORBIDDEN_CHARS = /[\n\r\\]/;
+const UNQUOTED_SHELL_OPERATOR = /[;&|<>`]|\$(?!')/;
 const GLOB_CHARS = /[*?[{]/;
 const SHORT_FLAG_CLUSTER = /^-[A-Za-z]{2,}$/;
 const SAFE_SESSION_ID = /^[A-Za-z0-9_-]+$/;
@@ -48,7 +49,7 @@ function expandsInDoubleQuotes(command, index) {
   return char === "$" || char === "`" || (char === "(" && command[index - 1] === "$");
 }
 
-// The masked text of a quoted run whose body starts at `start`, and the index right after it; an unterminated run masks to the end.
+// The masked text of a quoted run whose body starts at `start`, the index right after it, and whether it closes; an unterminated run masks to the end.
 function maskQuotedRun(command, start, { close, escapes, keep }) {
   let text = "";
   let index = start;
@@ -58,36 +59,49 @@ function maskQuotedRun(command, start, { close, escapes, keep }) {
     text += keep(command, index) && !escaped ? command[index] : QUOTE_MASK.repeat(width);
     index += width;
   }
-  return { text: index < command.length ? `${text}${close}` : text, next: index + 1 };
+  const closed = index < command.length;
+  return { text: closed ? `${text}${close}` : text, next: index + 1, closed };
 }
 
-// The masked text of the run that starts at `index` (a quoted run, an escaped character or one plain character) and the index after it.
+// The masked text of the run that starts at `index` (a quoted run, an escaped character or one plain character), the index after it, and whether it closes.
 function maskRunAt(command, index) {
   const char = command[index];
   const never = () => false;
-  if (char === "\\") return { text: index + 1 < command.length ? `\\${QUOTE_MASK}` : "\\", next: index + 2 };
+  if (char === "\\") return { text: index + 1 < command.length ? `\\${QUOTE_MASK}` : "\\", next: index + 2, closed: true };
   if (char === "'") return prefixed("'", maskQuotedRun(command, index + 1, { close: "'", escapes: false, keep: never }));
   if (char === "$" && command[index + 1] === "'") return prefixed("$'", maskQuotedRun(command, index + 2, { close: "'", escapes: true, keep: never }));
   if (char === '"') return prefixed('"', maskQuotedRun(command, index + 1, { close: '"', escapes: true, keep: expandsInDoubleQuotes }));
-  return { text: char, next: index + 1 };
+  return { text: char, next: index + 1, closed: true };
 }
 
 // A masked run with the opening quote mark put back in front of it.
 function prefixed(opening, run) {
-  return { text: `${opening}${run.text}`, next: run.next };
+  return { ...run, text: `${opening}${run.text}` };
 }
 
-// The command with every character zsh reads as quoted replaced by `_`, quote marks kept, so only what zsh reads unquoted stays visible.
-export function maskQuoted(command) {
+// The masked command and whether one of its quoted runs (`'`, `"` or `$'`) is never closed.
+function scanQuotes(command) {
   if (typeof command !== "string") throw new TypeError(`maskQuoted expects a string command, got ${typeof command}`);
   let masked = "";
+  let unterminated = false;
   let index = 0;
   while (index < command.length) {
     const run = maskRunAt(command, index);
     masked += run.text;
+    unterminated ||= !run.closed;
     index = run.next;
   }
-  return masked;
+  return { masked, unterminated };
+}
+
+// The command with every character zsh reads as quoted replaced by `_`, quote marks kept, so only what zsh reads unquoted stays visible.
+export function maskQuoted(command) {
+  return scanQuotes(command).masked;
+}
+
+// Tells whether a command opens a quote (`'`, `"` or `$'`) it never closes; a value that is not a string counts as one.
+export function hasUnterminatedQuote(command) {
+  return typeof command !== "string" || scanQuotes(command).unterminated;
 }
 
 // Tells whether a command carries a `(` or `)` zsh reads unquoted, through which it can run a program (`=(cmd)`, `*(e:cmd:)`).
@@ -148,10 +162,22 @@ export function hasUnquotedExpansion(command) {
   return UNQUOTED_EXPANSION_CHARS.test(masked) || masked.split(/\s+/).some((word) => word.startsWith("^"));
 }
 
-// Splits a command into whitespace-separated tokens, keeping a single- or double-quoted run inside one token.
+// Splits a command into whitespace-separated tokens, keeping a single-, double- or `$'`-quoted run inside one token.
 export function tokenize(command) {
-  const tokens = command.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g) ?? [];
-  return tokens.map((token) => token.replace(/"([^"]*)"|'([^']*)'/g, (_, double, single) => double ?? single ?? ""));
+  const tokens = command.match(/(?:[^\s"'$]+|\$(?!')|\$'[^']*'|"[^"]*"|'[^']*')+/g) ?? [];
+  return tokens.map((token) => token.replace(/\$'([^']*)'|"([^"]*)"|'([^']*)'/g, (_, ansi, double, single) => ansi ?? double ?? single ?? ""));
+}
+
+// The first reason a command is not one bare command zsh reads word for word, or null: an unclosed quote, a raw line break, backslash
+// or control character, a foreign blank or a shell operator outside quotes, or quoted words the tokenizer cannot align.
+export function shellShapeRefusal(command) {
+  if (typeof command !== "string") return "raw";
+  if (hasUnterminatedQuote(command)) return "unterminated";
+  if (RAW_FORBIDDEN_CHARS.test(command) || hasControlChar(command)) return "raw";
+  if (hasUnquotedForeignBlank(command)) return "foreign-blank";
+  const masked = maskQuoted(command);
+  if (UNQUOTED_SHELL_OPERATOR.test(masked)) return "operator";
+  return tokenize(command).length === tokenize(masked).length ? null : "unaligned";
 }
 
 // Tells whether one argument is the flag itself, its `--flag=value` form, or a short-flag cluster (`-fu`) carrying it.
@@ -182,9 +208,9 @@ function matchingRule(rules, tokens) {
   return matches.reduce((best, rule) => (best === null || rule.argv.length > best.argv.length ? rule : best), null);
 }
 
-// Tells whether zsh could run other words than the ones a closed list judges: a shell operator, a control character, an escape, a foreign blank or an unquoted expansion.
+// Tells whether zsh could run other words than the ones a closed list judges: a shell shape refusal or an unquoted expansion.
 function shellRewrites(command) {
-  if (FORBIDDEN_SHELL_CHARS.test(command) || hasControlChar(command) || hasEscapingBackslash(command) || hasUnquotedForeignBlank(command)) return true;
+  if (shellShapeRefusal(command) !== null) return true;
   return hasUnquotedExpansion(command) || hasUnquotedHash(command) || hasUnquotedCaret(command);
 }
 

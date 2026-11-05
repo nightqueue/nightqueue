@@ -16,6 +16,7 @@ import {
   hasUnquotedForeignBlank,
   hasUnquotedHash,
   hasUnquotedParen,
+  hasUnterminatedQuote,
   insideRoots,
   isOrchestratorCall,
   maskQuoted,
@@ -24,6 +25,8 @@ import {
   readTarget,
   sessionSpillRoot,
   sessionTranscriptPath,
+  shellShapeRefusal,
+  tokenize,
 } from "../../src/queue/orchestrator-scope.mjs";
 
 const BASH_TABLE = [
@@ -243,9 +246,9 @@ test("hasEscapingBackslash sees a backslash outside quotes or inside double quot
   assert.equal(hasEscapingBackslash(42), true);
 });
 
-test("the orchestrator's closed list refuses a backslash zsh reads as an escape, and keeps a single-quoted one", () => {
-  for (const command of BACKSLASH_VECTORS) assert.equal(orchestratorBashAllowed(command), false, command);
-  for (const command of ["git commit -m 'a\\b'", "git commit -m 'a b'", "git fetch origin", "git diff --stat"]) assert.equal(orchestratorBashAllowed(command), true, command);
+test("the orchestrator's closed list refuses a backslash in any position, a single-quoted one included", () => {
+  for (const command of [...BACKSLASH_VECTORS, "git commit -m 'a\\b'"]) assert.equal(orchestratorBashAllowed(command), false, command);
+  for (const command of ["git commit -m 'a b'", "git fetch origin", "git diff --stat"]) assert.equal(orchestratorBashAllowed(command), true, command);
 });
 
 test("the orchestrator's closed list refuses every row example with a foreign blank at any gap, and keeps a quoted one", () => {
@@ -259,6 +262,78 @@ test("the orchestrator's closed list refuses every row example with a foreign bl
     }
   }
   assert.equal(orchestratorBashAllowed("git commit -m 'a b'"), true);
+});
+
+test("tokenize unwraps an ANSI-C quote like the other quotes, so `$'--force'` is the word zsh passes", () => {
+  assert.deepEqual(tokenize("git commit -m $'a;b'"), ["git", "commit", "-m", "a;b"]);
+  assert.deepEqual(tokenize("git push origin $'--force'"), ["git", "push", "origin", "--force"]);
+  assert.deepEqual(tokenize(`'it'$'s' "$'" '$''x'`), ["its", "$'", "$x"]);
+});
+
+test("hasUnterminatedQuote sees a quote never closed, escape aware, and a value that is not a string", () => {
+  for (const command of ["'a", '"a', "$'a", '"a\\"b', "x 'a' \"b"]) assert.equal(hasUnterminatedQuote(command), true, command);
+  for (const command of ["'a'", '"a"', "$'a'", '"a\\"b"', "plain"]) assert.equal(hasUnterminatedQuote(command), false, command);
+  assert.equal(hasUnterminatedQuote(42), true);
+});
+
+test("shellShapeRefusal names the first refusal of a command, or null for one bare command", () => {
+  const table = [
+    ["git commit -m 'a; b'", null],
+    ["git commit -m 'a; b", "unterminated"],
+    ["git log --out\\put=f", "raw"],
+    ["git log\u0000x", "raw"],
+    [42, "raw"],
+    ["git log x", "foreign-blank"],
+    ["git status; rm x", "operator"],
+  ];
+  for (const [command, refusal] of table) assert.equal(shellShapeRefusal(command), refusal, JSON.stringify(command));
+});
+
+const QUOTED_OPERATOR_PASSES = [
+  "git commit -m 'feat(x): y' -m 'a; b <c> | d & e'",
+  "gh pr create --title t --body '## A <!-- x --> ; |'",
+  'git commit -m "a; b"',
+  "git commit -m $'a;b'",
+];
+const QUOTED_OPERATOR_SHAPE_ONLY = [
+  "git log --format='%h %an <%ae>' -3",
+  "git -C /x -c core.fsmonitor=false -c core.hooksPath=/dev/null --no-lazy-fetch grep -e 'a<b' -- 'src/*.mjs' ':(top,exclude,glob)**/.env*'",
+];
+const CHAIN_VECTORS = [
+  "git status; rm x",
+  "git log | cat",
+  "git log > f",
+  "git log < f",
+  "git log && x",
+  "'x';'y'",
+  '"a";b',
+  "'a' ; 'b'",
+  'git log "$(x)"',
+  'git log "`x`"',
+  "git log $HOME",
+];
+const UNTERMINATED_VECTORS = ["git commit -m 'a; b", 'git commit -m "a; b', "git commit -m $'a; b"];
+const RAW_VECTORS = ["git commit -m 'a'\\''b; c'", "git log --out\\put=f", "git log $'\\x3b'x", "git log\rx", "git log x"];
+
+test("quoted `; & | < >` pass the orchestrator's shape, and its closed list still decides the program", () => {
+  for (const command of QUOTED_OPERATOR_PASSES) {
+    assert.equal(shellShapeRefusal(command), null, command);
+    assert.equal(orchestratorBashAllowed(command), true, command);
+  }
+  for (const command of QUOTED_OPERATOR_SHAPE_ONLY) {
+    assert.equal(shellShapeRefusal(command), null, command);
+    assert.equal(orchestratorBashAllowed(command), false, command);
+  }
+  assert.equal(shellShapeRefusal('"a;"b'), null, "a quoted `;` is literal");
+  assert.equal(orchestratorBashAllowed('"a;"b'), false, "and the word is on no closed list");
+});
+
+test("an unquoted operator, an unclosed quote, a raw escape or an ANSI-C force flag never passes the orchestrator", () => {
+  for (const command of CHAIN_VECTORS) assert.equal(shellShapeRefusal(command), "operator", command);
+  for (const command of UNTERMINATED_VECTORS) assert.equal(shellShapeRefusal(command), "unterminated", command);
+  const refused = [...CHAIN_VECTORS, ...UNTERMINATED_VECTORS, ...RAW_VECTORS, "git push origin $'--force'", "git push origin $'--forc\\x65'"];
+  for (const command of refused) assert.equal(orchestratorBashAllowed(command), false, JSON.stringify(command));
+  for (const command of ["git show HEAD^", "git show HEAD@{1}", "git log (x)", "git log #x"]) assert.equal(orchestratorBashAllowed(command), false, command);
 });
 
 test("a command that is not a string is refused and never throws", () => {

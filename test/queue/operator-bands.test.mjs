@@ -4,7 +4,7 @@ import { dirname, join, relative } from "node:path";
 import { test } from "node:test";
 import { newId } from "../../src/config/ids.mjs";
 import { homeDir, secretsPath } from "../../src/config/paths.mjs";
-import { consentBash, neverBashReason, neverWriteReason, scopeWords } from "../../src/queue/operator-bands.mjs";
+import { CHAIN_SHAPE, UNTERMINATED_QUOTE_SHAPE, consentBash, neverBashReason, neverWriteReason, scopeWords } from "../../src/queue/operator-bands.mjs";
 import {
   bareTokens,
   checkoutRoots,
@@ -120,7 +120,48 @@ test("doctor --fix leaves the never band for a run consent from any directory, a
   assert.equal(neverBashReason("/abs/bin/nightqueue doctor --json", { cwd: checkout, env }), null);
 });
 
-test("a home path in an ANSI-C quote or a variable is never, and a link on the way out of the home leaves today's never band", (t) => {
+test("quoted `; & | < >` reach the operator as one bare command with the words zsh passes, under the normal consent", (t) => {
+  const { env, checkout } = bandsFixture(t);
+  const passes = [
+    ["git commit -m 'feat(x): y' -m 'a; b <c> | d & e'", ["git", "commit", "-m", "feat(x): y", "-m", "a; b <c> | d & e"], "git-write"],
+    ["gh pr create --title t --body '## A <!-- x --> ; |'", ["gh", "pr", "create", "--title", "t", "--body", "## A <!-- x --> ; |"], "run"],
+    ["git log --format='%h %an <%ae>' -3", ["git", "log", "--format=%h %an <%ae>", "-3"], "free"],
+    [
+      `git -C ${checkout} -c core.fsmonitor=false -c core.hooksPath=/dev/null --no-lazy-fetch grep -e 'a<b' -- 'src/*.mjs' ':(top,exclude,glob)**/.env*'`,
+      ["git", "-C", checkout, "-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", "--no-lazy-fetch", "grep", "-e", "a<b", "--", "src/*.mjs", ":(top,exclude,glob)**/.env*"],
+      "free",
+    ],
+    ['git commit -m "a; b"', ["git", "commit", "-m", "a; b"], "git-write"],
+    ["git commit -m $'a;b'", ["git", "commit", "-m", "a;b"], "git-write"],
+  ];
+  for (const [command, words, kind] of passes) {
+    assert.deepEqual(bareTokens(command), words, command);
+    const consent = consentBash(command, { cwd: checkout, env });
+    assert.equal(consent.shape, undefined, command);
+    assert.equal(consent.free === true ? "free" : consent.kind, kind, command);
+  }
+});
+
+test("an unquoted operator, an unclosed quote or a raw escape has no bare tokens and its own shape", (t) => {
+  const { env, checkout } = bandsFixture(t);
+  const chains = ["git status; rm x", "git log | cat", "git log > f", "git log < f", "git log && x", "'x';'y'", '"a";b', "'a' ; 'b'", 'git log "$(x)"', 'git log "`x`"', "git log $HOME"];
+  for (const command of chains) {
+    assert.equal(bareTokens(command), null, command);
+    assert.equal(consentBash(command, { cwd: checkout, env }).shape, CHAIN_SHAPE, command);
+  }
+  for (const command of ["git commit -m 'a; b", 'git commit -m "a; b', "git commit -m $'a; b"]) {
+    assert.equal(bareTokens(command), null, command);
+    assert.equal(consentBash(command, { cwd: checkout, env }).shape, UNTERMINATED_QUOTE_SHAPE, command);
+  }
+  for (const command of ["git commit -m 'a'\\''b; c'", "git log --out\\put=f", "git log $'\\x3b'x", "git log\rx", "git log x", "git push origin $'--forc\\x65'"]) {
+    assert.equal(bareTokens(command), null, JSON.stringify(command));
+    assert.ok(consentBash(command, { cwd: checkout, env }).shape, JSON.stringify(command));
+  }
+  assert.notEqual(consentBash('"a;"b', { cwd: checkout, env }).free, true, "a quoted `;` is literal, and the word is no free command");
+  assert.equal(neverBashReason("git push origin $'--force'", { cwd: checkout, env }), "a force push or a remote delete");
+});
+
+test("a home path in a variable is never, an ANSI-C quote is judged as its plain words, and a link on the way out of the home leaves today's never band", (t) => {
   const { env } = bandsFixture(t);
   const home = homeDir(env);
   const projectId = newId();
@@ -131,9 +172,10 @@ test("a home path in an ANSI-C quote or a variable is never, and a link on the w
   const linked = newId();
   mkdirSync(join(home, "worktrees"), { recursive: true });
   symlinkSync(dirname(canary), join(home, "worktrees", linked));
-  const never = [`rm -rf $'${run}'`, `rm -rf "$NIGHTQUEUE_HOME/runs/${projectId}/stale"`, `rm -rf \${HOME}/.nightqueue/runs/${projectId}/stale`, `rm -rf ${join(home, "worktrees", linked, "keep")}`];
+  const never = [`rm -rf "$NIGHTQUEUE_HOME/runs/${projectId}/stale"`, `rm -rf \${HOME}/.nightqueue/runs/${projectId}/stale`, `rm -rf ${join(home, "worktrees", linked, "keep")}`];
   for (const command of never) assert.ok(neverBashReason(command, { cwd: home, env }), command);
   assert.equal(neverBashReason(`rm -rf ${run}`, { cwd: home, env }), null);
+  assert.equal(neverBashReason(`rm -rf $'${run}'`, { cwd: home, env }), null, "an ANSI-C quote with no escape is judged as its plain words");
   assert.ok(existsSync(canary));
 });
 

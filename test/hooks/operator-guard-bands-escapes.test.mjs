@@ -163,8 +163,10 @@ test("a home-maintenance consent of one run dir never covers it behind a wrapper
   mkdirSync(run, { recursive: true });
   grant(ctx, { kind: "home-maintenance", scope: `rm -rf ${run}` });
   assert.equal(decide(ctx, "Bash", { command: `rm -rf ${run}` }), null);
-  const escapes = [`sudo rm -rf ${run}`, `FOO=1 rm -rf ${run}`, `nice rm -rf ${run}`, `sh -c "rm -rf ${run}"`, `bash -c 'rm -rf ${run}'`, `eval rm -rf ${run}`, `echo ${run} | xargs rm -rf`, `rm -rf $'${run}'`];
+  const escapes = [`sudo rm -rf ${run}`, `FOO=1 rm -rf ${run}`, `nice rm -rf ${run}`, `sh -c "rm -rf ${run}"`, `bash -c 'rm -rf ${run}'`, `eval rm -rf ${run}`, `echo ${run} | xargs rm -rf`];
   for (const command of escapes) assert.match(String(decide(ctx, "Bash", { command })), /never/, command);
+  assert.equal(decide(ctx, "Bash", { command: `rm -rf $'${run}'` }), null, "an ANSI-C quote with no escape is the consented words");
+  assert.match(String(decide(ctx, "Bash", { command: `rm -rf $'${run}\\x2f'` })), /^operator guard: /, "an escaped ANSI-C quote is refused");
   assert.throws(() => grant(ctx, { kind: "home-maintenance", scope: `sudo rm -rf ${run}` }), /one exact command|never band/);
 });
 

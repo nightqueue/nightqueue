@@ -4,20 +4,21 @@ import { SHIM_NAME, SHORTCUT_SHIM_NAMES, secretsPath } from "../config/paths.mjs
 import { packageRoot } from "../host/paths.mjs";
 import { registeredCheckouts } from "../memory/registry-access.mjs";
 import {
-  FORBIDDEN_SHELL_CHARS,
   canonicalPath,
   hasControlChar,
   hasUnquotedCaret,
   hasUnquotedForeignBlank,
   hasUnquotedHash,
   hasUnquotedParen,
+  hasUnterminatedQuote,
   insideRoots,
   isDeniedFlag,
   maskQuoted,
+  shellShapeRefusal,
   tokenize,
 } from "./orchestrator-scope.mjs";
 
-export { hasControlChar, hasUnquotedCaret, hasUnquotedForeignBlank, hasUnquotedHash, hasUnquotedParen };
+export { hasControlChar, hasUnquotedCaret, hasUnquotedForeignBlank, hasUnquotedHash, hasUnquotedParen, hasUnterminatedQuote };
 
 export const OPERATOR_GUARD = "operator guard";
 
@@ -543,10 +544,10 @@ export function expandsUnquoted(command, tokens) {
   return flags.slice(0, expansionJudgedEnd(tokens)).some(Boolean);
 }
 
-// The tokens of a single bare command, or null when it carries a shell operator, a backslash, an unquoted paren, `#` or foreign blank, or is not a string.
+// The tokens of a single bare command, or null when it has a shell shape refusal (an unquoted operator, a backslash, an unclosed quote, …), an unquoted paren or `#`, or is not a string.
 export function bareTokens(command) {
-  if (typeof command !== "string" || FORBIDDEN_SHELL_CHARS.test(command) || command.includes("\\")) return null;
-  if (hasUnquotedParen(command) || hasUnquotedHash(command) || hasUnquotedForeignBlank(command)) return null;
+  if (typeof command !== "string" || shellShapeRefusal(command) !== null) return null;
+  if (hasUnquotedParen(command) || hasUnquotedHash(command)) return null;
   return tokenize(command.trim());
 }
 
