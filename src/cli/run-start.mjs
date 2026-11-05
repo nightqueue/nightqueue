@@ -2,12 +2,14 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { UserError } from "../config/errors.mjs";
+import { runGit } from "../host/git.mjs";
 import { packageRoot } from "../host/paths.mjs";
 import { PIPELINE_TASK_TYPES } from "../memory/runs.mjs";
 import { COMMIT_TYPES } from "../queue/branch-name.mjs";
 import { jobPromptText } from "../queue/job-prompt.mjs";
 import { DEFAULT_PIPELINE, phaseIdsOf, phasesBeforeDeliveryOf, pipelineManifest, pipelineModule, stateManifest } from "../queue/pipeline-package.mjs";
 import { installedPipelineVersion, pipelineVersionBlock } from "../queue/pipeline-version.mjs";
+import { checkoutDefaultBranch } from "../queue/preflight.mjs";
 import { isSafeSegment, isStateObject, readRunState } from "../queue/resume.mjs";
 import { callerJobId } from "../queue/retry.mjs";
 import { agentModels, DEFAULT_MODEL_LABEL, modelTable, orchestratorModel, phasesFor } from "../queue/routing.mjs";
@@ -18,7 +20,8 @@ import { checkArgs, parseCommand } from "./args.mjs";
 import { findCommitTemplate } from "./commit-template.mjs";
 import { findPrTemplate } from "./pr-template.mjs";
 import { baseRef, commitConvention } from "./run-publish.mjs";
-import { resolveRun, RUN_OPTIONS, worktreeOf } from "./run-context.mjs";
+import { projectCheckout, resolveRun, RUN_OPTIONS, worktreeOf } from "./run-context.mjs";
+import { placeOperatorRun } from "./run-start-worktree.mjs";
 
 export const START_USAGE =
   "nightqueue run start [--type <bug/error|feature/refactor>] [--commit-type <type>] [--expect-slug <slug>] [--project <name> --slug <slug>] | --routing";
@@ -200,13 +203,25 @@ async function demoRepoOf(run, ctx) {
   }
 }
 
-// The base branch the QA triage compares the diff with: `HEAD`, said on stderr, when none can be found.
-function baseRefOf(cwd, ctx) {
+// The default branch of the run's checkout when it exists where the run works, the base of a checkout with no usual default branch; null otherwise.
+function checkoutBaseIn(run, cwd, ctx) {
+  try {
+    const branch = checkoutDefaultBranch(projectCheckout(run.project, ctx.env));
+    return runGit({ args: ["rev-parse", "--verify", "--quiet", `refs/heads/${branch}`], cwd, env: ctx.env }).ok ? branch : null;
+  } catch (error) {
+    ctx.err(`nightqueue: the default branch of the checkout could not be read: ${error?.message ?? String(error)}`);
+    return null;
+  }
+}
+
+// The base branch the QA triage compares the diff with: the checkout's own default branch, else `HEAD`, said on stderr, when none of the usual ones exists.
+function baseRefOf(run, cwd, ctx) {
   try {
     return baseRef(cwd, ctx.env);
   } catch (error) {
-    ctx.err(`nightqueue: answering \`HEAD\` as the base branch: ${error?.message ?? String(error)}`);
-    return "HEAD";
+    const fallback = checkoutBaseIn(run, cwd, ctx) ?? "HEAD";
+    ctx.err(`nightqueue: answering \`${fallback}\` as the base branch: ${error?.message ?? String(error)}`);
+    return fallback;
   }
 }
 
@@ -244,7 +259,8 @@ export async function runStart(argv, ctx) {
   }
   const options = startOptions(argv);
   await awaitDeclaredSlug(options.expected, ctx);
-  const run = await resolveRun(options.values, ctx);
+  const resolved = await resolveRun(options.values, ctx);
+  const run = callerJobId(ctx.env) === null ? await placeOperatorRun(resolved, ctx) : resolved;
   const prior = readRunState({ projectId: run.projectId, slug: run.slug, env: ctx.env });
   const versionBlock = pipelineVersionBlock(prior, ctx.env);
   if (versionBlock !== null) throw new UserError(versionBlock.message);
@@ -277,7 +293,7 @@ export async function runStart(argv, ctx) {
     promptFile,
     needsSlug: await needsSlugOf(run, ctx),
     demoRepo: await demoRepoOf(run, ctx),
-    baseRef: baseRefOf(cwd, ctx),
+    baseRef: baseRefOf(run, cwd, ctx),
     pluginRoot: join(packageRoot(), "plugin"),
     stages: await briefStages(run, pipeline, ctx),
     drafts,

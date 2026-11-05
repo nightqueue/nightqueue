@@ -68,13 +68,22 @@ test("the merger settings hold only the merger-guard PreToolUse hook, so no memo
   assert.equal(settings.claudeMdExcludes.length, 1);
 });
 
-test("the merger env carries the fence as absolute paths and never the job id nor the close lease token", () => {
-  const env = mergerEnv({ env: { PATH: "/bin", NIGHTQUEUE_JOB_ID: "3", NIGHTQUEUE_CLOSE_WORKER: "close:x" }, dir: "/tmp/w", files: ["src/a.mjs", "docs/b.md"] });
+test("the merger env carries the fence as absolute paths and never a job-scoped variable", () => {
+  const inherited = {
+    PATH: "/bin",
+    NIGHTQUEUE_JOB_ID: "3",
+    NIGHTQUEUE_JOB_HOME: "/runner-home",
+    NIGHTQUEUE_JOB_CLAUDE_DIR: "/runner-claude",
+    NIGHTQUEUE_JOB_CLAIM: "1:w#1",
+    NIGHTQUEUE_CLOSE_WORKER: "close:x",
+  };
+  const env = mergerEnv({ env: inherited, dir: "/tmp/w", files: ["src/a.mjs", "docs/b.md"] });
   assert.equal(env.PATH, "/bin");
   assert.equal(env.NIGHTQUEUE_MERGER_DIR, "/tmp/w");
   assert.deepEqual(JSON.parse(env.NIGHTQUEUE_MERGER_FILES), ["/tmp/w/src/a.mjs", "/tmp/w/docs/b.md"]);
-  assert.equal("NIGHTQUEUE_JOB_ID" in env, false, "the job id leaked into the merger");
-  assert.equal("NIGHTQUEUE_CLOSE_WORKER" in env, false, "the lease token leaked into the merger");
+  for (const key of ["NIGHTQUEUE_JOB_ID", "NIGHTQUEUE_JOB_HOME", "NIGHTQUEUE_JOB_CLAUDE_DIR", "NIGHTQUEUE_JOB_CLAIM", "NIGHTQUEUE_CLOSE_WORKER"]) {
+    assert.equal(key in env, false, `${key} leaked into the merger`);
+  }
 });
 
 test("the merger log is never named like a job log", (t) => {

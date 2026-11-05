@@ -15,15 +15,19 @@ const SLUG_SUFFIXES = 9;
 // Longest run slug a path segment accepts.
 const MAX_SLUG_CHARS = 80;
 
-// The slugs a job may bind its run to, in order: the base, its numbered variants, then one derived from the job id.
-export function slugCandidates(base, id) {
+// The slugs a run named after a base may live under, in order: the base, then its numbered variants, every one a safe segment.
+export function slugVariants(base) {
   const variants = [base];
   for (let n = 2; n <= SLUG_SUFFIXES; n += 1) {
     const suffix = `-${n}`;
     variants.push(`${String(base ?? "").slice(0, MAX_SLUG_CHARS - suffix.length)}${suffix}`);
   }
-  variants.push(`job-${id}`);
   return variants.filter(isSafeSegment);
+}
+
+// The slugs a job may bind its run to, in order: the base, its numbered variants, then one derived from the job id.
+export function slugCandidates(base, id) {
+  return [...slugVariants(base), `job-${id}`].filter(isSafeSegment);
 }
 
 // A run slug derived from the brief of a job, so the run directory exists from the first attempt even if the pipeline never names itself.

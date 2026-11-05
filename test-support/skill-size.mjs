@@ -8,7 +8,6 @@ export const LAZY_REFERENCES = Object.freeze([
   "phases.md",
   "phase-8.md",
   "phase-9.md",
-  "interactive-worktree.md",
   "qa-phase.md",
   "pr-template.md",
   "commit-template.md",

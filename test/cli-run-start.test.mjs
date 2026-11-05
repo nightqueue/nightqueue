@@ -297,17 +297,23 @@ test("`demoRepo` answers the project's checkout, or `none configured`", async (t
   assert.equal(answerOf(await runCli(env, START, { jobId: boundJob(env) })).demoRepo, "/demo/checkout");
 });
 
-test("`baseRef` answers the default branch, and `HEAD` with a stderr line in a repository without one", async (t) => {
+test("`baseRef` answers the default branch, the checkout's own branch without one, and `HEAD` with a stderr line on a detached checkout", async (t) => {
   const env = { ...makeQueue(t, "run-start-base-ref"), GIT_CONFIG_GLOBAL: "/dev/null", GIT_CONFIG_SYSTEM: "/dev/null" };
   const repo = projectPathOf(env, "alpha");
   const git = (...args) => execFileSync("git", ["-C", repo, ...args], { env: { ...env, GIT_AUTHOR_NAME: "t", GIT_AUTHOR_EMAIL: "t@t", GIT_COMMITTER_NAME: "t", GIT_COMMITTER_EMAIL: "t@t" } });
   rmSync(join(repo, ".git"), { recursive: true, force: true });
   git("init", "-q", "-b", "trunk");
   git("commit", "-q", "--allow-empty", "-m", "first");
+  git("checkout", "-q", "--detach");
 
   const without = await runCli(env, START, { jobId: boundJob(env) });
   assert.equal(answerOf(without).baseRef, "HEAD");
   assert.match(without.errText, /answering `HEAD` as the base branch: no base branch/);
+
+  git("checkout", "-q", "trunk");
+  const own = await runCli(env, START, { jobId: boundJob(env) });
+  assert.equal(answerOf(own).baseRef, "trunk");
+  assert.match(own.errText, /answering `trunk` as the base branch: no base branch/);
 
   git("branch", "-m", "main");
   assert.equal(answerOf(await runCli(env, START, { jobId: boundJob(env) })).baseRef, "main");

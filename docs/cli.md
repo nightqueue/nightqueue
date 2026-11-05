@@ -51,7 +51,7 @@ commit type outside the pipeline's own (naming the accepted values), and refuses
 phase). It records the `type` when given in `state.json` (the same write as `run_set`)
 and the pull request template in effect (the same as `run pr --template`), and prints
 one JSON line: `project`, `slug`, `runDir`, the `worktree` and `branch` the runtime
-recorded (it never creates a worktree), `type` (the recorded one, else the requested
+recorded, `type` (the recorded one, else the requested
 one, else null), `commitType` (the requested one, else the recorded one, else null),
 `models` (`{<agent>: <model>}`, the defaults of `src/queue/routing.mjs` with the
 project's overrides of `project models` applied; a store that cannot be read answers
@@ -66,8 +66,15 @@ the repository's convention file (`.gitmessage` gives `path`); else `nightqueue`
 of `plugin/skills/resolve/references/commit-template.md`, `path` null). With `--expect-slug`,
 inside a job, it waits up to 10 seconds for the runner to bind the slug the
 orchestrator of an older plugin just declared (`SLUG: <slug> TYPE: <type>`) and answers `slugDeclared`
-and `slugBound`; it never renames anything itself. Calling it again answers the
-same JSON. `run start --routing` takes no other option: it prints the default agent
+and `slugBound`; it never renames anything itself. Inside a job it reads the worktree
+the runner placed and calling it again answers the same JSON. Outside a job it places the
+run's worktree like a job's (`<home>/worktrees/<project id>/<slug>` on `worktree-<slug>`,
+from `origin/<default branch>` after a fetch, else `HEAD`) and records it before answering;
+a slug whose worktree slot or run directory is taken moves to the next free one (`<slug>-2`
+to `<slug>-9`), so a second call on the same name opens a new run and the answered `slug`
+and `runDir` are the run's; a run that already recorded a phase resumes under its own slug; a
+checkout with no commit gets no worktree, with a stderr line, and the run works in it; a
+registered checkout that no longer exists is refused. `run start --routing` takes no other option: it prints the default agent
 model table of `src/queue/routing.mjs` as markdown (`| Agent | Model |`, one row per
 agent), and resolves no run and writes nothing, inside a job or outside.
 
@@ -1330,7 +1337,10 @@ mints (a resume is a new launch, so a new id), pinned both in claude's env (the 
 and in the MCP server's env inside `--mcp-config`: it keys the session's consents (below). A
 `NIGHTQUEUE_PROJECT`, `NIGHTQUEUE_MODE`, `NIGHTQUEUE_OPERATOR_PID` or
 `NIGHTQUEUE_OPERATOR_SESSION` inherited from the caller is never passed on, and a job a runner
-started from inside an operator session never inherits any of them.
+started from inside an operator session never inherits any of them. Every job-scoped variable
+(`NIGHTQUEUE_JOB_ID`, `NIGHTQUEUE_JOB_HOME`, `NIGHTQUEUE_JOB_CLAUDE_DIR`, `NIGHTQUEUE_JOB_CLAIM`,
+`NIGHTQUEUE_CLOSE_WORKER`) is removed from the session's environment too, so a session opened from
+inside a job never acts as that job.
 
 The session runs with `--permission-mode default`, whatever a checkout's local settings say, so
 Claude Code's own permission prompt is always there; a queued job keeps `bypassPermissions`.

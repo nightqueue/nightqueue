@@ -47,11 +47,17 @@ function gitRead(gitImpl, cwd, args) {
   }
 }
 
-// Default branch of the checkout, taken from origin/HEAD and falling back to `main`.
-function defaultBranch(gitImpl, cwd) {
+// Default branch of the checkout, taken from origin/HEAD and falling back to the given branch, `main` by default.
+function defaultBranch(gitImpl, cwd, fallback = MAIN_BRANCHES[0]) {
   const head = gitRead(gitImpl, cwd, ["symbolic-ref", "--quiet", "--short", "refs/remotes/origin/HEAD"]);
   const suffix = head?.startsWith("origin/") ? head.slice("origin/".length) : "";
-  return suffix || MAIN_BRANCHES[0];
+  return suffix || fallback;
+}
+
+// The default branch of a checkout, the base a fresh run branch starts from: origin/HEAD, else the branch the checkout is on, else `main`.
+export function checkoutDefaultBranch(cwd, gitImpl = defaultGitImpl) {
+  const current = gitRead(gitImpl, cwd, ["symbolic-ref", "--quiet", "--short", "HEAD"]);
+  return defaultBranch(gitImpl, cwd, current || MAIN_BRANCHES[0]);
 }
 
 // Runs a read-only git command, returning its untrimmed output or null when git refused to answer.

@@ -339,10 +339,6 @@ test("every `nightqueue run <sub>` the skill names is a real run subcommand, all
 
 // Each command the skill prescribes to the orchestrator: the text the skill carries, and a concrete call of it.
 const SKILL_PRESCRIBED = [
-  ["git rev-parse --is-inside-work-tree", "git rev-parse --is-inside-work-tree"],
-  ["git branch --show-current", "git branch --show-current"],
-  ["git fetch origin", "git fetch origin"],
-  ["git worktree add <path> -b worktree-<slug> origin/main", "git worktree add /work/wt -b worktree-slug origin/main"],
   ["git status --short", "git status --short"],
   ["git diff --stat", "git diff --stat"],
   ["gh pr create", "gh pr create --title t --body-file /runs/p/s/pr-body.md"],

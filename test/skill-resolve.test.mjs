@@ -12,10 +12,9 @@ import { phasePrompts } from "../test-support/skill-size.mjs";
 const SKILL_FILE = readFileSync(new URL("../plugin/skills/resolve/SKILL.md", import.meta.url), "utf8");
 const PHASES = readFileSync(new URL("../plugin/skills/resolve/references/phases.md", import.meta.url), "utf8");
 const SKILL = `${SKILL_FILE}\n${PHASES}`;
-const INTERACTIVE = readFileSync(new URL("../plugin/skills/resolve/references/interactive-worktree.md", import.meta.url), "utf8");
 const PHASE_8 = readFileSync(new URL("../plugin/skills/resolve/references/phase-8.md", import.meta.url), "utf8");
 const PHASE_9 = readFileSync(new URL("../plugin/skills/resolve/references/phase-9.md", import.meta.url), "utf8");
-const FLOW = [SKILL, PHASE_8, PHASE_9, INTERACTIVE].join("\n");
+const FLOW = [SKILL, PHASE_8, PHASE_9].join("\n");
 const QA_PHASE = readFileSync(new URL("../plugin/skills/resolve/references/qa-phase.md", import.meta.url), "utf8");
 const OPERATOR = readFileSync(new URL("../plugin/agents/operator.md", import.meta.url), "utf8");
 const CLASSIFY = readFileSync(new URL("../src/queue/classify.mjs", import.meta.url), "utf8");
@@ -71,7 +70,7 @@ test("a launch is one filled block of the skill: the prompt lives in `## Phase p
   assert.ok(SKILL_FILE.includes("No other call is needed"), "the skill asks for another call before a launch");
   assert.ok(SKILL_FILE.includes("the filled block, fence removed, is the whole `prompt`"), "the skill lets the fence reach the prompt, where the hook reads no declaration");
   for (const target of Object.keys(phasePrompts().blocks)) assert.ok(SKILL_FILE.includes(`\`${target}\``), `the phase index never names the \`${target}\` block`);
-  for (const text of [SKILL, QA_PHASE, INTERACTIVE]) assert.equal(text.includes("phase_prompt"), false, "a plugin text still calls the removed tool");
+  for (const text of [SKILL, QA_PHASE]) assert.equal(text.includes("phase_prompt"), false, "a plugin text still calls the removed tool");
   assert.equal(/Also pass `exclude_ids`/.test(SKILL), false, "the agent is still told to rebuild exclude_ids by hand");
   assert.equal(/repeat the call without `exclude_ids`/.test(SKILL), false, "the agent is still told to retry the recall by hand");
   assert.equal(TOOLS.includes('name: "phase_prompt"'), false, "the removed tool is still registered");
@@ -459,7 +458,7 @@ test("the skill describes the one report table, never the execution table it rep
   assert.ok(PHASE_9.includes("one row per recorded execution"), "Phase 9 no longer says what the rows of the table are");
   assert.ok(PHASE_9.includes("`🔁N`"), "Phase 9 no longer names the re-run rows");
   assert.ok(PHASE_9.includes("Do NOT print the detail sections below"), "the happy path no longer keeps the detail sections out");
-  assert.ok(INTERACTIVE.includes("Do not repeat the report table here"), "an interactive Phase 8 no longer leaves the table to `run report`");
+  assert.ok(PHASE_8.includes("Do not repeat the report table here"), "an interactive Phase 8 no longer leaves the table to `run report`");
 });
 
 // The text of Phase 8: the SKILL.md stub must send the run to references/phase-8.md, which carries the steps.
@@ -498,25 +497,24 @@ test("Phase 8 is the one `nightqueue run publish` call the CLI really offers, an
     assert.equal(dead.test(FLOW), false, `Phase 7 still runs by hand what the runtime owns: ${dead}`);
   }
   assert.ok(SKILL.includes("inside a job, never ask before pushing"), "the push confirmation is asked for in an unattended run again");
-  assert.ok(phase.includes("An interactive `/resolve` (no `NIGHTQUEUE_JOB_ID`) also follows `references/interactive-worktree.md`"), "Phase 8 no longer sends an interactive run to its confirmation and worktree close");
-  assert.ok(INTERACTIVE.includes("**Before any external action, show the user and wait for confirmation:**"), "an interactive run no longer confirms before pushing");
-  assert.ok(INTERACTIVE.includes("`ExitWorktree`"), "an interactive run stopped closing the worktree, which only the session can do");
+  const outside = phase.replace(/\s+/g, " ");
+  assert.ok(outside.includes("With no `NIGHTQUEUE_JOB_ID`, before step 2 show the user the branch, the commit message, `git diff --stat` and a status line"), "an interactive run no longer confirms before pushing");
+  assert.ok(outside.includes("wait for the go; then add `--remove-worktree` to `run publish`"), "an interactive run no longer has the runtime close its worktree");
+  assert.equal(phase.split("--remove-worktree").length, 2, "`--remove-worktree` is named outside the no-`NIGHTQUEUE_JOB_ID` sentence");
+  assert.ok(CLI_RUN.includes("WORKTREE REMOVED:") && CLI_RUN.includes("WORKTREE KEPT:"), "Phase 8 reads a worktree close line the CLI never prints");
   assert.equal(phase.includes("ExitWorktree"), false, "Phase 8 still names the host worktree tool");
-  assert.equal(phase.includes("--remove-worktree"), false, "the command is told to remove the worktree the session is inside");
 });
 
-test("step 4 splits the worktree: a queued job runs in the one the runtime created, an interactive /resolve still creates its own", () => {
+test("step 4 is one worktree rule: the one `run start` answered, placed by the runtime inside a job or not", () => {
   const start = SKILL.indexOf("4. **The worktree.**");
   const end = SKILL.indexOf("5. Every block carries the shell rule", start);
   assert.ok(start >= 0 && end > start, "the skill no longer documents the worktree in step 4");
-  const step = SKILL.slice(start, end);
-  assert.ok(step.includes("the runtime created it at `$PWD`"), "a queued job is no longer told the runtime placed its worktree");
-  assert.ok(step.includes("never create another"), "a queued job may create a second worktree");
-  assert.ok(step.includes("never record `branch`/`worktree`"), "a queued job may overwrite the worktree the runtime recorded");
-  assert.ok(step.includes("`references/interactive-worktree.md` now"), "an interactive /resolve is no longer sent to its worktree reference");
+  const step = SKILL.slice(start, end).replace(/\s+/g, " ");
+  assert.ok(step.includes("The `worktree` `run start` answered"), "the run is no longer told its worktree is the one `run start` answered");
+  assert.ok(step.includes("never create another"), "a run may create a second worktree");
+  assert.ok(step.includes("never record `branch`/`worktree`"), "a run may overwrite the worktree the runtime recorded");
+  assert.equal(step.includes("interactive-worktree"), false, "step 4 still sends a run to the removed recipe");
   assert.equal(/EnterWorktree|ExitWorktree/.test(phaseZero()), false, "Phase 0 still names the host worktree tool");
-  assert.ok(INTERACTIVE.includes("then `git worktree add <path> -b worktree-<slug> origin/main`"), "an interactive /resolve no longer creates its worktree with git");
-  assert.ok(INTERACTIVE.indexOf("git worktree add") < INTERACTIVE.indexOf("EnterWorktree"), "the host tool is no longer only a shortcut after the git path");
 });
 
 
@@ -531,7 +529,7 @@ function phaseZero() {
 test("the run comes named in the prompt, and Phase 0 writes no Brief, no critique and no rename line", () => {
   assert.ok(SKILL.includes("a `RUN_DIR:` line of the prompt is the same"), "Phase 0 derives the run directory by hand again");
   assert.equal(SKILL.includes("Right after the `mkdir -p`"), false, "the skill still prints the older slug protocol as the rule");
-  assert.ok(INTERACTIVE.replace(/\s+/g, " ").includes("the `runDir` `run start` answers is the `RUN_DIR`"), "an interactive run lost where it takes its RUN_DIR");
+  assert.ok(SKILL.includes("later `--slug`s are the answered `slug`"), "an interactive run may keep the slug it asked for after `run start` moved it");
   const phase = phaseZero();
   for (const template of ["## Brief", "## Request critique"]) {
     assert.equal(phase.includes(template), false, `Phase 0 still carries \`${template}\`, which the triager owns`);
@@ -710,10 +708,10 @@ test("the contract lists exactly the five channels (a)-(e), and names the reflec
   assert.ok(contract.includes("The orchestrator never calls `lesson_save`/`memory_save`; the reflector is the run's only writer."));
 });
 
-test("references/interactive-worktree.md is the only file of the skill that names the host's worktree tool", () => {
+test("no file of the skill names the host's worktree tool", () => {
   const skillDir = new URL("../plugin/skills/resolve/", import.meta.url);
   const files = readdirSync(skillDir, { recursive: true }).map(String).filter((name) => name.endsWith(".md"));
   assert.ok(files.length >= 8, "the skill files were not found");
   const naming = files.filter((name) => /EnterWorktree|ExitWorktree/.test(readFileSync(new URL(name, skillDir), "utf8")));
-  assert.deepEqual(naming, ["references/interactive-worktree.md"]);
+  assert.deepEqual(naming, []);
 });

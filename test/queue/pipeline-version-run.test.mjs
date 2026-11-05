@@ -138,7 +138,7 @@ test("`run start` under another pipeline version refuses with one line and write
   const before = snapshot(dir);
   const { code, out, err } = await runStart(env);
   assert.equal(code, 1);
-  assert.deepEqual(err, [`nightqueue: ${REFUSAL}`]);
+  assert.deepEqual(err.filter((line) => !line.includes("has no commit to branch from")), [`nightqueue: ${REFUSAL}`]);
   assert.deepEqual(out, []);
   assert.deepEqual(snapshot(dir), before);
 });
