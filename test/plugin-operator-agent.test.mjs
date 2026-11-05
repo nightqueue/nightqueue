@@ -216,7 +216,7 @@ test("operator.md delegates to the seven pipeline agents with an inline request,
     assert.ok(delegation.includes(part), `Delegation does not name ${part}`);
   }
   const direct = sectionOf("Direct changes");
-  for (const step of ["`operator_consent`", "`nightqueue:coder`", "no worktree", "`git -C <checkout> diff --stat`", "`git-write`", "`/nightqueue:reflect`"]) {
+  for (const step of ["`CLAUDE.md`", "`.claude/settings.json`", "`operator_consent`", "`nightqueue:coder`", "no worktree", "`git -C <checkout> diff --stat`", "`git-write`", "`/nightqueue:reflect`"]) {
     assert.ok(direct.includes(step), `Direct changes does not name ${step}`);
   }
 });
