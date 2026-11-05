@@ -200,6 +200,14 @@ function runNoticeOf(job) {
   }
 }
 
+// The lines of every restore of the shared git config a run recorded, each prefixed with the attempt it closed.
+function gitConfigLines(state) {
+  const entries = Array.isArray(state?.gitConfigRestores) ? state.gitConfigRestores : [];
+  return entries
+    .filter((entry) => entry && typeof entry === "object" && Array.isArray(entry.lines))
+    .flatMap((entry) => entry.lines.filter((line) => typeof line === "string").map((line) => `#${entry.ordinal ?? "?"} ${line}`));
+}
+
 // One job in full with the state of its pull request, or null when the row is gone. When the run's own notice (read fresh
 // from its log) really differs from the row's `notice_md` - once the lines the runtime itself appends to the row are set
 // aside - both are carried: `notice` is the row's, `run_notice` the run's whole own.
@@ -208,9 +216,10 @@ export async function jobDetailView(readStore, id, { prStates = null, env = proc
   const job = row ? jobView(row, { full: true }) : null;
   if (!job) return null;
   const live = job.status === "running" ? readLiveOf(job, env).live : null;
-  const withState = { ...withPrState(job, prStates), live };
-  const runNotice = runNoticeOf(job);
   const state = readRunState({ projectId: job.project_id, slug: job.slug, env });
+  const gitConfig = gitConfigLines(state);
+  const withState = { ...withPrState(job, prStates), live, ...(gitConfig.length ? { git_config: gitConfig } : {}) };
+  const runNotice = runNoticeOf(job);
   const rowNotice = withoutRuntimeAppendedLines(job.notice_md, state).trim();
   return runNotice && runNotice.trim() !== rowNotice ? { ...withState, run_notice: runNotice } : withState;
 }

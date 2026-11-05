@@ -405,6 +405,20 @@ export function recordWip({ projectId, slug, wip, env = process.env } = {}) {
   return record({ projectId, slug, env, change: (_state, at) => ({ wip: { ...wip, at } }) });
 }
 
+const GIT_CONFIG_RESTORES_KEPT = 10;
+
+// The git config restores a state holds, as a list.
+function gitConfigRestoreEntries(state) {
+  return Array.isArray(state?.gitConfigRestores) ? state.gitConfigRestores : [];
+}
+
+// Records the lines of one restore of the shared git config at the end of an attempt, keeping the last ten.
+export function recordGitConfigRestore({ projectId, slug, ordinal = null, lines, env = process.env } = {}) {
+  if (!Array.isArray(lines) || lines.length === 0) return kept("a git config restore needs at least one line");
+  const entry = (at) => ({ ordinal: Number.isInteger(ordinal) ? ordinal : null, at, lines });
+  return record({ projectId, slug, env, change: (state, at) => ({ gitConfigRestores: [...gitConfigRestoreEntries(state), entry(at)].slice(-GIT_CONFIG_RESTORES_KEPT) }) });
+}
+
 // Whether the state holds a termination of that author (and of that phase, when one is named).
 function holdsTermination(state, { phase, onlyBy }) {
   const termination = isStateObject(state) ? state.termination : null;

@@ -13,6 +13,7 @@ import {
   dbWalPath,
   embeddingDir,
   homeDir,
+  jobWorktreePath,
   legacyHomeDir,
   legacyOperatorQaDir,
   qaDir,
@@ -50,7 +51,8 @@ import { findLostJobs, logOnlyTail, scanDisk } from "../queue/lost-rows.mjs";
 import { isRegistryFailure, killProcess, listRunnerRecords, liveRunnersReport, registryReadError } from "../queue/registry.mjs";
 import { closesSummary } from "../queue/close-view.mjs";
 import { isStateObject, readRunState } from "../queue/resume.mjs";
-import { canonicalPath, droppedNames, jobWorktreeOwners, lockState, parseWorktreeList, removeEmptyDir, sameDir } from "../queue/worktree.mjs";
+import { canonicalPath, jobWorktreeOwners, lockState, openJobHolds, parseWorktreeList, removeEmptyDir, sameDir } from "../queue/worktree.mjs";
+import { detachedWork, neutralGit, removeOrphanDir, salvageDest, salvageRegistered, salvageUnreadable } from "./doctor-salvage.mjs";
 import { compactStamp } from "../queue/runner.mjs";
 import { installedPipelineNames, manifestFailure, orWhenBroken, pipelineManifest } from "../queue/pipeline-package.mjs";
 import { openStore, openStoreReadOnly, releaseHomeConnections, withReadOnlyStore } from "../store/open.mjs";
@@ -1180,25 +1182,24 @@ function projectsWithLegacyWorktrees(projects) {
     .filter((project) => isDirectory(project.dir));
 }
 
-// The worktrees at least one job names and only closed or cancelled jobs do, the ones `--fix` may force-remove; a worktree no job names is never in it.
-async function releasableWorktrees(store, env) {
-  const named = await store.jobs.listNamedJobs();
-  const jobs = Array.isArray(named) ? named : [];
-  const finished = (job) => job.status === "closed" || job.status === "cancelled";
-  const holding = jobWorktreeOwners(jobs.filter((job) => !finished(job)), env);
-  return new Set([...jobWorktreeOwners(jobs.filter(finished), env).keys()].filter((path) => !holding.has(path)));
+// The holds of the open jobs plus the worktree path each open job's slug names, so a job whose run state was lost still spares its worktree; null stays null.
+function withNamedWorktrees(holds, jobs, env) {
+  if (holds === null) return null;
+  const open = (Array.isArray(jobs) ? jobs : []).filter((job) => job.status !== "cancelled" && typeof job.slug === "string" && job.slug !== "");
+  return [...holds, ...open.map((job) => ({ jobId: job.id, worktree: canonicalPath(jobWorktreePath(job.project_id, job.slug, env)) }))];
 }
 
-// The worktrees a job that is not closed still names in the state of its run, canonical and mapped to that job; read through a read-only store only.
+// The worktrees a job that is not closed still names in the state of its run, canonical and mapped to that job, plus with `--fix` what open jobs hold (null when unreadable); read through a read-only store only.
 async function ownedWorktrees(ctx, { fix = false } = {}) {
-  if (!existsSync(dbPath(ctx.env))) return { owners: new Map(), releasable: new Set(), error: null };
+  if (!existsSync(dbPath(ctx.env))) return { owners: new Map(), holds: [], error: null };
   const store = openStoreReadOnly(ctx.env);
   try {
-    const found = jobWorktreeOwners(await store.jobs.listOpenJobs(), ctx.env);
+    const jobs = await store.jobs.listOpenJobs();
+    const found = jobWorktreeOwners(jobs, ctx.env);
     const owners = new Map([...found].map(([path, owner]) => [path, owner.jobId]));
-    return { owners, releasable: fix ? await releasableWorktrees(store, ctx.env) : new Set(), error: null };
+    return { owners, holds: fix ? withNamedWorktrees(await openJobHolds({ store, env: ctx.env }), jobs, ctx.env) : [], error: null };
   } catch (err) {
-    return { owners: null, releasable: new Set(), error: err?.message ?? String(err) };
+    return { owners: null, holds: null, error: err?.message ?? String(err) };
   } finally {
     await store.close();
   }
@@ -1337,14 +1338,55 @@ function homeLinks(ctx, { project, dirs, fix }) {
   return { commonDir, broken, failure, stillBroken };
 }
 
-// The row of a leftover `--fix` force-removed: what it dropped, or why git refused.
-function removeLeftover(ctx, { project, dir, entry, name }) {
-  const status = runCommand(ctx, "git", ["status", "--porcelain", "--untracked-files=all"], { cwd: dir });
-  const dropped = status.ok ? droppedNames(status.stdout) : "";
-  if (lockState(entry, ctx.killImpl ?? killProcess) === "stale") runCommand(ctx, "git", ["worktree", "unlock", dir], { cwd: project.path });
-  const removed = runCommand(ctx, "git", ["worktree", "remove", "--force", dir], { cwd: project.path });
-  if (!removed.ok) return check(name, "warn", `git worktree remove --force failed (${firstLine(removed.stderr) || `exit ${removed.status}`})`, `inspect ${shellQuote(dir)}`);
-  return check(name, "ok", `removed: left over, no open job owns it${dropped ? ` (dropped uncommitted: ${dropped})` : ""}`);
+// The doctor command runner as the salvage module's seam.
+function salvageRun(ctx) {
+  return (file, args, options = {}) => runCommand(ctx, file, args, options);
+}
+
+// The row of an orphan `--fix` force-removed once what it held uncommitted was saved, or why it was kept.
+function removeLeftover(ctx, { project, dir, entry, name, neutral }) {
+  const dest = salvageDest({ env: ctx.env, projectId: project.id, name: basename(dir) });
+  const salvage = salvageRegistered({ git: neutral.git, run: salvageRun(ctx), env: ctx.env, dir, dest });
+  if (salvage.error) return check(name, "warn", `kept: ${salvage.error}; partial salvage at ${salvage.dest}`, `inspect ${shellQuote(dir)}`);
+  if (lockState(entry, ctx.killImpl ?? killProcess) === "stale") runCommand(ctx, "git", ["worktree", "unlock", dir], { cwd: project.path, env: neutral.env });
+  const removed = runCommand(ctx, "git", ["worktree", "remove", "--force", dir], { cwd: project.path, env: neutral.env });
+  const saved = salvage.saved.length ? `; saved ${salvage.saved.join(", ")} to ${salvage.dest}` : "";
+  if (!removed.ok) return check(name, "warn", `git worktree remove --force failed (${firstLine(removed.stderr) || `exit ${removed.status}`})${saved}`, `inspect ${shellQuote(dir)}`);
+  const branch = entry.branch?.startsWith("refs/heads/") ? `; branch ${entry.branch.slice("refs/heads/".length)} kept` : "";
+  return check(name, "ok", saved ? `removed: orphan, no open job holds it${saved}${branch}` : "removed: orphan, no open job holds it, nothing uncommitted");
+}
+
+// What `--fix` makes of a registered orphan: removed after its salvage unless a live or manual lock, unreadable config or detached work keeps it.
+function fixRegisteredOrphan(ctx, { project, dir, entry, name, row }) {
+  const lock = lockState(entry, ctx.killImpl ?? killProcess);
+  if (lock !== "none" && lock !== "stale") return row;
+  const neutral = neutralGit({ run: salvageRun(ctx), env: ctx.env, dir });
+  if (neutral.error) return check(name, "warn", `kept: ${neutral.error}, so its drivers cannot be neutralized for a salvage`, `inspect ${shellQuote(dir)}`);
+  const detached = detachedWork(neutral.git, entry);
+  if (detached) return check(name, "warn", `kept: ${detached}, which a removal would drop`, `git -C ${shellQuote(dir)} log --oneline HEAD --not --branches --tags --remotes`);
+  return removeLeftover(ctx, { project, dir, entry, name, neutral });
+}
+
+// The row of an orphan git cannot read `--fix` removed and pruned once what it held was archived, or why it was kept.
+function removeUnreadableOrphan(ctx, { project, dir, name, reason }) {
+  const dest = salvageDest({ env: ctx.env, projectId: project.id, name: basename(dir) });
+  const salvage = salvageUnreadable({ run: salvageRun(ctx), dir, dest });
+  if (salvage.error) return check(name, "warn", `kept: ${salvage.error}; partial salvage at ${salvage.dest}`, `inspect ${shellQuote(dir)}`);
+  const saved = salvage.saved.length ? `; saved ${salvage.saved.join(", ")} to ${salvage.dest}` : ", nothing in it besides its .git link";
+  try {
+    removeOrphanDir(dir);
+  } catch (err) {
+    return check(name, "warn", `could not remove the directory (${err?.message ?? String(err)})${saved}`, `rm -rf ${shellQuote(dir)}`);
+  }
+  const pruned = runCommand(ctx, "git", ["worktree", "prune"], { cwd: project.path });
+  if (!pruned.ok) return check(name, "warn", `removed, but git worktree prune failed (${firstLine(pruned.stderr) || `exit ${pruned.status}`})${saved}`, `git -C ${shellQuote(project.path)} worktree prune`);
+  return check(name, "ok", `removed and pruned: ${reason}, no open job holds it${saved}`);
+}
+
+// Tells whether `--fix` must leave a home directory alone: the holds are unknown, an open job holds it, or a fresh retry kept it.
+function isSpared(ctx, { dir, holds }) {
+  const canonical = canonicalPath(dir);
+  return holds === null || holds.some((hold) => hold.worktree === canonical) || ctx.keptFresh?.has(canonical) === true;
 }
 
 // Tells whether a directory holds nothing at all.
@@ -1366,22 +1408,30 @@ function removeEmptyOrphan(name, dir) {
   }
 }
 
-// What `--fix` makes of a home directory: an unregistered empty one is removed, a registered unlocked or stale-locked worktree is force-removed only when every job naming it is closed or cancelled; anything else keeps its row.
-function fixLeftover(ctx, { project, dir, entries, row, releasable }) {
+// What `--fix` makes of a home directory no open job holds: an empty one is removed, a registered one is salvaged then force-removed, an unregistered one is archived, removed and pruned; anything spared keeps its row.
+function fixLeftover(ctx, { project, dir, entries, row, holds }) {
+  if (isSpared(ctx, { dir, holds })) return row;
   const name = `worktree ${project.name}/${basename(dir)}`;
   const entry = entries.find((candidate) => canonicalPath(candidate.path) === canonicalPath(dir));
-  if (!entry) return row?.status === "warn" && isEmptyDir(dir) ? removeEmptyOrphan(name, dir) : row;
-  if (!releasable.has(canonicalPath(dir))) return row;
-  const lock = lockState(entry, ctx.killImpl ?? killProcess);
-  return lock === "none" || lock === "stale" ? removeLeftover(ctx, { project, dir, entry, name }) : row;
+  if (entry) return fixRegisteredOrphan(ctx, { project, dir, entry, name, row });
+  if (isEmptyDir(dir)) return removeEmptyOrphan(name, dir);
+  return removeUnreadableOrphan(ctx, { project, dir, name, reason: "not registered in git" });
+}
+
+// The row of a worktree whose link broke: with `--fix`, one still broken after the repair is archived, removed and pruned when no open job holds it.
+function brokenRow(ctx, { project, dir, links, holds, fix }) {
+  const holdsNow = !links.stillBroken.includes(dir);
+  const row = brokenLinkCheck(project, dir, { fix, failure: links.failure, holdsNow });
+  if (!fix || holdsNow || isSpared(ctx, { dir, holds })) return row;
+  return removeUnreadableOrphan(ctx, { project, dir, name: row.name, reason: "its .git link is broken" });
 }
 
 // The row of one worktree directory of a project under the home.
-function homeRow(ctx, { project, dir, entries, owners, releasable, links, fix }) {
+function homeRow(ctx, { project, dir, entries, owners, holds, links, fix }) {
   if (links.commonDir === null && existsSync(join(dir, ".git"))) return unreadableLinkCheck(project, dir);
-  if (links.broken.includes(dir)) return brokenLinkCheck(project, dir, { fix, failure: links.failure, holdsNow: !links.stillBroken.includes(dir) });
+  if (links.broken.includes(dir)) return brokenRow(ctx, { project, dir, links, holds, fix });
   const row = leftoverCheck(ctx, { project, dir, entries, owners, legacy: false });
-  return fix ? fixLeftover(ctx, { project, dir, entries, row, releasable }) : row;
+  return fix ? fixLeftover(ctx, { project, dir, entries, row, holds }) : row;
 }
 
 // With `--fix`, prunes the entries git registers under the project's home directory whose directory is gone and no open job owns, one row each.
@@ -1401,10 +1451,10 @@ function pruneGoneRows(ctx, { project, root, owners }) {
 }
 
 // The rows of the worktrees one project has under the home, the broken links repaired and the leftovers cleared first with `--fix`.
-function homeProjectRows(ctx, { project, root, owners, releasable, fix }) {
+function homeProjectRows(ctx, { project, root, owners, holds, fix }) {
   const pruned = fix ? pruneGoneRows(ctx, { project, root, owners }) : [];
   const links = homeLinks(ctx, { project, dirs: worktreeDirsOrNone(root), fix });
-  const rows = scanWorktreeDir(ctx, { project, root, rowOf: (dir, entries) => homeRow(ctx, { project, dir, entries, owners, releasable, links, fix }) });
+  const rows = scanWorktreeDir(ctx, { project, root, rowOf: (dir, entries) => homeRow(ctx, { project, dir, entries, owners, holds, links, fix }) });
   return [...pruned, ...rows];
 }
 
@@ -1419,8 +1469,8 @@ function scanHomeRoot({ base, projects, label, rowsOf }) {
 }
 
 // Reports every project directory under the home's worktrees.
-function checkHomeWorktrees(ctx, { projects, owners, releasable, fix }) {
-  return scanHomeRoot({ base: worktreesDir(ctx.env), projects, label: "worktrees", rowsOf: (project, root) => homeProjectRows(ctx, { project, root, owners, releasable, fix }) });
+function checkHomeWorktrees(ctx, { projects, owners, holds, fix }) {
+  return scanHomeRoot({ base: worktreesDir(ctx.env), projects, label: "worktrees", rowsOf: (project, root) => homeProjectRows(ctx, { project, root, owners, holds, fix }) });
 }
 
 // Reports, read-only, the worktrees a removed QA flow left under one directory of the home; no job ever owns one, so each is a leftover.
@@ -1482,7 +1532,7 @@ async function checkKeptRunDirs(ctx) {
   return kept.map((run) => keptRunRow(run, projects));
 }
 
-// Reports the worktrees of the home and the legacy ones under `.claude/worktrees`, with the command that cleans each; the only write is `git worktree repair` with `--fix`.
+// Reports the worktrees of the home and the legacy ones under `.claude/worktrees`, with the command that cleans each; with `--fix` it repairs links and salvages then removes the home orphans.
 async function checkWorktreeLeftovers(base, values) {
   const ctx = { ...base, keptFresh: keptFreshByWorktree(base.env) };
   const projects = await checkoutsOrNone(ctx);
@@ -1495,7 +1545,9 @@ async function checkWorktreeLeftovers(base, values) {
   const legacyRows = legacy.flatMap((project) =>
     scanWorktreeDir(ctx, { project, root: project.dir, rowOf: (dir, entries) => leftoverCheck(ctx, { project, dir, entries, owners: owned.owners, legacy: true }) }),
   );
-  return [...legacyRows, ...checkHomeWorktrees(ctx, { projects, owners: owned.owners, releasable: owned.releasable, fix: values.fix === true }), ...checkLegacyQa(ctx, { projects })];
+  const unknownHolds = owned.holds === null ? [check("worktrees", "warn", "the queue could not be read; --fix removed no worktree", `inspect ${dbPath(ctx.env)}`)] : [];
+  const homeRows = checkHomeWorktrees(ctx, { projects, owners: owned.owners, holds: owned.holds, fix: values.fix === true });
+  return [...unknownHolds, ...legacyRows, ...homeRows, ...checkLegacyQa(ctx, { projects })];
 }
 
 // Reason the registry could not answer, short enough for a report line.

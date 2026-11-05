@@ -952,7 +952,8 @@ touched; ignored files inside a removed worktree (a local `.env`, build output) 
 `.claude/worktrees/` of each checkout with the command that cleans it, offers only a read for a
 worktree `--fresh` kept with its run directory, marks a legacy worktree
 an open job still runs in as `legacy-in-use`, and `nightqueue doctor --fix` runs
-`git worktree repair` for a home worktree whose checkout or home moved
+`git worktree repair` for a home worktree whose checkout or home moved, and saves its
+uncommitted work under `<NIGHTQUEUE_HOME>/salvage/` before it removes a home worktree no open job holds
 (see [Doctor](cli.md#doctor)). In a `nightqueue open` session the operator runs
 `nightqueue doctor --fix` only after a `run` consent, and removes one run dir or worktree
 (`rm -rf <home>/runs/<project id>/<slug>`, `git -C <checkout> worktree remove <worktree>`) or
@@ -962,6 +963,49 @@ command; the guard refuses, naming the job (`belongs to J-248 (gate)`), an entry
 merged or closed (`belongs to J-248 (done, pull request <url> is open)`; a gh failure or
 `NIGHTQUEUE_NO_PR_CHECK=1` holds too), and never removes `runs/`, `worktrees/` or a
 project's whole directory (see [Operator](cli.md#open)).
+
+**The shared git config.** A job's worktree shares the `.git/config` of the project checkout, so
+a driver key a session writes there would run on the next git read of any worktree. Before the
+first attempt of a claim spawns, the runner snapshots the driver keys of that config:
+`filter.<name>.clean|smudge|process`, `diff.<name>.textconv|command`, `diff.external`,
+`merge.<name>.driver`, `core.fsmonitor`, `core.hooksPath`, `include.path` and
+`includeIf.<condition>.path`. There is one snapshot per git common dir, in
+`<NIGHTQUEUE_HOME>/git-config/<hash>.json` under a lock, taken by the first live claim on that
+checkout and shared by the claims that run beside it, so a key planted by one job never becomes
+another job's baseline. When an attempt ends (`done`, `gate`, `failed`, `cancelled`, released, lost
+ownership), every driver key that differs from the snapshot is put back: a key the snapshot did not
+hold is removed, a changed or deleted one gets its values back in their order, the first value
+replacing every current one in a single write so a refused write never leaves the key without a
+value. The last release keeps the snapshot for 10 minutes: the next claim of any runner inside that
+window restores a driver key a process of the session wrote after the release, logs it in that
+job, and drops the snapshot (an edit made by hand in that window is reverted too). A key present before
+the claim is never touched, and neither is any other key (`branch.<name>.remote` that `git push -u`
+writes stays). Each key restored is one line in the job log and in `state.json`
+`gitConfigRestores` (the last 10 attempts):
+`git config: removed <key> = "<value>" (written during the attempt)`,
+`git config: restored <key> to "<value>" (was "<value>"|absent)`, or
+`git config: could not restore <key>: <reason>`; values are quoted, with control characters
+blanked and a cap of 200 characters. `queue status <id>` prints them under a `git_config` block as
+`#<attempt ordinal> <line>`, and the MCP `queue_status` carries the same `git_config` list. The
+restore runs at every attempt end even when another job still holds the same checkout, so a key
+that job wrote is reverted too and logged in the job whose attempt ended. Known limit: an edit you
+make by hand to a driver key of the checkout (`git config core.hooksPath .husky`, `git lfs install`)
+while any job holds it is reverted at the next attempt end. Git records no author for a config write,
+so the runner cannot tell your edit from a value the running session planted, and keeping one would
+keep the other. Make such an edit while no job of that checkout runs, or make it again after the
+`git config: removed|restored` line names it. A snapshot that fails is
+one line, `the shared git config could not be snapshot: <reason>; driver keys this attempt writes
+will not be restored`, and never gates the job. A snapshot file that is not valid JSON or not the
+shape the runner writes is never trusted: a release restores nothing from it, and the next claim
+moves it to `<hash>.json.unreadable-<ms>`, takes a fresh snapshot and logs
+`git config: the git config snapshot <path> <cannot be read (...)|is malformed>; it was moved to
+<path> and a new snapshot was taken`. A runner killed mid-attempt cannot restore: the
+next claim of any runner, once the orphan sweep has failed the dead job's row, restores the keys
+of every snapshot whose holders are all dead and writes the lines in their jobs; a holder whose job
+cannot be read counts as live, so nothing is restored on a guess. Not covered: hooks written into
+`.git/hooks/`, `config.worktree` with `extensions.worktreeConfig`, attributes naming a driver
+configured before the claim, other keys git runs as a program (`core.sshCommand`,
+`credential.helper`, `alias.*`), and the `queue close` merger session.
 
 **Ownership and orphans.** A claim is one atomic `UPDATE` inside SQLite, so two
 runners never share a job and `queue.maxConcurrent` (no default: no ceiling) is, when set,
