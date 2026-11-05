@@ -572,6 +572,12 @@ function gateAnswer(job) {
   return [`retry it with: nightqueue queue retry ${jobRef(job.id)} --note "<your answer>"`];
 }
 
+// The restores of the shared git config the attempts of a job made, one indented line per key.
+function formatGitConfig(job) {
+  if (!Array.isArray(job.git_config) || job.git_config.length === 0) return [];
+  return ["git_config", ...job.git_config.map((line) => `  ${line}`)];
+}
+
 // The run's OWN notice, read fresh from its log, printed under its own line whenever it differs from the row's `notice_md`.
 function formatRunNotice(job) {
   if (!job.run_notice) return [];
@@ -638,7 +644,7 @@ function formatAttempts(job, nowMs = Date.now()) {
 }
 
 // The fields the detail view prints as blocks of their own instead of one key/value line.
-const DETAIL_BLOCK_KEYS = new Set(["notice_md", "run_notice", "close", "live", "attempts_log"]);
+const DETAIL_BLOCK_KEYS = new Set(["notice_md", "run_notice", "close", "live", "attempts_log", "git_config"]);
 
 const DURATION_KEYS = new Set(["active_s", "wall_s"]);
 
@@ -668,6 +674,7 @@ function formatDetail(job) {
     ...formatLive(job),
     ...(suggestion ? [suggestion] : []),
     ...formatNotice(job),
+    ...formatGitConfig(job),
     ...formatRunNotice(job),
   ];
   return at < 0 ? [...fields, ...extra] : [...fields.slice(0, at + 1), ...extra, ...fields.slice(at + 1)];

@@ -221,6 +221,16 @@ export function jobWorktreePath(projectId, slug, env = process.env) {
   return join(worktreesDir(env), projectId, slug);
 }
 
+// Directory of the snapshots of the driver keys of every shared `.git/config` a running job holds, one file per git common dir.
+export function gitConfigGuardDir(env = process.env) {
+  return join(homeDir(env), "git-config");
+}
+
+// Directory where `doctor --fix` saves what an orphaned worktree held before removing it, one sub-directory per project id.
+export function salvageDir(env = process.env) {
+  return join(homeDir(env), "salvage");
+}
+
 // Directory where an operator before the generalist operator left its QA worktrees, one sub-directory per project id; only doctor still reads it.
 export function legacyOperatorQaDir(env = process.env) {
   return join(homeDir(env), "operator-qa");

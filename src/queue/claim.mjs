@@ -6,6 +6,7 @@ import { BASH_TIMEOUT_DEFAULT, LEASE_HEARTBEAT_DEFAULT_S } from "../config/schem
 import { loadConfig } from "../config/store.mjs";
 import { openStore } from "../store/open.mjs";
 import { orphanNoticeTail } from "./classify.mjs";
+import { recoverSharedConfigs } from "./git-config-guard.mjs";
 import { replayAllPendingWrites } from "./pending-writes.mjs";
 import { liveRunnersReport } from "./registry.mjs";
 import { claimRunState, rowClaimOrdinal } from "./resume.mjs";
@@ -99,10 +100,21 @@ async function replayThenSweep(store, env) {
   await store.jobs.sweepOrphans({ liveWorkerImpl: liveLocalWorker, orphanTailImpl });
 }
 
+// Restores the shared git configs a killed runner left planted, once the sweep failed its rows; a failure is one stderr line and never stops a claim.
+async function recoverGitConfigs(store, env) {
+  try {
+    const errors = await recoverSharedConfigs({ store, env });
+    for (const reason of errors) process.stderr.write(`the shared git config could not be recovered: ${reason}\n`);
+  } catch (err) {
+    process.stderr.write(`the shared git config could not be recovered: ${String(err?.message ?? err).split("\n")[0]}\n`);
+  }
+}
+
 // Takes ownership of one job, never one of `excludeIds` when no job is named: replays the records runs queued while the database was unavailable, sweeps the orphans, then claims atomically inside the database.
 export async function acquire({ jobId = null, cap, excludeIds = [], env = process.env } = {}) {
   const store = openStore(env);
   await replayThenSweep(store, env);
+  await recoverGitConfigs(store, env);
   if (jobId === null && isPaused(env)) return { job: null, reason: "paused" };
   const worker = workerId();
   const job = jobId === null ? await store.jobs.claimNextJob({ worker, cap, excludeIds }) : await store.jobs.claimJobById(jobId, { worker, cap });

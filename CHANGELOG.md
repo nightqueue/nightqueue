@@ -8,6 +8,22 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **A job can no longer leave a git driver behind in the shared config.** At the first claim on a
+  checkout the runner snapshots the driver keys of its shared `.git/config`
+  (`filter.<name>.clean|smudge|process`, `diff.<name>.textconv|command`, `diff.external`,
+  `merge.<name>.driver`, `core.fsmonitor`, `core.hooksPath`, `include.path`,
+  `includeIf.<condition>.path`) into `<NIGHTQUEUE_HOME>/git-config/`, one snapshot per git common
+  dir shared by the claims that run beside it. Every attempt end (done, gate, failed, cancelled,
+  released, lost) removes the keys added since and restores the ones changed, with one
+  `git config: removed|restored <key> ...` line per key in the job log and in a new `git_config`
+  block of `queue status <id>` (and MCP `queue_status`). Keys present before the claim and every
+  other key stay. A runner killed mid-attempt is covered by the next claim of any runner, once the
+  sweep has failed the dead job, and so is a key a session process writes up to 10 minutes after
+  the last release. A snapshot file that is corrupt or misshapen restores nothing and is moved
+  aside by the next claim, which takes a fresh one. Known limit: a driver key you edit by hand in
+  the checkout (`core.hooksPath`, `git lfs install`) while a job of that checkout runs is reverted
+  at the next attempt end, because git records no author that would tell it from a planted value.
+  Make the edit while no job of the checkout runs.
 - **The orchestrator's model is routable per project and recorded per attempt.** `orchestrator` is a
   runtime-owned role of `project models` (`--set orchestrator=<opus|sonnet|haiku>`, `--unset
   orchestrator`) with no default: with no override the job argv is unchanged (no `--model`, the
@@ -76,6 +92,20 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
   environment of the operator (`nightqueue open`, `queue session`, studio terminals) and of every
   spawn with no job; the merger reuses it, now dropping the job home and Claude dir pins too. A job
   spawn still pins its own identity.
+
+- **`doctor --fix` saves, then removes, every orphan job worktree.** A directory under
+  `<NIGHTQUEUE_HOME>/worktrees/` no open job holds (closed and cancelled jobs hold nothing; an open
+  job holds the worktree its slug names even with its run state lost) is
+  saved under `<NIGHTQUEUE_HOME>/salvage/<project_id>/<dir>-<stamp>/` - `changes.patch` and
+  `untracked.tar.gz` (untracked files, ignored files outside a wholly ignored directory, dirty
+  submodules) for a registered worktree, `content.tar.gz` for one git does not register or
+  whose `.git` link stays broken after the repair - then removed with `git worktree remove
+  --force`, or deleted and `git worktree prune`d. The row names what was saved and where. Before,
+  only a worktree whose jobs were all closed or cancelled was removed (with no salvage) and an
+  orphan with content only got an `rm -rf` hint. A worktree an open job holds, one kept by
+  `queue retry --fresh`, one locked live or by hand and a detached HEAD with commits on no branch
+  are kept; a failed salvage removes nothing; an unreadable queue removes no worktree. No driver a
+  job planted runs during the salvage. Without `--fix` the listing is unchanged.
 
 - **Agent roles come from the pipeline manifest.** The manifest declares `agents` (`name`, `role`,
   `lessons`), and the `context_for_agent.agent` and `lesson_*` `target` enums are its roles in order,

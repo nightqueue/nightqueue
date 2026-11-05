@@ -438,7 +438,7 @@ nightqueue update --from . --no-install            # ...never run npm ci; the de
 nightqueue update --schema-only                    # internal: the database migration alone, run by update/setup from the installed runtime
 nightqueue doctor --json                           # check the host and the home, exit 1 on any failure
 nightqueue doctor --check-updates                  # ...and ask the registry for the newest version
-nightqueue doctor --fix                            # ...and git worktree repair the job worktrees whose checkout or home moved, and repair the database files
+nightqueue doctor --fix                            # ...and git worktree repair the job worktrees whose checkout or home moved, save then remove the orphan ones, and repair the database files
 nightqueue init                                    # set the host up and register the current repository
 nightqueue init ~/code/api --org acme --name api   # ...or an explicit path, org and name
 nightqueue init --no-embedding --no-path --no-gh   # ...answering every question up front
@@ -863,7 +863,7 @@ delete nothing in those cases and are refused inside a queue job. A deleted row 
 nightqueue doctor                  # one line per check: ok, warn or fail
 nightqueue doctor --json           # the same report, as the only thing on stdout
 nightqueue doctor --check-updates  # ...plus the newest version published in the registry
-nightqueue doctor --fix            # ...and git worktree repair the job worktrees whose checkout or home moved, remove the shm orphans and repair the database files
+nightqueue doctor --fix            # ...and git worktree repair the job worktrees whose checkout or home moved, save then remove the orphan ones, remove the shm orphans and repair the database files
 nightqueue doctor --db             # ...plus the database files, a quick_check and the jobs on disk the table lost
 ```
 
@@ -1012,7 +1012,8 @@ place that meets a sick database prints.
 
 Job worktrees live under the home, at `<NIGHTQUEUE_HOME>/worktrees/<project_id>/<slug>`, and
 an older nightqueue left them under `.claude/worktrees/` of each checkout; the diagnosis reads
-both places and writes nothing in either, except `git worktree repair` with `--fix` (the qa
+both places and, without `--fix`, writes nothing in either; `--fix` runs `git worktree repair`
+and removes the home orphans described below, never anything under `.claude/worktrees/` (the qa
 worktrees below have their own `--fix`). One row
 `worktree <project>/<dir>` is printed per directory that needs a word:
 
@@ -1026,7 +1027,8 @@ worktrees below have their own `--fix`). One row
   `git worktree repair <dir...>` per project from its checkout, then checks each link again:
   the row reads `repaired: git links it to <checkout> again` only when the link now holds, and
   otherwise stays a `warn` - git's reason, or `still not linked after git worktree repair` -
-  with the `git -C '<checkout>' worktree repair '<dir>'` command;
+  with the `git -C '<checkout>' worktree repair '<dir>'` command, unless no open job holds the
+  directory: then it is an orphan, archived, removed and pruned (below);
 - under the home, a directory holding a `.git` link when git cannot read its checkout at all:
   a `warn` `cannot check its link: git could not read <checkout>`, with no repair and no
   removal offered;
@@ -1049,6 +1051,38 @@ worktrees below have their own `--fix`). One row
     unlock '<dir>' && git -C '<checkout>' worktree remove '<dir>'`;
   - not registered in git and holding no `.git` link (orphaned): `rm -rf '<dir>'`; a directory
     that still holds a `.git` link is never offered `rm -rf`, but a `worktree repair` first.
+
+With `--fix`, a directory under `<NIGHTQUEUE_HOME>/worktrees/` no open job holds (every job but a
+`closed` or `cancelled` one holds the worktree its run recorded and the
+`<NIGHTQUEUE_HOME>/worktrees/<project_id>/<slug>` its slug names, so a job whose run state was lost
+still keeps its worktree) is an orphan: what it holds
+uncommitted is saved under `<NIGHTQUEUE_HOME>/salvage/<project_id>/<dir>-<stamp>/`, then it is
+removed. Spared, with the row of the listing above: a directory an open job holds, one
+`queue retry --fresh` kept, and one locked by a live pid or by hand. When the queue cannot be read,
+`--fix` removes no worktree at all and adds one `warn` row `worktrees` `the queue could not be read;
+--fix removed no worktree`. Every git command run in an orphan pins `core.fsmonitor=false`,
+`core.hooksPath=/dev/null` and empties every configured `filter.<name>.clean|smudge|process`
+(`required=false`), and its diff runs with `--no-textconv --no-ext-diff --ignore-submodules=all`,
+so a driver a job planted never runs:
+
+- registered in git: `changes.patch` (`git diff --binary HEAD`, apply it with `git apply` on its
+  branch) and `untracked.tar.gz` (the untracked files, the ignored files outside a wholly ignored
+  directory, so a local `.env` is saved and `node_modules/` is not, and every checked out
+  submodule whose own neutralized `git status` shows a change, archived whole), each written only
+  when not empty, plus `head.txt` (branch and
+  sha); then a lock left by a gone pid is lifted and `git worktree remove --force` runs. The branch
+  and its commits stay. The row is an `ok` `removed: orphan, no open job holds it; saved
+  <files> to <salvage dir>; branch <branch> kept`, or `removed: orphan, no open job holds it,
+  nothing uncommitted` with no salvage directory. A detached HEAD with commits no branch, tag or
+  remote reaches is kept: a `warn` `kept: ..., which a removal would drop` with the read-only
+  `git -C '<dir>' log --oneline HEAD --not --branches --tags --remotes`;
+- not registered in git, or its `.git` link still broken after the repair: `content.tar.gz` (every
+  entry but `.git`) when there is any, then the directory is removed and `git worktree prune` runs
+  from the checkout: an `ok` `removed and pruned: <not registered in git|its .git link is broken>,
+  no open job holds it; saved content.tar.gz to <salvage dir>` (or `, nothing in it besides its
+  .git link`). An empty directory is removed as before: `removed: left over, orphaned and empty`;
+- a salvage that fails removes nothing: a `warn` `kept: <reason>; partial salvage at <salvage
+  dir>` with `inspect '<dir>'`.
 
 A directory under `<NIGHTQUEUE_HOME>/worktrees/` named after an id no registered project with a
 checkout has (a project removed with `--purge` leaves it) is one `warn` row

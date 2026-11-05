@@ -13,6 +13,7 @@ import { openStore, openStoreReadOnly } from "../store/open.mjs";
 import { acquire, bashTimeoutS, concurrencyCap, gate, inheritUserEnvironment, isPaused, leaseHeartbeatMs, release, renew, resumeSessionEnabled, stillOwned } from "./claim.mjs";
 import { backoffMs, classifyJobResult, isRecordSettled, isTerminalRuntimeKill, nightqueueMcpUnreachable, transientFailureEvent, TRANSIENT_RESPAWNS } from "./classify.mjs";
 import { provenEditedPrUrls } from "./edit-proof.mjs";
+import { holdSharedConfig, releaseSharedConfig } from "./git-config-guard.mjs";
 import { BLOCK_CODES, preflight } from "./preflight.mjs";
 import { createStoreOutage, OUTAGE_STOPPED, waitNextPass } from "./store-outage.mjs";
 import { jobBranchName, prepareJobWorktree, worktreeSlotFree } from "./job-worktree.mjs";
@@ -1226,6 +1227,19 @@ function noteClaim(job, env) {
   if (written.status !== "written") appendJobLog(job.id, `the claim could not be recorded in the state of the run: ${written.reason}`, env);
 }
 
+// Runs the attempts of a job between a snapshot of the shared git config and its restore, so no driver key the attempt writes outlives it.
+async function runGuardedAttempts(job, checkout, attemptCtx) {
+  const hold = await holdSharedConfig({ job, checkout, store: attemptCtx.store, env: attemptCtx.env });
+  let slug = job.slug;
+  try {
+    const run = await runAttempts(job, attemptCtx);
+    slug = run?.facts?.slug ?? slug;
+    return run;
+  } finally {
+    await releaseSharedConfig({ hold, job, slug, env: attemptCtx.env });
+  }
+}
+
 // Runs one held job: what comes before the spawn, its attempts and the single write of the outcome.
 async function runHeldJob(claimed, ctx) {
   const { env } = ctx;
@@ -1234,7 +1248,7 @@ async function runHeldJob(claimed, ctx) {
   const { job, check, prepared } = ready;
   noteClaim(job, env);
   const promptFor = (slug) => promptOfSpawn(job, slug, env);
-  const run = await runAttempts(job, { ...ctx, cwd: prepared.path, sessionResumable: prepared.reused && !prepared.legacy, promptFor });
+  const run = await runGuardedAttempts(job, check.cwd, { ...ctx, cwd: prepared.path, sessionResumable: prepared.reused && !prepared.legacy, promptFor });
   if (run.lost) {
     noteOwnershipLost(job, env);
     await recordLateMeasures(job, run, ctx);

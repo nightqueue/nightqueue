@@ -10,6 +10,7 @@ import { pruneDeadRunners, writeRunnerRecord } from "../../src/queue/registry.mj
 import { DISABLED_BACKGROUND_ESCAPE_LINE } from "../../src/queue/runner.mjs";
 import { closedLine } from "../../src/queue/close-view.mjs";
 import { closeSuggestion, failedCoreSection, jobDetailView, liveBlock, prUrlsOf, queueView, truncationSuggestion, jobTitle } from "../../src/queue/view.mjs";
+import { recordGitConfigRestore } from "../../src/queue/run-state.mjs";
 import { KEPT_PREFIX } from "../../src/queue/worktree.mjs";
 import { withReadOnlyStore } from "../../src/store/open.mjs";
 import { ensureProject, makeHome, makeProject, seedClosedJob } from "../../test-support/memory.mjs";
@@ -429,4 +430,16 @@ test("queue_status jobs carry the title of their prompt, in the listing and in t
     assert.equal((await jobDetailView(store, brief, { env })).title, "prompt words");
     assert.equal((await jobDetailView(store, free, { env })).title, "free prompt words");
   });
+});
+
+test("jobDetailView carries every recorded git config restore as git_config, prefixed with its attempt, and omits it when there is none", async (t) => {
+  const env = makeHome(t, "view-git-config");
+  makeProject(t, env, "alpha");
+  const projectId = ensureProject(env, "alpha");
+  const id = addJob({ projectId, prompt: "fix the worker" }, env).id;
+  openDb(env).prepare("UPDATE jobs SET slug = 'run-git' WHERE id = ?").run(id);
+  assert.equal("git_config" in (await withReadOnlyStore(env, (store) => jobDetailView(store, id, { env }))), false);
+  recordGitConfigRestore({ projectId, slug: "run-git", ordinal: 2, lines: ["git config: removed filter.x.clean = \"x\" (written during the attempt)"], env });
+  const detail = await withReadOnlyStore(env, (store) => jobDetailView(store, id, { env }));
+  assert.deepEqual(detail.git_config, ["#2 git config: removed filter.x.clean = \"x\" (written during the attempt)"]);
 });
