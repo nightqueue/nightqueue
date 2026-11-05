@@ -6,10 +6,11 @@ import { easAccountStatus, runEasAsync } from "../host/eas.mjs";
 import { ghPrChecks, ghPrDetail, ghPrDiffNames, ghPrMerge, ghPrReady, ghPrRequiredChecks, ghRunRerun } from "../host/gh.mjs";
 import { runGitAsync } from "../host/git.mjs";
 import { runNpmAsync } from "../host/npm.mjs";
+import { CLOSE_WORKER_ENV } from "../config/job-home.mjs";
 import { loadConfig, loadSecrets } from "../config/store.mjs";
 import { runMerger } from "./merger-spawn.mjs";
 
-export const CLOSE_WORKER_ENV = "NIGHTQUEUE_CLOSE_WORKER";
+export { CLOSE_WORKER_ENV };
 const QUIET = { warn: () => {} };
 
 // Runs git with the close's abort signal wired into the child, never rejecting.

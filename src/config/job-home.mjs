@@ -8,6 +8,12 @@ export const JOB_HOME_ENV = "NIGHTQUEUE_JOB_HOME";
 // The claim the runner pinned on this child, `<attempt>:<worker>#<ordinal>`, so a record says which claim wrote it.
 export const JOB_CLAIM_ENV = "NIGHTQUEUE_JOB_CLAIM";
 
+// The Claude configuration directory the runner itself uses, pinned on every unattended child so a job can tell it from a temporary one.
+export const JOB_CLAUDE_DIR_ENV = "NIGHTQUEUE_JOB_CLAUDE_DIR";
+
+// The lease token of a detached close worker, set only on the worker the close starts.
+export const CLOSE_WORKER_ENV = "NIGHTQUEUE_CLOSE_WORKER";
+
 // The pin of a claim: its attempt and worker, then the ordinal of its `job_attempts` row when known, the one part a re-claim after a park never repeats.
 export function claimPin({ attempt, worker = null, ordinal = null }) {
   return `${attempt}:${worker ?? ""}${Number.isInteger(ordinal) ? `#${ordinal}` : ""}`;

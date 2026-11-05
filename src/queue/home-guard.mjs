@@ -1,12 +1,9 @@
 import { UserError } from "../config/errors.mjs";
-import { callerJobId, isRunnerHome, pinnedPath } from "../config/job-home.mjs";
+import { callerJobId, isRunnerHome, JOB_CLAUDE_DIR_ENV, pinnedPath } from "../config/job-home.mjs";
 import { claudeConfigDir } from "../host/paths.mjs";
 import { jobRef } from "../memory/refs.mjs";
 
-export { JOB_HOME_ENV } from "../config/job-home.mjs";
-
-// The Claude configuration directory the runner itself uses, pinned on every unattended child so a job can tell it from a temporary one.
-export const JOB_CLAUDE_DIR_ENV = "NIGHTQUEUE_JOB_CLAUDE_DIR";
+export { JOB_CLAUDE_DIR_ENV, JOB_HOME_ENV } from "../config/job-home.mjs";
 
 // Tells whether the write would land in the Claude configuration directory of the runner.
 function writesRunnerHost(env) {

@@ -1,13 +1,11 @@
 import { spawn } from "node:child_process";
 import { join, resolve } from "node:path";
-import { JOB_CLAIM_ENV } from "../config/job-home.mjs";
 import { logsDir } from "../config/paths.mjs";
 import { MERGER_DIR_ENV, MERGER_FILES_ENV } from "../hooks/merger-guard.mjs";
 import { mergerSettings } from "../host/settings.mjs";
-import { CLOSE_WORKER_ENV } from "./close-deps.mjs";
 import { MERGER_MODEL, MODEL_NAMES } from "./routing.mjs";
 import { compactStamp } from "./runner.mjs";
-import { profileArgs } from "./session-profile.mjs";
+import { profileArgs, withoutJobScope } from "./session-profile.mjs";
 import { pluginDir, spawnClaude } from "./spawn.mjs";
 import { extractResultText } from "./stream.mjs";
 
@@ -24,13 +22,9 @@ export function mergerArgs({ prompt, env = process.env, model }) {
   });
 }
 
-// The environment of the merger: the close's own, plus the fence its guard reads, without the job id nor the lease token.
+// The environment of the merger: the close's own without any job-scoped variable, plus the fence its guard reads.
 export function mergerEnv({ env = process.env, dir, files }) {
-  const own = { ...env, [MERGER_DIR_ENV]: dir, [MERGER_FILES_ENV]: JSON.stringify(files.map((file) => resolve(dir, file))) };
-  delete own.NIGHTQUEUE_JOB_ID;
-  delete own[JOB_CLAIM_ENV];
-  delete own[CLOSE_WORKER_ENV];
-  return own;
+  return { ...withoutJobScope(env), [MERGER_DIR_ENV]: dir, [MERGER_FILES_ENV]: JSON.stringify(files.map((file) => resolve(dir, file))) };
 }
 
 // The log path of one merger run, never named like a job log.

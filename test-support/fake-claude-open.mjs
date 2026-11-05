@@ -2,6 +2,7 @@
 import { appendFileSync } from "node:fs";
 
 const args = process.argv.slice(2);
+const JOB_SCOPED = ["NIGHTQUEUE_JOB_ID", "NIGHTQUEUE_JOB_HOME", "NIGHTQUEUE_JOB_CLAUDE_DIR", "NIGHTQUEUE_JOB_CLAIM", "NIGHTQUEUE_CLOSE_WORKER"];
 
 // Answers the `--help` probe, listing `--agent` unless the test asks for a CLI without it.
 function printHelp() {
@@ -25,6 +26,7 @@ function recordLaunch() {
     project: process.env.NIGHTQUEUE_PROJECT ?? null,
     operatorPid: process.env.NIGHTQUEUE_OPERATOR_PID ?? null,
     operatorSession: process.env.NIGHTQUEUE_OPERATOR_SESSION ?? null,
+    jobScoped: JOB_SCOPED.filter((key) => process.env[key] !== undefined),
   };
   appendFileSync(path, `${JSON.stringify(call)}\n`);
 }

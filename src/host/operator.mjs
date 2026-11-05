@@ -5,7 +5,7 @@ import { newId } from "../config/ids.mjs";
 import { registeredCheckouts } from "../memory/registry-access.mjs";
 import { PLUGIN_DIR_ENV } from "../queue/orchestrator-scope.mjs";
 import { OPERATOR_SESSION_ENV } from "../queue/operator-consent.mjs";
-import { profileArgs } from "../queue/session-profile.mjs";
+import { profileArgs, withoutJobScope } from "../queue/session-profile.mjs";
 import { CLAUDE_MISSING_MESSAGE, mcpConfigArg, pluginDir, resolveClaudeBin } from "../queue/spawn.mjs";
 import { isSessionIdSafe } from "../queue/stream.mjs";
 import { childExitCode } from "./child-exit.mjs";
@@ -96,7 +96,7 @@ export function operatorPrompt(value, usage) {
 // Environment of the operator session: the mode the guard reads, the launcher's pid, the session id its consents live under, the preselected project when one is, and the plugin copy its reads are scoped to.
 export function operatorEnv(env, { projectId = null, session = null } = {}) {
   return {
-    ...withoutOperatorSession(env),
+    ...withoutJobScope(withoutOperatorSession(env)),
     NIGHTQUEUE_MODE: "operator",
     NIGHTQUEUE_OPERATOR_PID: String(process.pid),
     ...(session ? { [OPERATOR_SESSION_ENV]: session } : {}),

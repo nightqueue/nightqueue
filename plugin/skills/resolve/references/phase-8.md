@@ -6,8 +6,9 @@ is the runtime's, never a delivery nor `run publish`.
 
 The command below owns the mechanics — staging, the commit, the branch name, the push and
 `gh pr create`; yours are the files, the message and the body.
-An interactive `/resolve` (no `NIGHTQUEUE_JOB_ID`) also follows `references/interactive-worktree.md`
-before step 2 and after the pull request exists.
+With no `NIGHTQUEUE_JOB_ID`, before step 2 show the user the branch, the commit message,
+`git diff --stat` and a status line (Do not repeat the report table here; Phase 9 prints it) and
+wait for the go; then add `--remove-worktree` to `run publish` (`WORKTREE REMOVED:`/`WORKTREE KEPT:`).
 
 Run `nightqueue run report --facts` first (outside a job, with `--project <project> --slug <slug>`):
 it records nothing; its `## Facts for the report` and the subagents' returns are this phase's material.
@@ -57,11 +58,10 @@ it records nothing; its `## Facts for the report` and the subagents' returns are
      with the `--extra`s of step 1. It checks the body BEFORE
      anything is committed, stages exactly the list and commits it
      ONCE (a retry answers `COMMITTED: <sha> (already committed)`), renames the branch to its final
-     name (a job's `worktree-<slug>` becomes `<commit type>/<slug>`, the type read from the commit
-     subject; an interactive `worktree-<type>+<slug>` becomes `<type>/<slug>`), pushes it and opens
+     name (`worktree-<slug>` becomes `<commit type>/<slug>`, the type read from the commit
+     subject), pushes it and opens
      the pull request, answering `CONVENTION:`, `COMMITTED: <sha> (<n> files)`, `BRANCH:`,
-     `PR: <url>` and `WORKTREE: <path>`. You never run `git add`, `git commit`, `git branch -m`,
-     `git push` or `gh pr create` by hand.
+     `PR: <url>` and `WORKTREE: <path>`. Never run any of that git/gh by hand.
    - `REFUSED: <path> (<reason>)` names a path the pipeline never commits and nothing was committed: `--extra` does not
      override it — drop that path (when it came from the artifact: `coder-fix` with `NOTE:` = drop it
      from `## Modified files`), call the command again and record the refusal as an ⚠️ open item of Phase 9.
@@ -72,8 +72,8 @@ it records nothing; its `## Facts for the report` and the subagents' returns are
      placeholder or a leftover `<...>` example) and nothing was pushed. Fix the body or evidence
      and retry; a `… wip commit` one is not yours (yours folds): never rewrite history, open item, no PR.
    - `run publish` records the delivery itself.
-   - If `gh` is not installed or could not open the pull request, the command says so with the
-     branch already pushed: inform it; the pull request is opened by hand.
+   - If `gh` is missing or failed, the command says so with the branch already pushed: inform it;
+     the pull request is opened by hand.
      A refused `--draft` opens a normal pull request; the report keeps the failures.
 
 3. **Cycle closing belongs to the runtime, not to this pipeline.** The pipeline ends at an open PR;

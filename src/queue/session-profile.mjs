@@ -1,3 +1,14 @@
+import { CLOSE_WORKER_ENV, JOB_CLAIM_ENV, JOB_CLAUDE_DIR_ENV, JOB_HOME_ENV } from "../config/job-home.mjs";
+
+export const JOB_SCOPED_ENV_KEYS = Object.freeze(["NIGHTQUEUE_JOB_ID", JOB_HOME_ENV, JOB_CLAUDE_DIR_ENV, JOB_CLAIM_ENV, CLOSE_WORKER_ENV]);
+
+// A copy of an environment without the variables that scope a process to one job, so no session that is not a job inherits them.
+export function withoutJobScope(env) {
+  const copy = { ...(env ?? {}) };
+  for (const key of JOB_SCOPED_ENV_KEYS) delete copy[key];
+  return copy;
+}
+
 const present = (value) => value !== null && value !== undefined;
 const flag = (name, value) => (present(value) ? [name, String(value)] : []);
 

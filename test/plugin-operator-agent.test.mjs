@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { OPERATOR_AGENT, OPERATOR_MODE_AGENT, operatorAgentPath, operatorArgs, operatorEnv } from "../src/host/operator.mjs";
 import { OPERATOR_CLI_COMMANDS, PIPELINE_AGENTS } from "../src/queue/operator-scope.mjs";
+import { JOB_SCOPED_ENV_KEYS } from "../src/queue/session-profile.mjs";
 import { pluginDir, resolveClaudeBin } from "../src/queue/spawn.mjs";
 import { phasePrompts } from "../test-support/skill-size.mjs";
 
@@ -142,6 +143,20 @@ test("live: every built-in the installed Claude Code hands the operator is guard
   const builtins = init.tools.filter((tool) => typeof tool === "string" && !tool.startsWith("mcp__"));
   const untriaged = builtins.filter((tool) => !OPERATOR_BUILTINS.includes(tool) && !disallowed.includes(tool));
   assert.deepEqual(untriaged, [], `Claude Code ${init.claude_code_version} hands the operator untriaged built-ins`);
+});
+
+test("the operator's environment drops every job-scoped variable it inherits", () => {
+  const env = operatorEnv({
+    PATH: "/bin",
+    NIGHTQUEUE_JOB_ID: "7",
+    NIGHTQUEUE_JOB_HOME: "/runner-home",
+    NIGHTQUEUE_JOB_CLAUDE_DIR: "/runner-claude",
+    NIGHTQUEUE_JOB_CLAIM: "1:w#1",
+    NIGHTQUEUE_CLOSE_WORKER: "close:x",
+  });
+  assert.equal(env.PATH, "/bin");
+  assert.equal(env.NIGHTQUEUE_MODE, "operator");
+  for (const key of JOB_SCOPED_ENV_KEYS) assert.equal(key in env, false, `${key} leaked into the operator session`);
 });
 
 test("the operator offers the reflect skill in its Reflect section, saving with `project`", () => {

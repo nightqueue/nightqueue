@@ -685,3 +685,8 @@ export async function prepareJobWorktree({ job, checkout, baseBranch, env = proc
     return failed(`the worktree could not be prepared: ${err?.message ?? String(err)}`);
   }
 }
+
+// Places the worktree of a run started outside any job exactly as a job's: same path, branch, base and record-first creation.
+export async function prepareRunWorktree({ projectId, slug, checkout, baseBranch, env = process.env, gitImpl = runGitAsync, log = () => {} } = {}) {
+  return await prepareJobWorktree({ job: { id: null, project_id: projectId, slug }, checkout, baseBranch, env, gitImpl, log });
+}

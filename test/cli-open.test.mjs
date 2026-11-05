@@ -134,6 +134,25 @@ test("an unregistered directory opens in the home with no project, a stale inher
   assert.equal(existsSync(home.callsPath), false);
 });
 
+test("`nightqueue open` launched from inside a job starts claude with every job-scoped variable removed", async (t) => {
+  const home = openHome(t, "open-job-scoped");
+  Object.assign(home.env, {
+    NIGHTQUEUE_JOB_ID: "7",
+    NIGHTQUEUE_JOB_HOME: join(home.base, "runner-home"),
+    NIGHTQUEUE_JOB_CLAUDE_DIR: join(home.base, "runner-claude"),
+    NIGHTQUEUE_JOB_CLAIM: "1:w#1",
+    NIGHTQUEUE_CLOSE_WORKER: "close:x",
+  });
+
+  const result = await runOpen(home.env, [], home.checkout);
+
+  assert.equal(result.code, 0, result.err.join("\n"));
+  const [call] = launches(home.callsPath);
+  assert.equal(call.jobId, null);
+  assert.deepEqual(call.jobScoped, [], "a job-scoped variable of the caller leaked into the operator session");
+  assert.equal(call.mode, "operator");
+});
+
 test("`--resume <session>` is passed through, and an unsafe session id is refused before claude starts", async (t) => {
   const home = openHome(t, "open-resume");
 

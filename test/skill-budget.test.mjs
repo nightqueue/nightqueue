@@ -17,12 +17,11 @@ import {
 } from "../test-support/skill-size.mjs";
 
 // Ratchet: lower these ceilings when the skill shrinks, never raise them to fit a change.
-const ALWAYS_LOADED_CEILING = 32650;
+const ALWAYS_LOADED_CEILING = 32639;
 const LAZY_CEILINGS = Object.freeze({
-  "phases.md": 13064,
-  "phase-8.md": 6853,
+  "phases.md": 13041,
+  "phase-8.md": 6827,
   "phase-9.md": 7725,
-  "interactive-worktree.md": 2895,
   "qa-phase.md": 3923,
   "pr-template.md": 8852,
   "commit-template.md": 2457,
@@ -42,7 +41,6 @@ const HOST_TERMS = /TaskCreate|bypassPermissions|isolation: worktree|EnterWorktr
 const AGENTS_DIR = join(SKILL_DIR, "..", "..", "agents");
 const SKILL_PATH = join(SKILL_DIR, "SKILL.md");
 const PHASES_PATH = join(SKILL_DIR, "references", "phases.md");
-const INTERACTIVE_PATH = join(SKILL_DIR, "references", "interactive-worktree.md");
 const MAIN_DIR = fileURLToPath(new URL("fixtures/skill-main/", import.meta.url));
 
 // Reads the text of one file of the plugin.
@@ -83,7 +81,7 @@ test(`a queued job reads at most ${Math.round(FIRST_LAUNCH_SHARE * 100)}% of mai
 
 test(`an interactive /resolve reads at most ${Math.round(FIRST_LAUNCH_SHARE * 100)}% of main's bytes before its first launch`, () => {
   const before = fileBytes(join(MAIN_DIR, "SKILL.md")) + fileBytes(join(MAIN_DIR, "interactive-worktree.md"));
-  const after = fileBytes(SKILL_PATH) + fileBytes(INTERACTIVE_PATH);
+  const after = fileBytes(SKILL_PATH);
   assert.ok(after / before <= FIRST_LAUNCH_SHARE, `${after} bytes against main's ${before}`);
 });
 

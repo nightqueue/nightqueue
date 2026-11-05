@@ -62,6 +62,21 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **An interactive `/resolve` gets its worktree from `run start`.** Outside a job, `run start` now
+  places the run's worktree like a job's (`<home>/worktrees/<project id>/<slug>` on
+  `worktree-<slug>`, from the same base), records it and answers `worktree`, `branch` and `baseRef`
+  read in it; a slug whose slot or run directory is taken moves to the next free one (`<slug>-2` to
+  `<slug>-9`), and a checkout with no commit keeps the run in place. Phase 0 is the same for both,
+  Phase 8 removes an interactive worktree with `run publish --remove-worktree`, and
+  `references/interactive-worktree.md` is gone.
+
+- **Sessions that are not a job inherit no job-scoped variable.** One list
+  (`JOB_SCOPED_ENV_KEYS` of the spawn profile: `NIGHTQUEUE_JOB_ID`, `NIGHTQUEUE_JOB_HOME`,
+  `NIGHTQUEUE_JOB_CLAUDE_DIR`, `NIGHTQUEUE_JOB_CLAIM`, `NIGHTQUEUE_CLOSE_WORKER`) is removed from the
+  environment of the operator (`nightqueue open`, `queue session`, studio terminals) and of every
+  spawn with no job; the merger reuses it, now dropping the job home and Claude dir pins too. A job
+  spawn still pins its own identity.
+
 - **Agent roles come from the pipeline manifest.** The manifest declares `agents` (`name`, `role`,
   `lessons`), and the `context_for_agent.agent` and `lesson_*` `target` enums are its roles in order,
   equal to today's, so the tool contract is unchanged. A role a manifest adds is accepted with no runtime

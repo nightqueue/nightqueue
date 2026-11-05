@@ -849,7 +849,11 @@ written out in their place. The orchestrator fills the `<…>` of every line up 
 `NOTE:` and copies every later line as written, so the agent-side placeholders of a Deliver survive.
 The filled block is the whole `prompt` of the `Agent` call; no other call is needed.
 A pipeline picks a model from the `models` that `nightqueue run start` answers: `subagent_type` and
-`model` are the block's `AGENT` and `MODEL`. `run start` also answers the values a block needs that
+`model` are the block's `AGENT` and `MODEL`. Outside a job, `run start` places the run's worktree
+like a job's (same path, `worktree-<slug>` branch and base), moves a slug whose worktree slot or run
+directory is taken to the next free one (`<slug>-2` to `<slug>-9`) — an empty run directory counts
+as taken, since it is the exclusive claim a runner or a concurrent start holds before writing —, resumes a run that recorded a
+phase under its own slug, and places none in a checkout with no commit; inside a job it reads the one the runner placed. `run start` also answers the values a block needs that
 only the run knows: `needsSlug`, `demoRepo`, `baseRef` (`HEAD` when none resolves), `pluginRoot` and
 `stages`. It keeps the `commit-message.txt` and `pr-body.md` of a run that recorded Phase 6 or 7, naming
 them in `drafts`, and deletes them otherwise, as a previous attempt's: the host refuses to overwrite an
@@ -882,8 +886,7 @@ reaches them as `## Facts for the report` of `nightqueue run report` (see the CL
 one index row per phase and `## Phase prompts`. What only
 one phase or one mode needs lives in `references/` and is read when the phase says so:
 `phases.md` (the artifact gate, the records, what each `NEXT:` action asks and the judgment it leaves,
-once after the first subagent returns, or first on a resume), `interactive-worktree.md` (Phase 0
-and Phase 8 outside a job; the only file of the skill that names the host's worktree tool),
+once after the first subagent returns, or first on a resume),
 `qa-phase.md` (Phase 5), `phase-8.md` with `commit-template.md` and `pr-template.md`
 (Phase 8), `phase-9.md` (Phase 9: the report, the `## Notice` writing rules and the icon
 tables). `report.md` is rendered by `nightqueue run report` and never read by the

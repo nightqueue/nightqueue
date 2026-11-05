@@ -48,19 +48,18 @@ Read at Phase 0 when the prompt carries `RUN FACTS`. The block holds records, ne
 
 1. **Run resume.** When the prompt carries a `RUN FACTS` block, read `references/phases.md`, then `## Resume`, and follow it before step 2.
 
-2. **Start the run**: run `nightqueue run start` (outside a job add
+2. **Start the run** once: `nightqueue run start` (outside a job add
    `--project <project> --slug <a short kebab-case slug of the request>`). It answers one JSON
-   line: `runDir` (the `RUN_DIR` from here on; a `RUN_DIR:` line of the prompt is the same),
-   `project`, `worktree`, `branch`, `models`, `needsSlug`, `demoRepo`, `baseRef`, `pluginRoot`,
-   `stages`, `drafts`, `phases`, `prTemplate`, `commitConvention`, `commitTemplate`.
+   line; its `runDir` is the `RUN_DIR` from here on (a `RUN_DIR:` line of the prompt is the same).
+   Outside a job a taken slug moves to the next free one: later `--slug`s are the answered `slug`.
+   `promptFile` null → Write the request verbatim (plus any gate answer) to `<RUN_DIR>/00-prompt.md`.
 
 3. **One pipeline:** every run executes Phases 1–10; nothing in the request changes the phases.
 
-4. **The worktree.** Inside a queued job the runtime created it at `$PWD` on branch
-   `worktree-<slug>` and recorded it: never create another and never record `branch`/`worktree`.
-   Run `git status --short` once: anything listed is a previous attempt's work — keep it. Pass
-   `$PWD` to every phase. No `NIGHTQUEUE_JOB_ID` (an interactive `/resolve`) → read
-   `references/interactive-worktree.md` now.
+4. **The worktree.** The `worktree` `run start` answered (in a job, `$PWD`), placed and recorded
+   by the runtime: never create another and never record `branch`/`worktree`. Run
+   `git status --short` in it once: anything listed is a previous attempt's work — keep it.
+   Pass that path to every phase; `worktree` null → the project's checkout, said in one line.
 
 5. Every block carries the shell rule through `<LANE>`; every test command a phase runs goes under an explicit `timeout`.
 

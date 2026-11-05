@@ -47,7 +47,7 @@ It always runs (bug/error and feature/refactor): it turns the request into the B
 critiques it before exploration, architecture and implementation are spent.
 
 Launch **1 triager**: the `triager` block. It reads the request from `<RUN_DIR>/00-prompt.md`,
-which `run start` writes inside a job (outside one, `references/interactive-worktree.md`). It writes
+which `run start` writes (`promptFile`; null → Phase 0 wrote it). It writes
 `01-triage.md`; run `nightqueue run check 01` (the artifact gate, step 6) and do its `NEXT:`.
 
 `recorded: slug … (renamed …; run dir <path>)` → use that path as `RUN_DIR` from here on.

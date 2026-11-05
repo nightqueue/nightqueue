@@ -7,6 +7,8 @@ import { test } from "node:test";
 import { newId } from "../../src/config/ids.mjs";
 import { jobLogPath, homeDir, runDir } from "../../src/config/paths.mjs";
 import { isSafeSegment } from "../../src/queue/resume.mjs";
+import { slugVariants } from "../../src/queue/run-slug.mjs";
+import { JOB_SCOPED_ENV_KEYS } from "../../src/queue/session-profile.mjs";
 import { UserError } from "../../src/config/errors.mjs";
 import { OPERATOR_NOTE_LIMIT } from "../../src/memory/jobs.mjs";
 import { claudeConfigDir, packageRoot } from "../../src/host/paths.mjs";
@@ -359,6 +361,7 @@ test("the slug candidates are the base, its numbered variants and the job id, ev
   assert.equal(candidates.length, 10);
   assert.equal(candidates[1], `${"a".repeat(78)}-2`);
   for (const slug of candidates) assert.equal(isSafeSegment(slug), true, `\`${slug}\` is not a safe segment`);
+  assert.deepEqual(slugCandidates(long, 7), [...slugVariants(long), "job-7"], "a job's candidates are the run's variants plus its id");
 });
 
 test("a run with records carries the facts block, data only, after the request", () => {
@@ -658,6 +661,37 @@ test("a wait ceiling inherited from the parent environment is always overridden 
   await spawnClaude({ prompt: "p", timeoutS: 30, logPath: jobLogPath(103, env), env, spawnImpl });
 
   assert.equal(capturedEnv.CLAUDE_CODE_PRINT_BG_WAIT_CEILING_MS, "0", "an inherited wait ceiling leaked into the child");
+});
+
+test("a job spawn pins a fresh job identity while a spawn with no job inherits no job-scoped variable", async (t) => {
+  const env = {
+    ...makeHome(t, "spawn-job-scope"),
+    NIGHTQUEUE_JOB_ID: "3",
+    NIGHTQUEUE_JOB_HOME: "/stale-home",
+    NIGHTQUEUE_JOB_CLAUDE_DIR: "/stale-claude",
+    NIGHTQUEUE_JOB_CLAIM: "1:w#1",
+    NIGHTQUEUE_CLOSE_WORKER: "close:x",
+  };
+  const capturedEnvs = [];
+  const spawnImpl = (bin, args, opts) => {
+    capturedEnvs.push(opts.env);
+    return fakeChild();
+  };
+
+  await spawnClaude({ prompt: "p", timeoutS: 30, logPath: jobLogPath(110, env), env, jobId: 9, attempt: 2, spawnImpl });
+  await spawnClaude({ prompt: "p", timeoutS: 30, logPath: jobLogPath(111, env), env, jobId: null, spawnImpl });
+
+  const [job, none] = capturedEnvs;
+  assert.equal(job.NIGHTQUEUE_JOB_ID, "9");
+  assert.equal(job.NIGHTQUEUE_JOB_HOME, homeDir(env));
+  assert.equal(job.NIGHTQUEUE_JOB_CLAUDE_DIR, claudeConfigDir(env));
+  assert.match(job.NIGHTQUEUE_JOB_CLAIM, /^2:/);
+  for (const key of JOB_SCOPED_ENV_KEYS) assert.equal(key in none, false, `${key} leaked into a spawn with no job`);
+});
+
+test("every job-scoped variable the MCP server of a job is pinned with is in the job-scoped list", () => {
+  const pinned = Object.keys(JSON.parse(mcpConfigArg(ENV, 3, { claim: { attempt: 1 } })).mcpServers.nightqueue.env);
+  assert.deepEqual(pinned.filter((key) => key !== "NIGHTQUEUE_HOME" && !JOB_SCOPED_ENV_KEYS.includes(key)), []);
 });
 
 test("the child env disables background tasks and carries the configured bash timeouts in ms, whether or not the job carries an identity", async (t) => {

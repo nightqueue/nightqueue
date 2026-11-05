@@ -20,7 +20,7 @@ import { PLUGIN_DIR_ENV } from "./orchestrator-scope.mjs";
 import { DEFAULT_PIPELINE, PIPELINE_NAME_RE } from "./pipeline-package.mjs";
 import { isRunPath, isSafeSegment } from "./resume.mjs";
 import { MODEL_NAMES } from "./routing.mjs";
-import { profileArgs } from "./session-profile.mjs";
+import { profileArgs, withoutJobScope } from "./session-profile.mjs";
 import { isSessionIdSafe } from "./stream.mjs";
 export { provisionalSlug, slugCandidates } from "./run-slug.mjs";
 import { jobRef } from "../memory/refs.mjs";
@@ -378,7 +378,7 @@ export function spawnClaude({
     const args = argsOverride ?? buildArgs({ prompt, resumeSessionId, env, jobId, claim, inheritUserEnvironment, model });
     const runtimeEnv = { ...BG_WAIT_CEILING_ENV, ...noOrphanTaskEnv(bashTimeoutS), [PLUGIN_DIR_ENV]: pluginDir() };
     const baseEnv = withoutOperatorSession(env);
-    const childEnv = jobId === null ? { ...baseEnv, ...runtimeEnv } : { ...baseEnv, ...jobIdentity(env, jobId, claim), ...runtimeEnv };
+    const childEnv = jobId === null ? { ...withoutJobScope(baseEnv), ...runtimeEnv } : { ...baseEnv, ...jobIdentity(env, jobId, claim), ...runtimeEnv };
     const child = spawnImpl(resolved?.bin ?? "claude", args, { cwd, env: childEnv, stdio: SPAWN_STDIO });
     if (Number.isInteger(child?.pid)) holdJobAwakeImpl({ pid: child.pid, env });
     const chunks = [];
