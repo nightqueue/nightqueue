@@ -85,9 +85,10 @@ What a runtime has to provide, and what it can rely on:
     `agents` entry, with the project's override, and is left out when there is none (the delivery
     entry). `run report`, `run log`, the reflector timeline and the runner's telemetry read these
     fields and never the job log's lanes; an older entry without them reads as `-` and NULL.
-  - `checks{<NN>: {line, ok, completed, digest, at}, lastFailure?{check, line, at}}`:
+  - `checks{<NN>: {line, ok, completed, digest, at, seq}, lastFailure?{check, line, at}}`:
     `nightqueue run check` alone, the memo of the last check of each artifact (its first
-    notable line and the sha256 of the text it read); it supplies the reason of a re-run and
+    notable line, the sha256 of the text it read, and `seq`, one past the highest `seq` any memo holds,
+    which orders the checks without reading their time); it supplies the reason of a re-run and
     keeps a check run twice on the same text from appending twice. It is not a `run_set` field.
   - `termination{phase, reason, at, by?, claim?}`: `run_terminate`, and `nightqueue run check 01` on a
     terminal triage verdict (`by: "runtime"`). A termination speaks only for the claim that wrote
@@ -143,7 +144,7 @@ What a runtime has to provide, and what it can rely on:
     attempt that paused; the row's `operator_note` stays NULL. A note on a job with no run directory
     yet stays on the row. A state.json that cannot be read is never overwritten: the note stays on
     the row. It is not a `run_set` field.
-  - `lastClaim{attempt, phases, answers}`, `previousClaim`: the runner, at each claim that reaches a
+  - `lastClaim{attempt, phases, answers, decisions}`, `previousClaim`: the runner, at each claim that reaches a
     spawn, what it found recorded. Another attempt moves `lastClaim` to `previousClaim`, and an
     attempt given back and claimed again replaces `lastClaim` alone. `queue retry` reads them for the
     progress guard (see [Queue](queue.md)). Neither is a `run_set` field.
@@ -159,16 +160,28 @@ What a runtime has to provide, and what it can rely on:
     QA after it is its first launch. It is not a `run_set` field.
   - `pipelineLoops{attempt, missing, fix, architect, retriage, stage, lastNext, fixPending, invalidated,
     pendingQaRow, counted}`: `nightqueue run check` only, what `NEXT:` needs to remember between checks: a
-    cache of one attempt. On another attempt, or with no cache, the fix, architect, re-triage and fix-owed
-    counts are replayed from `phases[]`, which a plain retry keeps and `--fresh` starts over; the fix and
-    re-triage counts never drop below the previous attempt's cache, which counts what no entry records (a
-    fix lane that left 04 unchanged, a re-triage before its triage entry). `missing`
+    cache of one attempt and nothing else; another attempt's cache is never read. On another attempt, or
+    with no cache, the loops come from the last `decisions[]` record (every `invalidated` item any record
+    holds, and `lastNext` only when that record's check was not run since on another text and no other
+    memo was written at or after it: by `seq` when both carry one, else by an ISO `at`, and a memo whose
+    order cannot be read counts as after), else,
+    for a run with no record, the fix, architect, re-triage and fix-owed counts are replayed from
+    `phases[]`. `missing` starts again on each attempt and
     counts per call, because a relaunch that wrote nothing must reach the still-missing row; a counted row
     (`counted{key, digest, next, unchanged}`, by check and digest) repeats on the same text and burns no
     iteration. The same text after another check ran relaunches that row's lane once, with a `note=` that
     its artifact did not change since the last check; a second unchanged text answers `publish --draft`, and
     on a stage row its `remaining=` names the stages not run. A late write is set aside like any other. It
     is not a `run_set` field.
+  - `decisions[{check, digest, next, loops, at, seq, claim}]`: `nightqueue run check` only, the loop decisions
+    a retry replays. One record is appended when `NEXT:` launches `coder-fix`, `architect` or `triager`, or
+    when a loop fact it keeps changes (`fix`, `architect`, `retriage`, `stage`, `fixPending`, `invalidated`,
+    `pendingQaRow`, `counted`); `loops` is the snapshot of those facts after the step. It is written with
+    `pipelineLoops` in one write, append-only and stamped with the claim, and a re-run of a counted row on
+    the same text appends none. A plain retry keeps it and `--fresh` starts over with the run directory. A
+    late write is set aside like any other. `seq` is the one the record's own check memo takes, and a
+    held count, stage or action outside its range or off the `NEXT:` grammar reads as none. It is not a
+    `run_set` field, and the retry stall guard counts a new record as progress.
   - `prTemplate{source, path?, headings, at}`: `nightqueue run pr` (both the
     `--template` query and the publishing call), the template the body is checked
     against - `repo` with its path, or `nightqueue`.
@@ -985,6 +998,7 @@ PR-body duties.
 | --- | --- | --- |
 | `writeRunFile` | `name`, `text`, `line?`, `what?`, `locked?` | writes a bare file name of the run directory; a `locked` write happens before any other effect, inside the lock span, and a failure stops the check |
 | `recordFields` | `fields`, `line?`, `dropPhases?`, `afterRecord?` | writes fields the manifest's `recordable` declares and the runtime has one writer for: `type`, `commitType`, `qaMode`, `termination` (`{phase, reason}`, or `{phase, clear: true}` to lift it, printing its line only when one was lifted), `slug` (the runtime prints its own `renamed from` or `kept:` line), `pipelineLoops` (prints nothing on success) |
+| `recordDecision` | `decision` (`{check, digest, next, loops}`), `loops` | needs `decisions` in the manifest's `recordable`; appends the decision to `decisions[]` and writes `pipelineLoops` in one write, and prints nothing on success |
 | `saveIndex` | `text` | saves the explore map into the project index and prints the `index:` line |
 | `say` | `line`, `afterRecord?` | prints one line |
 
@@ -1586,8 +1600,8 @@ studio do not apply it. `queue_retry` and `queue retry` refuse a `closed` job
 (``J-<n> is closed: a finished job does not resume; queue a new one``) and a `done` job whose
 pull request gh reads as merged (``J-<n> is done and its pull request is merged: …``), before
 writing anything; an unreadable answer or `NIGHTQUEUE_NO_PR_CHECK=1` proves no merge. With neither
-`note` nor `fresh` they also refuse a run whose last two attempts recorded no new phase and no new
-answer (``J-<n> made no progress in its last two attempts (same <n> phases, no new answer): answer
+`note` nor `fresh` they also refuse a run whose last two attempts recorded no new phase, no new
+answer and no new loop decision (``J-<n> made no progress in its last two attempts (same <n> phases, no new answer): answer
 with a note, or retry --fresh``), nothing written.
 
 **The commit message follows the template in effect.** `run start` answers

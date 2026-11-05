@@ -32,7 +32,7 @@ export const RUN_OUTCOME_STATUSES = ["done", "gate", "no_change"];
 export const NO_CHANGE_OUTCOME = "no_change";
 
 // The keys of `state.json` only the runtime writes: no pipeline writer may set them, whole or by a dotted name.
-export const RUNTIME_ONLY_KEYS = ["job", "gateQuestionDigest", "gateAnswersSeen", "draftPrUrl", "qaMode", "pipeline", "freshRetry", "pipelineUnpinned", "answers", "lastClaim", "previousClaim", "pipelineLoops"];
+export const RUNTIME_ONLY_KEYS = ["job", "gateQuestionDigest", "gateAnswersSeen", "draftPrUrl", "qaMode", "pipeline", "freshRetry", "pipelineUnpinned", "answers", "lastClaim", "previousClaim", "pipelineLoops", "decisions"];
 
 // The QA modes a triage may decide.
 const QA_MODES = ["skip", "lite", "full"];
@@ -206,7 +206,7 @@ function record({ projectId, slug, env, change, runtimeFields = {}, claim = null
       if (late !== null && (claim?.over === true || newerClaimHolds(state[late.kind], claim))) {
         return setLateRecordAside({ projectId, slug, env, state, claim, late, at });
       }
-      const runtime = typeof runtimeFields === "function" ? runtimeFields(state) : runtimeFields;
+      const runtime = typeof runtimeFields === "function" ? runtimeFields(state, at) : runtimeFields;
       return saveRunState({ projectId, slug, env, state: { ...withRuntimeFields({ ...state, ...withoutRuntimeKeys(change(state, at)) }, runtime), updatedAt: at } });
     },
   });
@@ -255,9 +255,15 @@ function checkMemos(state) {
   return isStateObject(state?.checks) ? state.checks : {};
 }
 
+// The sequence number the next check memo takes: one past the highest a memo holds, so the order of checks never rests on their time.
+function nextCheckSeq(checks) {
+  const held = Object.values(checks).map((memo) => memo?.seq).filter((seq) => Number.isSafeInteger(seq) && seq >= 0);
+  return held.length === 0 ? 1 : Math.max(...held) + 1;
+}
+
 // The memos after one check: its own entry replaced and, when it did not pass, the run's last failure.
 function memosWithCheck(checks, check, memo, at) {
-  const entry = { line: String(memo.line ?? ""), ok: memo.ok === true, completed: memo.completed === true, digest: String(memo.digest ?? ""), at };
+  const entry = { line: String(memo.line ?? ""), ok: memo.ok === true, completed: memo.completed === true, digest: String(memo.digest ?? ""), at, seq: nextCheckSeq(checks) };
   return { ...checks, [check]: entry, ...(entry.ok ? {} : { lastFailure: { check, line: entry.line, at } }) };
 }
 
@@ -344,6 +350,26 @@ export function recordRuntimeField({ projectId, slug, name, value, dropPhases = 
   const refused = RECORDED_RUNTIME_FIELDS[name](value);
   if (refused !== null) return refused;
   return record({ projectId, slug, env, claim, late: { kind: "fields", record: { [name]: value } }, change: (state) => droppedPhases(state, dropPhases), runtimeFields: { [name]: value } });
+}
+
+// The decision records a state holds, as a list.
+function decisionEntries(state) {
+  return Array.isArray(state?.decisions) ? state.decisions : [];
+}
+
+// Appends a pipeline's loop decision, stamped with its time and claim, and writes the loops cache in the same write; a claim that is over sets both aside.
+export function recordLoopDecision({ projectId, slug, decision, loops, claim = null, env = process.env } = {}) {
+  if (!isStateObject(decision)) return kept("a loop decision must be an object");
+  if (!isStateObject(loops)) return kept("the pipeline loops must be an object");
+  return record({
+    projectId,
+    slug,
+    env,
+    claim,
+    late: { kind: "decision", record: decision },
+    change: () => ({}),
+    runtimeFields: (state, at) => ({ pipelineLoops: loops, decisions: [...decisionEntries(state), withStamp({ ...decision, at, seq: nextCheckSeq(checkMemos(state)) }, claim)] }),
+  });
 }
 
 // Records that the run stopped on purpose at a phase; a retry consumes the stop, and where the run continues is the pipeline's call.
@@ -629,9 +655,9 @@ export function recordAdoptedWorktree({ projectId, slug, branch, worktree, env =
   return record({ projectId, slug, env, change: () => ({ ...held, adoptedWorktree: held.worktree }) });
 }
 
-// What one claim found recorded: how many phases and how many answers, under its attempt.
+// What one claim found recorded: how many phases, answers and loop decisions, under its attempt.
 function claimCounts(state, attempt) {
-  return { attempt, phases: phaseEntries(state).length, answers: answerEntries(state).length };
+  return { attempt, phases: phaseEntries(state).length, answers: answerEntries(state).length, decisions: decisionEntries(state).length };
 }
 
 // Records what this claim found: another attempt moves the last claim to `previousClaim`, and the same attempt claimed again replaces it, so an attempt given back never counts twice. A run with no readable state is not created by a claim.
@@ -654,7 +680,7 @@ export function recordClaim({ projectId, slug, attempt, env = process.env } = {}
 export function stalledPhases(state) {
   if (!isStateObject(state)) return null;
   const now = claimCounts(state);
-  const foundNow = (claim) => isStateObject(claim) && claim.phases === now.phases && claim.answers === now.answers;
+  const foundNow = (claim) => isStateObject(claim) && claim.phases === now.phases && claim.answers === now.answers && (claim.decisions ?? 0) === now.decisions;
   return foundNow(state.lastClaim) && foundNow(state.previousClaim) ? now.phases : null;
 }
 

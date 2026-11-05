@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { UserError } from "../config/errors.mjs";
 import { writeFileAtomic } from "../config/store.mjs";
 import { adoptRunSlug } from "../queue/run-slug.mjs";
-import { clearTermination, recordCheck, recordRunFields, recordRuntimeField, recordTermination, RUNTIME_AUTHOR } from "../queue/run-state.mjs";
+import { clearTermination, recordCheck, recordLoopDecision, recordRunFields, recordRuntimeField, recordTermination, RUNTIME_AUTHOR } from "../queue/run-state.mjs";
 import { openStore } from "../store/open.mjs";
 import { saveIndexFromText } from "./index-save.mjs";
 import { worktreeOf } from "./run-context.mjs";
@@ -76,6 +76,11 @@ function loopsLines({ value }, { run, ctx }) {
   return writtenLines(recordRuntimeField({ projectId: run.projectId, slug: run.slug, name: "pipelineLoops", value, claim: run.claim, env: ctx.env }), null);
 }
 
+// The pipeline's loop decision and its loops in one write, set aside when the claim is over; nothing prints on success.
+function decisionLines({ decision, loops }, { run, ctx }) {
+  return writtenLines(recordLoopDecision({ projectId: run.projectId, slug: run.slug, decision, loops, claim: run.claim, env: ctx.env }), null);
+}
+
 // A termination lifted or recorded: lifting prints its line only when one was lifted.
 function terminationLines({ value, line }, { run, ctx }) {
   const target = { projectId: run.projectId, slug: run.slug, phase: value.phase, env: ctx.env };
@@ -111,6 +116,7 @@ async function effectLines(effect, exec) {
   if (effect.kind === "say") return [effect.line];
   if (effect.kind === "saveIndex") return await indexLines(effect, exec);
   if (effect.kind === "recordFields") return await fieldsLines(effect, exec);
+  if (effect.kind === "recordDecision") return decisionLines(effect, exec);
   return effect.locked === true ? [] : plainWriteLines(effect, exec);
 }
 

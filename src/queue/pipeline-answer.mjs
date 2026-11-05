@@ -4,7 +4,7 @@ import { phaseIdsOf } from "./pipeline-package.mjs";
 // The fields the runtime has a writer for: a manifest declares which of them its pipeline records.
 export const RUNTIME_FIELDS = Object.freeze(["type", "commitType", "qaMode", "termination", "slug", "pipelineLoops"]);
 
-const EFFECT_KINDS = Object.freeze(["writeRunFile", "recordFields", "saveIndex", "say"]);
+const EFFECT_KINDS = Object.freeze(["writeRunFile", "recordFields", "recordDecision", "saveIndex", "say"]);
 
 // The closed grammar of a `next` action: what the runtime can tell the orchestrator to do.
 const NEXT_RE = /^(?:launch (\S+)(?: stage=\d+)?(?: note=\S.*)?|terminate \S.*|gate \S.*|publish(?: --draft)?(?: remaining=\S.*)?|report|check (\S+))$/;
@@ -32,11 +32,25 @@ function fieldsDefect(effect, manifest) {
   return undeclared === undefined ? null : `field \`${undeclared}\` is not recordable`;
 }
 
+// Whether a value is a plain object.
+function isPlainObject(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+// What is wrong with a `recordDecision` effect, or null.
+function decisionDefect(effect, manifest) {
+  if (!Array.isArray(manifest.recordable) || !manifest.recordable.includes("decisions")) return "`decisions` is not recordable";
+  const { decision } = effect;
+  if (!isPlainObject(decision) || typeof decision.check !== "string" || typeof decision.next !== "string") return "recordDecision has no decision";
+  return isPlainObject(effect.loops) ? null : "recordDecision has no loops";
+}
+
 // What is wrong with one effect, or null.
 function effectDefect(effect, manifest) {
   if (effect === null || typeof effect !== "object" || !EFFECT_KINDS.includes(effect.kind)) return `unknown effect \`${String(effect?.kind)}\``;
   if (effect.kind === "writeRunFile") return writeDefect(effect);
   if (effect.kind === "recordFields") return fieldsDefect(effect, manifest);
+  if (effect.kind === "recordDecision") return decisionDefect(effect, manifest);
   if (effect.kind === "saveIndex") return typeof effect.text === "string" ? null : "saveIndex has no text";
   return typeof effect.line === "string" ? null : "say has no line";
 }
@@ -58,7 +72,7 @@ function memoDefect(memo) {
 }
 
 // What is wrong with an answer's `next` action, or null: one line of the grammar, launching a target and checking a phase the manifest declares.
-function nextDefect(next, manifest) {
+export function nextDefect(next, manifest) {
   if (typeof next !== "string" || next.includes("\n")) return "the answer has no one-line `next`";
   const match = NEXT_RE.exec(next);
   if (match === null) return `\`next\` \`${next}\` is off the grammar`;

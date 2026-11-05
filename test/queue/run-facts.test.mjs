@@ -126,7 +126,7 @@ test("a first claim prints no facts block, and recording it leaves the pipeline 
   await runJob(home);
   assert.equal(promptOfSpawn(home, 0).includes("RUN FACTS"), false);
   const state = readRunState(runOf(home));
-  assert.deepEqual(state.lastClaim, { attempt: 1, phases: 0, answers: 0 });
+  assert.deepEqual(state.lastClaim, { attempt: 1, phases: 0, answers: 0, decisions: 0 });
   assert.equal(state.previousClaim, undefined);
 });
 
@@ -363,13 +363,16 @@ test("the guard counts the claims: another attempt shifts the last one, the same
   assert.equal(stalledPhases(readRunState(target)), null);
 
   assert.equal(recordClaim({ ...target, attempt: 2 }).status, "written");
-  assert.deepEqual(readRunState(target).previousClaim, { attempt: 1, phases: 0, answers: 0 });
+  assert.deepEqual(readRunState(target).previousClaim, { attempt: 1, phases: 0, answers: 0, decisions: 0 });
   assert.equal(stalledPhases(readRunState(target)), 0);
 
   const withWip = { ...readRunState(target), wip: { commit: "abcdef1234", short: "abcdef1", files: ["a.mjs"] } };
   assert.equal(stalledPhases(withWip), 0, "a wip commit counted as progress");
   assert.equal(stalledPhases({ ...withWip, answers: [{ text: "go" }] }), null, "a new answer did not count");
   assert.equal(stalledPhases({ ...withWip, phases: [{ phase: "triage" }] }), null, "a new phase did not count");
+  assert.equal(stalledPhases({ ...withWip, decisions: [{ check: "06", next: "launch coder-fix note=iteration 1: a", loops: { fix: 1 } }] }), null, "a new loop decision did not count");
+  const legacyClaims = { ...withWip, lastClaim: { attempt: 2, phases: 0, answers: 0 }, previousClaim: { attempt: 1, phases: 0, answers: 0 } };
+  assert.equal(stalledPhases(legacyClaims), 0, "a claim recorded before decisions were counted read as progress");
   for (const held of [null, undefined, [], "text"]) assert.equal(stalledPhases(held), null);
 });
 

@@ -73,8 +73,9 @@ function evaluated({ phase, stage, state, files }) {
   return { result: evaluateCheck({ check: phase, stage, texts, state }), repaired: null, writes: [] };
 }
 
-// The write of the loops a check changed, placed before the effects so a renamed run dir cannot lose it.
-function loopEffects(loops, state) {
+// The write of the loops a check changed, with the decision record in the same write when there is one, placed before the effects so a renamed run dir cannot lose it.
+function loopEffects(loops, state, decision) {
+  if (decision !== null) return [{ kind: "recordDecision", decision, loops }];
   return JSON.stringify(loops) === JSON.stringify(state?.pipelineLoops ?? null) ? [] : [{ kind: "recordFields", fields: { pipelineLoops: loops } }];
 }
 
@@ -83,6 +84,6 @@ export function check({ phase, stage, state, files, run }) {
   const { result, repaired, writes } = evaluated({ phase, stage, state, files });
   const [first, ...rest] = result.lines;
   const { record, memo, effects } = answerParts({ check: phase, stage, result, state, run });
-  const { action, loops } = nextOf({ result, repaired, state, memo, plan: files.read(MANIFEST.gateArtifact) });
-  return { lines: [first, ...(repaired ? [repaired] : []), ...rest], script: result.script, record, memo, effects: [...writes, ...loopEffects(loops, state), ...effects], next: action };
+  const { action, loops, decision } = nextOf({ result, repaired, state, memo, plan: files.read(MANIFEST.gateArtifact) });
+  return { lines: [first, ...(repaired ? [repaired] : []), ...rest], script: result.script, record, memo, effects: [...writes, ...loopEffects(loops, state, decision), ...effects], next: action };
 }
