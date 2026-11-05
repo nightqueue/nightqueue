@@ -36,7 +36,7 @@ import {
   retryJob,
 } from "../../src/memory/jobs.mjs";
 import { logPipelineRun } from "../../src/memory/runs.mjs";
-import { ensureProject, makeHome, makeProject, projectIdOf, seedClosedJob } from "../../test-support/memory.mjs";
+import { ensureProject, makeHome, makeProject, projectIdOf, seedClosedJob, storedJob } from "../../test-support/memory.mjs";
 
 const WORKER = "host:1000";
 const OTHER_WORKER = "host:2000";
@@ -359,9 +359,9 @@ test("cancel accepts a pending job and an orphan, and refuses a live run without
   const running = enqueue(env);
   claimJobById(running, { worker: WORKER, cap: CAP }, env);
 
-  const before = getJob(running, env);
+  const before = storedJob(running, env);
   assert.throws(() => cancelJob(running, { reason: "changed my mind" }, env), /is running with a live lease/);
-  assert.deepEqual(getJob(running, env), before, "the refused cancel wrote to the row");
+  assert.deepEqual(storedJob(running, env), before, "the refused cancel wrote to the row");
 
   assert.equal(cancelJob(pending, { reason: "no longer needed" }, env).status, "cancelled");
   assert.equal(getJob(pending, env).operator_note, "no longer needed");
@@ -410,9 +410,9 @@ test("cancelRunningJob writes nothing to a row another worker owns or that is no
   finishJob(gate, { worker: WORKER, status: "gate", result: { status: "gate", prUrl: null } }, env);
 
   for (const id of [otherOwner, pending, done, gate]) {
-    const before = getJob(id, env);
+    const before = storedJob(id, env);
     assert.equal(cancelRunningJob(id, { worker: WORKER, reason: "too late" }, env), null);
-    assert.deepEqual(getJob(id, env), before, `the refused compare-and-set wrote to a ${before.status} job`);
+    assert.deepEqual(storedJob(id, env), before, `the refused compare-and-set wrote to a ${before.job.status} job`);
   }
 });
 
@@ -575,9 +575,9 @@ test("retry accepts a failed and a cancelled job without a note, and refuses eve
   assert.throws(() => retryJob(done, { note: "again" }, env), /cannot be retried from status `done`/);
   const running = enqueue(env);
   claimJobById(running, { worker: WORKER, cap: CAP }, env);
-  const before = getJob(running, env);
+  const before = storedJob(running, env);
   assert.throws(() => retryJob(running, { note: "again" }, env), /is running with a live lease/);
-  assert.deepEqual(getJob(running, env), before);
+  assert.deepEqual(storedJob(running, env), before);
   assert.throws(() => retryJob(9999, { note: "again" }, env), /unknown job `9999`/);
   assert.throws(() => retryJob(0, { note: "again" }, env), /positive integer job id/);
 });

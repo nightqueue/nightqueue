@@ -14,6 +14,7 @@ import { makeHome } from "../test-support/memory.mjs";
 const CLI = fileURLToPath(new URL("../bin/nightqueue.mjs", import.meta.url));
 const DB_MODULE_URL = pathToFileURL(fileURLToPath(new URL("../src/memory/db.mjs", import.meta.url))).href;
 const WITNESS_TIMEOUT_MS = 15000;
+const CHILD_HANG_BOUND_MS = 60000;
 
 // The registration as it is on disk right now, or null while there is none.
 function readRecord(env, pid) {
@@ -38,7 +39,7 @@ async function waitForWitness(env, child) {
 
 // Runs a real `nightqueue doctor --json` as its own process against the given home, and returns the `db shm` check.
 function realDoctorDbShmLine(env) {
-  const result = spawnSync(process.execPath, [CLI, "doctor", "--json"], { env, encoding: "utf8", timeout: 10000 });
+  const result = spawnSync(process.execPath, [CLI, "doctor", "--json"], { env, encoding: "utf8", timeout: CHILD_HANG_BOUND_MS });
   assert.equal(result.error, undefined, `doctor did not run: ${result.error}`);
   const parsed = JSON.parse(result.stdout);
   const line = parsed.checks.find((entry) => entry.name === "db shm");
@@ -50,7 +51,7 @@ function realDoctorDbShmLine(env) {
 // invocation touching the same home would.
 function realThirdPartyCheckpoint(env) {
   const code = `import(${JSON.stringify(DB_MODULE_URL)}).then(({ openDb }) => { openDb(process.env).prepare("PRAGMA wal_checkpoint(TRUNCATE)").get(); process.exit(0); }).catch((err) => { console.error(err); process.exit(1); });`;
-  const result = spawnSync(process.execPath, ["-e", code], { env, encoding: "utf8", timeout: 10000 });
+  const result = spawnSync(process.execPath, ["-e", code], { env, encoding: "utf8", timeout: CHILD_HANG_BOUND_MS });
   assert.equal(result.status, 0, `the checkpoint process failed: ${result.stderr}`);
 }
 

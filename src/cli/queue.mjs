@@ -35,6 +35,7 @@ import { worktreeLine } from "../queue/close.mjs";
 import { cancelJobAndWorktree } from "../queue/cancel.mjs";
 import { refuseDependentPrompt } from "../queue/dependent-prompt.mjs";
 import { closeMerged, CLOSE_MERGED_DEADLINE_MS } from "../queue/close-merged.mjs";
+import { ghReadTimeoutMs } from "../host/gh.mjs";
 import { runMaintenance } from "../queue/maintenance.mjs";
 import { jobIdOfPrUrl } from "../queue/pr-lookup.mjs";
 import { createPrStateCache } from "../queue/pr-state.mjs";
@@ -982,7 +983,7 @@ async function printStatus(argv, ctx) {
 async function primePrStates(prStates, urls, env) {
   let timer = null;
   const deadline = new Promise((resolve) => {
-    timer = setTimeout(resolve, PR_PRIME_DEADLINE_MS);
+    timer = setTimeout(resolve, ghReadTimeoutMs(env, PR_PRIME_DEADLINE_MS));
   });
   try {
     await Promise.race([prStates.refresh(urls, env), deadline]);

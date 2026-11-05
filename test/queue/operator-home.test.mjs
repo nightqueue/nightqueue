@@ -4,11 +4,13 @@ import { basename, join } from "node:path";
 import { test } from "node:test";
 import { newId } from "../../src/config/ids.mjs";
 import { dbPath, homeDir, secretsPath } from "../../src/config/paths.mjs";
+import { GUARD_PR_VIEW_TIMEOUT_MS } from "../../src/host/gh.mjs";
 import { operatorDecision } from "../../src/hooks/operator-guard.mjs";
 import { acquireClose, addJob, cancelJob, claimJobById, finishJob, retryJob } from "../../src/memory/jobs.mjs";
 import { registeredCheckouts } from "../../src/memory/registry-access.mjs";
 import { consentBash, neverBashReason } from "../../src/queue/operator-bands.mjs";
 import { recordConsent } from "../../src/queue/operator-consent.mjs";
+import { overridePrBudgetMs } from "../../src/queue/operator-pr-budget.mjs";
 import { WORKTREE_READ_SPELLING, homeEntry, homeOwner, homeSegment } from "../../src/queue/operator-home.mjs";
 import { saveRunState } from "../../src/queue/resume.mjs";
 import { isolatedHostVars } from "../../test-support/host.mjs";
@@ -20,9 +22,11 @@ const HARDENED_WORDS = HARDENED.split(" ");
 const READ_HARDENED = /never \(a worktree under the nightqueue home is read only hardened.*core\.fsmonitor=false -c core\.hooksPath=\/dev\/null/;
 const GREP_UNHARDENED = /never \(`git grep` runs only hardened and with no lazy fetch.*--no-lazy-fetch grep \[--cached\] <options>/;
 const WORKTREE_CD_NEVER = /never \(a worktree under the nightqueue home is read only through `git -C <worktree>`, never after a `cd` into it: `git -C <worktree> -c core\.fsmonitor=false/;
+const STATE_READ_BUDGET_MS = 60000;
 
 // A home at `~/.nightqueue` of its own user home, one registered checkout, one run dir and one worktree of a project.
 function homeFixture(t) {
+  t.after(overridePrBudgetMs(STATE_READ_BUDGET_MS));
   const env = makeHome(t, "operator-home");
   const base = makeDir(t, "operator-home-host");
   Object.assign(env, { HOME: join(base, "user"), CLAUDE_CONFIG_DIR: join(base, "claude") });
@@ -409,6 +413,7 @@ test("a done job's run dir and worktree stay never while its pull request is not
 
 test("a done job's pull request that is not on GitHub or does not answer in time holds its entries, and one with no pull request does not", (t) => {
   const { env, home, alphaId } = sessionFixture(t);
+  t.after(overridePrBudgetMs(GUARD_PR_VIEW_TIMEOUT_MS));
   const foreign = seedDoneJob(env, { slug: "foreign", prUrl: "https://gitlab.com/acme/api/-/merge_requests/7" });
   const slow = seedDoneJob(env, { slug: "slow", prUrl: "https://github.com/acme/api/pull/8" });
   seedDoneJob(env, { slug: "unchanged", prUrl: null });

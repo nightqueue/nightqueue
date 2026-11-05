@@ -1,10 +1,25 @@
 import { GUARD_PR_VIEW_TIMEOUT_MS, ghPrStatesSync } from "../host/gh.mjs";
 
 let active = null;
+let budgetMs = GUARD_PR_VIEW_TIMEOUT_MS;
 
 // A fresh gh budget: one deadline every pull request read under it shares, and the states already read.
 function newBudget() {
-  return { deadline: Date.now() + GUARD_PR_VIEW_TIMEOUT_MS, states: new Map() };
+  return { deadline: Date.now() + budgetMs, states: new Map() };
+}
+
+// The length of the next gh budget, in ms.
+export function prBudgetMs() {
+  return budgetMs;
+}
+
+// Tests only: sets the length of every later gh budget of this process and answers the function that puts the real 3 s back.
+export function overridePrBudgetMs(ms) {
+  if (!(Number.isFinite(ms) && ms > 0)) throw new Error(`overridePrBudgetMs expects a finite number of ms above 0, got ${ms}`);
+  budgetMs = ms;
+  return () => {
+    budgetMs = GUARD_PR_VIEW_TIMEOUT_MS;
+  };
 }
 
 // Runs one guard decision under one gh budget (the one already running, if any), so each pull request is read once and all of them within 3 s.

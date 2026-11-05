@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { foldStream, formatBytes, groupLanes, looksLikeMarkdown } from "../../studio/src/lib/log-tree.ts";
+import { threadCpuMs } from "../../test-support/cpu-time.mjs";
 
 const FOLD_BUDGET_MS = 200;
 
@@ -230,10 +231,10 @@ function largeStream() {
 
 test("folding twenty thousand events stays well inside a render frame budget", () => {
   const events = largeStream();
-  const started = performance.now();
+  const started = threadCpuMs();
   const stream = foldStream(events, context({ ended: true, status: "done", attempts: [attemptRow(1)] }));
   const grouped = groupLanes(stream.rows, { ended: true });
-  const spent = performance.now() - started;
+  const spent = threadCpuMs() - started;
   assert.ok(grouped.length < stream.rows.length);
-  assert.ok(spent < FOLD_BUDGET_MS, `the fold took ${spent.toFixed(1)} ms`);
+  assert.ok(spent < FOLD_BUDGET_MS, `the fold took ${spent.toFixed(1)} ms of CPU`);
 });

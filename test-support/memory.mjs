@@ -24,6 +24,7 @@ const OWN_ENV_KEYS = [
   "NIGHTQUEUE_JOB_CLAIM",
   "NIGHTQUEUE_NO_UPDATE_CHECK",
   "NIGHTQUEUE_NO_PR_CHECK",
+  "NIGHTQUEUE_GH_READ_TIMEOUT_MS",
 ];
 
 const finishedDirs = new Set();
@@ -181,6 +182,14 @@ export function mergedChecklist(prNumber = 7) {
     steps: { preflight: { status: "done", note: "seeded", at }, merge: { status: "done", note: "seeded", at }, settle: { status: "done", note: "seeded", at } },
     data: { prNumber, merged: true, mergeSha: SEED_MERGE_SHA, noticeLine: `Closed: PR #${prNumber} merged as abc1234 on 2026-09-21` },
   };
+}
+
+// The stored rows of a job and of its attempts, without the values getJob derives from the current second (a running attempt's elapsed_s, end_epoch).
+export function storedJob(id, env) {
+  const db = openDb(env);
+  const job = db.prepare("SELECT * FROM jobs WHERE id = ?").get(id);
+  if (!job) throw new Error(`storedJob: no job #${id}`);
+  return { job, attempts: db.prepare("SELECT * FROM job_attempts WHERE job_id = ? ORDER BY attempt").all(id) };
 }
 
 // Seeds a job that ended `done` with a pull request, through the real store writes, and answers its id.

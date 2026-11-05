@@ -15,7 +15,7 @@ import { addJob, claimJobById, getJob, parkJob } from "../../src/memory/jobs.mjs
 import { DB_USER_VERSION } from "../../src/memory/schema.mjs";
 import { clockLabel } from "../../src/queue/hints.mjs";
 import { writeRunnerRecord } from "../../src/queue/registry.mjs";
-import { assertIsolatedEnv, isolatedHostVars } from "../../test-support/host.mjs";
+import { assertIsolatedEnv, GH_READ_HANG_BOUND_MS, GH_READS_HANG_BOUND_ONLY, isolatedHostVars } from "../../test-support/host.mjs";
 import { ensureProject, makeDir, makeHome, makeProject, projectIdOf, seedClosedJob, seedLegacyV8Home } from "../../test-support/memory.mjs";
 import { FAKE_CLAUDE } from "../../test-support/queue-fake.mjs";
 import * as registry from "../../src/memory/registry.mjs";
@@ -1135,9 +1135,9 @@ function prViewCalls(env) {
   return readFileSync(log, "utf8").split("\n").filter(Boolean).map((line) => JSON.parse(line)).filter((call) => call[0] === "pr");
 }
 
-// Asks queue_status until the pull request of its first job reads `state`, within five seconds, and returns that answer.
+// Asks queue_status until the pull request of its first job reads `state`, the gh read hang bound at most, and returns that answer.
 async function pollPrState(client, state) {
-  const deadline = Date.now() + 5000;
+  const deadline = Date.now() + GH_READ_HANG_BOUND_MS;
   for (;;) {
     const answer = payloadOf(await client.callTool({ name: "queue_status", arguments: {} }));
     if (answer.jobs[0]?.pr_state === state || Date.now() > deadline) return answer;
@@ -1148,7 +1148,7 @@ async function pollPrState(client, state) {
 test("queue_status never writes a delivered job whose pull request is merged, and asks gh from inside a job too without writing", async (t) => {
   const base = makeQueueHome(t, "mcp-queue-merged");
   deliver(base, addJob({ projectId: ensureProject(base, "alpha"), prompt: "fix the worker" }, base).id);
-  const env = { ...base, ...isolatedHostVars(makeDir(t, "mcp-queue-merged-host")), NIGHTQUEUE_FAKE_GH_PR_STATE: "MERGED", NIGHTQUEUE_FAKE_GH_PR_SHA: MERGE_SHA };
+  const env = { ...base, ...isolatedHostVars(makeDir(t, "mcp-queue-merged-host")), ...GH_READS_HANG_BOUND_ONLY, NIGHTQUEUE_FAKE_GH_PR_STATE: "MERGED", NIGHTQUEUE_FAKE_GH_PR_SHA: MERGE_SHA };
   delete env.NIGHTQUEUE_NO_PR_CHECK;
 
   const client = await connect(t, env);
@@ -1341,6 +1341,28 @@ test("a backlog parked by a rate limit is what queue_status says, instead of ask
   assert.equal(mixed.hint, "0 runners online - pending jobs will wait until `nightqueue queue run` starts one", "a job that could be claimed right now was held back by the park of another one");
 });
 
+const RUNNER_EXIT_HANG_BOUND_MS = 60000;
+
+// Tells whether a process with this pid still exists.
+function pidAlive(pid) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return err?.code === "EPERM";
+  }
+}
+
+// Waits until the detached runner a test started has exited, so its home is never removed while the runner still writes there.
+async function awaitRunnerExit(pid) {
+  if (!Number.isInteger(pid)) return;
+  const deadline = Date.now() + RUNNER_EXIT_HANG_BOUND_MS;
+  while (pidAlive(pid)) {
+    if (Date.now() > deadline) throw new Error(`the detached runner ${pid} was still alive ${RUNNER_EXIT_HANG_BOUND_MS} ms after its test`);
+    await new Promise((done) => setTimeout(done, 50));
+  }
+}
+
 test("queue_run comes back at once with the log of the detached runner, inside this home", async (t) => {
   const env = makeQueueHome(t, "mcp-queue-run");
   const client = await connect(t, env);
@@ -1355,6 +1377,7 @@ test("queue_run comes back at once with the log of the detached runner, inside t
 
   rmSync(queuePausedPath(env), { force: true });
   const started = payloadOf(await client.callTool({ name: "queue_run", arguments: { job_id: null } }));
+  t.after(() => awaitRunnerExit(started.pid));
 
   assert.equal(started.ok, true);
   assert.equal(Number.isInteger(started.pid), true, `no pid: ${JSON.stringify(started)}`);
@@ -1415,6 +1438,7 @@ test("queue_run starts a runner even while another one is live, and queue_status
   const client = await connect(t, env);
 
   const started = payloadOf(await client.callTool({ name: "queue_run", arguments: { job_id: null } }));
+  t.after(() => awaitRunnerExit(started.pid));
 
   assert.equal(started.started, true, `a start was refused while another runner was live: ${JSON.stringify(started)}`);
   assert.equal(Number.isInteger(started.pid), true);

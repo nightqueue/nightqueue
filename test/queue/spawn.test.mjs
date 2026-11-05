@@ -496,10 +496,21 @@ test("the idle window is the idle timeout with nothing pending, and past the Bas
   assert.equal(idleWindowS({ ...base, pending: true, bashTimeoutS: { max: 60 }, marginS: 30 }), 1200, "a Bash bound below the idle timeout shortened the window");
 });
 
+// An onLine that moves the mocked timers forward once, the moment the child has printed the given pending tool.
+function tickOnPendingTool(t, toolId, ms) {
+  let ticked = false;
+  return (line) => {
+    if (ticked || !line.includes(`"id":"${toolId}"`)) return;
+    ticked = true;
+    t.mock.timers.tick(ms);
+  };
+}
+
 test("a silent Bash call still pending past the idle timeout is not killed as idle", async (t) => {
   const { env } = makeSpawnHome(t, "spawn-pending-main", [{ stdout: pendingBash("toolu_long"), holdMs: 1200, tail: bashResult("toolu_long"), exitCode: 0 }]);
+  t.mock.timers.enable({ apis: ["setTimeout"] });
 
-  const result = await spawnClaude({ prompt: "run it", timeoutS: 30, idleTimeoutS: 0.4, bashTimeoutS: { default: 0.5, max: 1 }, pendingMarginS: 0.5, logPath: jobLogPath(1, env), env });
+  const result = await spawnClaude({ prompt: "run it", timeoutS: 30, idleTimeoutS: 0.4, bashTimeoutS: { default: 0.5, max: 1 }, pendingMarginS: 0.5, logPath: jobLogPath(1, env), env, onLine: tickOnPendingTool(t, "toolu_long", 1000) });
 
   assert.deepEqual({ exitCode: result.exitCode, idleTimedOut: result.idleTimedOut, timedOut: result.timedOut, killNote: result.killNote }, { exitCode: 0, idleTimedOut: false, timedOut: false, killNote: null });
 });
@@ -514,8 +525,9 @@ test("a subagent's silent tool call alone keeps the idle timer from firing", asy
 
 test("a tool pending past the Bash ceiling plus the margin is killed, and the log names the tool bound", async (t) => {
   const { env } = makeSpawnHome(t, "spawn-pending-bound", [{ stdout: pendingBash("toolu_hung"), holdMs: 4000, exitCode: 0 }]);
+  t.mock.timers.enable({ apis: ["setTimeout"] });
 
-  const result = await spawnClaude({ prompt: "run it", timeoutS: 30, idleTimeoutS: 0.2, bashTimeoutS: { default: 0.2, max: 0.3 }, pendingMarginS: 0.2, logPath: jobLogPath(1, env), env });
+  const result = await spawnClaude({ prompt: "run it", timeoutS: 30, idleTimeoutS: 0.2, bashTimeoutS: { default: 0.2, max: 0.3 }, pendingMarginS: 0.2, logPath: jobLogPath(1, env), env, onLine: tickOnPendingTool(t, "toolu_hung", 500) });
 
   assert.equal(result.idleTimedOut, true, "the hung tool was left running");
   assert.match(result.killNote, /1 tool\(s\) pending \(oldest Bash, past the 0\.5 s tool bound\)/);
@@ -533,8 +545,9 @@ test("a pending tool killed by an idle timeout wider than the tool bound is logg
 
 test("the total timeout still ends a run whose tool is pending, and says so in the log", async (t) => {
   const { env } = makeSpawnHome(t, "spawn-pending-total", [{ stdout: pendingBash("toolu_total"), holdMs: 4000, exitCode: 0 }]);
+  t.mock.timers.enable({ apis: ["setTimeout"] });
 
-  const result = await spawnClaude({ prompt: "run it", timeoutS: 0.6, idleTimeoutS: 0.2, bashTimeoutS: { default: 30, max: 30 }, logPath: jobLogPath(1, env), env });
+  const result = await spawnClaude({ prompt: "run it", timeoutS: 0.6, idleTimeoutS: 0.2, bashTimeoutS: { default: 30, max: 30 }, logPath: jobLogPath(1, env), env, onLine: tickOnPendingTool(t, "toolu_total", 600) });
 
   assert.deepEqual({ timedOut: result.timedOut, idleTimedOut: result.idleTimedOut }, { timedOut: true, idleTimedOut: false });
   assert.match(readFileSync(jobLogPath(1, env), "utf8"), /^=== timeout kill: total budget of 0\.6 s spent @ \S+ ===$/m);

@@ -5,7 +5,7 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { openDb } from "../../src/memory/db.mjs";
 import { acquireClose, addJob, claimJobById, finishJob, getJob, reclassifyJob, repairJobFromWitness, settleClose } from "../../src/memory/jobs.mjs";
-import { ensureProject, makeHome, makeProject, mergedChecklist, seedDoneJob } from "../../test-support/memory.mjs";
+import { ensureProject, makeHome, makeProject, mergedChecklist, seedDoneJob, storedJob } from "../../test-support/memory.mjs";
 
 const SRC = fileURLToPath(new URL("../../src", import.meta.url));
 const WORKER = "host:1";
@@ -41,10 +41,10 @@ function sourceFiles(dir) {
 test("the generic status writers refuse `closed` by name and leave the row as it was", (t) => {
   const env = invariantHome(t, "invariant-writers");
   const running = runningJob(env);
-  const before = getJob(running, env);
+  const before = storedJob(running, env);
   assert.throws(() => finishJob(running, { worker: WORKER, status: "closed", prUrl: PR_URL }, env), PIPELINE_ONLY);
   assert.throws(() => repairJobFromWitness(running, { status: "closed", prUrl: PR_URL }, env), PIPELINE_ONLY);
-  assert.deepEqual(getJob(running, env), before);
+  assert.deepEqual(storedJob(running, env), before);
 
   const failed = runningJob(env);
   finishJob(failed, { worker: WORKER, status: "failed", prUrl: PR_URL }, env);

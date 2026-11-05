@@ -14,6 +14,8 @@ const CHECKOUT_ROOT = fileURLToPath(new URL("../", import.meta.url));
 export const FAKE_GH_TOKEN = "gh-fake-token-do-not-print";
 export const FAKE_GH_LOGIN = "octocat";
 export const FAKE_GH_PR_URL = "https://github.com/octocat/hello-world/pull/7";
+export const GH_READ_HANG_BOUND_MS = 60000;
+export const GH_READS_HANG_BOUND_ONLY = { NIGHTQUEUE_GH_READ_TIMEOUT_MS: String(GH_READ_HANG_BOUND_MS) };
 
 const OWN_ENV_KEYS = [
   "NIGHTQUEUE_HOME",
@@ -27,6 +29,7 @@ const OWN_ENV_KEYS = [
   "NIGHTQUEUE_FAKE_CLAUDE_LOG",
   "NIGHTQUEUE_FAKE_CLAUDE_EXIT",
   "NIGHTQUEUE_GH_BIN",
+  "NIGHTQUEUE_GH_READ_TIMEOUT_MS",
   "NIGHTQUEUE_FAKE_GH_LOG",
   "NIGHTQUEUE_FAKE_GH_STATE",
   "NIGHTQUEUE_FAKE_GH_TOKEN",

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { jobRecalls, LESSONS_HEADING, MEMORY_HEADING } from "../../src/queue/recalls.mjs";
+import { loopStallProbe } from "../../test-support/cpu-time.mjs";
 import { agentToolUseEvent, attemptMarker, taskStartedEvent, toolResultEvent, toolUseEvent } from "../../test-support/streams.mjs";
 
 const LESSON = "mcp__nightqueue__lesson_recall";
@@ -324,14 +325,9 @@ test("a log of tens of megabytes is scanned without stalling the event loop, eve
   const pair = `${logOf([toolUseEvent({ name: LESSON, id: "r1", input: { query: "x".repeat(200) } }), toolResultEvent({ toolUseId: "r1", content: "y".repeat(600) })])}\n`;
   const copies = Math.ceil((48 * 1024 * 1024) / pair.length);
   const log = `${attemptMarker(1)}\n${pair.repeat(copies)}`;
-  let last = performance.now();
-  let worstGap = 0;
-  const timer = setInterval(() => {
-    worstGap = Math.max(worstGap, performance.now() - last);
-    last = performance.now();
-  }, 10);
+  const stopProbe = loopStallProbe();
   const recalls = await jobRecalls(log);
-  clearInterval(timer);
+  const worstGap = stopProbe();
   assert.equal(recalls.length, copies);
   assert.ok(worstGap < 150, `the event loop stalled ${Math.round(worstGap)} ms while the log was scanned`);
 });

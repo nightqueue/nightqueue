@@ -693,7 +693,8 @@ closed job that had a worktree, `status` `removed` or `kept`) next to `closed`, 
 what has not answered by then prints `unknown`, and the gh still running is stopped; `--follow` never waits for gh - it asks after drawing a
 frame and picks the answer up on a later one - and the MCP `queue_status` answers from
 its cache and asks gh after answering. `NIGHTQUEUE_NO_PR_CHECK=1` switches every gh call
-of this off.
+of this off. `NIGHTQUEUE_GH_READ_TIMEOUT_MS` (a finite number above 0) replaces the 5 s of
+each `gh pr view`/`gh pr list` read and of the one-shot's overall deadline, for a slow machine.
 
 `queue cancel` moves a job into `cancelled` (from `pending`, `gate`, an orphan, `done` or
 `failed`), and `queue retry` moves it back to `pending` (from `gate`,

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { accessSync, constants, existsSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { accessSync, constants, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, sep } from "node:path";
 import { test } from "node:test";
@@ -120,13 +120,13 @@ test("a record with no RUN_DIR in the prompt fails loudly instead of writing not
 });
 
 test("a record refuses a run directory outside the system temp dir", (t) => {
-  const outside = join(process.cwd(), "tmp", "seam-outside");
   // A checkout copied under the temp dir (the close's throwaway run of the suite) has no path outside it to try.
   if (realpathSync(process.cwd()).startsWith(realpathSync(tmpdir()) + sep)) {
     t.skip("the checkout itself is under the system temp dir");
     return;
   }
-  mkdirSync(outside, { recursive: true });
+  mkdirSync(join(process.cwd(), "tmp"), { recursive: true });
+  const outside = mkdtempSync(join(process.cwd(), "tmp", "seam-outside-"));
   t.after(() => spawnSync("rm", ["-rf", outside]));
 
   const played = playFake(t, "seam-outside", { prompt: `RUN_DIR: ${outside}`, attempt: { runState: recordedGate() } });

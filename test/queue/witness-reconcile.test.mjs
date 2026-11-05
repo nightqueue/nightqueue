@@ -14,7 +14,7 @@ import { readRunState, writeRunTerminal } from "../../src/queue/resume.mjs";
 import { applyRetry } from "../../src/queue/retry.mjs";
 import { consumeRunConclusion } from "../../src/queue/run-state.mjs";
 import { runCycle } from "../../src/queue/runner.mjs";
-import { ensureProject, makeHome, makeProject } from "../../test-support/memory.mjs";
+import { ensureProject, makeHome, makeProject, storedJob } from "../../test-support/memory.mjs";
 
 const CLI = fileURLToPath(new URL("../../bin/nightqueue.mjs", import.meta.url));
 const REPAIRER = fileURLToPath(new URL("../../test-support/witness-repairer.mjs", import.meta.url));
@@ -183,10 +183,10 @@ test("the reconciliation never touches a job a live runner owns, a row that alre
 test("a witness that says `closed` is never trusted: the row stays as it is", async (t) => {
   const env = makeQueue(t, "reconcile-closed-witness");
   const id = lostFinish(env, { status: "closed" });
-  const before = getJob(id, env);
+  const before = storedJob(id, env);
 
   assert.deepEqual((await reconcileFromWitness(env)).repaired, [], "a witness closed a job, which only the operator does");
-  assert.deepEqual(getJob(id, env), before, "a `closed` witness rewrote the row");
+  assert.deepEqual(storedJob(id, env), before, "a `closed` witness rewrote the row");
 });
 
 test("a repair the database refuses only warns: `queue status` still prints the queue and exits 0", (t) => {
