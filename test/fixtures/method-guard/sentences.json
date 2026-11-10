@@ -672,7 +672,7 @@
         "architect"
       ],
       "sentence": "- /absolute/path/file.ts — [what changes, per function]",
-      "phrase": "- /absolute/path/file.ts — [what changes, per function]"
+      "phrase": "[what changes, per function]"
     },
     {
       "file": "prompts/architect.md",
@@ -1040,7 +1040,7 @@
         "architect"
       ],
       "sentence": "- [PM1] <likely cause of the plan's failure> — mitigation: <adjustment already made in the plan | \"accepted because <reason>\">",
-      "phrase": "- [PM1] <likely cause of the plan's failure> — mitigation: <adjustment already made in the plan | \"accepted because <reason>\">"
+      "phrase": "- [PM1] <likely cause of the plan's failure> — mitigation: <adjustment already made in the plan | \"accepted because <reason>\""
     },
     {
       "file": "prompts/architect.md",
