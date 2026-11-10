@@ -158,6 +158,23 @@ test("the verifier owns the runtime method and the verdict the phases read", () 
   assert.equal(phases.includes("Decide the path by the change:"), false, "the phases still carry the runtime cases");
 });
 
+// A fix removes its mechanism instead of bending to a proof file, and an outdated proof is judged by its contract, within each file's byte ceiling.
+test("the coder fixes the mechanism and the verifier judges an outdated proof by its contract", () => {
+  const ceilings = { coder: 13200, verifier: 25800 };
+  for (const [agent, ceiling] of Object.entries(ceilings)) {
+    const bytes = Buffer.byteLength(readFileSync(join(ROOT, `plugin/agents/${agent}.md`), "utf8"));
+    assert.ok(bytes <= ceiling, `${agent}.md is ${bytes} bytes, over its ${ceiling}-byte ceiling`);
+  }
+  const coder = readAgent("coder");
+  for (const phrase of ["touch nothing of a later stage", "Fix the mechanism", "sibling vectors", "A proof file is evidence, never a specification", "Outdated proof:", "fix: design"]) {
+    assert.ok(coder.includes(phrase), `coder.md lost \`${phrase}\``);
+  }
+  const verifier = readAgent("verifier");
+  for (const phrase of ["still run the whole suite", "Outdated proof:", "judge the contract it states, not its call", "`contract` or `literal call`"]) {
+    assert.ok(verifier.includes(phrase), `verifier.md lost \`${phrase}\``);
+  }
+});
+
 // One coder lane per stage keeps the binding rule of a staged Brief: the verifier runs between stages.
 test("the stage lanes keep the verifier between stages", () => {
   const skill = readFileSync(PHASES, "utf8").replace(/\s+/g, " ");
