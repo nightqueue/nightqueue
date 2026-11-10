@@ -495,7 +495,7 @@ integer is a 400. Without `from` the route answers the last MiB, as before. All 
 read-only and sit behind the same token gate as the rest of `/api`.
 
 **Spawn profile.** Every `claude` argv nightqueue builds comes from one declarative builder,
-`profileArgs({ kind, ... })` in `src/queue/session-profile.mjs`, a module with no imports; each
+`profileArgs({ kind, ... })` in `src/host/session-profile.mjs`, a module with no imports; each
 caller computes the environment-dependent values (settings object, MCP config, plugin dir, agent
 body) with its own helpers and passes them in. A kind declares its defaults and its flag order,
 kept per kind so the argv stays byte-identical to what each launcher built before:
@@ -505,9 +505,22 @@ kept per kind so the argv stays byte-identical to what each launcher built befor
 | `job` | `buildArgs` (spawn.mjs) | `bypassPermissions` | `project` | yes | `mcpConfigArg(env, jobId)` | `jobSettings` | yes | `-p <prompt>`, then `--model <alias>` only when the project routes the orchestrator |
 | `merger` | `mergerArgs` (merger-spawn.mjs) | `acceptEdits` | `project` | yes | none | `mergerSettings` | yes | `-p <prompt>`, `--agent nightqueue:merger`, `--tools Read,Edit` |
 | `operator` | `operatorArgs` (host/operator.mjs) | `default` | `user,project,local` | no | `mcpConfigArg(env, null, { operator })` | `operatorSettings` | no | interactive operand (the opening prompt, `--prompt`, or none on a bare `--resume`) |
+| `chat` | `chatArgs` (sessions/launch.mjs) | `default` | `user,project,local` | no | `mcpConfigArg(env)` | `chatSettings` | no | interactive operand (`--prompt`, or none); `--agents <json>` before `--agent` for a user agent; `--session-id <uuid>` fresh, `--resume <uuid>` resumed |
 
 With `queue.inheritUserEnvironment` on, a job drops `--strict-mcp-config`, `--setting-sources` and
 `--settings`. An unknown kind throws.
+
+**Chat sessions.** `nightqueue chat` records each session in `<NIGHTQUEUE_HOME>/sessions/<ULID>.json`
+(schema 1: agent, agent source, Claude session uuid, cwd, worktree, project, timestamps and the
+launcher's pid and uptime while it runs); live or stopped is derived from that pid and the boot,
+never stored. `src/sessions` never imports `src/queue` nor `src/cli/run*`
+(`test/sessions-boundary.test.mjs`). The child env drops every job-scoped and operator variable and
+any inherited `NIGHTQUEUE_CHAT_WORKTREE`, then sets `NIGHTQUEUE_CHAT_WORKTREE` only for a session
+recorded with a worktree. The only hook its `--settings` carries is `hook chat-guard` (PreToolUse,
+matcher `Bash|Edit|Write|MultiEdit|NotebookEdit`, timeout 10 s, run by the launcher's node and
+package): the never band of `src/host/never-band.mjs` denies, a file delete answers
+`permissionDecision: "ask"`, and an edit inside the session's own worktree entry is judged only on
+its `.git`, `.env*` and settings paths. A guard that throws denies.
 
 **Operator sessions.** `nightqueue open` (and `nightqueue queue session`, and a studio
 terminal through them) starts `claude` with `NIGHTQUEUE_MODE=operator`,

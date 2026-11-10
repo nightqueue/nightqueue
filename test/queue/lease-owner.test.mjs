@@ -10,7 +10,7 @@ import { openDb } from "../../src/memory/db.mjs";
 import { addJob, claimJobById, countActiveJobs, getJob, sweepOrphans } from "../../src/memory/jobs.mjs";
 import { acquire, liveLocalWorker, localWorkerPid } from "../../src/queue/claim.mjs";
 import { applyRetry } from "../../src/queue/retry.mjs";
-import { cliEntrypoint } from "../../src/queue/spawn.mjs";
+import { cliEntrypoint } from "../../src/host/claude-launch.mjs";
 import { initGitRepo } from "../../test-support/git.mjs";
 import { makeDir, makeHome, makeProject } from "../../test-support/memory.mjs";
 

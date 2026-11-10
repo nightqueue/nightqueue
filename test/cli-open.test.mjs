@@ -11,7 +11,7 @@ import { registerCheckout } from "../test-support/memory.mjs";
 import { loadConfig, saveConfig } from "../src/config/store.mjs";
 import { OPERATOR_AGENT, OPERATOR_OPENING_PROMPT } from "../src/host/operator.mjs";
 import { operatorSettings } from "../src/host/settings.mjs";
-import { pluginDir } from "../src/queue/spawn.mjs";
+import { pluginDir } from "../src/host/claude-launch.mjs";
 import { initGitRepo } from "../test-support/git.mjs";
 import { makeDir, makeHome } from "../test-support/memory.mjs";
 

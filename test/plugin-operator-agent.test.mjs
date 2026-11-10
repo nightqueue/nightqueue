@@ -6,8 +6,8 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { OPERATOR_AGENT, OPERATOR_MODE_AGENT, operatorAgentPath, operatorArgs, operatorEnv } from "../src/host/operator.mjs";
 import { OPERATOR_CLI_COMMANDS, PIPELINE_AGENTS } from "../src/queue/operator-scope.mjs";
-import { JOB_SCOPED_ENV_KEYS } from "../src/queue/session-profile.mjs";
-import { pluginDir, resolveClaudeBin } from "../src/queue/spawn.mjs";
+import { pluginDir, resolveClaudeBin } from "../src/host/claude-launch.mjs";
+import { JOB_SCOPED_ENV_KEYS } from "../src/host/session-profile.mjs";
 import { phasePrompts } from "../test-support/skill-size.mjs";
 
 const AGENTS_DIR = join(pluginDir(), "agents");

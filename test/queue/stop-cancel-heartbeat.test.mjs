@@ -8,7 +8,7 @@ import { addJob, getJob } from "../../src/memory/jobs.mjs";
 import { stopAndCancelJob } from "../../src/queue/cancel.mjs";
 import { findRunnerRecord } from "../../src/queue/registry.mjs";
 import { recordRunFields } from "../../src/queue/run-state.mjs";
-import { cliEntrypoint } from "../../src/queue/spawn.mjs";
+import { cliEntrypoint } from "../../src/host/claude-launch.mjs";
 import { openStore } from "../../src/store/open.mjs";
 import { ensureProject, makeDir, makeHome, registerCheckout } from "../../test-support/memory.mjs";
 import { fakeCalls, useFakeClaude } from "../../test-support/queue-fake.mjs";

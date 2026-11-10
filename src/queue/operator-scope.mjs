@@ -26,7 +26,7 @@ export const OPERATOR_GUARD = "operator guard";
 // registry and the queue, the refused ones install, serve, run code, nest a session or act on a run; a new command must land in one.
 export const OPERATOR_CLI_COMMANDS = Object.freeze({
   allowed: Object.freeze(["queue", "project", "org", "connection", "doctor", "memory", "lesson", "libs", "version"]),
-  refused: Object.freeze(["setup", "init", "open", "update", "mcp", "studio", "hook", "embed", "verify", "sandbox", "run"]),
+  refused: Object.freeze(["setup", "init", "open", "update", "mcp", "studio", "hook", "embed", "verify", "sandbox", "run", "chat", "sessions", "agent"]),
 });
 
 // The subcommands of the allowed families that write files or widen the operator's own scope, refused one by one; a new subcommand

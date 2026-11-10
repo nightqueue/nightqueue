@@ -1,5 +1,6 @@
 import { UserError } from "../config/errors.mjs";
 import { runAgentForeground } from "../hooks/agent-foreground.mjs";
+import { CHAT_GUARD_DENY, runChatGuard } from "../hooks/chat-guard.mjs";
 import { MERGER_DENY_ALL, runMergerGuard } from "../hooks/merger-guard.mjs";
 import { runPromptContext } from "../hooks/prompt-context.mjs";
 import { runReturnSyntax } from "../hooks/return-syntax.mjs";
@@ -13,6 +14,7 @@ const HOOKS = new Map([
   ["prompt-context", { handler: runPromptContext, fallback: "" }],
   ["agent-foreground", { handler: runAgentForeground, fallback: "" }],
   ["merger-guard", { handler: runMergerGuard, fallback: MERGER_DENY_ALL }],
+  ["chat-guard", { handler: runChatGuard, fallback: CHAT_GUARD_DENY }],
   ["return-syntax", { handler: runReturnSyntax, fallback: "" }],
 ]);
 

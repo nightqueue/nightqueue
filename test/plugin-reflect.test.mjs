@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
-import { pluginDir } from "../src/queue/spawn.mjs";
+import { pluginDir } from "../src/host/claude-launch.mjs";
 import { phasePrompts } from "../test-support/skill-size.mjs";
 
 const RUBRIC = readFileSync(join(pluginDir(), "skills/reflect/references/rubric.md"), "utf8").replace(/\s+/g, " ");

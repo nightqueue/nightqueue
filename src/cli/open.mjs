@@ -14,7 +14,7 @@ const OPTIONS = { resume: { type: "string" }, prompt: { type: "string" } };
 const TRANSCRIPT_HEAD_BYTES = 1024 * 1024;
 
 // The project the session preselects: the one named (by name, else id), else the one registered for the current directory, else none.
-async function openProject(name, ctx) {
+export async function openProject(name, ctx) {
   const store = await openRegistryReader(ctx.env);
   if (name !== undefined) {
     const named = store ? ((await store.projects.byName(name)) ?? (await store.projects.byId(name))) : null;

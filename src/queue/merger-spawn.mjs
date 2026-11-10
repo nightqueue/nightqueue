@@ -5,8 +5,9 @@ import { MERGER_DIR_ENV, MERGER_FILES_ENV } from "../hooks/merger-guard.mjs";
 import { mergerSettings } from "../host/settings.mjs";
 import { MERGER_MODEL, MODEL_NAMES } from "./routing.mjs";
 import { compactStamp } from "./runner.mjs";
-import { profileArgs, withoutJobScope } from "./session-profile.mjs";
-import { pluginDir, spawnClaude } from "./spawn.mjs";
+import { pluginDir } from "../host/claude-launch.mjs";
+import { profileArgs, withoutJobScope } from "../host/session-profile.mjs";
+import { spawnClaude } from "./spawn.mjs";
 import { extractResultText } from "./stream.mjs";
 
 const MERGER_STOP_POLL_MS = 1000;

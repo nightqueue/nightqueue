@@ -1,6 +1,7 @@
 import { copyFileSync, existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
 import { backupPath, modeOf, writeFileAtomic } from "../config/store.mjs";
+import { cliEntrypoint } from "./claude-launch.mjs";
 import { readJsonStrict } from "./json.mjs";
 import { claudeConfigDir, claudeSettingsPath, cliEntryPath } from "./paths.mjs";
 
@@ -16,6 +17,8 @@ const HOOK_EVENTS = [
 const RETIRED_HOOK_EVENTS = ["SessionEnd"];
 
 const OPERATOR_TOOL_MATCHER = "Agent|Task|Bash|Read|Grep|Glob|Edit|Write|MultiEdit|NotebookEdit";
+const CHAT_TOOL_MATCHER = "Bash|Edit|Write|MultiEdit|NotebookEdit";
+const CHAT_GUARD_TIMEOUT_S = 10;
 
 // The tools the operator session may call without asking: the nightqueue MCP server is its own product, every prompt would be noise; never another MCP server: the person's own go through the host prompt.
 export const OPERATOR_ALLOWED_TOOLS = ["mcp__nightqueue__*", "WebFetch", "WebSearch"];
@@ -186,6 +189,17 @@ export function operatorSettings(env = process.env) {
 export function mergerSettings(env = process.env) {
   const guard = { type: "command", command: hookCommand("merger-guard", env), timeout: 5 };
   return { hooks: { PreToolUse: [{ matcher: "*", hooks: [guard] }] }, claudeMdExcludes: [join(claudeConfigDir(env), "CLAUDE.md")] };
+}
+
+// The command that runs the chat guard with this very node and package, so an older host runtime never judges a chat session.
+export function chatGuardCommand() {
+  return `${JSON.stringify(process.execPath)} ${JSON.stringify(cliEntrypoint())} hook chat-guard`;
+}
+
+// The `--settings` payload of a chat session: only the chat guard fencing Bash and the edit tools, no pre-approved permission.
+export function chatSettings() {
+  const guard = { type: "command", command: chatGuardCommand(), timeout: CHAT_GUARD_TIMEOUT_S };
+  return { hooks: { PreToolUse: [{ matcher: CHAT_TOOL_MATCHER, hooks: [guard] }] } };
 }
 
 // Writes the settings back, keeping a backup and the permission bits the user had set on the file.

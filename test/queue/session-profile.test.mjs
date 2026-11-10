@@ -4,7 +4,8 @@ import { OPERATOR_AGENT, OPERATOR_MODE_AGENT, OPERATOR_MODE_FALLBACK, operatorAg
 import { jobSettings, mergerSettings, operatorSettings } from "../../src/host/settings.mjs";
 import { mergerArgs } from "../../src/queue/merger-spawn.mjs";
 import { MERGER_MODEL } from "../../src/queue/routing.mjs";
-import { buildArgs, mcpConfigArg, pluginDir } from "../../src/queue/spawn.mjs";
+import { mcpConfigArg, pluginDir } from "../../src/host/claude-launch.mjs";
+import { buildArgs } from "../../src/queue/spawn.mjs";
 import { makeHome } from "../../test-support/memory.mjs";
 
 const SAFE_RESUME = "abc-12345";
