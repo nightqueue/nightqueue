@@ -4,6 +4,8 @@ import { withLock } from "../config/lock.mjs";
 import { saveConfig, saveSecrets } from "../config/store.mjs";
 import { warmupModel } from "../memory/embedding.mjs";
 import { refuseHomeWriteInsideJob } from "../queue/home-guard.mjs";
+import * as agent from "./agent.mjs";
+import * as chat from "./chat.mjs";
 import * as connection from "./connection.mjs";
 import * as doctor from "./doctor.mjs";
 import * as embed from "./embed.mjs";
@@ -19,6 +21,7 @@ import * as project from "./project.mjs";
 import * as queue from "./queue.mjs";
 import * as runCommand from "./run.mjs";
 import * as sandbox from "./sandbox.mjs";
+import * as sessions from "./sessions.mjs";
 import { borrowsParentLock } from "./schema-migrate.mjs";
 import * as setup from "./setup.mjs";
 import * as studio from "./studio.mjs";
@@ -31,6 +34,9 @@ const COMMANDS = new Map([
   ["doctor", doctor.run],
   ["init", init.run],
   ["open", open.run],
+  ["chat", chat.run],
+  ["sessions", sessions.run],
+  ["agent", agent.run],
   ["update", update.run],
   ["org", org.run],
   ["project", project.run],
@@ -59,7 +65,7 @@ const READ_ONLY_COMMANDS = new Set(["doctor", "version", "verify", "sandbox", "l
 
 const READ_ONLY_SUBCOMMANDS = new Set(["list", "test"]);
 
-const SELF_LOCKING_COMMANDS = new Set(["mcp", "studio", "hook", "embed", "memory", "lesson", "queue", "run"]);
+const SELF_LOCKING_COMMANDS = new Set(["mcp", "studio", "hook", "embed", "memory", "lesson", "queue", "run", "chat", "sessions", "agent"]);
 
 const HOME_WRITE_COMMANDS = new Set(["init", "setup", "update"]);
 
@@ -69,6 +75,8 @@ const HOME_WRITE_SUBCOMMANDS = new Map([
   ["connection", new Set(["add", "bind", "remove"])],
   ["embed", new Set(["install", "download", "backfill"])],
   ["queue", new Set(["add", "cancel", "close", "pause", "resume"])],
+  ["sessions", new Set(["rm"])],
+  ["agent", new Set(["new"])],
 ]);
 
 const USAGE = `nightqueue — configuration CLI
@@ -80,6 +88,9 @@ commands:
   doctor [--json] [--check-updates] [--fix] [--db]  check the host and the home, one line per check; --db reports more of the database, --fix also folds its WAL and moves broken sidecars aside; exits 1 on any failure
   init [path] [--key <KEY>] [--gh (deprecated, no effect)|--no-gh]  install the runtime and register the git repository at [path] (default: .) as a project
   open [project] [--resume <session>] [--prompt <text>]  open the operator in the nightqueue home; [project] only preselects it; it investigates, plans and queues jobs, and edits or runs only with your consent; --prompt starts it with a request
+  chat [agent] [--project <p>] [--worktree <path>] [--resume <id>] [--prompt <text>]  open an interactive claude with an optional agent (built-in or yours) as the main thread, recorded so it can be resumed; \`chat operator\` is \`open\`; a delete asks you first
+  sessions list|show <id>|rm <id> [--json]  list the chat sessions (live or stopped), show one, or remove its record (never its worktree or transcript)
+  agent list|new <name>|show <name> [--json]  list the built-in and your agents, write the skeleton of a new one in ~/.nightqueue/agents, or show one
   update [<version>] [--from [--no-install]] [--force]  reinstall the runtime at the newest version (or at <version>) and re-point the host at it
   org add <name> [--key <KEY>]              create an org; without --key a terminal is asked, else a key is suggested from the name
   org list [--json]                         list orgs, their key, connection slots and project counts
@@ -105,7 +116,7 @@ commands:
   mcp                                       start the stdio MCP server that exposes the thirty-three memory and queue tools
   mcp --http [--port <n>] [--token <t>]     serve the same tools over Streamable HTTP on 127.0.0.1
   studio [--port <n>] [--api-only] [--no-open]  serve nightqueue studio, the local web cockpit, on 127.0.0.1
-  hook <name>                               run a hook (session-start, prompt-context, agent-foreground, merger-guard, return-syntax), reading the event JSON from stdin
+  hook <name>                               run a hook (session-start, prompt-context, agent-foreground, merger-guard, chat-guard, return-syntax), reading the event JSON from stdin
   embed install                             install the embedding library into the home and download its weights
   embed download                            download the embedding weights into the home (the only network path)
   embed backfill                            compute the embeddings of the lessons that still have none

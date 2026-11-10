@@ -8,22 +8,19 @@ import { newId } from "../../src/config/ids.mjs";
 import { jobLogPath, homeDir, runDir } from "../../src/config/paths.mjs";
 import { isSafeSegment } from "../../src/queue/resume.mjs";
 import { slugVariants } from "../../src/queue/run-slug.mjs";
-import { JOB_SCOPED_ENV_KEYS } from "../../src/queue/session-profile.mjs";
+import { JOB_SCOPED_ENV_KEYS } from "../../src/host/session-profile.mjs";
 import { UserError } from "../../src/config/errors.mjs";
 import { OPERATOR_NOTE_LIMIT } from "../../src/memory/jobs.mjs";
 import { claudeConfigDir, packageRoot } from "../../src/host/paths.mjs";
 import { desiredHooks, mergeHooks } from "../../src/host/settings.mjs";
+import { cliEntrypoint, mcpConfigArg, pluginDir, resolveClaudeBin } from "../../src/host/claude-launch.mjs";
 import {
   buildArgs,
   buildPrompt,
-  cliEntrypoint,
   IDLE_TIMEOUT_S,
   idleWindowS,
-  mcpConfigArg,
   PENDING_TOOL_MARGIN_S,
-  pluginDir,
   provisionalSlug,
-  resolveClaudeBin,
   slugCandidates,
   spawnClaude,
 } from "../../src/queue/spawn.mjs";

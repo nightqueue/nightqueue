@@ -25,6 +25,8 @@ const SEGMENTS = Object.freeze({
   settingSources: (v) => flag("--setting-sources", v.settingSources),
   settings: (v) => (present(v.settings) ? ["--settings", JSON.stringify(v.settings)] : []),
   resume: (v) => flag("--resume", v.resume),
+  agents: (v) => flag("--agents", v.agents),
+  sessionId: (v) => flag("--session-id", v.sessionId),
   operand: (v) => (present(v.operand) ? [v.operand] : []),
 });
 
@@ -51,6 +53,12 @@ export const SESSION_PROFILES = Object.freeze({
     strictMcp: false,
     settingSources: "user,project,local",
   }),
+  chat: profile({
+    order: ["agents", "agent", "pluginDir", "mcpConfig", "permissionMode", "settingSources", "settings", "sessionId", "resume", "operand"],
+    permissionMode: "default",
+    strictMcp: false,
+    settingSources: "user,project,local",
+  }),
 });
 
 // Merges a kind's defaults with the values the caller gives, a value left undefined keeping the default.
@@ -62,7 +70,7 @@ function profileValues(defaults, given) {
   return values;
 }
 
-// Builds the claude argv of one session kind (job, merger or operator) from its declared profile and the caller's values.
+// Builds the claude argv of one session kind (job, merger, operator or chat) from its declared profile and the caller's values.
 export function profileArgs({ kind, ...given } = {}) {
   const defaults = Object.hasOwn(SESSION_PROFILES, kind) ? SESSION_PROFILES[kind] : null;
   if (defaults === null) {

@@ -216,6 +216,16 @@ export function worktreesDir(env = process.env) {
   return join(homeDir(env), "worktrees");
 }
 
+// Directory holding one record file per chat session.
+export function sessionsDir(env = process.env) {
+  return join(homeDir(env), "sessions");
+}
+
+// Directory holding the person's own agents, one `<name>.md` each.
+export function agentsDir(env = process.env) {
+  return join(homeDir(env), "agents");
+}
+
 // Path of the git worktree the runtime places a queued job's run in, keyed by the project's id and the run slug.
 export function jobWorktreePath(projectId, slug, env = process.env) {
   return join(worktreesDir(env), projectId, slug);

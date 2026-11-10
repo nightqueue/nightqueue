@@ -1390,7 +1390,7 @@ after git's own expiry; a failure is one warning line. `queue session` and a stu
 run it too, through the same launcher.
 
 **Spawn profile.** The operator's argv comes from the same builder as a queued job's and the
-merger's: `profileArgs({ kind: "operator" })` in `src/queue/session-profile.mjs`, the
+merger's: `profileArgs({ kind: "operator" })` in `src/host/session-profile.mjs`, the
 `operator` kind carrying `--permission-mode default`, `--setting-sources user,project,local`
 and no `--strict-mcp-config` (see `Spawn profile` in [the runtime contract](runtime-contract.md)).
 
@@ -1570,6 +1570,93 @@ as a command when it names one, even after `--`, so the bare word would run that
 instead of opening the session with it as the first message. The text is on the command line of the `claude` process (and of `nightqueue`
 itself), so `ps` shows it to any user of the machine while the session runs; do not put
 secrets in it.
+
+## Chat
+
+```sh
+nightqueue chat                          # plain claude with the plugin, recorded as a session
+nightqueue chat coder                    # a built-in agent as the main thread
+nightqueue chat rev --project my-app     # your own agent, in the project's checkout
+nightqueue chat coder --worktree ~/.nightqueue/worktrees/<project id>/<slug>   # work inside a job worktree
+nightqueue chat --resume <id>            # resume a recorded session with its agent and directory
+nightqueue chat operator                 # the same as `nightqueue open`
+```
+
+`nightqueue chat [agent] [--project <p>] [--worktree <path>] [--resume <id>] [--prompt <text>]`
+starts an interactive `claude` (the `chat` spawn profile) with the plugin, the nightqueue MCP
+server, `--permission-mode default` and `--setting-sources user,project,local`, so Claude Code's
+own permission prompts and the person's MCP servers, plugins and settings apply. With no agent it
+is plain claude with the plugin; a built-in agent goes as `--agent nightqueue:<name>`, and one of
+yours (below) as `--agents <json> --agent <name>`. `chat operator` (or `nightqueue-operator`) runs
+`nightqueue open` unchanged: the operator keeps its own launch and guard and is never recorded.
+
+**Where it runs.** `--worktree <path>` on a directory outside the nightqueue home runs there.
+Under the home it must lie in a git worktree under `<NIGHTQUEUE_HOME>/worktrees` (its `.git` is a
+file whose `gitdir:` still exists); the directory you gave stays the cwd, a subdirectory included,
+and its `<project id>/<slug>` entry becomes the session's own worktree. A worktree whose git
+directory is gone is refused, and so is any other path under the home. Without `--worktree` the
+session runs in the project's checkout (the one named by `--project`, else the one registered for
+the current directory), else in the current directory, judged by the same rules: a chat never
+runs in the nightqueue home itself (pass `--project`, `--worktree` or run it from another
+directory). Nothing stops a chat from editing a worktree a queued job is running in: you chose the
+path.
+
+**Sessions.** Each chat is recorded in `<NIGHTQUEUE_HOME>/sessions/<ULID>.json` with the Claude
+session id it was launched with (`--session-id`), so `--resume <id>` runs `claude --resume` in the
+recorded directory, with the recorded agent and worktree. A resume is refused for an unknown id, a
+session still open, a directory that no longer exists, or a session closed before its first
+message (no transcript). `--resume` takes no agent, `--project` nor `--worktree`. A launch holds an
+exclusive claim, `<NIGHTQUEUE_HOME>/sessions/<ULID>.launcher` (its pid and start time), so two
+resumes of one session never run at once; a session is live while that launcher still runs, and a
+claim left by a launcher that died is taken over by the next resume, under a short
+`<ULID>.launcher.takeover` lock. The record itself is never
+rewritten after it is created.
+
+```sh
+nightqueue sessions list [--json]        # newest first: id · live|stopped · agent · project · cwd · last update
+nightqueue sessions show <id> [--json]   # the record, its transcript and the resume command
+nightqueue sessions rm <id>              # removes the record only, never the worktree nor the transcript
+```
+
+**Agents.** `nightqueue agent list [--json]` lists the plugin's agents and yours;
+`nightqueue agent new <name>` writes a skeleton to `<NIGHTQUEUE_HOME>/agents/<name>.md` (never in
+a project repository), ready to edit and use with `nightqueue chat <name>`; `nightqueue agent show
+<name>` prints one. A user agent needs a `---` frontmatter with `name` (lowercase letters, digits
+and `-`, equal to the file name) and `description`; `tools` (comma list, `[a, b]` flow list or
+`- item` list) and `model` are optional, a ` # comment` after a plain or quoted value is dropped, and a
+nested list or map is refused rather than guessed; the body is its prompt (at most 100 KB). A
+built-in name, `operator`, and Claude Code's own agent names are refused; an invalid file is
+listed as a warning and never loaded. `nightqueue:<name>` names a built-in only; call your own
+agent by its bare name.
+
+**The chat guard.** A chat session carries one PreToolUse hook, `nightqueue hook chat-guard`
+(Bash and the edit tools, 10 s timeout, fail closed):
+
+- **never** (denied, no prompt): the never band of the operator — reading secrets or `.env*`,
+  writing under the nightqueue home, Claude/Codex settings or a `.git` directory, a force push,
+  a branch delete, a hard reset, `git clean`, and every nightqueue command that writes the home or
+  nests a session. A command that mixes a delete with any of these is denied as a whole.
+- **ask**: a file delete (`rm`, `unlink`, `find -delete`, `git rm`, the same inside `sh -c`,
+  `bash -lc` or `eval`) shows Claude Code's own permission prompt naming the command; approving
+  runs it once, refusing keeps the files. Nothing is recorded. Deleting the nightqueue home, a
+  directory that holds it, or the session worktree itself stays never, and so does a delete of a
+  glob that could match `.git` (`.g[i]t`, `.git*`) or of a path the shell computes (`$…`, a
+  command substitution). Every word after a shell's `-c` is read as its script, a wrapper such as
+  `setsid`, `stdbuf`, `ionice` or `doas` is looked through, and a shell reading its script from
+  stdin (`… | sh`, `bash <<< …`, `sh < file`) asks, its quoted text judged as the script.
+- **the session's worktree**: edits inside the worktree recorded for the session are allowed,
+  except its `.git`, `.env*` and Claude settings; every other worktree and the rest of the home
+  stay never. In Bash every word is read the way the shell reads it, from the real cwd, so a
+  relative path (`src/a.mjs`, `.`, `../x`) is judged as the path it names: inside the session
+  worktree it is free by any relative spelling, and `../../../secrets.json` is refused like its
+  absolute twin. Name the worktree's files by relative paths: an absolute path under the home is
+  still judged as the home.
+- **the second line**: past the guard, Claude Code's own permission prompt decides
+  (`--permission-mode default`), so every Bash command outside Claude's built-in read-only set
+  asks you, including a delete the guard cannot read (`python3 -c "import os; os.remove(...)"`,
+  `perl -e unlink`, `rsync --delete`, `bash script.sh`). Your own pre-authorization (an allow rule,
+  "Yes, and don't ask again", auto mode) lets such a program run unprompted: that grant is your
+  authorization. A delete the guard does recognise keeps forcing the prompt over an allow rule.
 
 ## Libs
 

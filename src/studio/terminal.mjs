@@ -1,10 +1,10 @@
-import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { UserError } from "../config/errors.mjs";
 import { homeDir, studioTerminalsDir } from "../config/paths.mjs";
 import { packageRoot, spawnRoot } from "../host/paths.mjs";
+import { parsePsLine, readProcess } from "../host/process-identity.mjs";
 import { providerOf } from "../integrations/registry.mjs";
 import { jobRef, parseJobRef } from "../memory/refs.mjs";
 import { refuseHomeWriteInsideJob } from "../queue/home-guard.mjs";
@@ -19,16 +19,16 @@ export const TERMINAL_ID = /^[0-9a-f]{16}$/;
 export const TERMINAL_TIMING = Object.freeze({ killGraceMs: 2000, exitedTtlMs: 60_000 });
 export const SPAWN_SELF_ENV = "NIGHTQUEUE_STUDIO_SPAWN_SELF";
 
+export { parsePsLine };
+
 const STUDIO_ENV_PREFIX = "NIGHTQUEUE_STUDIO_";
 
 const REGISTRATION = /^\d+-[0-9a-f]{16}\.json$/;
 const SCROLLBACK_BYTES = 256 * 1024;
 const BODY_KEYS = new Set(["kind", "job", "project", "instruction", "provider"]);
 const TERMINAL_KINDS = new Set(["session", "operator", "connect"]);
-const PS_TIMEOUT_MS = 5000;
 const PTY_SIZE = { cols: 120, rows: 32 };
 const RESIZE_LIMITS = { cols: [2, 500], rows: [1, 200] };
-const PS_LINE = /^\s*(\S+\s+\S+\s+\d+\s+\d\d:\d\d:\d\d\s+\d{4})\s+(.+)$/;
 
 // A create, delete or attach the studio refuses, carrying the HTTP status the API answers with.
 export class TerminalRefusal extends Error {
@@ -37,19 +37,6 @@ export class TerminalRefusal extends Error {
     this.name = "TerminalRefusal";
     this.status = status;
   }
-}
-
-// Reads one `ps -o lstart= -o command=` line into the start time and the command line, or null when it is not one.
-export function parsePsLine(text) {
-  const match = PS_LINE.exec(String(text ?? "").split("\n")[0]);
-  return match ? { lstart: match[1].replace(/\s+/g, " "), command: match[2] } : null;
-}
-
-// The start time and command line of a live process, or null when ps does not know the pid.
-function readProcess(pid) {
-  const result = spawnSync("ps", ["-ww", "-p", String(pid), "-o", "lstart=", "-o", "command="], { encoding: "utf8", timeout: PS_TIMEOUT_MS });
-  if (result.error || result.status !== 0) return null;
-  return parsePsLine(result.stdout);
 }
 
 // Tells whether a pid is alive; a pid owned by another user counts as alive.

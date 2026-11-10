@@ -22,7 +22,7 @@ import { runOwnNotice, withoutRuntimeAppendedLines } from "../../src/queue/run-n
 import { consumeRunConclusion, recordCheck, recordOutcome, recordPhaseDone, recordPrUrl, recordRunFields, recordTermination, RUNTIME_AUTHOR } from "../../src/queue/run-state.mjs";
 import { provisionalSlug } from "../../src/queue/run-slug.mjs";
 import { runCycle } from "../../src/queue/runner.mjs";
-import { mcpConfigArg } from "../../src/queue/spawn.mjs";
+import { mcpConfigArg } from "../../src/host/claude-launch.mjs";
 import { terminateRun } from "../../src/queue/terminate.mjs";
 import { initGitRepo } from "../../test-support/git.mjs";
 import { fakeJobWorktree } from "../../test-support/job-worktree.mjs";

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { profileArgs, SESSION_PROFILES } from "../../src/queue/session-profile.mjs";
+import { profileArgs, SESSION_PROFILES } from "../../src/host/session-profile.mjs";
 
 test("profileArgs refuses an unknown kind, a missing kind and an inherited key as the kind", () => {
   assert.throws(() => profileArgs({ kind: "x" }), /unknown session profile kind "x"; expected one of job, merger, operator/);

@@ -41,7 +41,7 @@ export function personMcpTool(toolName) {
 }
 
 // The absolute path an edit tool call writes, a relative one resolved against the session cwd, or null when it names none.
-function writeTarget(toolInput, cwd) {
+export function writeTarget(toolInput, cwd) {
   const path = toolInput?.file_path ?? toolInput?.notebook_path ?? null;
   if (typeof path !== "string" || path.trim() === "") return null;
   if (isAbsolute(path)) return resolve(path);

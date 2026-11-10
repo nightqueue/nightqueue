@@ -8,6 +8,30 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Added
 
+- **Chat sessions with any agent: `nightqueue chat`, `nightqueue sessions`, `nightqueue agent`.**
+  `nightqueue chat [agent] [--project] [--worktree] [--resume <id>] [--prompt]` opens an
+  interactive claude with no agent, a built-in one or one of yours as the main thread, recorded in
+  `~/.nightqueue/sessions/<ULID>.json` and resumable with its agent and directory; live or stopped
+  is derived from an exclusive launch claim (pid and start time), so one session never runs twice
+  at once, and the record is never rewritten. `nightqueue sessions list|show|rm` lists, shows and
+  removes records (never a worktree or transcript). `nightqueue agent list|new|show` lists the
+  plugin's agents and yours, and writes the skeleton of a new one to
+  `~/.nightqueue/agents/<name>.md`; a built-in or reserved name is refused, `[a, b]` tool lists
+  and trailing comments parse, nested YAML forms are refused, and `nightqueue:<name>` names a
+  built-in only. `--worktree` accepts a directory outside the home, or a directory inside a live
+  git worktree under `~/.nightqueue/worktrees` (kept as the cwd), where the session may then edit
+  files; with no project nor worktree a chat runs in the current directory, never in the home. A
+  chat carries its own PreToolUse guard that reads every Bash word the way the shell does: the
+  never band is denied by any relative spelling and behind `bash -lc`, a file delete asks you
+  through Claude Code's prompt, deleting the home or the session worktree stays never, and edits
+  are free inside the session's own worktree except `.git`, `.env*` and settings. Past the guard,
+  Claude Code's own prompt is the second line; a program you pre-authorized runs on your grant.
+  `nightqueue chat operator` is `nightqueue open`, whose operator is unchanged.
+- **The spawn profile, the claude launch helpers and the never band live in `src/host`.**
+  `src/host/session-profile.mjs`, `src/host/claude-launch.mjs` and `src/host/never-band.mjs`
+  replace their `src/queue` homes with no behaviour change, and a test keeps `src/sessions` from
+  importing `src/queue` or `src/cli/run*`.
+
 - **A job can no longer leave a git driver behind in the shared config.** At the first claim on a
   checkout the runner snapshots the driver keys of its shared `.git/config`
   (`filter.<name>.clean|smudge|process`, `diff.<name>.textconv|command`, `diff.external`,

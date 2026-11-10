@@ -1,7 +1,7 @@
 import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
 import { join } from "node:path";
-import { CLAUDE_MISSING_MESSAGE, resolveClaudeBin } from "./spawn.mjs";
+import { CLAUDE_MISSING_MESSAGE, resolveClaudeBin } from "../host/claude-launch.mjs";
 import { checkoutOfJob } from "../memory/registry-access.mjs";
 import { sameBranch } from "./branch-name.mjs";
 import { canonicalPath, parseWorktreeList, sameDir } from "./worktree.mjs";
