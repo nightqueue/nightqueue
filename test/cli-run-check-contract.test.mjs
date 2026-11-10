@@ -163,6 +163,28 @@ test("the QA text asks the three open lines, audits no count and never reports t
   assert.ok(agent.includes("You never ask the operator"));
 });
 
+// The table rows of the `## Proven breaks` section of the QA agent's own report template.
+function provenBreaksTemplate(agent) {
+  const template = agent.split("````\n")[1] ?? "";
+  const section = template.split("## Proven breaks\n")[1]?.split("\n## Break hypotheses")[0];
+  assert.ok(section, "the QA report template has no ## Proven breaks section");
+  return section.split("\n").filter((line) => line.startsWith("|")).join("\n");
+}
+
+test("the QA method groups breaks by root mechanism and tags the fix, and its break template passes check 05", () => {
+  const agent = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "plugin", "agents", "qa-guardian.md"), "utf8");
+  const rules = ["`fix: code`", "`fix: design`", "**One break per root mechanism.**", "**A mechanism that does not converge.**", "**Re-attack after a fix.**", "**Contract vs illustrative.**", "| Proof | Fix | Vectors |"];
+  for (const rule of rules) assert.ok(agent.includes(rule), `the qa-guardian does not say ${rule}`);
+  assert.ok(Buffer.byteLength(agent) <= 32350, `the qa-guardian is ${Buffer.byteLength(agent)} bytes`);
+  const table = provenBreaksTemplate(agent);
+  assert.match(table, /fix: design/);
+  const { texts } = readFixture("qa-open-free-lines");
+  const qa = texts["05-qa.md"].replace("## Proven breaks\nNone", () => `## Proven breaks\n${table}`).replace("## Verdict\nAPPROVED", "## Verdict\nNEEDS FIX");
+  const { lines } = evaluateCheck({ check: "05", texts: { ...texts, "05-qa.md": qa }, state: { type: "bug/error" } });
+  assert.equal(lines.some((line) => line.startsWith("GATE: ") || line.startsWith("MISSING")), false, lines.join("\n"));
+  assert.ok(lines.includes("VERDICT: NEEDS FIX"), lines.join("\n"));
+});
+
 // ---- Stage 2: the effects a check chains after its contract lines.
 
 // The state.json of a seeded run.
