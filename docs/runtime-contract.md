@@ -158,14 +158,17 @@ What a runtime has to provide, and what it can rely on:
     beside a `qaMode` of `skip`: otherwise `run report` reads it `⚠️`. A
     `lite` or `full` decision removes the runtime's own `qa` `SKIPPED` in the same write, so the real
     QA after it is its first launch. It is not a `run_set` field.
-  - `pipelineLoops{attempt, missing, fix, architect, retriage, stage, lastNext, fixPending, invalidated,
-    pendingQaRow, counted}`: `nightqueue run check` only, what `NEXT:` needs to remember between checks: a
-    cache of one attempt and nothing else; another attempt's cache is never read. On another attempt, or
-    with no cache, the loops come from the last `decisions[]` record (every `invalidated` item any record
-    holds, and `lastNext` only when that record's check was not run since on another text and no other
+  - `pipelineLoops{attempt, missing, fix, retriage, stage, final, qaDone, verified, redesign, lastNext,
+    fixPending, counted}`: `nightqueue run check` only, what `NEXT:` needs to remember between checks: the
+    current front (`stage`), whether the run is in the whole-change part (`final`), the fix loops spent
+    in it (`fix`), whether its QA ran (`qaDone`), the scope and `04` digest of the last `PASSED`
+    (`verified{scope, impl}`) and an architect relaunched by `fix: design` (`redesign`). It is a
+    cache of one attempt and nothing else; another attempt's cache is never read, and keys of an older
+    shape are ignored. On another attempt, or
+    with no cache, the loops come from the last `decisions[]` record (and `lastNext` only when that record's check was not run since on another text and no other
     memo was written at or after it: by `seq` when both carry one, else by an ISO `at`, and a memo whose
     order cannot be read counts as after), else,
-    for a run with no record, the fix, architect, re-triage and fix-owed counts are replayed from
+    for a run with no record, the fix, re-triage and fix-owed counts are replayed from
     `phases[]`. `missing` starts again on each attempt and
     counts per call, because a relaunch that wrote nothing must reach the still-missing row; a counted row
     (`counted{key, digest, next, unchanged}`, by check and digest) repeats on the same text and burns no
@@ -175,8 +178,8 @@ What a runtime has to provide, and what it can rely on:
     is not a `run_set` field.
   - `decisions[{check, digest, next, loops, at, seq, claim}]`: `nightqueue run check` only, the loop decisions
     a retry replays. One record is appended when `NEXT:` launches `coder-fix`, `architect` or `triager`, or
-    when a loop fact it keeps changes (`fix`, `architect`, `retriage`, `stage`, `fixPending`, `invalidated`,
-    `pendingQaRow`, `counted`); `loops` is the snapshot of those facts after the step. It is written with
+    when a loop fact it keeps changes (`fix`, `retriage`, `stage`, `fixPending`, `final`, `qaDone`,
+    `verified`, `redesign`, `counted`); `loops` is the snapshot of those facts after the step. It is written with
     `pipelineLoops` in one write, append-only and stamped with the claim, and a re-run of a counted row on
     the same text appends none. A plain retry keeps it and `--fresh` starts over with the run directory. A
     late write is set aside like any other. `seq` is the one the record's own check memo takes, and a
@@ -901,7 +904,7 @@ reaches them as `## Facts for the report` of `nightqueue run report` (see the CL
 `plugin/skills/resolve/SKILL.md` is the orchestrator's skeleton: the contract, `## Resume`, Phase 0,
 one index row per phase and `## Phase prompts`. What only
 one phase or one mode needs lives in `references/` and is read when the phase says so:
-`phases.md` (the artifact gate, the records, what each `NEXT:` action asks and the judgment it leaves,
+`phases.md` (the artifact check, the records, what each `NEXT:` action asks and the judgment it leaves,
 once after the first subagent returns, or first on a resume),
 `qa-phase.md` (Phase 5), `phase-8.md` with `commit-template.md` and `pr-template.md`
 (Phase 8), `phase-9.md` (Phase 9: the report, the `## Notice` writing rules and the icon
@@ -997,7 +1000,16 @@ is `{ slug, provisionalSlug }`. It answers:
 | `next` | one action, printed last as `NEXT: <action>`, after `SCRIPT:` |
 
 `next` is one line of a closed grammar, and the post-check policy that was prose now lives in
-`pipeline/next.mjs`, one fixture per row in `test/fixtures/next/`:
+`pipeline/next.mjs`, one fixture per row in `test/fixtures/next/`. Each stage of the plan is a
+front, in order: `launch coder stage=<n>` → `launch verifier stage=<n>` → the stage's QA
+(`launch qa-triage stage=<n>`, then lite or analyst and provers) unless its `### Stage <n>` block
+says `QA: none` (no `QA:` line, or any other word, is attacked). A plan with fewer than two stages
+is one front with no stage, whose verifier is the whole-change one. After the last front the whole
+change is verified (`launch verifier`, skipped when its `PASSED` still covers the same `04`
+digest), then `launch runtime` and `publish`. A negative verdict (`06` `FAILED`, `05` `NEEDS
+FIX`, `07` `NOT-MET`) goes to the architect when its round carries a `fix: design` line, else to
+`coder-fix`; at most two fix loops per front (then the next front, with the failures left open)
+and two on the whole change (then `publish --draft`). `SYMPTOM-PERSISTS` takes one re-triage.
 
 | action | what the orchestrator does |
 | --- | --- |
@@ -1009,7 +1021,7 @@ is `{ slug, provisionalSlug }`. It answers:
 | `check <NN>` | runs that check; `NN` must be a check of the manifest |
 
 What the code cannot decide stays prose in `references/phases.md`: what else goes in a `note`, the
-wording of a gate, the `run_set` of the Type valve, `run_outcome`, whether an answer is a go-ahead, the N
+wording of a gate, `run_outcome`, whether an answer is a go-ahead, the N
 prover groups, the purely static change that takes `publish` for `launch runtime`, and the open-item and
 PR-body duties.
 
@@ -1314,187 +1326,82 @@ ended stays the runtime's call),
 `gate_stop` (`critique`, `triage`, `architect`, `qa`, `verification`, `runtime`,
 `user`), the phase `status` (`ok`, `failed`, `skipped`). A value outside them comes back as an error message, never as a stack.
 
-**The artifact check answers the gates.** `nightqueue run check <NN>` reads the phase's
-artifact (and, where a rule needs them, `01-triage.md`, `03-plan.md`, `state.json` and the job's
-operator note) and prints one fact per line, in this fixed order:
+**The artifact check confirms the artifact and its verdict.** `nightqueue run check <NN>` reads
+the phase's artifact (and `01-triage.md`, `03-plan.md` and `state.json` where a fact needs them)
+and prints one fact per line, in this fixed order. It never gates on an artifact's sections,
+fields or format: method and report format belong to the agents.
 
-1. `OK` | `MISSING: <sections>` | `GENERATED` (`04`), unchanged. After `MISSING:` nothing
-   else is printed but a `REPAIRED:` line and, on `06`, its `OPEN: pre-existing-failure` lines: no
-   gate is evaluated and nothing is recorded but the check memo. On a round artifact (`05`, `06`, `07`) whose open code fence the check closed, the
-   `REPAIRED: …` line follows the first line, before `VERDICT:`; it never changes the memo nor
-   completion. `01`
-   with `NOT-REPRODUCIBLE` also requires `## Open items` with an item
-   (`MISSING: ## Open items`, or `## Open items (empty)` when it holds only blank lines or
-   `None`), because the next step reads it.
-2. `VERDICT: <value>`: `01` the suffix of `## Verdict:` (`PROCEED`, `NO-CHANGE-NEEDED`,
-   `NOT-REPRODUCIBLE`; a retired `NEEDS-CLARIFICATION` or `PROPOSE-ALTERNATIVE` still parses and
-   reads as `PROCEED`, its Brief gates applied); `05` and `05 --stage analyst` the first non-blank line of
-   `## Verdict` (`APPROVED`, `NEEDS FIX`, `NEEDS DISCUSSION`); `06` the suffix of
-   `## Verification:` (`PASSED`, `PASSED-STATIC`, `FAILED`); `07` the first non-blank line of
-   `## Runtime verdict` (`CONFIRMED`, `NOT-MET`, `SYMPTOM-PERSISTS`, `NEEDS-DEVICE`,
-   `UNAVAILABLE`). A verdict outside the values is a `MISSING:` naming the expected line. A `06`
-   round whose verdict line says `(stage N)` is a stage round: the line reads
-   `VERDICT: <value> (stage N)`. A stated `FAILED` with at least one failure, each of them excused,
-   does not read `FAILED`. A failure is an item of `## Failures` or a line of `## Checks run` whose
-   status is not `PASSED`, `SKIPPED`, `OK` or `not run`. Its excuse is an item of
-   `## Pre-existing failures` that opens with `<that check>:` and mentions every file the check's
-   line blames, or, on a stage round with no `qa` phase and no `05*` check recorded, a failure that
-   only says `05-qa.md`, the QA report, a PoC or runtime evidence is absent, and names no error. An
-   item of `## Failures` is never excused by the base. The round reads `PASSED` on a stage round and
-   `PASSED-STATIC` on a final one, whose Phase 7 stays owed.
-3. `GATE: <code> — <evidence>`, one per firing item, the evidence one trimmed line of at most
-   160 code points.
-4. `OPEN: <text>`: `03` the coverage items below, `## Requires user confirmation has no filled
-   **Question:**` and `type mismatch — <evidence> — kept <bug/error|feature/refactor>` (`bug/error`
-   with `## Diagnosis` filled, else `feature/refactor`), `stages-unjustified — <n> stages, no reason
-   line` (two or more stages titled under `## Implementation plan`, no `**Stage reason:**` line from
-   the closed list and no Brief that numbers them) and `assumption-without-evidence — <first words>`
-   per `## Assumptions` item (a bullet with what is nested under it, or a table row) with neither a
-   `path:line` (a directory, or a source extension on a bare file name) nor `(unverified)`;
-   `05` `<label> — <value>` per filled
-   `omitted:`, `divergences:` or `unconfirmed decisions:` line other than `none`;
-   `06` `pre-existing-failure — <item>` per item of `## Pre-existing failures`, whatever the verdict;
-   `07` `<scenario> — to confirm` per `NOT MET / to confirm` row. Never a gate.
-5. `TYPE-MISMATCH: <evidence> — triage: <bug/error|feature/refactor> (<## Diagnosis filled|## Diagnosis absent or empty>)` (`03`).
-6. `CONFIRM:` (`03`, only with a filled question, the one human stop of a run):
-   `CONFIRM: requires-user-confirmation — <question>`, or `CONFIRM: answered (<at>)`, the time of the
-   last answer, when `state.answers` holds more entries than `state.gateAnswersSeen` and
-   `state.gateQuestionDigest` is this question's digest, so re-typing
-   the same question (markup, quotes, punctuation) still reads as answered and one with other words
-   pauses again. The question is the block under the label of the confirmation section, at any
-   heading level, with HTML comments and fenced lines ignored. The label is `**Question:**`,
-   `**Question**:`, `**Question :**` or `__Question:__` anywhere in a line, `Question:` at a line's
-   start, a heading titled `Question` (a level-2 one stays in the section), or a table row
-   `| Question | text |` with a filled second cell (that cell alone; under a header row whose cell
-   has no `?`, the first cell of the row below). The block ends at the next bold label or heading.
-   One reader (`src/queue/question-text.mjs`) serves the check, the pause and the report. A question
-   is a value with a `?` and at least one word; nothing else ever pauses a run. A label left unfilled
-   (empty, one single `<…>` or `[…]` hint, or a placeholder word, `none`, `no question` or `nothing`
-   that goes on to say nothing, such as `None needed`, `(none)`, `N/A - decided above`) is an `OPEN:`
-   line. Any other labelled value with no `?` is a `MISSING:`, and so is a section with a `?` and no
-   label, so the architect is relaunched once. A section with no label and no `?` asks nothing: an
-   `OPEN:` line.
-7. `QA-MODE: skip|lite|full — <why>` (`05 --stage triage` only, on a complete round): the first
-   line of the `## QA mode` section of the last `source: qa-triage` round. The lane decides under
-   the written rule of its prompt, from the real diff, the plan's risks and the Brief; the plan's
-   `**Always-gate class:**` field and its 🔴 count are not read here. The check answers `MISSING:`
-   for an empty section, a first line that is not a mode and a real sentence, a `skip` with a listed
-   `## New risk`, a `skip` or `lite` with a filled `data/migration`, `route/endpoint`,
-   `auth/permission`, `payment`, `concurrency`, `external-input parsing` or `personal data` line,
-   a `skip` or `lite` with a line off the list of kinds (`copy/docs`, `config`, `test-only`, `rename`,
-   `logic` and those), read in any case, and a `skip` with a `logic` line whose sentence names no
-   test path: a path under a test directory or a file named as a test. Every test path such a
-   sentence names must also be a regular file inside the run's worktree once `..` and links are
-   resolved, and still read as a test there, with an extension on the closed list of code files
-   (so `docs/spec/overview.md` or `test/data.json` is refused) and no vendored directory
-   (`node_modules/`, `vendor/`, `third_party/`, `site-packages/` and the like, at any depth, in any
-   case) on its path; an absolute path does not count, and a worktree the
-   check cannot read answers `MISSING:` too, so none of these records a mode or a phase. This is the
-   gate's one disk read: `run check` (`pipeline/worktree-tests.mjs` of the package) passes what it finds to
-   `evaluateCheck` as gaps, and `evaluateCheck` itself reads no disk. The orchestrator's Phase 5
-   reads this line and nothing else to pick the QA mode; a resume re-runs the check and launches
-   the lane only on its `MISSING:`.
-8. `QA-STAGE: provers|skip` (`05 --stage analyst` only): `skip` when the analyst's
-   `## Break hypotheses` holds no item other than `None`, so the orchestrator goes straight to
-   `run check 05`; `provers` otherwise.
-9. `INVALIDATED: <item>`, one per item of `## Invalidated assumptions` other than `None` (`05`).
-   It sends the plan back to the architect, never to the operator: `05` does not record `qa`,
-   and the memo line is the first `INVALIDATED:` line.
-10. `DIFF-APPLIES: yes|no` (`07`, from `Diff applies plan:`; omitted on `n/a` or absent).
-11. `NEEDS-DEVICE` (`07`).
-12. `index: saved N files, M libs` | `index: not saved (<reason>)` (`02`).
-13. `recorded: …` lines.
-14. `SCRIPT:` and the device script verbatim to the end of the output (`07` `NEEDS-DEVICE`:
-    the lines of `## Runtime verdict` after the verdict, up to `Diff applies plan:`).
+1. `OK` | `MISSING: <what>` | `GENERATED` (`04`). `MISSING: <file> (not written)` when the
+   artifact (or, for a round artifact, the round read) is empty or absent; `MISSING: verdict (one
+   of: <words>)` when the step has verdict words and the round states none of them. Nothing else
+   is ever `MISSING:`, so a free-form artifact passes. After `MISSING:` nothing is printed but a
+   `REPAIRED:` line, and nothing is recorded but the check memo. On a round artifact (`05`, `06`,
+   `07`) whose open code fence the check closed, the `REPAIRED: …` line follows the first line; it
+   never changes the memo nor completion.
+2. `VERDICT: <word>` (`01`, `05`, `05 --stage analyst`, `06`, `07`): one of the manifest's
+   verdict words of the check (`PROCEED`, `NO-CHANGE-NEEDED`, `NOT-REPRODUCIBLE`; `APPROVED`,
+   `NEEDS FIX`, `NEEDS DISCUSSION`; `PASSED`, `PASSED-STATIC`, `FAILED`; `CONFIRMED`, `NOT-MET`,
+   `SYMPTOM-PERSISTS`, `NEEDS-DEVICE`, `UNAVAILABLE`). The reader is tolerant: it looks at the
+   unfenced, comment-free lines of the round read, and a line states a verdict when it is a
+   heading or a `Verdict:`/`Verification:`/`QA mode:` labelled line (bullets, bold and backticks
+   allowed) whose text opens with a word, or the first non-blank line under a heading titled with
+   `verdict`, `verification` or `QA mode`. A heading with no such title states one only when the
+   word stands alone (`## Confirmed root cause` is none). Words match in any case, longest first,
+   never as the prefix of a longer word (`PASSED-STATIC` beats `PASSED`); the last line that states
+   one wins. Prose and check lines (`- test: PASSED`) are never read.
+3. `CONFIRM:` (`03`, only with a filled question, the one human stop of a run):
+   `CONFIRM: requires-user-confirmation — <question>`, or `CONFIRM: answered (<at>)`, the time of
+   the last answer, when `state.answers` holds more entries than `state.gateAnswersSeen` and
+   `state.gateQuestionDigest` is this question's digest, so re-typing the same question still reads
+   as answered and one with other words pauses again. The question is the labelled block of the
+   confirmation section that `src/queue/question-text.mjs` reads for the check, the pause and the
+   report alike; a section with no filled, labelled question asks nothing and never pauses.
+4. `QA-MODE: skip|lite|full — <why>` (`05 --stage triage` only): the mode the last
+   `source: qa-triage` round states, read like a verdict, with the text after it (past a dash or a
+   colon) as the reason, or `stated by the QA triage` when it gives none.
+5. `QA-STAGE: provers|skip` (`05 --stage analyst` only): `provers` when the analyst's round holds a
+   line that opens with an `H<n>` id or an item under `## Break hypotheses`, `skip` otherwise, so the
+   orchestrator goes straight to `run check 05`.
+6. `NEEDS-DEVICE` (`07`).
+7. `index: saved N files, M libs` | `index: not saved (<reason>)` (`02`).
+8. `recorded: …` lines.
+9. `SCRIPT:` and the device script verbatim to the end of the output (`07` `NEEDS-DEVICE`: the lines
+   of `## Runtime verdict` after the verdict, up to `Diff applies plan:`).
 
 The check ids are `00` to `07`; `--stage analyst` and `--stage triage` are accepted only with `05` (any other stage,
 or a stage on another check, is refused). A retired id of the old numbering is refused with
 the one line `renumbered: use <NN>` (exit 1), and nothing is evaluated.
 
-Every section read is fence-aware: a heading matches by prefix, never inside fenced code, and
-HTML comments are stripped first, also mid-line, by one scanner that keeps fenced lines and code
-spans byte for byte (a `<!--` inside inline code or a fence opens nothing; a comment never
-closed stays visible); a section ends at the next `## ` outside a fence. Round artifacts (`05`,
-`06`, `07`) are split into rounds first, left to right with no lookahead, and read on their last
-`## Round`, or on the last `source: qa-triage` round for `05 --stage triage` (its HTML comments stripped inside that round only): a `## Round` heading inside fenced
-code is never a round; a column-0 `## Round <n>` whose number is the highest so far plus one is a
-round even inside an open HTML comment, and closes the comment only; any other `## Round` heading
-counts only outside fenced code and HTML comments (also one opened mid-line), for the check and
-for the next round number alike. Fence lines follow CommonMark, in one place (`fenceStep`): an
-opener is 0-3 spaces then 3+ backticks or tildes, and a backtick info string holding a backtick
-is no fence (```` ```node --test``` ```` is inline code); a closer is the opener's character, at
-least as long, with no info string (```` ```js ```` never closes). Every reader — the gates,
-`roundsOf`/`lastRound`/`nextRound`, `run append`, the consolidation's section reader and the
-`04` file list — reads comments with one scanner (`scanMarkdown`): a `<!--` that never closes
-opens nothing, it and all after it are literal text. The rounds a gate reads (the last round, or
-the consolidation window for `run check 05`) must be well-formed, so a gate never picks an older
-round or a phantom tail:
-- an artifact that ends inside an open code fence (D1) is repaired before any evaluation, under
-  the run lock: the check (and `run append`) appends the fence's own marker as the last line —
-  a no-op for every reader, no round boundary moves — and prints `REPAIRED: the code fence of
-  round <k> opened at line <X> of <file> never closed; the runtime appended `<marker>` at line
-  <Z>` right after the first line;
-- every other defect is one `MISSING:` part, earliest line first, joined by `; `, each asking
-  the lane to append a new `## Round <next>` (never to edit an earlier round): a column-0
-  `## Round <next>` inside a fence of a read round (D2 — a quote and a swallowed round cannot be
-  told apart, so the round is never evaluated; a fenced heading of another number is plain
-  content), a read round that leaves a `<!--` open (D3), and a first read round whose heading
-  sits in a comment the round itself closes (D4). `run check 05` writes no consolidation over a
-  window with a defect and answers its parts. The Type
-every rule uses is `state.type`; without one, the triage's (a `## Diagnosis` with a filled
-`Confirmed root cause:` or `Symptom proof:` is `bug/error`, else `feature/refactor`); without a
-triage, `bug/error`. A method "names a re-runnable search" when it carries a backtick span or
-one of the words `grep`, `rg`, `glob`, `ast-grep`, `git `, `find `, `ls `, `sed `, `awk `,
-`node `, `npm `. Table cells are split the GFM way: one leading and one trailing `|` are
-dropped, `\|` is a literal pipe, a pipe inside a code span (a backtick run closed by a run of
-the same length on the line) is cell text, and an unmatched backtick is plain text. The gate
-codes, in output order per phase:
+Round artifacts (`05`, `06`, `07`) are split into rounds first and read on their last `## Round`,
+or on the last `source: qa-triage` round for `05 --stage triage`: a `## Round` heading inside
+fenced code is never a round; a column-0 `## Round <n>` whose number is the highest so far plus one
+is a round even inside an open HTML comment, and closes the comment only. Fence lines follow
+CommonMark, in one place (`fenceStep`), and every reader reads comments with one scanner
+(`scanMarkdown`): a `<!--` that never closes opens nothing. An artifact that ends inside an open
+code fence is repaired before any evaluation, under the run lock: the check (and `run append`)
+appends the fence's own marker as the last line — no round boundary moves — and prints
+`REPAIRED: the code fence of round <k> opened at line <X> of <file> never closed; the runtime
+appended `<marker>` at line <Z>` right after the first line. No other round defect is refused:
+the last round is read as it is.
 
-- `01`, the `## Brief` of the triage, matched as a whole unfenced heading line (never a prefix):
-  - `brief-missing` — `## Brief absent`, on every verdict (a later phase prompt needs it even
-    on a terminated run);
-  - only on `PROCEED`: `brief-field-empty` — `<field>`, for `Affected area`, `Context`,
-    `Objective`, `Expected outcome` and `Commit type`, in that order, when the field is absent,
-    blank, `n/a` or wholly a `<…>`/`[…]` placeholder; `brief-type-invalid` — `<value>` when the
-    leading token of a present `**Type:**` is not `bug/error`/`feature/refactor`, so `bug/error
-    (security)` passes (an absent Type is no gate: the `## Diagnosis` rule below applies);
-    `brief-commit-type-invalid` — `<value>` when the leading token of the Commit type is not one
-    of the accepted commit types, so `fix(queue)` passes. The leading token is the lower-cased run
-    of `[a-z/_-]` the plain value opens with.
-- `01` `symptom-proof-missing` — a `PROCEED` on a `bug/error` run whose `## Diagnosis` is
-  absent, has no `Symptom proof:` line, or leaves it empty, `n/a` or a `<…>` placeholder.
-- `07`, on the first table of the last round with a `Result` column:
-  `runtime-not-met` — a row whose Result starts `NOT MET` without `to confirm`;
-  `runtime-no-attempt` — a row whose Result is none of `MET`/`NOT MET…`, or whose Evidence is
-  empty, `-`, `none` or `not run`.
-
-`03` and `05` have no gate code. A `bug/error` plan with no `**Type mismatch:**` line with
-evidence must still carry `## Symptom coverage` (`MISSING: ## Symptom coverage`, or `(empty)` with
-no table row), and two findings on it print as `OPEN:`, never as a gate:
-- `coverage-vector-no-reason` — a row whose Status is not `covered`/`not-covered`, or whose
-  Reason is empty, `-`, `n/a` or `not applicable`;
-- `coverage-enumeration-no-method` — `**How I enumerated:**` absent from the section, or its
-  block (from the label to the first table row or the next bold label, bullets and fenced
-  commands included) names no re-runnable search.
-
-A `not-covered` row, a `**Always-gate class:** yes` line (no gate and no QA mode read it) and an
-item the plan or triage leaves unconfirmed force no question. `05` reads the last round's
-`## Validated risks` only for its `OPEN:` lines; a report's old `Usage coverage:` or
-`Symptom coverage:` line opens nothing.
+The Type of the run is the Brief's valid `**Type:**` on `01`, else `state.type`, else the
+triage's (a `## Diagnosis` with a filled `Confirmed root cause:` or `Symptom proof:` is
+`bug/error`, else `feature/refactor`), else `bug/error`. A missing or odd Brief field never fails
+a check: the commit type and the slug are recorded only when present and valid, an odd Type falls
+to the derived one, and a triage with no `## Brief` stands whole for it.
 
 The check then acts on what it found, and no effect ever changes the first line or the exit
-code. A check **completes** its phase when the first line is `OK` or `GENERATED`, no `GATE:`
-fired and the verdict does not loop back (`06` `FAILED`, `07` `NOT-MET` and
-`SYMPTOM-PERSISTS`); a `CONFIRM`, `TYPE-MISMATCH`, `NEEDS-DEVICE` or `UNAVAILABLE` line
-completes, except `INVALIDATED:` on `05`, which never does. On completion it records the phase (`recorded: phase_done <phase> <verdict>`, plus
+code. A check **completes** its phase when the first line is `OK` or `GENERATED` and the
+verdict does not loop back (`06` `FAILED`, `07` `NOT-MET` and `SYMPTOM-PERSISTS`); a
+`CONFIRM`, `NEEDS-DEVICE` or `UNAVAILABLE` line completes. On completion it records the phase (`recorded: phase_done <phase> <verdict>`, plus
 ` — reason: <reason>` on a re-run: the line the same check failed with, else
 `re-run after <check> <line>` of the newest failure, else `re-run`; ` (already)` when the same
 text was already recorded); otherwise it prints `recorded: none (<line>)`, and a write the
-state refuses prints `recorded: not recorded (<reason>)`. `01` records the Type, even on a
-gate: the Brief's valid `**Type:**` wins over a recorded one (`recorded: type <type>`, or
+state refuses prints `recorded: not recorded (<reason>)`. `01` records the Type: the Brief's valid `**Type:**` wins over a recorded one (`recorded: type <type>`, or
 `(was <old>)` when it replaces one); without it the Type the triage implies, only when
 `state.type` has none. On completion `01` also writes the triage's `## Brief` section
-verbatim into `<RUN_DIR>/00-brief.md` (`recorded: brief 00-brief.md`), records the
+verbatim into `<RUN_DIR>/00-brief.md` (`recorded: brief 00-brief.md`; with no such section the whole
+triage, `recorded: brief 00-brief.md (whole triage: no ## Brief)`), records the
 `commitType` (`recorded: commit type <c>`), on a terminal verdict (`NOT-REPRODUCIBLE`,
 `NO-CHANGE-NEEDED`) the termination
 (`recorded: run_terminate triage <VERDICT>`, reason
@@ -1530,10 +1437,7 @@ so its round never supersedes nor is superseded); otherwise a round with
 `run check 05` (no stage) takes the run lock and, when the last round is neither lite nor
 consolidated and an analyst round exists, merges the window — the last analyst round plus every
 prover round after it, the later round of a group replacing the earlier one — into a new
-`## Round <n+1>` whose first line is `source: runtime consolidation · rounds <a>, <b>, …`; it
-validates that round with the same D1-D4 rules the final check reads it by and, when one fires
-(e.g. a fenced `## Round <n+2>` quote carried from the analyst), writes nothing and fails with
-`the consolidated round <n+1> of 05-qa.md would be ill-formed, so nothing was written: …`. It
+`## Round <n+1>` whose first line is `source: runtime consolidation · rounds <a>, <b>, …`. It
 carries, in this order and only when some merged round has it, `## Mapped rules`,
 `## Proven breaks`, `## Suggestions (non-blocking)`, `## Access map (QA)`, `## Validated risks`,
 `## Invalidated assumptions`, `## Generated PoCs` and `## Prevention`: each the analyst's body

@@ -442,7 +442,7 @@ test("the deny reason names every rule and every guard of the data, and the skil
   }
   const skill = readFileSync(join(packageRoot(), "plugin", "skills", "resolve", "SKILL.md"), "utf8");
   assert.equal(skill.includes("the closed Bash list"), false, "the skill still copies the closed list the runtime holds");
-  assert.ok(skill.includes("- (e) git/gh/`nightqueue run` in the subcommands the runtime allows; a denial says what to do instead."), "channel (e) no longer defers to the runtime");
+  assert.ok(skill.includes("- (e) git/gh/`nightqueue run` as the runtime allows; a denial says what to do instead."), "channel (e) no longer defers to the runtime");
 });
 
 test("the job home variable is the one the runtime pins on the child", () => {

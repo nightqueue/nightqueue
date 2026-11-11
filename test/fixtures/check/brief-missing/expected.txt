@@ -1,4 +1,5 @@
 OK
 VERDICT: PROCEED
-GATE: brief-missing — ## Brief absent
-recorded: none (GATE: brief-missing — ## Brief absent)
+recorded: brief 00-brief.md (whole triage: no ## Brief)
+recorded: phase_done triage PROCEED
+recorded: slug check-contract

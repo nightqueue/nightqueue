@@ -176,8 +176,8 @@ test("every answer reaches the triager and the architect through state.json, old
   await applyRetry({ id: home.id, note: "second answer", env: home.env });
 
   assert.deepEqual(readRunState(runOf(home)).answers.map((entry) => entry.text), ["first answer", "second answer"]);
-  assert.ok(blockText("triager").includes("every entry of `answers` of state.json, oldest first"));
-  assert.ok(blockText("architect").includes("Read `type` and `answers` of state.json"));
+  assert.ok(blockText("triager").includes("`answers` of state.json, oldest first"));
+  assert.ok(blockText("architect").includes("`type`, `answers` of state.json"));
   assert.equal(agentText("coder").includes("`answers`"), false, "the coder reads the answers");
 });
 
@@ -412,7 +412,7 @@ test("7: open pull requests found at claim are in origin/open-prs.md and the tri
   assert.equal(prompt.includes("open-prs"), false, prompt);
   const file = join(origin, "open-prs.md");
   assert.ok(readFileSync(file, "utf8").includes("- Fix the worker · https://github.com/acme/app/pull/7 · fix/worker"));
-  assert.ok(blockText("triager").includes("Read every file of origin/, when the directory exists, `open-prs.md` included"), "the triager no longer reads the open pull requests");
+  assert.ok(blockText("triager").includes("every file of origin/ (`open-prs.md` too)"), "the triager no longer reads the open pull requests");
 
   await applyRetry({ id: home.id, env: home.env });
   await runJob(home, { prListImpl: () => null });

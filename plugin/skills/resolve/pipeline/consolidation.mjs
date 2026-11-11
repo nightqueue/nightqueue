@@ -1,12 +1,13 @@
-import { UserError } from "../../../../src/config/errors.mjs";
-import { appendedText, CONSOLIDATION_SOURCE, nextRound, roundDefectParts, roundSourceLine, roundsOf } from "../../../../src/queue/rounds.mjs";
+import { appendedText, CONSOLIDATION_SOURCE, nextRound, roundSourceLine, roundsOf } from "../../../../src/queue/rounds.mjs";
 import { isMarkerCandidate, scanMarkdown, withoutHtmlComments } from "../../../../src/queue/stream.mjs";
-import { QA_VERDICT } from "./artifacts.mjs";
+import { PHASE_ARTIFACTS } from "./artifacts.mjs";
 import { firstItem, readVerdict } from "./contract.mjs";
 
 // The rounds of `05-qa.md` and the consolidation `run check 05` writes over a full QA: the analyst's round plus every prover round after it.
 
 export { CONSOLIDATION_SOURCE };
+
+const QA_VERDICTS = PHASE_ARTIFACTS.get("05").verdicts;
 
 // The only prover source line whose group the runtime trusts: the one `run append --group` stamps.
 const STAMPED_PROVER_SOURCE = /^source:\s*prover\s*·\s*group:\s*([a-z0-9][a-z0-9-]{0,63})\s*$/;
@@ -131,11 +132,6 @@ function consolidationWindow(text) {
   return [rounds[analystAt], ...latestProverRounds(rounds.slice(analystAt + 1))];
 }
 
-// The numbers of the rounds a pending consolidation would merge (analyst first), or null when the artifact needs none.
-export function consolidationNumbersOf(text) {
-  return consolidationWindow(text)?.map((round) => round.number) ?? null;
-}
-
 const NONE_SPELLING = /^\(?\s*(?:none|nothing|n\/a|na|no(?:\s+proven)?\s+breaks?)\s*\)?(?:$|\s*[:;,.!—–]|\s+-\s)/i;
 const DASH_ONLY = /^[—–-]+$/;
 const REGRESSION_MARK = /\btype\s*[:=]\s*regression\b|\(\s*regression\s*\)|\.regression\.|\bregression\s+(?:PoC|test|net)\b/i;
@@ -243,7 +239,7 @@ function provesABreak(round) {
 // The verdict the proof supports and its note lines: a proven break anywhere, else the provers' verdicts with the coverage of the analyst's hypotheses, else the analyst's when it left no hypothesis open.
 function provenVerdict([analyst, ...provers]) {
   const counted = provers.length > 0 ? provers : [analyst];
-  const verdicts = counted.map((round) => readVerdict(withoutHtmlComments(round.text), QA_VERDICT));
+  const verdicts = counted.map((round) => readVerdict(round.text, QA_VERDICTS));
   const unreadable = counted.filter((_round, at) => verdicts[at] === null).map((round) => round.number);
   const coverage = provers.length > 0 ? coverageOf(analyst, provers) : { verdict: null, notes: [] };
   const notes = [...(unreadable.length > 0 ? [`unreadable verdict in round ${unreadable.join(", ")}`] : []), ...coverage.notes];
@@ -268,10 +264,7 @@ export function consolidationOf(text) {
   return { number: nextRound(text), body: [source, ...sections, verdictSection(rounds)].join("\n\n") };
 }
 
-// The artifact with the consolidated round appended, refused when the round it builds is one the final check would refuse.
-export function validConsolidatedText(file, raw, consolidation) {
-  const { text } = appendedText(raw, consolidation.number, consolidation.body);
-  const defects = roundDefectParts(file, text, [consolidation.number]);
-  if (defects.length > 0) throw new UserError(`the consolidated round ${consolidation.number} of ${file} would be ill-formed, so nothing was written: ${defects.join("; ")}`);
-  return text;
+// The artifact with the consolidated round appended.
+export function consolidatedText(raw, consolidation) {
+  return appendedText(raw, consolidation.number, consolidation.body).text;
 }

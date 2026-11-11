@@ -1,0 +1,3 @@
+OK
+index: not saved (the artifact carries no `## File map` section; nothing to index)
+recorded: phase_done explore OK

@@ -2,12 +2,12 @@
   "name": "resolve",
   "version": "0.7.0",
   "phases": [
-    { "id": null, "check": "00", "artifact": "00-brief.md", "sections": ["## Brief"], "verdicts": [], "agents": [] },
+    { "id": null, "check": "00", "artifact": "00-brief.md", "sections": [], "verdicts": [], "agents": [] },
     {
       "id": "triage",
       "check": "01",
       "artifact": "01-triage.md",
-      "sections": ["## Verdict", "## Validated brief", "## Out of scope", "## Request gaps"],
+      "sections": [],
       "verdicts": ["PROCEED", "NO-CHANGE-NEEDED", "NOT-REPRODUCIBLE"],
       "agents": ["triager"],
       "gateStop": "triage"
@@ -16,7 +16,7 @@
       "id": "explore",
       "check": "02",
       "artifact": "02-explore.md",
-      "sections": ["## File map", "## Access map", "## Third-party libraries"],
+      "sections": [],
       "verdicts": ["OK"],
       "agents": ["explore"]
     },
@@ -24,7 +24,7 @@
       "id": "architecture",
       "check": "03",
       "artifact": "03-plan.md",
-      "sections": ["## Implementation plan", "## Assumptions", "## Pre-mortem", "## Identified risks"],
+      "sections": [],
       "verdicts": ["OK"],
       "agents": ["architect"],
       "gateStop": "architect"
@@ -33,7 +33,7 @@
       "id": "implementation",
       "check": "04",
       "artifact": "04-implementation.md",
-      "sections": ["## Modified files"],
+      "sections": [],
       "verdicts": ["OK", "GENERATED"],
       "agents": ["coder"],
       "derivesFileList": true
@@ -42,22 +42,22 @@
       "id": "qa",
       "check": "05",
       "artifact": "05-qa.md",
-      "sections": ["## Proven breaks", "## Validated risks", "## Invalidated assumptions", "## Generated PoCs", "## Verdict"],
+      "sections": [],
       "verdicts": ["APPROVED", "NEEDS FIX", "NEEDS DISCUSSION", "SKIPPED"],
       "agents": ["qa-triage", "qa-analyst", "qa-prover"],
       "rounds": true,
       "appendable": true,
       "gateStop": "qa",
       "stages": {
-        "analyst": { "sections": ["## Proven breaks", "## Break hypotheses", "## Test recipe", "## Validated risks", "## Invalidated assumptions", "## Generated PoCs", "## Verdict"] },
-        "triage": { "sections": ["## Diff classification", "## New risk", "## QA mode"] }
+        "analyst": { "verdicts": ["APPROVED", "NEEDS FIX", "NEEDS DISCUSSION"] },
+        "triage": { "verdicts": ["skip", "lite", "full"] }
       }
     },
     {
       "id": "verification",
       "check": "06",
       "artifact": "06-verification.md",
-      "sections": ["## Checks run", "## Verification"],
+      "sections": [],
       "verdicts": ["PASSED", "PASSED-STATIC", "FAILED"],
       "agents": ["verifier"],
       "rounds": true,
@@ -68,7 +68,7 @@
       "id": "runtime",
       "check": "07",
       "artifact": "07-runtime.md",
-      "sections": ["## Runtime verdict"],
+      "sections": [],
       "verdicts": ["CONFIRMED", "NOT-MET", "SYMPTOM-PERSISTS", "NEEDS-DEVICE", "UNAVAILABLE"],
       "agents": ["verifier"],
       "rounds": true,

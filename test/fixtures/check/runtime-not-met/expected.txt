@@ -1,5 +1,3 @@
 OK
 VERDICT: NOT-MET
-GATE: runtime-not-met — queue close J-2
-DIFF-APPLIES: yes
-recorded: none (GATE: runtime-not-met — queue close J-2)
+recorded: none (VERDICT: NOT-MET)

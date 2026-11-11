@@ -36,18 +36,17 @@ the release workflow depends on.
 
 A phase's text has three homes, and a change goes to the one that owns it:
 
-- **The block is the contract.** Its block of `## Phase prompts` in
-  `plugin/skills/resolve/SKILL.md` names the artifact (`ARTIFACT_PATH`), the run files and
-  sections to read (`INPUTS`), the `## Deliver` headings inside a `~~~` fence with the append rule,
-  the `## Found` extras and the return. The shared `<RETURN>`, `<LANE>` and `<ROUND>` lines expand
-  to the fences of those names; a block has at most 32 written lines, and the orchestrator fills
-  the `<…>` only up to and including `NOTE:`.
+- **The step is the contract.** Its step of `## Phase prompts` in
+  `plugin/skills/resolve/SKILL.md` is a heading (target, agent, model, artifact and extras) and
+  three lines: what it receives (`Receives`), what is wanted (`Wanted`) and the verdict words it
+  returns (`Verdict`). The orchestrator composes the launch from the shared `LAUNCH` fence, then
+  `<ROUND>`, `<LANE>` and `<RETURN>`; it fills the `<…>` only up to and including `NOTE:`.
 - **The agent is the method.** `plugin/agents/<agent>.md` says how to judge, attack, prove or
   write, worded for any request: no run file, run directory or phase name, and no run section
   (`test/plugin-agent-independence.test.mjs` holds it).
-- **The manifest is the mandatory sections.** `plugin/skills/resolve/pipeline/manifest.json`
-  lists what each `run check` reads; `test/plugin-pipeline-manifest-deliver.test.mjs` holds every
-  block's `## Deliver` to it.
+- **The manifest is the verdict words.** `plugin/skills/resolve/pipeline/manifest.json` lists
+  each phase's artifact and verdict words; `run check` confirms only that the artifact exists and
+  states one of them, never its sections or format.
 
 `test/plugin-method-guard.test.mjs` checks that no guarded sentence is lost when text moves
 between a block and an agent. [The runtime contract](runtime-contract.md#launching-a-subagent)

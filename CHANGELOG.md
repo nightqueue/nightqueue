@@ -102,6 +102,17 @@ versions follow [semantic versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Changed
 
+- **`/resolve` is a one-page workflow, run front by front, and `run check` only confirms the
+  artifact.** The skill is a sequence, a routing table and three lines per step (what it receives,
+  what is wanted, which verdict word it returns); the report format is the agents' own. Each stage
+  of the plan runs coder → verifier → QA (a stage marked `QA: none` skips its QA), with at most two
+  fix loops per stage; a negative report marked `fix: design` goes back to the architect, any other
+  to the coder; then the whole change is verified once (never again when nothing changed since its
+  `PASSED`), run and published. `nightqueue run check <NN>` now answers `MISSING:` only for an
+  absent artifact or an absent verdict word, and still records the phase, the memo and `NEXT:`;
+  the `GATE:`, `OPEN:`, `TYPE-MISMATCH:`, `INVALIDATED:` and `DIFF-APPLIES:` lines and every check
+  on sections, Brief fields, coverage, assumptions, round shape and QA-mode reasons are gone. A
+  missing or odd Brief field takes its default instead of relaunching the triager.
 - **The operator reads the project's rules before a direct change.** Before touching a checkout it
   reads its `CLAUDE.md` (and the parent one it points to), `AGENTS.md`, `.claude/settings.json` and
   the commit convention (`commitlint`, `.husky`, the style of `git log`), so the edit, the checks,

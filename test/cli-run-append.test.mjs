@@ -254,15 +254,15 @@ test("PoC qa-r2-comment-regex vector A: a code-span `<!--` in a prover round and
   assert.ok(roundsOf(readFileSync(path, "utf8")).at(-1).text.startsWith("## Round 3\nsource: runtime consolidation · rounds 1, 2\n"));
 });
 
-test("`run check 05` over an analyst round left inside an open fence closes the fence, refuses the fenced round and writes no consolidation", async (t) => {
+test("`run check 05` over an analyst round left inside an open fence closes the fence and never counts the fenced round as a prover's", async (t) => {
   const { env, path } = seededRun(t, "cli-run-append-open-fence");
   const open = `${ANALYST.replace("## Test recipe\nnode --test", "## Test recipe\n```sh\nnode --test")}\n## Round 2\nsource: prover · group: g1\n\n## Proven breaks\nNone\n\n## Verdict\nAPPROVED\n`;
   writeFileSync(path, open);
   const full = await runCli(env, ["run", "check", "05", "--project", "alpha", "--slug", SLUG]);
-  assert.equal(full.out[0], "MISSING: line 24 of 05-qa.md is a column-0 `## Round 2` inside the code fence opened at line 9 (round 1): append a new `## Round 2` with your whole round, and indent by one space any `## Round` line you quote");
+  assert.equal(full.out[0], "OK");
   assert.equal(full.out[1], "REPAIRED: the code fence of round 1 opened at line 9 of 05-qa.md never closed; the runtime appended ````` at line 32");
-  assert.ok(!full.out.some((line) => line.startsWith("VERDICT:")), full.out.join("\n"));
-  assert.equal(readFileSync(path, "utf8"), `${open}\`\`\`\n`);
+  assert.equal(full.out[2], "VERDICT: NEEDS DISCUSSION", full.out.join("\n"));
+  assert.ok(readFileSync(path, "utf8").startsWith(`${open}\`\`\`\n`));
 });
 
 test("`run append` over a round that leaves a fence open closes it first, then appends the round", async (t) => {
@@ -278,10 +278,10 @@ test("`run append` over a round that leaves a fence open closes it first, then a
 
 const OPEN_COMMENT_ANALYST = ANALYST.replace("## Test recipe\nnode --test", "## Test recipe\nnode --test\n- payload fragment <!-- img onerror");
 
-test("D3: `run check 05 --stage analyst` refuses an analyst round that leaves a `<!--` open and records nothing", async (t) => {
+test("D3: `run check 05 --stage analyst` reads an analyst round that leaves a `<!--` open like any other", async (t) => {
   const passed = ["OK", "VERDICT: APPROVED", "QA-STAGE: provers"];
   const cases = [
-    ["open", OPEN_COMMENT_ANALYST, ["MISSING: round 1 of 05-qa.md leaves the HTML comment opened at line 10 open: append a new `## Round 2` with your whole round, closing every `<!--` with `-->` or writing a literal `<!--` in backticks"]],
+    ["open", OPEN_COMMENT_ANALYST, passed],
     ["literal", OPEN_COMMENT_ANALYST.replace("<!-- img", "`<!--` img"), passed],
     ["closed", OPEN_COMMENT_ANALYST.replace("<!-- img onerror", "<!-- img onerror -->"), passed],
   ];
@@ -293,13 +293,13 @@ test("D3: `run check 05 --stage analyst` refuses an analyst round that leaves a 
   }
 });
 
-test("D3 in the consolidation window: `run check 05` writes no consolidation and answers one MISSING line", async (t) => {
+test("D3 in the consolidation window: `run check 05` consolidates past an open `<!--` and answers the provers' verdict", async (t) => {
   const { env, path } = seededRun(t, "cli-run-append-window-defect");
   const text = `${OPEN_COMMENT_ANALYST}\n## Round 2\nsource: prover · group: g1\n\n## Proven breaks\nNone\n\n## Validated risks\nH1: HELD (REFUTED)\n\n## Generated PoCs\nNone\n\n## Verdict\nAPPROVED\n`;
   writeFileSync(path, text);
   const full = await runCli(env, ["run", "check", "05", "--project", "alpha", "--slug", SLUG]);
-  assert.deepEqual(full.out, ["MISSING: round 1 of 05-qa.md leaves the HTML comment opened at line 10 open: append a new `## Round 3` with your whole round, closing every `<!--` with `-->` or writing a literal `<!--` in backticks"]);
-  assert.equal(readFileSync(path, "utf8"), text);
+  assert.deepEqual(full.out.slice(0, 2), ["OK", "VERDICT: APPROVED"], full.out.join("\n"));
+  assert.ok(roundsOf(readFileSync(path, "utf8")).at(-1).text.startsWith("## Round 3\nsource: runtime consolidation · rounds 1, 2\n"));
 });
 
 test("`run append` writes the prover's REFUTED lines in the canonical form, keeps a PROVEN as written (its reading depends on the hypothesis type) and keeps every other byte", () => {

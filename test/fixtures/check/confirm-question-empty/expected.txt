@@ -1,3 +1,2 @@
 OK
-OPEN: ## Requires user confirmation has no filled **Question:**
 recorded: phase_done architecture OK

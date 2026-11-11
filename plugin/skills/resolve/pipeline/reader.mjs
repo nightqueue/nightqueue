@@ -12,7 +12,7 @@ export function fileOf(check) {
 
 // The verdict a round's text states for a check, or null.
 export function readVerdictOf(check, text) {
-  return readVerdict(text, PHASE_ARTIFACTS.get(check).verdict);
+  return readVerdict(text, PHASE_ARTIFACTS.get(check).verdicts);
 }
 
 // The text of each `OPEN:` line one check answers for its artifact.

@@ -17,16 +17,16 @@ import {
 } from "../test-support/skill-size.mjs";
 
 // Ratchet: lower these ceilings when the skill shrinks, never raise them to fit a change.
-const ALWAYS_LOADED_CEILING = 32639;
+const ALWAYS_LOADED_CEILING = 10240;
 const LAZY_CEILINGS = Object.freeze({
-  "phases.md": 13041,
+  "phases.md": 4134,
   "phase-8.md": 6827,
   "phase-9.md": 7725,
-  "qa-phase.md": 3923,
+  "qa-phase.md": 905,
   "pr-template.md": 8852,
   "commit-template.md": 2457,
 });
-const SKILL_MAX_LINES = 482;
+const SKILL_MAX_LINES = 169;
 const ALWAYS_LOADED_BUDGET = 56173;
 const SKILL_LINE_BUDGET = 490;
 const PHASE_MAX_LINES = 40;
@@ -37,6 +37,9 @@ const BLOCK_TARGETS = ["triager", "explore", "architect", "coder", "coder-fix", 
 const PROVERS = ["qa-prover", "qa-prover", "qa-prover", "qa-prover"];
 const J277_LAUNCHES = ["triager", "explore", "architect", "coder", "qa-analyst", ...PROVERS, "qa-analyst", ...PROVERS, "coder-fix", "verifier", "qa-prover", "verifier", "coder-fix", "verifier", "reflector"];
 const AGENT_INPUT_BUDGET = 90000;
+const MANIFEST = JSON.parse(readFileSync(join(SKILL_DIR, "pipeline", "manifest.json"), "utf8"));
+const TARGET_CHECKS = Object.freeze({ triager: "01", explore: "02", architect: "03", coder: "04", "coder-fix": "04", "qa-lite": "05", "qa-analyst": "05", "qa-prover": "05", verifier: "06", runtime: "07", reflector: null });
+const QA_MODES = Object.freeze(["skip", "lite", "full"]);
 const HOST_TERMS = /TaskCreate|bypassPermissions|isolation: worktree|EnterWorktree|ExitWorktree|nstest-demo|Measured 20|tool_use|TRIAGER ·|00-main-measure/;
 const AGENTS_DIR = join(SKILL_DIR, "..", "..", "agents");
 const SKILL_PATH = join(SKILL_DIR, "SKILL.md");
@@ -85,44 +88,47 @@ test(`an interactive /resolve reads at most ${Math.round(FIRST_LAUNCH_SHARE * 10
   assert.ok(after / before <= FIRST_LAUNCH_SHARE, `${after} bytes against main's ${before}`);
 });
 
-test("every target has one block in `## Phase prompts`, at most 32 written lines, carrying its lane rules and its return", () => {
-  const { returnLines, snippets, blocks, written } = phasePrompts();
+test("every manifest target has one step of exactly three lines, and its launch opens with its target and carries its lane rules and its return", () => {
+  const { returnLines, snippets, blocks, steps } = phasePrompts();
   assert.equal(returnLines.length, 5, "the section no longer states the shared return syntax");
   assert.equal(snippets.LANE.length, 2, "the section no longer states the shared lane rules");
-  assert.equal(snippets.ROUND.length, 3, "the section no longer states the shared round rule");
+  assert.equal(snippets.ROUND.length, 2, "the section no longer states the shared round rule");
+  assert.deepEqual(Object.keys(steps).sort(), [...MANIFEST.targets].sort(), "the steps and the manifest targets differ");
   assert.deepEqual(Object.keys(blocks).sort(), [...BLOCK_TARGETS].sort());
   for (const [target, lines] of Object.entries(blocks)) {
-    assert.ok(written[target].length <= BLOCK_MAX_LINES, `the ${target} block has ${written[target].length} written lines`);
-    assert.ok(written[target].includes("<LANE>"), `the ${target} block does not carry \`<LANE>\``);
-    assert.ok(lines.some((line) => line.startsWith("RETURN-HEAD: ")), `the ${target} block declares no return head`);
-    assert.ok(lines[0].startsWith(`TARGET: ${target} · AGENT: nightqueue:`), `the ${target} block does not open with its target and agent`);
+    assert.deepEqual(steps[target].lines.map((line) => line.split(":")[0]), ["- Receives", "- Wanted", "- Verdict"], `the ${target} step is not its three lines`);
+    assert.ok(lines.length <= BLOCK_MAX_LINES, `the ${target} launch has ${lines.length} lines`);
+    assert.ok(lines.includes(snippets.LANE[1]), `the ${target} launch does not carry the lane rules`);
+    assert.ok(lines.some((line) => line.startsWith("RETURN-HEAD: ")), `the ${target} launch declares no return head`);
+    assert.ok(lines.some((line) => line.startsWith("RETURN-MAX-LINES: ")), `the ${target} launch declares no return cap`);
+    assert.ok(lines[0].startsWith(`TARGET: ${target} · AGENT: nightqueue:`), `the ${target} launch does not open with its target and agent`);
   }
 });
 
-// The lines from a block's `INPUTS:` line up to its `NOTE:` line: what the launch hands the agent to read.
-function inputsOf(lines) {
-  const from = lines.findIndex((line) => line.startsWith("INPUTS:"));
-  return from < 0 ? [] : lines.slice(from, lines.findIndex((line) => line.startsWith("NOTE:")));
+// The verdict words a step may name: its manifest phase's (or its QA stage's), or the QA modes for the QA triage.
+function verdictWordsOf(target) {
+  if (target === "qa-triage") return QA_MODES;
+  const phase = MANIFEST.phases.find((entry) => entry.check === TARGET_CHECKS[target]);
+  if (phase === undefined) throw new Error(`no manifest phase for the ${target} step`);
+  return phase.verdicts;
 }
 
-// A block that carries its contract states its artifact, the sections it reads, and opens its Deliver with a `~~~` fence.
-test("every block with a `## Deliver` names its artifact, the sections it reads and fences its headings", () => {
-  const { written } = phasePrompts();
-  const delivering = Object.entries(written).filter(([, lines]) => lines.some((line) => line.startsWith("## Deliver")));
-  assert.deepEqual(delivering.map(([target]) => target).sort(), [...BLOCK_TARGETS].sort(), "a block has no Deliver");
-  for (const [target, lines] of delivering) {
-    if (target !== "reflector") assert.ok(lines.some((line) => line.startsWith("ARTIFACT_PATH: <runDir>/")), `the ${target} block names no ARTIFACT_PATH`);
-    assert.ok(inputsOf(lines).some((line) => line.includes("## ")), `the ${target} block's INPUTS name no section`);
-    assert.equal(lines[lines.findIndex((line) => line.startsWith("## Deliver")) + 1], "~~~", `the ${target} Deliver does not open a \`~~~\` fence`);
+test("every step states `none` or verdict words of its manifest phase, and every launch with an artifact names it", () => {
+  const { steps, blocks } = phasePrompts();
+  for (const [target, step] of Object.entries(steps)) {
+    const words = step.Verdict === "none" ? [] : step.Verdict.split(" | ");
+    for (const word of words) assert.ok(verdictWordsOf(target).includes(word), `the ${target} step names \`${word}\`, no verdict of its phase`);
+    if (step.artifact === "no artifact") assert.equal(blocks[target].some((line) => line.startsWith("ARTIFACT_PATH:")), false, `the ${target} launch names an artifact`);
+    else assert.ok(blocks[target].includes(`ARTIFACT_PATH: <runDir>/${step.artifact}`), `the ${target} launch names no ARTIFACT_PATH`);
   }
 });
 
 // The orchestrator fills every placeholder up to `NOTE:`, so only the envelope's own keys may sit there.
-test("no block holds an agent-side placeholder on or above its `NOTE:` line", () => {
-  const envelope = /^<(runDir|worktree|project|needsSlug|baseRef|demoRepo|pluginRoot|stage|models\.[a-z-]+|note, or none|limit, or none|ids — label, from the analyst's return|the iteration and its failures, in one line)>$/;
-  for (const [target, lines] of Object.entries(phasePrompts().written)) {
+test("no launch holds an agent-side placeholder on or above its `NOTE:` line", () => {
+  const envelope = /^<(runDir|worktree|project|needsSlug|baseRef|demoRepo|pluginRoot|stage|models\.[a-z-]+|note, or none|limit, or none|ids — label, from the analyst's return|first H id of GROUP)>$/;
+  for (const [target, lines] of Object.entries(phasePrompts().blocks)) {
     const filled = lines.slice(0, lines.findIndex((line) => line.startsWith("NOTE:")) + 1);
-    for (const placeholder of filled.join("\n").match(/<[^<>]+>/g) ?? []) assert.match(placeholder, envelope, `the ${target} block fills an agent-side ${placeholder}`);
+    for (const placeholder of filled.join("\n").match(/<[^<>]+>/g) ?? []) assert.match(placeholder, envelope, `the ${target} launch fills an agent-side ${placeholder}`);
   }
 });
 

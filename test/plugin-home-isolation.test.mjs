@@ -75,5 +75,5 @@ test("the agents a run launches and their blocks keep the home isolation: no han
     assert.equal(/NIGHTQUEUE_JOB_(ID|HOME|CLAUDE_DIR)=/.test(text), false, `${name} tells a subagent to override a nightqueue guard`);
   }
   const runtime = phasePrompts().blocks.runtime.join("\n");
-  assert.ok(runtime.includes("nightqueue sandbox <cmd>"), "the runtime lane lost the sandbox rule");
+  assert.ok(runtime.includes("`nightqueue sandbox`"), "the runtime lane lost the sandbox rule");
 });

@@ -1,1 +1,1 @@
-NEXT: publish --draft remaining=MISSING: ## Implementation plan, ## Assumptions, ## Pre-mortem, ## Identified risks
+NEXT: publish --draft remaining=MISSING: 03-plan.md (not written)

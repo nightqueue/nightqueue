@@ -1,3 +1,0 @@
-OK
-VERDICT: PASSED (stage 1)
-recorded: phase_done verification PASSED

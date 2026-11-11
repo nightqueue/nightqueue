@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { evaluateCheck } from "../../plugin/skills/resolve/pipeline/contract.mjs";
 import { proverRound } from "../../src/cli/run-append.mjs";
 import { appendedText, appendRoundText, lastRound, nextRound, roundDefects, roundsOf, unclosedFenceOf, withClosedFence } from "../../src/queue/rounds.mjs";
-import { aggregateVerdict, breakItems, consolidationOf, roundSource, validConsolidatedText } from "../../plugin/skills/resolve/pipeline/consolidation.mjs";
+import { aggregateVerdict, breakItems, consolidationOf, consolidatedText, roundSource } from "../../plugin/skills/resolve/pipeline/consolidation.mjs";
 
 const ANALYST = "## Round 1\n## Mapped rules\n- rule A\n\n## Proven breaks\nNone\n\n## Break hypotheses\n- H1 · group: g1\n\n## Test recipe\nnode --test\n\n## Validated risks\n- R1 → hypothesis H1\n\n## Invalidated assumptions\nNone\n\n## Generated PoCs\nNone — this request writes no runtime PoC\n\n## Verdict\nAPPROVED\n";
 
@@ -113,16 +113,14 @@ test("a round that leaves a code fence open is named by unclosedFenceOf with its
   assert.equal(unclosedFenceOf("## Round 1\n```\nclosed\n```\n"), null);
 });
 
-test("a fenced `## Round <next>` quoted in a lane's last round is no round, and the gate refuses to read that round until the lane appends a new one (H8, D2)", () => {
+test("a fenced `## Round <next>` quoted in a lane's last round is no round, so the check reads that round's own verdict (H8, D2)", () => {
   const analyst = ANALYST.replace("## Test recipe\nnode --test", "## Test recipe\n```md\n## Round 2\n## Verdict\nNEEDS FIX\n```");
   assert.deepEqual(numbers(analyst), [1]);
   assert.equal(nextRound(analyst), 2);
   assert.ok(lastRound(analyst).includes("## Verdict\nAPPROVED"));
   const verification = "## Round 1\n## Checks run\n- npm test\n```\n## Round 2\n```\n\n## Verification: PASSED\n";
   const result = evaluateCheck({ check: "06", texts: { "06-verification.md": verification } });
-  assert.deepEqual(result.lines, [
-    "MISSING: line 5 of 06-verification.md is a column-0 `## Round 2` inside the code fence opened at line 4 (round 1): append a new `## Round 2` with your whole round, and indent by one space any `## Round` line you quote",
-  ]);
+  assert.deepEqual(result.lines, ["OK", "VERDICT: PASSED"]);
   const indented = verification.replace("```\n## Round 2\n```", "```\n ## Round 2\n```");
   assert.deepEqual(evaluateCheck({ check: "06", texts: { "06-verification.md": indented } }).lines, ["OK", "VERDICT: PASSED"]);
 });
@@ -167,13 +165,11 @@ test("every balanced round the writers append stays visible, and the next append
   }
 });
 
-test("the last round keeps its HTML comments byte for byte; a round artifact left inside an open fence answers MISSING until the fence is closed", () => {
+test("the last round keeps its HTML comments byte for byte; a round artifact left inside an open fence states no verdict until the fence is closed", () => {
   assert.equal(lastRound("## Round 1\nkeep `<!--x-->` here\n"), "## Round 1\nkeep `<!--x-->` here\n");
   const verification = "## Round 1\n## Checks run\n```\nunclosed\n\n## Round 2\n## Checks run\n- npm test\n\n## Verification: PASSED\n";
   const result = evaluateCheck({ check: "06", texts: { "06-verification.md": verification } });
-  assert.deepEqual(result.lines, [
-    "MISSING: the code fence of round 1 opened at line 3 of 06-verification.md never closes (append ````` on its own line at the end of the file); line 6 of 06-verification.md is a column-0 `## Round 2` inside the code fence opened at line 3 (round 1): append a new `## Round 2` with your whole round, and indent by one space any `## Round` line you quote",
-  ]);
+  assert.deepEqual(result.lines, ["MISSING: verdict (one of: PASSED, PASSED-STATIC, FAILED)"]);
   const recovered = `${verification}\`\`\`\n\n## Round 3\n## Checks run\n- npm test\n\n## Verification: PASSED\n`;
   assert.deepEqual(evaluateCheck({ check: "06", texts: { "06-verification.md": recovered } }).lines, ["OK", "VERDICT: PASSED"]);
 });
@@ -275,14 +271,6 @@ test("PoC qa-r2-comment-regex vector B: a code-span `<!--` and a later `-->` nev
 const F = "```";
 const STALE_OPEN = `## Round 1\n## Checks run\n- npm test\n\n## Verification: FAILED\n\n${F}text\nunclosed\n\n## Round 2\n## Checks run\n- npm test\n\n## Verification: PASSED\n`;
 
-test("PoC qa-r4-fence-stale-round vector b (H12): a stray closer at the end never makes the gate read round 1's verdict", () => {
-  const result = evaluateCheck({ check: "06", texts: { "06-verification.md": STALE_OPEN + F + "\n" } });
-  const first = String(result.lines[0]);
-  assert.ok(first.startsWith("MISSING:") || result.lines.some((line) => /VERDICT: PASSED/.test(String(line))), JSON.stringify(result.lines));
-  assert.ok(first.startsWith("MISSING: line 10 of 06-verification.md is a column-0 `## Round 2` inside the code fence opened at line 7 (round 1): "), first);
-  assert.ok(!result.lines.some((line) => line.startsWith("VERDICT:")), JSON.stringify(result.lines));
-});
-
 test("withClosedFence closes a fence left open at the end without moving a round, and leaves a closed text untouched", () => {
   const { text, closed } = withClosedFence(STALE_OPEN);
   assert.equal(text, `${STALE_OPEN}${F}\n`);
@@ -312,27 +300,21 @@ test("PoC qa-r4-open-comment-sections (H11): a raw `<!--` that never closes is l
   assert.match(c.body, /## Verdict\nNEEDS FIX/);
 });
 
-test("D3: a read round that leaves a `<!--` open is refused; a literal or closed one is not", () => {
+test("D3: a read round that leaves a `<!--` open is a round defect the check no longer refuses", () => {
   const open = ANALYST_FULL.replace("node --test", `node --test${RAW_OPEN}`);
   const line = open.split("\n").findIndex((candidate) => candidate.includes("<!--")) + 1;
   assert.deepEqual(roundDefects(open), [{ kind: "open-comment", line, round: 1 }]);
-  const result = evaluateCheck({ check: "05", stage: "analyst", texts: { "05-qa.md": open } });
-  assert.deepEqual(result.lines, [
-    `MISSING: round 1 of 05-qa.md leaves the HTML comment opened at line ${line} open: append a new \`## Round 2\` with your whole round, closing every \`<!--\` with \`-->\` or writing a literal \`<!--\` in backticks`,
-  ]);
+  assert.equal(evaluateCheck({ check: "05", stage: "analyst", texts: { "05-qa.md": open } }).lines[0], "OK");
   for (const fixed of [open.replace("<!-- img", "`<!--` img"), open.replace("<!-- img onerror", "<!-- img onerror -->")]) {
     assert.deepEqual(roundDefects(fixed), [], fixed);
     assert.equal(evaluateCheck({ check: "05", stage: "analyst", texts: { "05-qa.md": fixed } }).lines[0], "OK");
   }
 });
 
-test("D4: a read round whose heading sits in a comment the round itself closes is refused; an unclosed literal `<!--` before it is not", () => {
+test("D4: a read round whose heading sits in a comment the round itself closes is a round defect; an unclosed literal `<!--` before it is not", () => {
   const phantom = ANALYST.replace("## Test recipe\nnode --test", "## Test recipe\n<!--\n## Round 2\n-->");
   const opened = phantom.split("\n").indexOf("<!--") + 1;
-  const result = evaluateCheck({ check: "05", stage: "analyst", texts: { "05-qa.md": phantom } });
-  assert.deepEqual(result.lines, [
-    `MISSING: line ${opened + 1} of 05-qa.md (\`## Round 2\`) sits inside the HTML comment opened at line ${opened} and closed at line ${opened + 2}: append a new \`## Round 3\` with your whole round, and indent by one space any \`## Round\` line you quote`,
-  ]);
+  assert.deepEqual(roundDefects(phantom), [{ kind: "commented-heading", line: opened + 1, openedAt: opened, closedAt: opened + 2, round: 2 }]);
   const literal = "## Round 1\nquote <!--\n\n## Round 2\nlast\n";
   assert.deepEqual(roundDefects(literal), []);
   assert.deepEqual(roundDefects(`${literal}quote \`-->\`\n`), [{ kind: "commented-heading", line: 4, openedAt: 2, closedAt: 6, round: 2 }]);
@@ -440,14 +422,12 @@ test("PoC qa-r5-regression-proven (H16): a PROVEN on a type=regression hypothesi
   assert.match(verdictOver(regression, "H1: BROKE — the fixed code fails the net"), /^NEEDS FIX\nBROKE: H1/);
 });
 
-test("the consolidation refuses to write a round the final check would refuse, and writes one it would read", () => {
+test("the consolidation appends its round after the rounds it merges, whatever an earlier round quotes", () => {
   const F = "```";
   const quoting = (heading) => `${r5Analyst().replace("- rule A", `- rule A\n${F}\n${heading}\n${F}`)}\n## Round 2\nsource: prover · group: g1\n\n## Proven breaks\nNone\n\n## Validated risks\nH1: HELD (REFUTED)\n\n## Generated PoCs\nNone\n\n## Verdict\nAPPROVED\n`;
-  const raw = quoting("## Round 4");
-  assert.deepEqual(roundDefects(raw, [1, 2]), []);
-  assert.throws(() => validConsolidatedText("05-qa.md", raw, consolidationOf(raw)), /consolidated round 3 of 05-qa\.md would be ill-formed, so nothing was written: .*## Round 4/);
-  const safe = quoting("## Round 9");
-  const written = validConsolidatedText("05-qa.md", safe, consolidationOf(safe));
-  assert.deepEqual(roundsOf(written).map((round) => round.number), [1, 2, 3]);
-  assert.deepEqual(roundDefects(written, [3]), []);
+  for (const heading of ["## Round 4", "## Round 9"]) {
+    const raw = quoting(heading);
+    const written = consolidatedText(raw, consolidationOf(raw));
+    assert.deepEqual(roundsOf(written).map((round) => round.number), [1, 2, 3], heading);
+  }
 });

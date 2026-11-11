@@ -1,3 +1,0 @@
-OK
-OPEN: coverage-enumeration-no-method — I analyzed the code and the callers
-recorded: phase_done architecture OK

@@ -1,4 +1,5 @@
 OK
 VERDICT: PROCEED
-GATE: brief-commit-type-invalid — feature
-recorded: none (GATE: brief-commit-type-invalid — feature)
+recorded: brief 00-brief.md
+recorded: phase_done triage PROCEED
+recorded: slug check-contract

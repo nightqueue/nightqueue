@@ -260,8 +260,11 @@ function gateLines(out) {
 const TRIAGE_TAIL = "\n## Brief\n**Affected area:** src/a.mjs\n**Context:** the listing\n**Objective:** list the jobs\n**Expected outcome:** the jobs are listed\n**Commit type:** feat\n\n## Validated brief\nok\n\n## Out of scope\n- No item excluded from the scope.\n\n## Request gaps\n- None.\n";
 const OPEN_ITEMS = "\n## Open items\n- Which listing is meant?\n";
 const EXPLORE_OK = "# Explore\n\n## File map\n- /a.mjs — a\n\n## Access map\n- **No entry point:** text · grep\n\n## Third-party libraries\n- None\n";
+const VERIFICATION_NO_VERDICT = "MISSING: verdict (one of: PASSED, PASSED-STATIC, FAILED)";
+const QA_NO_VERDICT = "MISSING: verdict (one of: APPROVED, NEEDS FIX, NEEDS DISCUSSION)";
+const RUNTIME_NO_VERDICT = "MISSING: verdict (one of: CONFIRMED, NOT-MET, SYMPTOM-PERSISTS, NEEDS-DEVICE, UNAVAILABLE)";
 
-test("`run check` answers OK on a complete artifact and names every section the artifact does not carry", async (t) => {
+test("`run check` answers OK on a free-form artifact, and MISSING only for an absent artifact or an absent verdict word", async (t) => {
   const env = makeQueue(t, "cli-run-check-sections");
   const id = boundJob(env);
   writeArtifact(env, "01-triage.md", "# Triage\n\n## Verdict: PROCEED\n\nEvidence level: 3\n" + TRIAGE_TAIL);
@@ -273,27 +276,25 @@ test("`run check` answers OK on a complete artifact and names every section the 
 
   const plan = await runCli(env, ["run", "check", "03"], { jobId: id });
   assert.equal(plan.code, 0);
-  assert.deepEqual(plan.out, ["MISSING: ## Pre-mortem, ## Identified risks"]);
+  assert.deepEqual(gateLines(plan.out), ["OK"]);
 
   const qa = await runCli(env, ["run", "check", "05", "--stage", "analyst"], { jobId: id });
-  assert.deepEqual(qa.out, ["MISSING: ## Proven breaks, ## Break hypotheses, ## Test recipe, ## Validated risks, ## Invalidated assumptions, ## Generated PoCs, ## Verdict"]);
+  assert.deepEqual(qa.out, ["MISSING: 05-qa.md (not written)"]);
 
   const explore = await runCli(env, ["run", "check", "02"], { jobId: id });
-  assert.deepEqual(explore.out, ["MISSING: ## File map, ## Access map, ## Third-party libraries"]);
+  assert.deepEqual(explore.out, ["MISSING: 02-explore.md (not written)"]);
 
   writeArtifact(env, "02-explore.md", EXPLORE_OK);
   const exploreOk = await runCli(env, ["run", "check", "02"], { jobId: id });
   assert.deepEqual(gateLines(exploreOk.out), ["OK"]);
 
-  for (const heading of ["## Access map", "## Third-party libraries"]) {
-    writeArtifact(env, "02-explore.md", EXPLORE_OK.replace(`${heading}\n`, ""));
-    const exploreIncomplete = await runCli(env, ["run", "check", "02"], { jobId: id });
-    assert.deepEqual(exploreIncomplete.out, [`MISSING: ${heading}`]);
-  }
+  writeArtifact(env, "02-explore.md", "# Explore\n\nsrc/a.mjs holds the handler.\n");
+  const exploreFree = await runCli(env, ["run", "check", "02"], { jobId: id });
+  assert.deepEqual(gateLines(exploreFree.out), ["OK"]);
 
   writeArtifact(env, "07-runtime.md", "# Runtime\n\nDiff applies plan: yes\n");
   const runtimeIncomplete = await runCli(env, ["run", "check", "07"], { jobId: id });
-  assert.deepEqual(runtimeIncomplete.out, ["MISSING: ## Runtime verdict"]);
+  assert.deepEqual(runtimeIncomplete.out, [RUNTIME_NO_VERDICT]);
 
   writeArtifact(env, "07-runtime.md", "# Runtime\n\n## Runtime verdict\n\nCONFIRMED\n");
   const runtime = await runCli(env, ["run", "check", "07"], { jobId: id });
@@ -307,44 +308,44 @@ test("`run check` of a round artifact reads only its last `## Round`, and a lega
   const check = async (phase) => gateLines((await runCli(env, ["run", "check", phase], { jobId: id })).out);
 
   writeArtifact(env, "06-verification.md", "## Round 1\n\n## Verification: FAILED\n\n## Round 2\n\n## Checks run\n- Tests: PASSED\n");
-  assert.deepEqual(await check("06"), ["MISSING: ## Verification"]);
+  assert.deepEqual(await check("06"), [VERIFICATION_NO_VERDICT]);
   writeArtifact(env, "06-verification.md", "## Round 1\n\n## Checks run\n- Tests: FAILED\n\n## Verification: FAILED\n\n## Round 2\n\n## Verification: PASSED\n");
-  assert.deepEqual(await check("06"), ["MISSING: ## Checks run"], "a round with a verdict and no checks passed the gate");
+  assert.deepEqual(await check("06"), ["OK", "VERDICT: PASSED"], "a round with a verdict and no checks line is read for its verdict");
   writeArtifact(env, "06-verification.md", "## Round 1\n\n## Verification: FAILED\n\n## Round 2\n\n## Checks run\n- Tests: PASSED\n\n## Verification: PASSED\n");
   assert.deepEqual(await check("06"), ["OK", "VERDICT: PASSED"]);
   writeArtifact(env, "06-verification.md", "# Verification\n\n## Checks run\n- Tests: PASSED\n\n## Verification: PASSED\n");
   assert.deepEqual(await check("06"), ["OK", "VERDICT: PASSED"]);
   const decorated = "## Round 1\n\n## Verification: PASSED\n\n## Round 2 — retry\n\n## Checks run\n- Tests: FAILED\n";
   writeArtifact(env, "06-verification.md", decorated);
-  assert.deepEqual(await check("06"), ["MISSING: ## Verification"], "a decorated round heading passed on round 1's verdict");
+  assert.deepEqual(await check("06"), [VERIFICATION_NO_VERDICT], "a decorated round heading passed on round 1's verdict");
   writeArtifact(env, "06-verification.md", `${decorated}\n## Verification: FAILED\n`);
   assert.deepEqual(await check("06"), ["OK", "VERDICT: FAILED"]);
 
   const qaRest = "## Invalidated assumptions\nNone\n\n## Generated PoCs\nNone\n\n## Verdict\nAPPROVED\n";
   writeArtifact(env, "05-qa.md", `## Round 1\n\n## Validated risks\n- R1 HELD\n\n## Round 2\n\n## Proven breaks\nNone\n\n${qaRest}`);
-  assert.deepEqual(await check("05"), ["MISSING: ## Validated risks"]);
+  assert.deepEqual(await check("05"), ["OK", "VERDICT: APPROVED"]);
   writeArtifact(env, "05-qa.md", `## Round 1\n\n## Proven breaks\nNone\n\n## Round 2\n\n## Proven breaks\nNone\n\n## Validated risks\n- R1 HELD\n\n${qaRest}`);
   assert.deepEqual(await check("05"), ["OK", "VERDICT: APPROVED"]);
   writeArtifact(env, "05-qa.md", "## Round 1\n\n## Proven breaks\nNone\n\n## Validated risks\n- R1 HELD\n\n## Invalidated assumptions\nNone\n\n## Generated PoCs\nNone\n");
-  assert.deepEqual(await check("05"), ["MISSING: ## Verdict"], "a consolidated report with no verdict passed the gate");
+  assert.deepEqual(await check("05"), [QA_NO_VERDICT], "a consolidated report with no verdict passed the check");
 
   writeArtifact(env, "07-runtime.md", "## Round 1\n\n## Runtime verdict\nCONFIRMED\n\n## Round 2\n\nDiff applies plan: yes\n");
-  assert.deepEqual(await check("07"), ["MISSING: ## Runtime verdict"]);
+  assert.deepEqual(await check("07"), [RUNTIME_NO_VERDICT]);
   writeArtifact(env, "07-runtime.md", "## Round 1\n\nDiff applies plan: no\n\n## Round 2\n\n## Runtime verdict\nCONFIRMED\n");
   assert.deepEqual(await check("07"), ["OK", "VERDICT: CONFIRMED"]);
   writeArtifact(env, "07-runtime.md", "## Round 2\n");
-  assert.deepEqual(await check("07"), ["MISSING: ## Runtime verdict"]);
+  assert.deepEqual(await check("07"), [RUNTIME_NO_VERDICT]);
   writeArtifact(env, "07-runtime.md", "## Round 1\n\n## Runtime verdict\nCONFIRMED\n\n```\n## Round 9\n```\n");
   assert.deepEqual(await check("07"), ["OK", "VERDICT: CONFIRMED"], "a fenced round heading opened a round");
 });
 
-test("`run check 00` answers the missing brief, and OK once the brief carries ## Brief", async (t) => {
+test("`run check 00` answers the missing brief, and OK once the brief is written", async (t) => {
   const env = makeQueue(t, "cli-run-check-brief");
   const id = boundJob(env);
 
   const missing = await runCli(env, ["run", "check", "00"], { jobId: id });
   assert.equal(missing.code, 0);
-  assert.deepEqual(missing.out, ["MISSING: ## Brief"]);
+  assert.deepEqual(missing.out, ["MISSING: 00-brief.md (not written)"]);
 
   writeArtifact(env, "00-brief.md", "# Brief\n\n## Brief\n\nFix the notice.\n");
   const brief = await runCli(env, ["run", "check", "00"], { jobId: id });
@@ -352,32 +353,24 @@ test("`run check 00` answers the missing brief, and OK once the brief carries ##
   assert.deepEqual(brief.out, ["OK"]);
 });
 
-const EVIDENCE_MISSING = "MISSING: Evidence level: <1|2|3|4> as the first line under ## Verdict";
-
-test("`run check 01` requires `Evidence level: <1-4>` as the first line under ## Verdict, and nowhere else", async (t) => {
+test("`run check 01` reads only the verdict word: no section, Evidence level or open item is required", async (t) => {
   const env = makeQueue(t, "cli-run-check-evidence");
   const id = boundJob(env);
+  const noVerdict = "MISSING: verdict (one of: PROCEED, NO-CHANGE-NEEDED, NOT-REPRODUCIBLE)";
   const cases = [
-    ["# Triage\n\n## Verdict: PROCEED\n\nThe cause is confirmed.\n" + TRIAGE_TAIL, EVIDENCE_MISSING],
-    ["# Triage\n\n## Verdict: PROCEED\n\n## Diagnosis\nEvidence level: 3\n" + TRIAGE_TAIL, EVIDENCE_MISSING],
-    ["# Triage\n\n## Verdict: PROCEED\n\nThe cause.\nEvidence level: 3\n" + TRIAGE_TAIL, EVIDENCE_MISSING],
-    ["# Triage\n\n## Verdict: PROCEED\n\nEvidence level: 0\n" + TRIAGE_TAIL, EVIDENCE_MISSING],
-    ["# Triage\n\n## Verdict: PROCEED\n\nEvidence level: 5\n" + TRIAGE_TAIL, EVIDENCE_MISSING],
+    ["# Triage\n\n## Verdict: PROCEED\n\nThe cause is confirmed.\n" + TRIAGE_TAIL, ["OK", "VERDICT: PROCEED"]],
+    ["# Triage\n\n## Verdict: PROCEED\n\nEvidence level: 5\n", ["OK", "VERDICT: PROCEED"]],
     ["# Triage\n\n## Verdict: NOT-REPRODUCIBLE\nEvidence level: 1\n" + TRIAGE_TAIL + OPEN_ITEMS, ["OK", "VERDICT: NOT-REPRODUCIBLE"]],
-    ["# Triage\n\n## Verdict: PROCEED\n\n**Evidence level:** 4\n" + TRIAGE_TAIL, ["OK", "VERDICT: PROCEED"]],
-    ["# Triage\n\n## Verdict: PROCEED\n\n**Evidence level: 3**\n" + TRIAGE_TAIL, ["OK", "VERDICT: PROCEED"]],
-    ["# Triage\n\n## Verdict: PROCEED\n\n**Evidence level: 5**\n" + TRIAGE_TAIL, EVIDENCE_MISSING],
-    ["# Triage\n\n## Verdict: NEEDS-CLARIFICATION\n\nEvidence level: 1\n" + TRIAGE_TAIL, ["OK", "VERDICT: PROCEED"]],
-    ["# Triage\n\n## Verdict: NOT-REPRODUCIBLE\n\nEvidence level: 1\n" + TRIAGE_TAIL, "MISSING: ## Open items"],
-    ["# Triage\n\n## Verdict: PROCEED\n\nEvidence level: 3\n", "MISSING: ## Validated brief, ## Out of scope, ## Request gaps"],
-    ["# Triage\n\n## Verdict: PROCEED\n\nEvidence level: 3\n" + TRIAGE_TAIL.replace("\n## Request gaps\n- None.\n", ""), "MISSING: ## Request gaps"],
-    ["# Triage\n\n## Diagnosis\n\n- cause\n", "MISSING: ## Verdict, ## Validated brief, ## Out of scope, ## Request gaps"],
-    ["# Triage\n\n## Verdict: MAYBE\n\nEvidence level: 2\n" + TRIAGE_TAIL, "MISSING: ## Verdict: <PROCEED|NO-CHANGE-NEEDED|NOT-REPRODUCIBLE>"],
+    ["# Triage\n\n## Verdict: NOT-REPRODUCIBLE\n\nEvidence level: 1\n" + TRIAGE_TAIL, ["OK", "VERDICT: NOT-REPRODUCIBLE"]],
+    ["# Triage\n\n**Verdict:** no-change-needed — it already works\n", ["OK", "VERDICT: NO-CHANGE-NEEDED"]],
+    ["# Triage\n\n## Verdict: NEEDS-CLARIFICATION\n\nEvidence level: 1\n" + TRIAGE_TAIL, noVerdict],
+    ["# Triage\n\n## Diagnosis\n\n- cause\n", noVerdict],
+    ["# Triage\n\n## Verdict: MAYBE\n\nEvidence level: 2\n" + TRIAGE_TAIL, noVerdict],
   ];
   for (const [body, expected] of cases) {
     writeArtifact(env, "01-triage.md", body);
     const { out } = await runCli(env, ["run", "check", "01"], { jobId: id });
-    assert.deepEqual(gateLines(out), [expected].flat(), JSON.stringify(body));
+    assert.deepEqual(gateLines(out).filter((line) => !line.startsWith("NEXT:")), [expected].flat(), JSON.stringify(body));
   }
 });
 
@@ -469,7 +462,7 @@ test("`run check` refuses a phase it does not know and a missing argument, and e
 
   const absent = await runCli(env, ["run", "check", "06"], { jobId: id });
   assert.equal(absent.code, 0);
-  assert.deepEqual(absent.out, ["MISSING: ## Checks run, ## Verification"]);
+  assert.deepEqual(absent.out, ["MISSING: 06-verification.md (not written)"]);
 });
 
 test("the top-level help lists `run` under its own heading, saying it acts on the run of the job it is called from", async (t) => {

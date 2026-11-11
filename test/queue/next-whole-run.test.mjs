@@ -20,17 +20,21 @@ const TRIAGE = "# Triage\n\n## Brief\n**Affected area:** src/a.mjs\n**Context:**
 const EXPLORE = "# Explore\n\n## File map\n- /a.mjs — a\n\n## Access map\n- **No entry point:** text · grep\n\n## Third-party libraries\n- None\n";
 const PLAN_TAIL = "\n## Assumptions\n- [P1] it reads one table (`src/a.mjs:12`) — invalidated if: a view joins it.\n\n## Pre-mortem\n- [PM1] rows leak — mitigation: a test.\n\n## Identified risks\n- [R1] the default changes — how to test it: node --test.\n";
 const FLAT_PLAN = `# Plan\n\n## Implementation plan\n- Add the filter.\n${PLAN_TAIL}`;
-const STAGED_PLAN = `# Plan\n\n## Implementation plan\n### Stage 1 — one\n- a\n\n### Stage 2 — two\n- b\n${PLAN_TAIL}`;
 const IMPLEMENTATION = "## Modified files\n/a.mjs\n\n## Done\nDone.\n";
+
+// A two-stage plan whose stages carry the given QA lines, empty for none.
+function stagedPlan(first, second) {
+  return `# Plan\n\n## Implementation plan\n### Stage 1 — one\n- a\n${first}\n\n### Stage 2 — two\n- b\n${second}\n${PLAN_TAIL}`;
+}
 
 // A QA triage round deciding one mode.
 function qaTriageRound(mode) {
   return `source: qa-triage\n\n## Diff classification\n- copy/docs: README.md\n\n## New risk\nnone\n\n## QA mode\n${mode} — only documentation text changed.\n`;
 }
 
-// A QA round of one verdict.
-function qaRound(verdict, breaks = "None") {
-  return `\n## Proven breaks\n${breaks}\n\n## Validated risks\n- R1 UPHELD by test/a.test.mjs\n\n## Invalidated assumptions\nNone\n\n## Generated PoCs\nNone\n\n## Verdict\n${verdict}\n`;
+// A QA round of one verdict, with an optional `fix:` mark after it.
+function qaRound(verdict, breaks = "None", mark = null) {
+  return `\n## Proven breaks\n${breaks}\n\n## Validated risks\n- R1 UPHELD by test/a.test.mjs\n\n## Invalidated assumptions\nNone\n\n## Generated PoCs\nNone\n\n## Verdict\n${verdict}\n${mark === null ? "" : `\n${mark}\n`}`;
 }
 
 // An analyst round with no hypothesis, so there is no prover to launch.
@@ -38,10 +42,11 @@ function analystRound() {
   return `\n## Proven breaks\nNone\n\n## Break hypotheses\nNone\n\n## Test recipe\nnode --test\n\n## Validated risks\n- R1\n\n## Invalidated assumptions\nNone\n\n## Generated PoCs\nNone\n\n## Verdict\nAPPROVED\n`;
 }
 
-// A verification round of one verdict.
-function verificationRound(verdict) {
+// A verification round of one verdict, `FAILED | fix: design` adding the mark after it.
+function verificationRound(spec) {
+  const [verdict, mark = null] = spec.split(" | ");
   const failed = verdict.startsWith("FAILED");
-  return `\n## Checks run\n- test: ${failed ? "FAILED" : "PASSED"}\n\n${failed ? "## Failures\n- test/a.test.mjs: it drops a row\n\n" : ""}## Verification: ${verdict}\n`;
+  return `\n## Checks run\n- test: ${failed ? "FAILED" : "PASSED"}\n\n${failed ? "## Failures\n- test/a.test.mjs: it drops a row\n\n" : ""}## Verification: ${verdict}\n${mark === null ? "" : `\n${mark}\n`}`;
 }
 
 // A runtime round of one verdict.
@@ -68,6 +73,12 @@ function appendRound(seeded, file, body) {
   appendFileSync(join(seeded.dir, file), `${seeded.rounds[file] > 1 ? "\n" : ""}## Round ${seeded.rounds[file]}\n${body}`);
 }
 
+// A coder lane rewriting the implementation with a block of its own, as a cumulative report does.
+function writeCoderLane(seeded) {
+  seeded.lanes = (seeded.lanes ?? 0) + 1;
+  writeFileSync(join(seeded.dir, "04-implementation.md"), `${IMPLEMENTATION}\n### Lane ${seeded.lanes}\n- done\n`);
+}
+
 // The canned work of each lane and the check that follows it; the scenario picks the verdicts, in order, per lane.
 function laneWork(seeded, scenario) {
   const take = (lane) => (scenario[lane] ?? []).shift();
@@ -75,7 +86,7 @@ function laneWork(seeded, scenario) {
     triager: { write: () => writeFileSync(join(seeded.dir, "01-triage.md"), TRIAGE), check: ["01"] },
     explore: { write: () => writeFileSync(join(seeded.dir, "02-explore.md"), EXPLORE), check: ["02"] },
     architect: { write: () => writeFileSync(join(seeded.dir, "03-plan.md"), scenario.plan ?? FLAT_PLAN), check: ["03"] },
-    coder: { write: () => writeFileSync(join(seeded.dir, "04-implementation.md"), IMPLEMENTATION), check: ["04"] },
+    coder: { write: () => writeCoderLane(seeded), check: ["04"] },
     "coder-fix": { write: () => appendFileSync(join(seeded.dir, "04-implementation.md"), "\n### Fix loop\n- fixed\n"), check: ["04"] },
     "qa-triage": { write: () => appendRound(seeded, "05-qa.md", qaTriageRound(take("qa-triage"))), check: ["05", "--stage", "triage"] },
     "qa-lite": { write: () => appendRound(seeded, "05-qa.md", take("qa-lite")), check: ["05"] },
@@ -154,7 +165,7 @@ async function deliverThroughRunner(t, actions) {
 test("a run following only `NEXT:` reaches `publish`, and the runner delivers the lanes it launched", async (t) => {
   const seeded = seedRun(t, "lite");
   const actions = await followNext(seeded, { "qa-triage": ["lite"], "qa-lite": [qaRound("APPROVED")], verifier: ["PASSED"], runtime: ["CONFIRMED"] });
-  assert.deepEqual(actions, ["launch triager", "launch explore", "launch architect", "launch coder", "launch qa-triage", "launch qa-lite", "launch verifier", "launch runtime", "publish"]);
+  assert.deepEqual(actions, ["launch triager", "launch explore", "launch architect", "launch coder", "launch verifier", "launch qa-triage", "launch qa-lite", "launch runtime", "publish"]);
   assert.equal(existsSync(join(seeded.dir, "00-brief.md")), true);
   const job = await deliverThroughRunner(t, actions);
   assert.equal(job.status, "done", JSON.stringify(job));
@@ -162,21 +173,69 @@ test("a run following only `NEXT:` reaches `publish`, and the runner delivers th
 
 test("a NEEDS FIX run goes coder-fix, verifier, FAILED, a second coder-fix, FAILED, and `publish --draft` at the limit", async (t) => {
   const seeded = seedRun(t, "fix");
-  const actions = await followNext(seeded, { "qa-triage": ["lite"], "qa-lite": [qaRound("NEEDS FIX", "- H1 it drops a row")], verifier: ["FAILED", "FAILED"] });
-  assert.deepEqual(shortened(actions), ["launch triager", "launch explore", "launch architect", "launch coder", "launch qa-triage", "launch qa-lite", "launch coder-fix", "launch verifier", "launch coder-fix", "launch verifier", "publish --draft"]);
+  const actions = await followNext(seeded, { "qa-triage": ["lite"], "qa-lite": [qaRound("NEEDS FIX", "- H1 it drops a row")], verifier: ["PASSED", "FAILED", "FAILED"] });
+  assert.deepEqual(shortened(actions), ["launch triager", "launch explore", "launch architect", "launch coder", "launch verifier", "launch qa-triage", "launch qa-lite", "launch coder-fix", "launch verifier", "launch coder-fix", "launch verifier", "publish --draft"]);
   assert.equal(actions.at(-1), "publish --draft remaining=test/a.test.mjs: it drops a row");
-  assert.match(actions[6], /note=iteration 1: H1 it drops a row$/);
-  assert.match(actions[8], /note=iteration 2: test\/a\.test\.mjs: it drops a row$/);
+  assert.match(actions[7], /note=iteration 1: H1 it drops a row$/);
+  assert.match(actions[9], /note=iteration 2: test\/a\.test\.mjs: it drops a row$/);
 });
 
-test("a staged plan alternates each coder lane with its verifier, then the QA and the final verification", async (t) => {
+const HEAD = ["launch triager", "launch explore", "launch architect"];
+
+test("a two-stage plan runs coder → verifier → QA on the attacked stage, coder → verifier on the `QA: none` one, then the whole change", async (t) => {
   const seeded = seedRun(t, "staged");
-  const actions = await followNext(seeded, { plan: STAGED_PLAN, "qa-triage": ["skip"], verifier: ["PASSED (stage 1)", "PASSED (stage 2)", "PASSED"], runtime: ["UNAVAILABLE"] });
-  assert.deepEqual(actions, ["launch triager", "launch explore", "launch architect", "launch coder stage=1", "launch verifier stage=1", "launch coder stage=2", "launch verifier stage=2", "launch qa-triage", "launch verifier", "launch runtime", "publish"]);
+  const actions = await followNext(seeded, { plan: stagedPlan("QA: attack", "QA: none"), "qa-triage": ["lite"], "qa-lite": [qaRound("APPROVED")], verifier: ["PASSED", "PASSED", "PASSED"], runtime: ["CONFIRMED"] });
+  assert.deepEqual(actions, [...HEAD, "launch coder stage=1", "launch verifier stage=1", "launch qa-triage stage=1", "launch qa-lite stage=1", "launch coder stage=2", "launch verifier stage=2", "launch verifier", "launch runtime", "publish"]);
+});
+
+test("a stage with no QA line, or an odd one, is attacked", async (t) => {
+  const seeded = seedRun(t, "odd-qa");
+  const actions = await followNext(seeded, { plan: stagedPlan("", "- **QA:** maybe"), "qa-triage": ["skip", "skip"], verifier: ["PASSED", "PASSED", "PASSED"], runtime: ["CONFIRMED"] });
+  assert.deepEqual(actions, [...HEAD, "launch coder stage=1", "launch verifier stage=1", "launch qa-triage stage=1", "launch coder stage=2", "launch verifier stage=2", "launch qa-triage stage=2", "launch verifier", "launch runtime", "publish"]);
+});
+
+const QUIET = stagedPlan("QA: none", "QA: none");
+
+test("a stage verifier's `fix: design` goes to the architect, then the coder of that stage and its verifier", async (t) => {
+  const seeded = seedRun(t, "design");
+  const actions = await followNext(seeded, { plan: QUIET, verifier: ["FAILED | fix: design", "PASSED", "PASSED", "PASSED"], runtime: ["CONFIRMED"] });
+  assert.deepEqual(shortened(actions), [...HEAD, "launch coder stage=1", "launch verifier stage=1", "launch architect", "launch coder stage=1", "launch verifier stage=1", "launch coder stage=2", "launch verifier stage=2", "launch verifier", "launch runtime", "publish"]);
+  assert.equal(actions[5], "launch architect note=fix: design — test/a.test.mjs: it drops a row");
+});
+
+for (const mark of ["fix: code", null]) {
+  test(`a stage verifier's FAILED ${mark === null ? "with no mark" : `with \`${mark}\``} goes to the coder-fix of that stage`, async (t) => {
+    const seeded = seedRun(t, `code-${mark === null ? "none" : "mark"}`);
+    const failed = mark === null ? "FAILED" : `FAILED | ${mark}`;
+    const actions = await followNext(seeded, { plan: QUIET, verifier: [failed, "PASSED", "PASSED", "PASSED"], runtime: ["CONFIRMED"] });
+    assert.deepEqual(shortened(actions), [...HEAD, "launch coder stage=1", "launch verifier stage=1", "launch coder-fix stage=1", "launch verifier stage=1", "launch coder stage=2", "launch verifier stage=2", "launch verifier", "launch runtime", "publish"]);
+  });
+}
+
+test("a stage QA's NEEDS FIX with `fix: design` goes to the architect", async (t) => {
+  const seeded = seedRun(t, "qa-design");
+  const actions = await followNext(seeded, { plan: stagedPlan("QA: attack", "QA: none"), "qa-triage": ["lite"], "qa-lite": [qaRound("NEEDS FIX", "- H1 it drops a row", "fix: design")], verifier: ["PASSED", "PASSED", "PASSED", "PASSED"], runtime: ["CONFIRMED"] });
+  assert.deepEqual(shortened(actions), [...HEAD, "launch coder stage=1", "launch verifier stage=1", "launch qa-triage stage=1", "launch qa-lite stage=1", "launch architect", "launch coder stage=1", "launch verifier stage=1", "launch coder stage=2", "launch verifier stage=2", "launch verifier", "launch runtime", "publish"]);
+});
+
+test("a stage QA's NEEDS FIX goes coder-fix, verifier, then the next stage, and the QA is not run again", async (t) => {
+  const seeded = seedRun(t, "qa-fix");
+  const actions = await followNext(seeded, { plan: stagedPlan("QA: attack", "QA: none"), "qa-triage": ["lite"], "qa-lite": [qaRound("NEEDS FIX", "- H1 it drops a row")], verifier: ["PASSED", "PASSED", "PASSED", "PASSED"], runtime: ["CONFIRMED"] });
+  assert.deepEqual(shortened(actions), [...HEAD, "launch coder stage=1", "launch verifier stage=1", "launch qa-triage stage=1", "launch qa-lite stage=1", "launch coder-fix stage=1", "launch verifier stage=1", "launch coder stage=2", "launch verifier stage=2", "launch verifier", "launch runtime", "publish"]);
+});
+
+test("two fix loops spent in a stage leave it open for the next stage, and two on the whole change publish a draft", async (t) => {
+  const seeded = seedRun(t, "limits");
+  const verifier = ["FAILED", "FAILED", "FAILED", "PASSED", "FAILED", "FAILED", "FAILED"];
+  const actions = await followNext(seeded, { plan: QUIET, verifier });
+  const stageOne = ["launch coder stage=1", "launch verifier stage=1", "launch coder-fix stage=1", "launch verifier stage=1", "launch coder-fix stage=1", "launch verifier stage=1"];
+  const whole = ["launch verifier", "launch coder-fix", "launch verifier", "launch coder-fix", "launch verifier", "publish --draft"];
+  assert.deepEqual(shortened(actions), [...HEAD, ...stageOne, "launch coder stage=2", "launch verifier stage=2", ...whole]);
+  assert.equal(actions[9], "launch coder stage=2 note=stage 1 left open: test/a.test.mjs: it drops a row");
 });
 
 test("a full QA with no hypothesis goes from the analyst straight to the consolidating check, and on", async (t) => {
   const seeded = seedRun(t, "analyst");
   const actions = await followNext(seeded, { "qa-triage": ["full"], verifier: ["PASSED-STATIC"], runtime: ["CONFIRMED"] });
-  assert.deepEqual(actions, ["launch triager", "launch explore", "launch architect", "launch coder", "launch qa-triage", "launch qa-analyst", "check 05", "launch verifier", "launch runtime", "publish"]);
+  assert.deepEqual(actions, [...HEAD, "launch coder", "launch verifier", "launch qa-triage", "launch qa-analyst", "check 05", "launch runtime", "publish"]);
 });

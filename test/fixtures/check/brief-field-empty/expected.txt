@@ -1,4 +1,5 @@
 OK
 VERDICT: PROCEED
-GATE: brief-field-empty — Commit type
-recorded: none (GATE: brief-field-empty — Commit type)
+recorded: brief 00-brief.md
+recorded: phase_done triage PROCEED
+recorded: slug check-contract

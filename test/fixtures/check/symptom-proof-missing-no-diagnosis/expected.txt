@@ -1,4 +1,0 @@
-OK
-VERDICT: PROCEED
-GATE: symptom-proof-missing — ## Diagnosis absent
-recorded: none (GATE: symptom-proof-missing — ## Diagnosis absent)

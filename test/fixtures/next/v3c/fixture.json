@@ -1,1 +1,1 @@
-{"type":"feature/refactor","check":"06","loopsSeed":{"stage":1},"loops":{"stage":1,"fix":1,"fixPending":true},"prints":"VERDICT: FAILED (stage 1)"}
+{"type":"feature/refactor","check":"06","loopsSeed":{"stage":1},"loops":{"stage":1,"fix":1,"fixPending":true},"prints":"VERDICT: FAILED"}

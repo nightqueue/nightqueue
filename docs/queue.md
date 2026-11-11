@@ -223,14 +223,13 @@ nightqueue plugin, update it``, and nothing is registered or queued. A prompt qu
 older runtime may still carry a `Tier:` line; the title ignores it and the run does not
 read it.
 
-**Each phase's contract lives in its block, the method in its agent.** A phase is launched from
-its block of `## Phase prompts` in the resolve skill (`plugin/skills/resolve/SKILL.md`): the block
-is the contract of that launch - the artifact it writes, the run files and sections it reads, the
-`## Deliver` headings with the round, stage or fix-loop append rule, and the return. The agent file
-(`plugin/agents/<agent>.md`) is the method only - how to judge, attack, prove or write - and names
-no run file, so the same agent answers a direct request the same way. The pipeline manifest
-(`plugin/skills/resolve/pipeline/manifest.json`) lists the mandatory sections `run check` reads,
-and a test holds every block's `## Deliver` to it. The details are in
+**Each phase's contract lives in its step, the method in its agent.** A phase is launched from
+its step of `## Phase prompts` in the resolve skill (`plugin/skills/resolve/SKILL.md`): three
+lines say what it receives, what is wanted and which verdict word it returns. The agent file
+(`plugin/agents/<agent>.md`) is the method and the report format - how to judge, attack, prove or
+write - and names no run file, so the same agent answers a direct request the same way. The
+pipeline manifest (`plugin/skills/resolve/pipeline/manifest.json`) lists each phase's verdict
+words; `run check` confirms only that the artifact exists and states one. The details are in
 [the runtime contract](runtime-contract.md#launching-a-subagent).
 
 ### Running the queue

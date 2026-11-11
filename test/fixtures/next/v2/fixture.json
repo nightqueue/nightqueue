@@ -1,1 +1,1 @@
-{"type":"feature/refactor","check":"06","prints":"VERDICT: PASSED-STATIC"}
+{"type":"feature/refactor","check":"06","prints":"VERDICT: PASSED-STATIC","loopsSeed":{"final":true}}

@@ -1,1 +1,1 @@
-NEXT: launch verifier
+NEXT: launch verifier note=the QA of the whole change never answered (05-qa.md)

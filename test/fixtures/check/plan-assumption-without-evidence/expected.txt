@@ -1,3 +1,0 @@
-OK
-OPEN: assumption-without-evidence — the list reads one table — invalidated if:…
-recorded: phase_done architecture OK

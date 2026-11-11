@@ -1,1 +1,1 @@
-NEXT: publish --draft remaining=re-triage: MISSING: ## Verdict, ## Validated brief, ## Out of scope, ## Request gaps
+NEXT: publish --draft remaining=re-triage: MISSING: verdict (one of: PROCEED, NO-CHANGE-NEEDED, NOT-REPRODUCIBLE)

@@ -617,7 +617,7 @@ test("a qa SKIPPED no qaMode of skip backs is no skip: it stays ⚠️ and the r
   assert.ok(lines.includes("Happy: no — 5 QA ⚠️ x"), lines.join("\n"));
 });
 
-test("the report lists the QA's dedicated-ticket suggestions and the runtime's open scenarios under `## Open items`", async (t) => {
+test("the report lists the QA's dedicated-ticket suggestions under `## Open items`, and no check-derived runtime scenario", async (t) => {
   const { env, id, run: target } = makeRun(t, "report-open-items");
   recordPhases(target, COMPLEX_CLEAN);
   recordDelivery(target);
@@ -632,9 +632,9 @@ test("the report lists the QA's dedicated-ticket suggestions and the runtime's o
 
   const at = lines.indexOf("## Open items");
   assert.ok(at > 0, lines.join("\n"));
-  assert.deepEqual(lines.slice(at + 2), ["- dedicated ticket: foo.mjs:3 — leak on close · dedicated ticket: yes", "- 07 open: sms login — to confirm"]);
+  assert.deepEqual(lines.slice(at + 2), ["- dedicated ticket: foo.mjs:3 — leak on close · dedicated ticket: yes"]);
   const json = JSON.parse((await report(env, id, ["--json"]))[0]);
-  assert.deepEqual(json.openItems, ["dedicated ticket: foo.mjs:3 — leak on close · dedicated ticket: yes", "07 open: sms login — to confirm"]);
+  assert.deepEqual(json.openItems, ["dedicated ticket: foo.mjs:3 — leak on close · dedicated ticket: yes"]);
 });
 
 test("the report records the run from state.json once per attempt: a second report and its --json add no row", async (t) => {

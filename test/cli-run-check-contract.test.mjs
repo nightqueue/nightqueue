@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
@@ -15,8 +15,8 @@ import { nextRound } from "../src/queue/rounds.mjs";
 import { readRunState, saveRunState } from "../src/queue/resume.mjs";
 import { applyRetry } from "../src/queue/retry.mjs";
 import { provisionalSlug } from "../src/queue/run-slug.mjs";
-import { recordOutcome, recordPhaseDone, recordRunFields, recordTermination, RUNTIME_AUTHOR } from "../src/queue/run-state.mjs";
-import { ensureProject, makeDir, makeHome, makeProject } from "../test-support/memory.mjs";
+import { recordOutcome, recordPhaseDone, recordRunFields, recordTermination } from "../src/queue/run-state.mjs";
+import { ensureProject, makeHome, makeProject } from "../test-support/memory.mjs";
 import { phasePrompts } from "../test-support/skill-size.mjs";
 
 const FIXTURES = join(dirname(fileURLToPath(import.meta.url)), "fixtures", "check");
@@ -66,21 +66,13 @@ async function runCheck(env, check, args = []) {
   return { code, out, err };
 }
 
-test("every gate code and fact of the check contract has a fixture", () => {
-  const names = fixtureNames();
-  const codes = [
-    "symptom-proof-missing",
-    "runtime-not-met",
-    "runtime-no-attempt",
-    "brief-missing",
-    "brief-field-empty",
-    "brief-type-invalid",
-    "brief-commit-type-invalid",
-  ];
-  for (const code of codes) {
-    assert.ok(names.includes(code), `no fixture for ${code}`);
-    assert.ok(readFixture(code).expected.some((line) => line.startsWith(`GATE: ${code} — `)), `the ${code} fixture never fires it`);
+test("free-form artifacts pass, and only an absent artifact or an absent verdict word is MISSING", () => {
+  for (const name of ["free-form-triage", "free-form-explore", "free-form-plan", "free-form-verification", "brief-missing", "brief-field-empty"]) {
+    assert.equal(readFixture(name).expected[0], "OK", name);
   }
+  assert.deepEqual(readFixture("artifact-missing").expected, ["MISSING: 06-verification.md (not written)"]);
+  assert.deepEqual(readFixture("triage-verdict-unknown").expected, ["MISSING: verdict (one of: PROCEED, NO-CHANGE-NEEDED, NOT-REPRODUCIBLE)"]);
+  for (const name of fixtureNames()) assert.equal(readFixture(name).expected.some((line) => /^(?:GATE|OPEN|INVALIDATED|DIFF-APPLIES|TYPE-MISMATCH):/.test(line)), false, name);
 });
 
 for (const name of fixtureNames()) {
@@ -93,7 +85,7 @@ for (const name of fixtureNames()) {
   });
 }
 
-test("a check that fired a gate, a loop-back verdict or a missing part never completes its phase", () => {
+test("a check with a loop-back verdict or a missing part never completes its phase", () => {
   const verdict = (text) => `## Checks run\n- Tests: PASSED\n\n## Verification: ${text}\n`;
   assert.equal(evaluateCheck({ check: "06", texts: { "06-verification.md": verdict("PASSED") } }).completes, true);
   const failed = evaluateCheck({ check: "06", texts: { "06-verification.md": verdict("FAILED") } });
@@ -101,11 +93,10 @@ test("a check that fired a gate, a loop-back verdict or a missing part never com
   assert.equal(failed.memoLine, "VERDICT: FAILED");
   const missing = evaluateCheck({ check: "06", texts: {} });
   assert.equal(missing.completes, false);
-  assert.equal(missing.memoLine, "MISSING: ## Checks run, ## Verification");
-  const gated = readFixture("runtime-not-met");
-  const result = evaluateCheck({ check: "07", texts: gated.texts, state: { type: "bug/error" } });
-  assert.equal(result.completes, false);
-  assert.equal(result.memoLine, "GATE: runtime-not-met — queue close J-2");
+  assert.equal(missing.memoLine, "MISSING: 06-verification.md (not written)");
+  const notMet = evaluateCheck({ check: "07", texts: readFixture("runtime-not-met").texts, state: { type: "bug/error" } });
+  assert.equal(notMet.completes, false);
+  assert.equal(notMet.memoLine, "VERDICT: NOT-MET");
 });
 
 test("a pause completes its phase and is the line the check memo keeps", () => {
@@ -116,42 +107,11 @@ test("a pause completes its phase and is the line the check memo keeps", () => {
 });
 
 test("without a recorded Type the triage decides it, and with no triage the fail-safe is bug/error", () => {
-  const coverageless = readFixture("symptom-coverage-missing").texts;
-  assert.equal(evaluateCheck({ check: "03", texts: coverageless }).type, "bug/error");
-  assert.equal(evaluateCheck({ check: "03", texts: coverageless }).first, "MISSING: ## Symptom coverage");
-  const feature = { ...coverageless, "01-triage.md": readFixture("type-mismatch").texts["01-triage.md"] };
-  assert.equal(evaluateCheck({ check: "03", texts: feature }).type, "feature/refactor");
-  assert.equal(evaluateCheck({ check: "03", texts: { "03-plan.md": coverageless["03-plan.md"] } }).type, "bug/error");
-});
-
-test("the evidence of an open coverage item is one line of at most 160 code points", () => {
-  const long = `${"x".repeat(300)}`;
-  const texts = readFixture("coverage-enumeration-no-method").texts;
-  const plan = texts["03-plan.md"].replace("I analyzed the code and the callers", long);
-  const [, openLine] = evaluateCheck({ check: "03", texts: { ...texts, "03-plan.md": plan }, state: { type: "bug/error" } }).lines;
-  const evidence = openLine.slice("OPEN: coverage-enumeration-no-method — ".length);
-  assert.equal([...evidence].length, 160);
-  assert.ok(evidence.endsWith("…"));
-});
-
-// The `OPEN:` lines check 05 prints for a report whose `## Validated risks` holds these lines.
-function qaOpenLines(riskLines) {
-  const { texts } = readFixture("qa-open-free-lines");
-  const qa = texts["05-qa.md"].replace(/(## Validated risks\n)[\s\S]*?(\n## Invalidated)/, (_, head, tail) => `${head}${riskLines.join("\n")}\n${tail}`);
-  const { lines } = evaluateCheck({ check: "05", texts: { ...texts, "05-qa.md": qa }, state: { type: "bug/error" } });
-  return lines.filter((line) => line.startsWith("OPEN: "));
-}
-
-test("a QA line left empty, as a placeholder or `none` opens nothing, and the old coverage lines neither gate nor open", () => {
-  const blank = ["omitted:", "divergences: <file:line, …|none>", "unconfirmed decisions: None."];
-  assert.deepEqual(qaOpenLines(blank), []);
-  const legacy = ["Symptom coverage: 9 · read the plan · omitted: src/a.mjs:1", "Usage coverage: 9 · 9 · divergences: src/b.mjs:2 · unconfirmed decisions: c"];
-  assert.deepEqual(qaOpenLines(legacy), []);
-  const { texts } = readFixture("qa-open-free-lines");
-  const qa = texts["05-qa.md"].replace("- R1 UPHELD by test/list.test.mjs", () => legacy.join("\n"));
-  const result = evaluateCheck({ check: "05", texts: { ...texts, "05-qa.md": qa }, state: { type: "bug/error" } });
-  assert.equal(result.lines.some((line) => line.startsWith("GATE: ")), false, result.lines.join("\n"));
-  assert.equal(result.completes, true);
+  const plan = { "03-plan.md": "# Plan\nchange it\n" };
+  const triage = (diagnosis) => `# Triage\n\n## Verdict: PROCEED\n\n${diagnosis}`;
+  assert.equal(evaluateCheck({ check: "03", texts: { ...plan, "01-triage.md": triage("## Diagnosis\n- Confirmed root cause: the filter (src/a.mjs:1)\n") } }).type, "bug/error");
+  assert.equal(evaluateCheck({ check: "03", texts: { ...plan, "01-triage.md": triage("") } }).type, "feature/refactor");
+  assert.equal(evaluateCheck({ check: "03", texts: plan }).type, "bug/error");
 });
 
 test("the QA text asks the three open lines, audits no count and never reports to a pause", () => {
@@ -194,7 +154,7 @@ test("a completed check records its phase as the runtime, and the same artifact 
   assert.equal(checks.lastFailure, undefined);
 });
 
-test("a loop-back verdict or a gate records no phase, and the passing re-check sends the failure as its reason", async (t) => {
+test("a loop-back verdict records no phase, and the passing re-check sends the failure as its reason", async (t) => {
   const seeded = seedRun(t, "effects-loop-back", { fixture: {}, texts: { "06-verification.md": verification("FAILED") } });
   const failed = await runCheck(seeded.env, "06");
   assert.deepEqual(failed.out, ["OK", "VERDICT: FAILED", "recorded: none (VERDICT: FAILED)"]);
@@ -203,12 +163,6 @@ test("a loop-back verdict or a gate records no phase, and the passing re-check s
   writeFileSync(join(seeded.dir, "06-verification.md"), verification("PASSED"));
   const passed = await runCheck(seeded.env, "06");
   assert.equal(passed.out.at(-1), "recorded: phase_done verification PASSED — reason: VERDICT: FAILED");
-
-  const gated = readFixture("runtime-not-met");
-  const gatedRun = seedRun(t, "effects-gate", gated);
-  await runCheck(gatedRun.env, "07");
-  assert.equal(stateOf(gatedRun).phases, undefined);
-  assert.equal(stateOf(gatedRun).checks.lastFailure.line, "GATE: runtime-not-met — queue close J-2");
 });
 
 test("a phase checked again after another check failed names that failure as the reason of its re-run", async (t) => {
@@ -257,15 +211,13 @@ test("check 05 of a full QA writes the consolidated round of the analyst and bot
   assert.equal(readFileSync(join(seeded.dir, "05-qa.md"), "utf8"), written, "a second check wrote another consolidation");
 });
 
-test("PoC qa-r4-fence-stale-round vector a (H12): the check closes the open fence and refuses the fenced round, and the lane's appended round converges", async (t) => {
+test("PoC qa-r4-fence-stale-round vector a (H12): the check closes the open fence and reports it, and the lane's appended round converges", async (t) => {
   const fence = "```";
   const open = `## Round 1\n## Checks run\n- npm test\n\n## Verification: FAILED\n\n${fence}text\nunclosed\n\n## Round 2\n## Checks run\n- npm test\n\n## Verification: PASSED\n`;
   const seeded = seedRun(t, "fence-stale-round", { fixture: {}, texts: { "06-verification.md": open } });
   const path = join(seeded.dir, "06-verification.md");
   const first = await runCheck(seeded.env, "06");
-  assert.ok(first.out[0].startsWith("MISSING: line 10 of 06-verification.md is a column-0 `## Round 2` inside the code fence opened at line 7 (round 1): append a new `## Round 2`"), first.out.join("\n"));
   assert.equal(first.out[1], `REPAIRED: the code fence of round 1 opened at line 7 of 06-verification.md never closed; the runtime appended \`${fence}\` at line 15`);
-  assert.ok(!first.out.some((line) => line.startsWith("VERDICT:")), first.out.join("\n"));
   assert.equal(readFileSync(path, "utf8"), `${open}${fence}\n`);
   appendFileSync(path, "## Round 2\n## Checks run\n- npm test\n\n## Verification: PASSED\n");
   assert.equal(nextRound(readFileSync(path, "utf8")), 3);
@@ -304,21 +256,6 @@ function triageWith(verdict, openItems = "## Open items\n- Which listing is mean
   return `# Triage\n\n${brief}## Verdict: ${verdict}\n\nEvidence level: 3\n\n## Diagnosis\n- Confirmed root cause: y (src/a.mjs:1)\n- Symptom proof: a.mjs:1 calls b\n\n## Validated brief\nFix the thing.\n\n## Out of scope\n- None.\n\n## Request gaps\n- None.\n\n${openItems}`;
 }
 
-test("a NOT-REPRODUCIBLE triage without an open item is MISSING, so nothing completes and nothing terminates", async (t) => {
-  const seeded = seedRun(t, "open-items-missing", readFixture("triage-open-items-missing"));
-  assert.deepEqual((await runCheck(seeded.env, "01")).out, ["MISSING: ## Open items"]);
-  const state = stateOf(seeded);
-  assert.equal(state.termination, undefined);
-  assert.equal(state.phases, undefined);
-});
-
-test("an open item written as prose counts, and a deeper `### Open items` heading does not", () => {
-  const prose = evaluateCheck({ check: "01", texts: { "01-triage.md": triageWith("NOT-REPRODUCIBLE", "## Open items\n\nWhich listing is meant?\n") } });
-  assert.equal(prose.first, "OK");
-  const deeper = evaluateCheck({ check: "01", texts: { "01-triage.md": triageWith("NOT-REPRODUCIBLE", "### Open items\n- Which listing is meant?\n") } });
-  assert.equal(deeper.first, "MISSING: ## Open items");
-});
-
 test("a PROCEED re-triage lifts the runtime's triage stop", async (t) => {
   const seeded = seedRun(t, "lift-termination", { fixture: { type: "bug/error" }, texts: { "01-triage.md": triageWith("NOT-REPRODUCIBLE") } });
   assert.equal((await runCheck(seeded.env, "01")).out.at(-2), "recorded: run_terminate triage NOT-REPRODUCIBLE");
@@ -336,160 +273,12 @@ test("a termination written by hand is never lifted by a PROCEED re-triage", asy
   assert.equal(stateOf(seeded).termination.reason, "NEEDS-CLARIFICATION: by hand");
 });
 
-test("table cells keep a pipe inside a code span, and a lone backtick is plain text", () => {
-  const runtime = "## Runtime verdict\nCONFIRMED\n\n| # | Scenario | Result | Evidence |\n|---|---|---|---|\n| 1 | list | MET | `a|b` matched |\n";
-  assert.deepEqual(evaluateCheck({ check: "07", texts: { "07-runtime.md": runtime } }).lines, ["OK", "VERDICT: CONFIRMED"]);
-  const texts = readFixture("coverage-table-pipes").texts;
-  const plan = texts["03-plan.md"].replace("| 2 | a \\| b path |", "| 2 | a ` b path |");
-  const result = evaluateCheck({ check: "03", texts: { ...texts, "03-plan.md": plan }, state: { type: "bug/error" } });
-  assert.deepEqual(result.lines, ["OK"]);
-});
-
 test("check 03 prints no QA line, whatever always-gate class and 🔴 risks the plan declares", () => {
   const plan = "## Implementation plan\n- x\n\n**Always-gate class:** yes — rows change\n\n## Assumptions\n- a (unverified)\n\n## Pre-mortem\n- b\n\n## Identified risks\n- [R1] 🔴 a\n- [R2] 🔴 b\n";
   const result = evaluateCheck({ check: "03", texts: { "03-plan.md": plan }, state: { type: "feature/refactor" } });
   assert.deepEqual(result.lines, ["OK"]);
   assert.equal(result.qaMode, null);
   assert.equal(result.completes, true);
-});
-
-// The answer of check 03 for a feature plan with the given implementation lines and a cited assumption.
-function planAnswer(body) {
-  const plan = `## Implementation plan\n${body}\n\n## Assumptions\n- [P1] a (\`src/a.mjs:1\`)\n\n## Pre-mortem\n- [PM1] Stage 8 fails\n\n## Identified risks\n- [R1] a\n`;
-  return evaluateCheck({ check: "03", texts: { "03-plan.md": plan }, state: { type: "feature/refactor" } });
-}
-
-test("check 03 counts the stages of a plan only outside a fence and a pre-mortem tag, and an open item never stops the phase", () => {
-  assert.deepEqual(planAnswer("```\nStage 1\nStage 2\n```\n[PM1] Stage 3").lines, ["OK"]);
-  const unjustified = planAnswer("### Stage 1 — a\n- x\n\n### Stage 2 — b\n- y");
-  assert.deepEqual(unjustified.lines, ["OK", "OPEN: stages-unjustified — 2 stages, no reason line"]);
-  assert.equal(unjustified.completes, true);
-  assert.deepEqual(planAnswer("**Stage reason:** because I said so\n\n### Stage 1 — a\n\n### Stage 2 — b").lines, ["OK", "OPEN: stages-unjustified — 2 stages, no reason line"]);
-});
-
-test("check 03 reads an assumption's evidence across its folded lines and asks the rest for it", () => {
-  const assumptions = "- [P1] the list\n  reads src/list.mjs:3\n- [P2] plain\n\n- None of the others";
-  const plan = `## Implementation plan\n- x\n\n## Assumptions\n${assumptions}\n\n## Pre-mortem\n- a\n\n## Identified risks\n- a\n`;
-  const result = evaluateCheck({ check: "03", texts: { "03-plan.md": plan }, state: { type: "feature/refactor" } });
-  assert.deepEqual(result.lines, ["OK", "OPEN: assumption-without-evidence — plain"]);
-  assert.equal(result.completes, true);
-});
-
-// The answer of check 03 for a plan with the given `## Assumptions` body.
-function assumptionsAnswer(assumptions) {
-  const plan = `## Implementation plan\n- x\n\n## Assumptions\n${assumptions}\n\n## Pre-mortem\n- a\n\n## Identified risks\n- a\n`;
-  return evaluateCheck({ check: "03", texts: { "03-plan.md": plan }, state: { type: "feature/refactor" } }).lines;
-}
-
-test("check 03 reads a nested list's evidence under its assumption and a table's rows without its header", () => {
-  assert.deepEqual(assumptionsAnswer("- P1: the list is sorted\n  - evidence: src/a.mjs:3"), ["OK"]);
-  assert.deepEqual(assumptionsAnswer("  - P1: cited src/a.mjs:3\n  - P2: plain"), ["OK", "OPEN: assumption-without-evidence — P2: plain"]);
-  assert.deepEqual(assumptionsAnswer("Assumptions read:\n  - P1: cited src/a.mjs:3\n  - P2: plain"), ["OK", "OPEN: assumption-without-evidence — P2: plain"]);
-  assert.deepEqual(assumptionsAnswer("| ID | Assumption | Evidence |\n|---|---|---|\n| P1 | the list is sorted | src/a.mjs:3 |"), ["OK"]);
-  assert.deepEqual(assumptionsAnswer("| ID | Assumption | Evidence |\n|---|---|---|\n| P1 | the list is sorted | none |"), ["OK", "OPEN: assumption-without-evidence — P1 the list is sorted none"]);
-});
-
-test("check 03 takes a file citation for evidence, never a host, a port or a decimal", () => {
-  for (const cited of ["src/a.mjs:3", "`list.mjs:12`", "(./src/a.mjs:3)", "/abs/src/a.mjs:3", "src/Makefile:9", "01-triage.md:4"]) assert.deepEqual(assumptionsAnswer(`- [P1] reads ${cited}`), ["OK"], cited);
-  for (const fake of ["localhost.local:8080", "db.prod:5432", "api.example.com:443", "12.30:45", "10.0.0.1:8080", "https://example.com:80", "1/2:30"]) assert.deepEqual(assumptionsAnswer(`- [P1] reads ${fake}`), ["OK", `OPEN: assumption-without-evidence — reads ${fake}`], fake);
-});
-
-test("check 03 counts a titled stage of the implementation plan, never a prose line that mentions one", () => {
-  assert.deepEqual(planAnswer("### Stage 1 — a\n- Stage 2 deploy may fail\n- **Stage 3** of the rollout is later").lines, ["OK"]);
-  assert.deepEqual(planAnswer("- Stage 1: a\n- Stage 2 — b").lines, ["OK", "OPEN: stages-unjustified — 2 stages, no reason line"]);
-  const risky = "## Implementation plan\n### Stage 1 — a\n\n## Assumptions\n- a (unverified)\n\n## Pre-mortem\n- a\n\n## Identified risks\n- Stage 2: deploy may fail\n";
-  assert.deepEqual(evaluateCheck({ check: "03", texts: { "03-plan.md": risky }, state: { type: "feature/refactor" } }).lines, ["OK"]);
-});
-
-test("check 03 reads a Brief as numbering stages only when it lists them, never for a decimal", () => {
-  const plan = "## Implementation plan\n### Stage 1 — a\n\n### Stage 2 — b\n\n## Assumptions\n- a (unverified)\n\n## Pre-mortem\n- a\n\n## Identified risks\n- a\n";
-  const withStages = (stages) => evaluateCheck({ check: "03", texts: { "03-plan.md": plan, "01-triage.md": `## Brief\n**Stages:** ${stages}\n\n## Verdict: PROCEED\n` }, state: { type: "feature/refactor" } }).lines;
-  const unjustified = ["OK", "OPEN: stages-unjustified — 2 stages, no reason line"];
-  assert.deepEqual(withStages("see 1.2 and 3.4"), unjustified);
-  assert.deepEqual(withStages("1. a 2. b"), ["OK"]);
-  assert.deepEqual(withStages("(1) a (2) b"), ["OK"]);
-  assert.deepEqual(withStages("stage 1 then stage 2"), ["OK"]);
-});
-
-// The verification round with the given lines of `## Checks run`, `## Failures` and `## Pre-existing failures`, and its verdict.
-function verificationRound({ verdict, checks = ["- test: PASSED"], failures = [], preExisting = [] }) {
-  const section = (heading, lines) => (lines.length === 0 ? [] : [heading, ...lines, ""]);
-  return [...section("## Checks run", checks), ...section("## Failures (if any)", failures), ...section("## Pre-existing failures", preExisting), `## Verification: ${verdict}`, ""].join("\n");
-}
-
-// The verdict line check 06 answers for a round on a run with the given state.
-function verdictLine(round, state = null) {
-  return evaluateCheck({ check: "06", texts: { "06-verification.md": verificationRound(round) }, state }).lines[1];
-}
-
-const QA_DEMAND = "05-qa.md missing, mandatory PoC";
-
-test("check 06 excuses a stage round that only demands the QA, and only before the QA", () => {
-  assert.equal(verdictLine({ verdict: "FAILED (stage 1)", failures: [`- ${QA_DEMAND}`] }), "VERDICT: PASSED (stage 1)");
-  assert.equal(verdictLine({ verdict: "FAILED (stage 1)", checks: ["- poc: FAILED — no PoC to run"] }), "VERDICT: PASSED (stage 1)");
-  assert.equal(verdictLine({ verdict: "FAILED (stage 1)", failures: [`- ${QA_DEMAND}`] }, { phases: [{ phase: "qa" }] }), "VERDICT: FAILED (stage 1)");
-  assert.equal(verdictLine({ verdict: "FAILED (stage 1)", failures: [`- ${QA_DEMAND}`] }, { checks: { "05-triage": {} } }), "VERDICT: FAILED (stage 1)");
-  assert.equal(verdictLine({ verdict: "FAILED", failures: [`- ${QA_DEMAND}`] }), "VERDICT: FAILED");
-  assert.equal(verdictLine({ verdict: "FAILED (stage 1)", failures: [`- ${QA_DEMAND}`, "- test: src/a.mjs:1 — boom"] }), "VERDICT: FAILED (stage 1)");
-});
-
-test("check 06 holds a FAILED no pre-existing item explains", () => {
-  const lint = "- lint: 3 errors — base: 3 · diff: 3";
-  assert.equal(verdictLine({ verdict: "FAILED", checks: ["- test: FAILED", "- lint: FAILED"], preExisting: [lint] }), "VERDICT: FAILED");
-  assert.equal(verdictLine({ verdict: "FAILED", checks: ["- test: **FAILED**"], preExisting: [lint] }), "VERDICT: FAILED");
-  assert.equal(verdictLine({ verdict: "FAILED", checks: ["- FAILED lint 3s"], preExisting: [lint] }), "VERDICT: FAILED");
-  assert.equal(verdictLine({ verdict: "FAILED", checks: ["- lint: FAILED"], preExisting: ["- linter: a — base: b · diff: c"] }), "VERDICT: FAILED");
-  assert.equal(verdictLine({ verdict: "FAILED" }), "VERDICT: FAILED");
-  assert.equal(verdictLine({ verdict: "FAILED", checks: ["- lint (`npm run lint`): **FAILED**"], preExisting: [lint] }), "VERDICT: PASSED-STATIC");
-});
-
-test("check 06 excuses a failed check by its item, never by a shared check name with another file", () => {
-  const failed = "- npm test: FAILED (new failure in foo.test.mjs)";
-  assert.equal(verdictLine({ verdict: "FAILED", checks: [failed], preExisting: ["- npm test fails in retry.test.mjs on the base"] }), "VERDICT: FAILED");
-  assert.equal(verdictLine({ verdict: "FAILED", checks: [failed], preExisting: ["- npm test: retry.test.mjs — base: a · diff: a"] }), "VERDICT: FAILED");
-  assert.equal(verdictLine({ verdict: "FAILED", checks: [failed], preExisting: ["- npm test: foo.test.mjs — base: a · diff: a"] }), "VERDICT: PASSED-STATIC");
-  assert.equal(verdictLine({ verdict: "FAILED", checks: ["- npm test: FAILED (a.test.mjs, b.test.mjs)"], preExisting: ["- npm test: a.test.mjs — base: a · diff: a"] }), "VERDICT: FAILED");
-  assert.equal(verdictLine({ verdict: "FAILED", checks: ["- npm test: FAILED"], preExisting: ["- npm test: environment: no database · attempt: placeholders"] }), "VERDICT: PASSED-STATIC");
-});
-
-test("check 06 reads any status but a clean one as a failure, whatever its wording", () => {
-  const lint = "- lint: 3 errors — base: 3 · diff: 3";
-  for (const status of ["failed (3 tests)", "exit 1", "3 errors", "timed out", "passed 3, failed 2"]) assert.equal(verdictLine({ verdict: "FAILED", checks: [`- test: ${status}`, "- lint: FAILED"], preExisting: [lint] }), "VERDICT: FAILED", status);
-  for (const status of ["PASSED — 12 tests", "SKIPPED — no script", "ok", "not run — uncommitted"]) assert.equal(verdictLine({ verdict: "FAILED", checks: [`- test: ${status}`, "- lint: FAILED"], preExisting: [lint] }), "VERDICT: PASSED-STATIC", status);
-});
-
-test("check 06 keeps a stated FAILED when no pre-existing item names a failed check of the round", () => {
-  assert.equal(verdictLine({ verdict: "FAILED", checks: ["- test: PASSED", "- lint: PASSED"], preExisting: ["- typecheck: 2 errors — base: 2 · diff: 2"] }), "VERDICT: FAILED");
-});
-
-test("check 06 excuses only what demands the QA, never a real error that mentions a PoC or the QA", () => {
-  const stage = (failure) => verdictLine({ verdict: "FAILED (stage 1)", failures: [`- ${failure}`] });
-  for (const real of ["test: PoC helper throws TypeError at poc/helper.mjs:4", "bug path crashes with ReferenceError in parser.mjs:12", "05-qa.md missing because the parser crashed", "test: the PoC runner is slow"]) assert.equal(stage(real), "VERDICT: FAILED (stage 1)", real);
-  for (const demand of ["mandatory PoC missing", "no PoC to run", "no QA report", "runtime evidence is absent", "missing the mandatory 05-qa.md"]) assert.equal(stage(demand), "VERDICT: PASSED (stage 1)", demand);
-});
-
-test("a malformed verification still answers its pre-existing failures, and the report keeps them", async (t) => {
-  const malformed = "## Round 1\n\n## Pre-existing failures\n- lint: 3 errors — base: 3 · diff: 3\n\n## Verification: ???\n";
-  const line = "OPEN: pre-existing-failure — lint: 3 errors — base: 3 · diff: 3";
-  const answer = evaluateCheck({ check: "06", texts: { "06-verification.md": malformed } });
-  assert.deepEqual(answer.lines, ["MISSING: ## Checks run", line]);
-  assert.equal(answer.completes, false);
-  assert.deepEqual(evaluateCheck({ check: "06", texts: { "06-verification.md": "just prose\n" } }).lines.filter((text) => text.startsWith("OPEN: ")), []);
-  const { env } = seedRun(t, "report-malformed-verification", { fixture: { type: "feature/refactor" }, texts: { "06-verification.md": malformed } });
-  const report = [];
-  assert.equal(await run(["run", "report", "--json"], { env, out: (text) => report.push(text), err: () => {}, stdout: { write: () => {} } }), 0);
-  assert.equal(report.join("\n").split("06 open: pre-existing-failure — lint: 3 errors").length - 1, 1);
-});
-
-test("the run report lists a pre-existing failure once and its facts carry it for the PR body", async (t) => {
-  const round = verificationRound({ verdict: "FAILED", checks: ["- lint: FAILED"], preExisting: ["- lint: 3 errors — base: 3 · diff: 3"] });
-  const { env } = seedRun(t, "report-pre-existing", { fixture: { type: "feature/refactor" }, texts: { "06-verification.md": round } });
-  const report = [];
-  assert.equal(await run(["run", "report", "--json"], { env, out: (line) => report.push(line), err: () => {}, stdout: { write: () => {} } }), 0);
-  assert.equal(report.join("\n").split("06 open: pre-existing-failure — lint: 3 errors").length - 1, 1);
-  const facts = [];
-  assert.equal(await run(["run", "report", "--facts"], { env, out: (line) => facts.push(line), err: () => {}, stdout: { write: () => {} } }), 0);
-  assert.ok(facts.join("\n").includes("Pre-existing failure: lint: 3 errors — base: 3 · diff: 3"), facts.join("\n"));
 });
 
 // ---- The QA triage stage: `run check 05 --stage triage`.
@@ -499,11 +288,6 @@ const TRIAGE_ARGS = ["--stage", "triage"];
 // A triage round of the given number, from its classification, its new risk and its QA mode line.
 function triageRound(number, { kinds = "- copy/docs: README.md", risk = "none", mode = "skip — only text changed." } = {}) {
   return `## Round ${number}\nsource: qa-triage\n\n## Diff classification\n${kinds}\n\n## New risk\n${risk}\n\n## QA mode\n${mode}\n`;
-}
-
-// The first line check 05 --stage triage answers for a whole `05-qa.md`.
-function triageFirstLine(qa) {
-  return evaluateCheck({ check: "05", stage: "triage", texts: { "05-qa.md": qa } }).first;
 }
 
 test("a skip records the mode and one SKIPPED qa entry, and a second check leaves both untouched", async (t) => {
@@ -544,7 +328,7 @@ test("a lite or full mode records the mode and no phase, so `run check 05` keeps
 });
 
 test("a refused triage records neither a mode nor a phase", async (t) => {
-  for (const name of ["qa-triage-missing-section", "qa-triage-bad-word", "qa-triage-migration-not-full", "qa-triage-no-round"]) {
+  for (const name of ["qa-triage-bad-word", "qa-triage-no-round"]) {
     const seeded = seedRun(t, name, readFixture(name));
     const { out } = await runCheck(seeded.env, "05", TRIAGE_ARGS);
     assert.equal(out.length, 1, out.join("\n"));
@@ -552,161 +336,6 @@ test("a refused triage records neither a mode nor a phase", async (t) => {
     assert.equal(state.qaMode, undefined);
     assert.equal(state.phases, undefined);
     assert.equal(state.checks["05-triage"].completed, false);
-  }
-});
-
-test("the triage gate refuses an empty section, a placeholder reason and every contradicting mode, and reads what the lane wrote", () => {
-  assert.equal(triageFirstLine(triageRound(1, { risk: "" })), "MISSING: ## New risk (empty)");
-  assert.equal(triageFirstLine(triageRound(1, { kinds: "" })), "MISSING: ## Diff classification (empty)");
-  assert.equal(triageFirstLine(triageRound(1, { mode: "" })), "MISSING: ## QA mode (empty)");
-  for (const mode of ["skip — <why>", "skip", "skip — ", "Skip — text", "- skip — text"]) {
-    assert.ok(triageFirstLine(triageRound(1, { mode })).startsWith("MISSING: ## QA mode: "), mode);
-  }
-  for (const kind of ["data/migration", "route/endpoint", "auth/permission", "payment", "concurrency", "external-input parsing", "personal data"]) {
-    const kinds = `- **${kind}**: \`src/a.mjs\``;
-    assert.match(triageFirstLine(triageRound(1, { kinds, mode: "skip — small." })), new RegExp(`^MISSING: ## QA mode \\(skip with ${kind}`), kind);
-    assert.match(triageFirstLine(triageRound(1, { kinds, mode: "lite — small." })), new RegExp(`^MISSING: ## QA mode \\(lite with ${kind}`), kind);
-    assert.equal(triageFirstLine(triageRound(1, { kinds, mode: "full — it asks it." })), "OK", kind);
-  }
-  assert.equal(triageFirstLine(triageRound(1, { kinds: "- data/migration: none\n- copy/docs: README.md" })), "OK", "a kind with no file is no danger");
-  const logic = { kinds: "- logic: src/a.mjs" };
-  assert.equal(triageFirstLine(triageRound(1, { ...logic, mode: "skip — `test/a.test.mjs` exercises it." })), "OK");
-  assert.ok(triageFirstLine(triageRound(1, { ...logic, mode: "skip — a test covers it." })).startsWith("MISSING: "));
-  assert.match(triageFirstLine(triageRound(1, { kinds: "- migration: db/1.sql", mode: "lite — a label off the list." })), /^MISSING: ## Diff classification \(migration is off the list: write /);
-});
-
-test("the triage gate reads the kinds in any case and refuses a label off the list unless the answer is full", () => {
-  const offList = ["Data migration: db/1.sql", "**Payments**: src/pay.mjs", "PII: src/user.mjs", "Logic changes: src/a.mjs", "code: src/a.mjs", "db/migrations/1.sql"];
-  for (const line of offList) {
-    assert.match(triageFirstLine(triageRound(1, { kinds: `- ${line}` })), /^MISSING: ## Diff classification /, line);
-    assert.match(triageFirstLine(triageRound(1, { kinds: `- ${line}`, mode: "lite — small." })), /^MISSING: ## Diff classification /, line);
-    assert.equal(triageFirstLine(triageRound(1, { kinds: `- ${line}`, mode: "full — unsure of the kind." })), "OK", line);
-  }
-  assert.match(triageFirstLine(triageRound(1, { kinds: "- Personal Data: src/user.mjs" })), /^MISSING: ## QA mode \(skip with personal data/);
-  assert.equal(triageFirstLine(triageRound(1, { kinds: "- Copy/Docs: README.md\n- other: none\n\n- none" })), "OK", "a line that lists nothing is no kind");
-});
-
-test("a logic skip needs a real test path in its sentence, never a word that merely contains test or spec", () => {
-  const refused = ["see the latest.md notes.", "by inspect.js.", "in contest.txt.", "see respect.md.", "in latest/notes.md.", "a test covers it."];
-  for (const why of refused) assert.match(triageFirstLine(triageRound(1, { kinds: "- logic: src/a.mjs", mode: `skip — ${why}` })), /the sentence must name the test's path/, why);
-  const named = ["test/a.mjs", "tests/a.py", "src/__tests__/a.js", "spec/a_spec.rb", "src/a.test.ts", "pkg/a_test.go", "test_a.py", "src/AppTest.java", "a.spec.ts"];
-  for (const path of named) assert.equal(triageFirstLine(triageRound(1, { kinds: "- logic: src/a.mjs", mode: `skip — covered by ${path}.` })), "OK", path);
-});
-
-// A logic skip round on a seeded run whose worktree holds the given files.
-function seedCitedTest(t, name, { why, files = [] }) {
-  const seeded = seedRun(t, name, { fixture: {}, texts: { "05-qa.md": triageRound(1, { kinds: "- logic: src/list.mjs", mode: `skip — ${why}` }) } });
-  const worktree = makeDir(t, `${name}-worktree`);
-  for (const file of files) {
-    mkdirSync(dirname(join(worktree, file)), { recursive: true });
-    writeFileSync(join(worktree, file), "// a file of the worktree\n");
-  }
-  recordRunFields({ projectId: seeded.projectId, slug: SLUG, fields: { worktree }, env: seeded.env });
-  return { ...seeded, worktree };
-}
-
-// Asserts the check refused the cited test with the given text and recorded neither a mode nor a phase.
-function assertSkipRefused(seeded, out, refusal) {
-  assert.equal(out.length, 1, out.join("\n"));
-  assert.match(out[0], refusal);
-  const state = stateOf(seeded);
-  assert.equal(state.qaMode, undefined);
-  assert.equal(state.phases, undefined);
-  assert.equal(state.checks["05-triage"].completed, false);
-}
-
-test("a logic skip citing a test file of the worktree is recorded", async (t) => {
-  const seeded = seedCitedTest(t, "cited-test-exists", { why: "covered by `test/list.test.mjs`.", files: ["test/list.test.mjs"] });
-  const { out } = await runCheck(seeded.env, "05", TRIAGE_ARGS);
-  assert.equal(out[0], "OK", out.join("\n"));
-  assert.equal(stateOf(seeded).qaMode.mode, "skip");
-  assert.deepEqual(stateOf(seeded).phases.map((entry) => [entry.phase, entry.verdict]), [["qa", "SKIPPED"]]);
-});
-
-test("a logic skip citing a test the worktree does not prove records no skip", async (t) => {
-  const refused = [
-    ["invented", "covered by test/does-not-exist.test.mjs.", /test\/does-not-exist\.test\.mjs is not a test file inside the worktree/],
-    ["one-of-two-invented", "covered by test/list.test.mjs and test/does-not-exist.test.mjs.", /: test\/does-not-exist\.test\.mjs is not a test file/],
-    ["existing-non-test", "covered by src/list.mjs.", /the sentence must name the test's path/],
-    ["dot-escape", "covered by ../test/list.test.mjs.", /\.\.\/test\/list\.test\.mjs is not a test file/],
-    ["inner-escape", "covered by test/../../test/list.test.mjs.", /is not a test file inside the worktree/],
-    ["absolute", "covered by /tmp/test/list.test.mjs.", /the sentence must name the test's path/],
-    ["segment-only-in-the-spelling", "covered by test/../src/list.mjs.", /test\/\.\.\/src\/list\.mjs is not a test file/],
-    ["directory", "covered by test/list.dir.", /test\/list\.dir is not a test file/],
-  ];
-  for (const [name, why, refusal] of refused) {
-    const seeded = seedCitedTest(t, `cited-${name}`, { why, files: ["test/list.test.mjs", "src/list.mjs", "test/list.dir/inner.txt"] });
-    const { out } = await runCheck(seeded.env, "05", TRIAGE_ARGS);
-    assertSkipRefused(seeded, out, refusal);
-  }
-});
-
-test("a logic skip citing a link that leaves the worktree, or points at a non-test inside it, records no skip", async (t) => {
-  const outside = makeDir(t, "cited-link-outside");
-  writeFileSync(join(outside, "real.test.mjs"), "// outside the worktree\n");
-  const seeded = seedCitedTest(t, "cited-link", { why: "covered by test/out.test.mjs and test/in.test.mjs.", files: ["src/list.mjs", "test/keep.test.mjs"] });
-  symlinkSync(join(outside, "real.test.mjs"), join(seeded.worktree, "test/out.test.mjs"));
-  symlinkSync(join(seeded.worktree, "src/list.mjs"), join(seeded.worktree, "test/in.test.mjs"));
-  const { out } = await runCheck(seeded.env, "05", TRIAGE_ARGS);
-  assertSkipRefused(seeded, out, /test\/out\.test\.mjs, test\/in\.test\.mjs is not a test file/);
-});
-
-test("a logic skip citing a documentation or non-code file with a test's shape records no skip", async (t) => {
-  const cited = ["docs/spec/overview.md", "docs/api-spec.md", "docs/tests/plan.md", "test/README.MD", "test/plan.txt", "test/data.json", "test/config.yaml", "spec/page.html", "test/list.test.snap", "test/list.test"];
-  for (const path of cited) {
-    const seeded = seedCitedTest(t, `cited-doc-${path.replace(/\W/g, "-")}`, { why: `covered by ${path}.`, files: [path] });
-    const { out } = await runCheck(seeded.env, "05", TRIAGE_ARGS);
-    assertSkipRefused(seeded, out, new RegExp(`: ${path.replace(/\./g, "\\.")} is not a test file inside the worktree`));
-  }
-});
-
-test("a logic skip citing a test under a vendored directory records no skip, at any depth and in any case", async (t) => {
-  const cited = ["node_modules/pkg/test/a.test.js", "vendor/lib/test/b.test.js", "packages/a/node_modules/p/test/c.test.js", "third_party/lib/d_test.go", ".venv/lib/site-packages/p/tests/test_e.py", "VENDOR/lib/test/f.test.js"];
-  for (const path of cited) {
-    const seeded = seedCitedTest(t, `cited-vendored-${path.replace(/\W/g, "-")}`, { why: `covered by ${path}.`, files: [path] });
-    const { out } = await runCheck(seeded.env, "05", TRIAGE_ARGS);
-    assertSkipRefused(seeded, out, new RegExp(`: ${path.replace(/\./g, "\\.")} is not a test file inside the worktree`));
-  }
-});
-
-test("a vendored test beside a real one, a link to a vendored test or to a doc, and a directory named as code record no skip", async (t) => {
-  const beside = seedCitedTest(t, "cited-beside-vendored", { why: "covered by test/list.test.mjs and node_modules/pkg/test/a.test.js.", files: ["test/list.test.mjs", "node_modules/pkg/test/a.test.js"] });
-  assertSkipRefused(beside, (await runCheck(beside.env, "05", TRIAGE_ARGS)).out, /: node_modules\/pkg\/test\/a\.test\.js is not a test file/);
-  const linked = seedCitedTest(t, "cited-link-own", { why: "covered by test/dep.test.mjs and test/doc.test.mjs.", files: ["node_modules/pkg/test/a.test.js", "docs/api-spec.md", "test/keep.test.mjs"] });
-  symlinkSync(join(linked.worktree, "node_modules/pkg/test/a.test.js"), join(linked.worktree, "test/dep.test.mjs"));
-  symlinkSync(join(linked.worktree, "docs/api-spec.md"), join(linked.worktree, "test/doc.test.mjs"));
-  assertSkipRefused(linked, (await runCheck(linked.env, "05", TRIAGE_ARGS)).out, /test\/dep\.test\.mjs, test\/doc\.test\.mjs is not a test file/);
-  const directory = seedCitedTest(t, "cited-code-directory", { why: "covered by test/suite.mjs.", files: ["test/suite.mjs/inner.txt"] });
-  assertSkipRefused(directory, (await runCheck(directory.env, "05", TRIAGE_ARGS)).out, /test\/suite\.mjs is not a test file/);
-});
-
-test("a logic skip citing a test of the worktree's own tree stays recorded in every test shape", async (t) => {
-  const cited = ["test/a.mjs", "tests/a.py", "src/__tests__/a.js", "spec/a_spec.rb", "src/a.test.ts", "pkg/a_test.go", "test_a.py", "src/AppTest.java", "a.spec.ts", "test/a.PY", "docs/tests/plan.test.mjs", "test/vendored/a.test.mjs"];
-  for (const path of cited) {
-    const seeded = seedCitedTest(t, `cited-own-${path.replace(/\W/g, "-")}`, { why: `covered by ${path}.`, files: [path] });
-    const { out } = await runCheck(seeded.env, "05", TRIAGE_ARGS);
-    assert.equal(out[0], "OK", `${path}: ${out.join("\n")}`);
-    assert.equal(stateOf(seeded).qaMode.mode, "skip", path);
-  }
-});
-
-test("a worktree the check cannot read never records a logic skip, and a copy skip never reads it", async (t) => {
-  const seeded = seedCitedTest(t, "cited-gone", { why: "covered by test/list.test.mjs.", files: ["test/list.test.mjs"] });
-  rmSync(seeded.worktree, { recursive: true, force: true });
-  const { out } = await runCheck(seeded.env, "05", TRIAGE_ARGS);
-  assertSkipRefused(seeded, out, /the worktree cannot be read, so test\/list\.test\.mjs is not verified: /);
-  writeFileSync(join(seeded.dir, "05-qa.md"), triageRound(1));
-  const copy = await runCheck(seeded.env, "05", TRIAGE_ARGS);
-  assert.equal(copy.out[0], "OK", copy.out.join("\n"));
-  assert.equal(stateOf(seeded).qaMode.mode, "skip");
-});
-
-test("a lite or full round citing an invented test keeps its mode: only a skip is held against the worktree", async (t) => {
-  for (const mode of ["lite", "full"]) {
-    const seeded = seedRun(t, `cited-${mode}`, { fixture: {}, texts: { "05-qa.md": triageRound(1, { kinds: "- logic: src/list.mjs", mode: `${mode} — test/does-not-exist.test.mjs is thin.` }) } });
-    const { out } = await runCheck(seeded.env, "05", TRIAGE_ARGS);
-    assert.equal(out[0], "OK", out.join("\n"));
-    assert.equal(stateOf(seeded).qaMode.mode, mode);
   }
 });
 
@@ -867,10 +496,12 @@ test("`run_set` refuses the QA mode, whole or dotted, and `--stage` accepts no i
   assert.throws(() => evaluateCheck({ check: "06", stage: "triage", texts: {} }), /unknown stage/);
 });
 
-test("the round shape the lane is asked for is the one the skip fixture proves", () => {
-  const template = phasePrompts().blocks["qa-triage"];
+test("the round the skip fixture proves is the one the lane asks for and the qa-guardian method writes", () => {
+  const launch = phasePrompts().blocks["qa-triage"].join("\n");
+  const method = readFileSync(new URL("../plugin/agents/qa-guardian.md", import.meta.url), "utf8");
   const round = readFixture("qa-triage-skip").texts["05-qa.md"].split("\n").slice(1);
-  for (const line of round.filter((text) => text !== "")) assert.ok(template.includes(line), `the qa-triage block lost the line: ${line}`);
+  assert.ok(round.includes("source: qa-triage") && launch.includes("`source: qa-triage`"), "the qa-triage launch no longer asks for the round's source line");
+  for (const heading of round.filter((text) => text.startsWith("## "))) assert.ok(method.includes(`- \`${heading}\`: `), `the qa-guardian method no longer defines ${heading}`);
 });
 
 test("a `###` confirmation heading the check announces is the section the gate notice composes", async (t) => {
@@ -910,62 +541,22 @@ function seedProvisional(t, name, triage) {
   return { env: { ...env, NIGHTQUEUE_JOB_ID: String(id) }, projectId, slug, dir, id };
 }
 
-test("a retired triage verdict reads as PROCEED: no stop, the phase recorded, and a stop it caused before is lifted", async (t) => {
-  for (const word of ["NEEDS-CLARIFICATION", "PROPOSE-ALTERNATIVE"]) {
-    const seeded = seedRun(t, `retired-${word}`, { fixture: { type: "bug/error" }, texts: { "01-triage.md": triageWith(word) } });
-    recordTermination({ projectId: seeded.projectId, slug: SLUG, phase: "triage", reason: `${word}: which one?`, by: RUNTIME_AUTHOR, env: seeded.env });
-    const { out } = await runCheck(seeded.env, "01");
-    assert.deepEqual(out.slice(0, 2), ["OK", "VERDICT: PROCEED"]);
-    assert.ok(out.includes("recorded: phase_done triage PROCEED"), out.join("\n"));
-    assert.ok(out.includes("recorded: termination cleared"), out.join("\n"));
-    assert.equal(stateOf(seeded).termination, undefined);
-    assert.equal(stateOf(seeded).phases.at(-1).phase, "triage");
-  }
-});
-
-test("a retired triage verdict still answers the Brief gates of a PROCEED", () => {
-  const partial = "## Brief\n**Affected area:** src/a.mjs\n**Commit type:**\n\n";
-  const { lines, completes } = evaluateCheck({ check: "01", texts: { "01-triage.md": triageWith("NEEDS-CLARIFICATION", undefined, partial) } });
-  assert.ok(lines.some((line) => line.startsWith("GATE: brief-field-empty — ")), lines.join("\n"));
-  assert.equal(completes, false);
-});
-
-test("a second-round INVALIDATED withholds qa, pauses at a gate from `## Validated risks`, and the answer is recorded with no qa entry", async (t) => {
-  const seeded = seedRun(t, "invalidated-gate", readFixture("invalidated-second-round"));
-  for (const phase of ["triage", "explore", "architecture", "implementation"]) recordPhaseDone({ projectId: seeded.projectId, slug: SLUG, phase, env: seeded.env });
-  const { out } = await runCheck(seeded.env, "05");
-  assert.equal(out.filter((line) => line.startsWith("INVALIDATED: ")).length, 3, out.join("\n"));
-  assert.ok(!out.some((line) => line.startsWith("recorded: phase_done qa")), out.join("\n"));
-  assert.equal(out.at(-1), `recorded: none (${out.find((line) => line.startsWith("INVALIDATED: [H6]"))})`);
-  assert.equal(stateOf(seeded).termination, undefined);
-  const notice = composeGateNotice({ runDir: seeded.dir, fromArtifact: { file: "05-qa.md", section: "## Validated risks" } });
-  assert.match(notice, /R1 UPHELD by test\/list\.test\.mjs/);
-  openDb(seeded.env).prepare("UPDATE jobs SET status = 'gate' WHERE id = ?").run(jobIdOf(seeded));
-  await applyRetry({ id: jobIdOf(seeded), note: "(b) ship as is", env: seeded.env });
-  assert.deepEqual(stateOf(seeded).answers.map((entry) => entry.text), ["(b) ship as is"]);
-  assert.equal(stateOf(seeded).phases.at(-1).phase, "implementation");
-});
-
-test("a J-258 plan with open coverage and a filled question records its phase and no termination, composes its notice, and the answer is recorded after the architecture", async (t) => {
-  const seeded = seedRun(t, "coverage-gate-pause", readFixture("coverage-split-status-confirm"));
+test("a plan with a filled question records its phase and no termination, composes its notice, and the answer is recorded after the architecture", async (t) => {
+  const seeded = seedRun(t, "confirm-pause", readFixture("confirm"));
   for (const phase of ["triage", "explore"]) recordPhaseDone({ projectId: seeded.projectId, slug: SLUG, phase, env: seeded.env });
   const { out } = await runCheck(seeded.env, "03");
-  for (const prefix of ["OPEN: coverage-vector-no-reason — V14", "OPEN: coverage-enumeration-no-method — ", "CONFIRM: requires-user-confirmation — "]) {
-    assert.ok(out.some((line) => line.startsWith(prefix)), `check 03 no longer prints ${prefix}: ${out.join("\n")}`);
-  }
+  assert.ok(out.includes("CONFIRM: requires-user-confirmation — approve fixing the retry path only?"), out.join("\n"));
   assert.ok(out.some((line) => line.startsWith("recorded: phase_done architecture")), out.join("\n"));
   assert.equal(stateOf(seeded).termination, undefined);
   const confirmation = composeGateNotice({ runDir: seeded.dir, fromArtifact: { file: "03-plan.md", section: "## Requires user confirmation" } });
-  assert.match(confirmation, /should the escape apply to every git read \(A\)/);
-  const coverage = composeGateNotice({ runDir: seeded.dir, fromArtifact: { file: "03-plan.md", section: "## Symptom coverage" } });
-  assert.match(coverage, /covered under \(A\) · not-covered under \(B\)/);
+  assert.match(confirmation, /approve fixing the retry path only\?/);
   openDb(seeded.env).prepare("UPDATE jobs SET status = 'gate' WHERE id = ?").run(jobIdOf(seeded));
-  await applyRetry({ id: jobIdOf(seeded), note: "(A) every git read", env: seeded.env });
-  assert.deepEqual(stateOf(seeded).answers.map((entry) => entry.text), ["(A) every git read"]);
+  await applyRetry({ id: jobIdOf(seeded), note: "yes, the retry path only", env: seeded.env });
+  assert.deepEqual(stateOf(seeded).answers.map((entry) => entry.text), ["yes, the retry path only"]);
   assert.equal(stateOf(seeded).phases.at(-1).phase, "architecture");
 });
 
-test("a terminal triage with a partial Brief fires no field gate and still terminates", async (t) => {
+test("a terminal triage with a partial Brief still terminates", async (t) => {
   const partial = "## Brief\n**Affected area:** src/a.mjs\n**Commit type:**\n\n";
   const seeded = seedRun(t, "terminal-partial-brief", { fixture: { type: "bug/error" }, texts: { "01-triage.md": triageWith("NOT-REPRODUCIBLE", undefined, partial) } });
   const { out } = await runCheck(seeded.env, "01");
@@ -1117,12 +708,3 @@ test("a pause showing the plan's question records its digest, whatever text surr
   ];
   for (const notice of notices) assert.equal(gateDigestOf({ runDir: dir, notice }), questionDigest("keep the old column?"), notice);
 });
-
-test("`run report` lists the plan's open items once", async (t) => {
-  const seeded = seedRun(t, "report-plan-open", readFixture("coverage-enumeration-no-method"));
-  const report = [];
-  assert.equal(await run(["run", "report", "--json"], { env: seeded.env, out: (line) => report.push(line), err: () => {}, stdout: { write: () => {} } }), 0);
-  const { openItems } = JSON.parse(report[0]);
-  assert.equal(openItems.filter((item) => item === "03 open: coverage-enumeration-no-method — I analyzed the code and the callers").length, 1, report[0]);
-});
-

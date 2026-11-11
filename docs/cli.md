@@ -189,80 +189,55 @@ cannot answer one `Changed outside the list: unknown, git answered nothing` line
 report nor changes what it records. `--facts` prints that section alone (`--json`: `{facts}`) and
 records nothing, for Phase 8, which runs before the report.
 
-`run check <NN> [--stage analyst|triage]` is the artifact gate of a phase: it reads
-`<RUN_DIR>/<NN-phase>.md` and prints `OK` or `MISSING: <sections>` - the
-sections required are `## Brief` (`00`, the `00-brief.md` written by `run check 01`; an older plugin writes it by hand), `## Verdict` (with `Evidence level: <1|2|3|4>` as its first line), `## Validated brief`, `## Out of scope` and `## Request gaps` (`01`), `## File map`, `## Access map` and
-`## Third-party libraries` (`02`), the four sections of the plan (`03`),
-`## Modified files` (`04`), `## Proven breaks`, `## Break hypotheses`, `## Test recipe`,
-`## Validated risks`, `## Invalidated assumptions` and `## Verdict` (`05 --stage analyst`, the
-analyst's round of `05-qa.md`), `## Diff classification`, `## New risk` and `## QA mode`
-(`05 --stage triage`, the last `source: qa-triage` round of `05-qa.md`, whichever rounds follow
-it), `## Proven breaks`,
-`## Validated risks`, `## Invalidated assumptions`, `## Generated PoCs` and `## Verdict` (`05`),
-`## Checks run` and `## Verification` (`06`) and `## Runtime verdict`
-(`07`, the runtime lane's `07-runtime.md`). Each list is the mandatory part of the
-`## Deliver` block the phase's request renders (the plan and QA/verification report formats
-under `plugin/skills/resolve/references/`). `05`, `06` and `07` are append-only, one `## Round <n>` per
-launch: their sections are required in the LAST `## Round` (to the end of the file),
-so an earlier round's verdict never passes a later launch; a `## Round` heading inside fenced
-code is never a round, one inside an HTML comment is a round only when it is the next number in
-sequence (which closes the comment); a file with no round heading is checked whole. Fence lines
-follow CommonMark: an opener is 0-3 spaces and 3+ backticks or tildes, a backtick info string
-holds no backtick (```` ```node --test``` ```` is inline code), and a closer carries no info
-string. The rounds a gate reads must be well-formed: a round artifact that ends inside an open
+`run check <NN> [--stage analyst|triage]` confirms the artifact of a phase: it reads
+`<RUN_DIR>/<NN-phase>.md` and prints `OK`, or `MISSING: <file> (not written)` when the artifact
+(for a round artifact, the round read) is empty or absent, or `MISSING: verdict (one of: <words>)`
+when the step has verdict words (`01`, `05`, `05 --stage analyst|triage`, `06`, `07`) and the
+artifact states none of them. No section, field or format is required: method and report format
+are the agents'. `05`, `06` and `07` are append-only, one `## Round <n>` per launch, and are read
+on their LAST `## Round` (`05 --stage triage` on the last `source: qa-triage` round), so an earlier
+round's verdict never passes a later launch; a `## Round` heading inside fenced code is never a
+round, and a file with no round heading is read whole. A round artifact that ends inside an open
 code fence is repaired first — the check appends the fence's own marker as the last line and
 prints `REPAIRED: the code fence of round <k> opened at line <X> of <file> never closed; the
-runtime appended `<marker>` at line <Z>` right after its first line — and any other defect is a
-`MISSING:` part that asks the lane to append a new `## Round <next>`: a column-0
-`## Round <next>` inside a code fence (`line <Y> of <file> is a column-0 ...`), a `<!--` the
-round leaves open (`round <k> of <file> leaves the HTML comment opened at line <X> open: ...`),
-and a round heading inside a comment the round itself closes (`line <Y> of <file> (`## Round
-<k>`) sits inside the HTML comment ...`), every part in line order, joined by `; `. `04` is the only artifact with a fallback: with no file list,
-the command derives one from the changes of the run's worktree (`git diff
---name-only HEAD` plus `git ls-files --others --exclude-standard`) and from what
-the run's own wip commits would carry into the delivery, writes it to
-`04-files.generated.md`, never over `04-implementation.md`, and prints `GENERATED` - and a worktree with no change at all and no wip to fold prints
-`MISSING: ## Modified files (no changed files)` without writing anything. The
+runtime appended `<marker>` at line <Z>` right after its first line. `04` is the only artifact with
+a fallback: with no file list, the command derives one from the changes of the run's worktree
+(`git diff --name-only HEAD` plus `git ls-files --others --exclude-standard`) and from what the
+run's own wip commits would carry into the delivery, writes it to `04-files.generated.md`, never
+over `04-implementation.md`, and prints `GENERATED` - and a worktree with no change at all and no
+wip to fold prints `MISSING: ## Modified files (no changed files)` without writing anything. The
 three answers exit `0`: they are findings the last line routes, `NEXT: <action>` (`launch`, `gate`,
-`terminate`, `publish`, `report` or `check`; `docs/runtime-contract.md`), not failures of the command; only an unknown `<NN>`, a stage other than
-`05 --stage analyst|triage`, a retired id of the old numbering (`renumbered: use <NN>`) or a run that
-cannot be resolved exits `1`. In a full QA, `run check 05` first writes the consolidated round
-(`source: runtime consolidation`) of the analyst's and the provers' rounds and answers over it
-(see [Runtime contract](runtime-contract.md), "The QA consolidation is the check's own").
+`terminate`, `publish`, `report` or `check`; `docs/runtime-contract.md`), not failures of the
+command; only an unknown `<NN>`, a stage other than `05 --stage analyst|triage`, a retired id of
+the old numbering (`renumbered: use <NN>`) or a run that cannot be resolved exits `1`. In a full QA,
+`run check 05` first writes the consolidated round (`source: runtime consolidation`) of the
+analyst's and the provers' rounds and answers over it (see [Runtime contract](runtime-contract.md),
+"The QA consolidation is the check's own").
 
-The first line keeps that meaning; the check also answers the phase's verdict and gates, one
-fact per line under a stable prefix, in this order: `VERDICT: <value>` (`01`, `05`,
-`05 --stage analyst`, `06`, `07`; a verdict outside the phase's values is a `MISSING:` of the verdict line),
-`GATE: <code> — <evidence>`, `OPEN: <text>`, `TYPE-MISMATCH: …`,
-`CONFIRM: requires-user-confirmation — <question>` or `CONFIRM: answered (<at>)`, once an answer was
-recorded after the pause on that question (`03`, only with a
-filled question, one with a `?`; a confirmation section with a `?` no label shape places, or a
-filled label with no `?`, is a `MISSING:`),
-`QA-MODE: skip|lite|full — <why>` (`05 --stage triage`; a `skip` with a `logic` line must name a
-test file inside the run's worktree, which the check reads on disk, a code file by extension and
-outside a vendored directory, else `MISSING:`), `QA-STAGE: provers|skip`
-(`05 --stage analyst`), `INVALIDATED: <item>`, `DIFF-APPLIES: yes|no`,
-`NEEDS-DEVICE`, `index: …` (`02`), the `recorded: …` lines, and `SCRIPT:` followed by the
-device script, always last. A `MISSING:` first line prints nothing else but a `REPAIRED:` line. Headings are matched
-by prefix, outside fenced code and HTML comments; round artifacts are read on their last
-`## Round`. The check acts on what it found: on a complete phase it records
-`phase_done` itself (`recorded: phase_done <phase> <verdict>`, with the reason of a re-run),
-`02` saves the File map into the project index (`index: saved N files, M libs` or
-`index: not saved (<reason>)`, which never changes `OK`), `01` gates the triage's
-`## Brief` (`brief-missing`, `brief-field-empty`, `brief-type-invalid`,
-`brief-commit-type-invalid`), records the Type (`recorded: type <type>`), writes the Brief
-into `<RUN_DIR>/00-brief.md` (`recorded: brief 00-brief.md`), records the commit type
-(`recorded: commit type <c>`), the termination of a terminal verdict
-(`recorded: run_terminate triage <VERDICT>`), and, last, the slug
-(`recorded: slug <slug>`, or `(renamed from <old>; run dir <path>)` when a job run still on
-its provisional slug takes the Brief's `**Slug:**`), and `05 --stage analyst` records no phase. `05 --stage triage` records the decision
+After the first line the check prints, one fact per line under a stable prefix and in this order:
+`VERDICT: <word>`, read tolerantly from a verdict heading, a `Verdict:`/`Verification:` labelled
+line or the first line under a verdict heading; `CONFIRM: requires-user-confirmation — <question>`
+or `CONFIRM: answered (<at>)`, once an answer was recorded after the pause on that question (`03`,
+only with a filled question); `QA-MODE: skip|lite|full — <why>` (`05 --stage triage`, with
+`stated by the QA triage` when the round gives no reason); `QA-STAGE: provers|skip`
+(`05 --stage analyst`); `NEEDS-DEVICE`; `index: …` (`02`); the `recorded: …` lines; and `SCRIPT:`
+followed by the device script, always last. A `MISSING:` first line prints nothing else but a
+`REPAIRED:` line. The check acts on what it found: on a complete phase it records `phase_done`
+itself (`recorded: phase_done <phase> <verdict>`, with the reason of a re-run), `02` saves the
+File map into the project index (`index: saved N files, M libs` or `index: not saved (<reason>)`,
+which never changes `OK`), `01` records the Type (`recorded: type <type>`), writes the Brief into
+`<RUN_DIR>/00-brief.md` (`recorded: brief 00-brief.md`, or the whole triage when it has no
+`## Brief`), records the commit type when the Brief states a valid one (`recorded: commit type
+<c>`), the termination of a terminal verdict (`recorded: run_terminate triage <VERDICT>`), and,
+last, the slug (`recorded: slug <slug>`, or `(renamed from <old>; run dir <path>)` when a job run
+still on its provisional slug takes the Brief's `**Slug:**`); a missing or odd Brief field never
+fails the check. `05 --stage analyst` records no phase. `05 --stage triage` records the decision
 (`recorded: qa_mode <mode>`, `(already)` when the same mode stands, however it is worded) and, only
-on a `skip`, the `qa` phase with the verdict `SKIPPED`, once while it is the phase's last entry; a `lite` or `full` decision removes that `SKIPPED`, and its QA records its phase through
-`05`. `05` with `INVALIDATED:` lines records no
-`qa` (`recorded: none (INVALIDATED: …)`). `03` and `05` print no `GATE:`: what they find is an
-`OPEN:` line, and the only human stop of a run is `CONFIRM: requires-user-confirmation`. Every gate
-code, the completion rule and the record
-semantics are in [Runtime contract](runtime-contract.md) ("The artifact check answers the gates").
+on a `skip`, the `qa` phase with the verdict `SKIPPED`, once while it is the phase's last entry; a
+`lite` or `full` decision removes that `SKIPPED`, and its QA records its phase through `05`. The
+only human stop of a run is `CONFIRM: requires-user-confirmation`. The completion rule and the
+record semantics are in [Runtime contract](runtime-contract.md) ("The artifact check confirms the
+artifact and its verdict").
 
 `run append 05 --group <id>|--group-label <label> --from <file> [--project <name> --slug <slug>]` appends one prover
 round to `<RUN_DIR>/05-qa.md`: it numbers the round from the file under the run lock, writes it

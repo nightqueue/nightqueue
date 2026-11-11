@@ -95,25 +95,26 @@ test("the reflector reads every round and fix loop, never the job's stream or lo
   assert.equal(AGENT.includes("decision_save"), false);
 });
 
-test("the reflector's block has no artifact handoff and names the rubric, state.json and the rounds rule; its agent fetches the timeline", () => {
+test("the reflector's launch has no artifact handoff and names the rubric, state.json and the rounds; its agent fetches the timeline", () => {
   assert.equal(BLOCK.includes("ARTIFACT_PATH"), false);
   assert.ok(BLOCK.includes("RUBRIC: <pluginRoot>/skills/reflect/references/rubric.md"));
   assert.ok(BLOCK.includes("state.json"));
-  assert.ok(BLOCK.includes('`agent: "reflector"`') && AGENT.includes('`agent: "reflector"`'));
+  assert.ok(BLOCK.includes("context: `slug` = RUN_DIR's last segment") && AGENT.includes('`agent: "reflector"`'));
   assert.ok(AGENT.includes("`## Run timeline`"));
   assert.ok(AGENT.includes("`## Lessons given to this run`"));
-  assert.ok(BLOCK.includes("Read every round and every fix-loop block; never the job's stream/log."));
+  assert.ok(BLOCK.includes("every round and fix loop"));
 });
 
-test("the reflector's block names its run, its plugin root and its own return head", () => {
+test("the reflector's launch names its run, its rubric and its own return head", () => {
   const { blocks } = phasePrompts();
-  for (const field of ["RUN_DIR: ", "PROJECT: ", "PLUGIN_ROOT: ", "RETURN-HEAD: REFLECTION: "]) {
-    assert.ok(blocks.reflector.some((line) => line.startsWith(field)), `the reflector block lost ${field}`);
+  for (const field of ["RUN_DIR: ", "PROJECT: ", "RUBRIC: ", "RETURN-HEAD: REFLECTION: "]) {
+    assert.ok(blocks.reflector.some((line) => line.startsWith(field)), `the reflector launch lost ${field}`);
   }
 });
 
-test("the reflector's block reads qaMode and its agent points a QA skip to the rubric's rule", () => {
-  assert.ok(BLOCK.includes("state.json — `termination`, `answers`, `lastClaim.attempt`, `qaMode`"), BLOCK);
+test("the reflector reads qaMode from the state its launch names, and its agent points a QA skip to the rubric's rule", () => {
+  assert.ok(BLOCK.includes("state.json"), BLOCK);
+  assert.ok(AGENT.includes("`qaMode` (the QA triage's decision)"), AGENT);
   assert.ok(AGENT.includes("a QA skip follows the rubric's `## A QA skip`"), AGENT);
   assert.match(AGENT, /later defect in the skipped area is a lesson with `target: qa`, a skip that held saves nothing/);
 });
