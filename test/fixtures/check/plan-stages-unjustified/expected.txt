@@ -1,3 +1,0 @@
-OK
-OPEN: stages-unjustified — 3 stages, no reason line
-recorded: phase_done architecture OK

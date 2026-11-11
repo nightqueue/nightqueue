@@ -3,7 +3,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { deliverOf, phasePrompts } from "../test-support/skill-size.mjs";
+import { phasePrompts } from "../test-support/skill-size.mjs";
 
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
 const AGENTS = ["coder", "qa-guardian", "verifier", "triager", "explore", "architect"];
@@ -127,35 +127,34 @@ test("each agent returns a short pointer, never file contents nor a diff", () =>
   }
 });
 
-// The coder's block delivers the sections the stage lanes append to, its request scopes a lane to its stage, and the agent reads with the discipline that keeps a lane small.
-test("the coder writes the staged handoff sections and reads with discipline", () => {
+// The coder's launch asks for the cumulative file list run publish reads, scopes a lane to its stage, and the agent reads with the discipline that keeps a lane small.
+test("the coder keeps the cumulative file list, works one stage, and reads with discipline", () => {
   const agent = readAgent("coder");
-  assert.deepEqual(deliverOf(phasePrompts().blocks.coder).headings, ["## Modified files", "## Done", "## Left", "## How it was tested"], "the coder block does not deliver the staged handoff sections");
-  assert.ok(blockText("coder-fix").includes("### Fix loop <n> — what was wrong / what changed"), "the coder-fix block does not append its fix loop");
+  assert.ok(blockText("coder").includes("a cumulative `## Modified files` list of absolute paths"), "the coder launch no longer asks for the cumulative file list");
+  assert.ok(blockText("coder-fix").includes("append a `### Fix loop N` block"), "the coder-fix launch does not append its fix loop");
   assert.ok(agent.includes("## Reading discipline"), "coder.md lost its reading discipline");
   assert.ok(agent.includes("under ~300 lines"), "coder.md lost the whole-file Read threshold");
   assert.ok(agent.includes("When the request names a stage, implement only that stage"), "coder.md does not scope a task to its stage");
-  assert.ok(phasePrompts().blocks.coder.includes("STAGE: <stage>"), "the coder block does not name its stage");
+  assert.ok(phasePrompts().blocks.coder.includes("STAGE: <stage> — this plan stage only"), "the coder launch does not name its stage");
 });
 
-// The verifier owns the method of proving by execution and the verdict meanings; its blocks own the runtime deliverable, the evidence file and the line that tells a runtime lane apart.
-test("the verifier owns the runtime method and the verdict the phases read", () => {
+// The verifier owns the method of proving by execution, the verdict meanings and the evidence files; its launches own the verdict words, the automated evidence file and the line that tells a runtime lane apart.
+test("the verifier owns the runtime method and the verdict the routing reads", () => {
   const agent = readAgent("verifier");
   const runtime = blockText("runtime");
-  const phases = readFileSync(PHASES, "utf8");
+  const skill = readFileSync(SKILL, "utf8");
+  const routing = skill.slice(skill.indexOf("## Routing"), skill.indexOf("## Phase prompts"));
   assert.ok(agent.includes("## Proving by execution"), "verifier.md does not carry `## Proving by execution`");
   assert.ok(agent.includes("a scenario with no recorded attempt is not `to confirm`"), "the unavailable rule left the verifier");
-  for (const phrase of ["## Runtime verdict", "Diff applies plan: yes|no"]) {
-    assert.ok(runtime.includes(phrase), `the runtime block does not carry \`${phrase}\``);
-  }
-  assert.ok(phasePrompts().blocks.runtime.includes("Mode: RUNTIME"), "the runtime block lost its `Mode: RUNTIME` line");
+  assert.ok(runtime.includes("your `## Proving by execution`"), "the runtime launch does not send the lane to its proving method");
+  assert.ok(phasePrompts().blocks.runtime.includes("Mode: RUNTIME"), "the runtime launch lost its `Mode: RUNTIME` line");
   for (const verdict of ["CONFIRMED", "NOT-MET", "SYMPTOM-PERSISTS", "NEEDS-DEVICE", "UNAVAILABLE"]) {
     assert.ok(agent.includes(`- \`${verdict}\` — `), `verifier.md does not define the \`${verdict}\` verdict`);
-    assert.ok(runtime.includes(`\`${verdict}\``), `the runtime block does not name the \`${verdict}\` verdict`);
-    assert.ok(phases.includes(`\`${verdict}\``) || phases.includes(`\`VERDICT: ${verdict}`), `the phases do not route the \`${verdict}\` verdict`);
+    assert.ok(runtime.includes(verdict), `the runtime launch does not name the \`${verdict}\` verdict`);
+    assert.ok(routing.includes(verdict), `the routing does not route the \`${verdict}\` verdict`);
   }
-  assert.ok(blockText("verifier").includes("evidence/automated-verification.md"), "the verifier block does not write its evidence file");
-  assert.equal(phases.includes("Decide the path by the change:"), false, "the phases still carry the runtime cases");
+  assert.ok(blockText("verifier").includes("evidence/automated-verification.md"), "the verifier launch does not write its evidence file");
+  assert.equal(readFileSync(PHASES, "utf8").includes("Decide the path by the change:"), false, "the phases still carry the runtime cases");
 });
 
 // A fix removes its mechanism instead of bending to a proof file, and an outdated proof is judged by its contract, within each file's byte ceiling.
@@ -175,11 +174,10 @@ test("the coder fixes the mechanism and the verifier judges an outdated proof by
   }
 });
 
-// One coder lane per stage keeps the binding rule of a staged Brief: the verifier runs between stages.
+// A staged plan runs the verifier after each stage's coder, so no stage waits for the end to be verified.
 test("the stage lanes keep the verifier between stages", () => {
-  const skill = readFileSync(PHASES, "utf8").replace(/\s+/g, " ");
-  assert.ok(skill.includes("Phase 4 implements stage by stage with the verifier between stages"), "the skill lost the binding stage rule of a staged Brief");
-  assert.ok(skill.includes("then the verifier between stages"), "the one-lane-per-stage text skips the verifier between stages");
+  const skill = readFileSync(SKILL, "utf8").replace(/\s+/g, " ");
+  assert.ok(skill.includes("each stage of the plan in order (none: one stage): `coder` → `verifier`"), "the sequence lost the verifier after each stage's coder");
   assert.equal(skill.includes("Phase 5 and Phase 6 run once"), false, "the stage lanes still defer every verification to the end");
 });
 

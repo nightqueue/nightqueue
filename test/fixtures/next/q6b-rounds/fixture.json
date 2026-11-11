@@ -1,1 +1,0 @@
-{"type":"feature/refactor","check":"05","loopsSeed":{"architect":2,"invalidated":["[P1] other"]},"loops":{"fix":1,"pendingQaRow":"launch coder-fix note=iteration 1: H1 the filter drops a row (test/h1.test.mjs)"}}

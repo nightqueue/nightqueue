@@ -273,7 +273,7 @@ given.
 loop artifacts keep their history: `05-qa.md`, `06-verification.md` and
 `07-runtime.md` are append-only, one `## Round n` per launch, and a fix-loop coder appends a
 `### Fix loop n — what was wrong / what changed` block to `04-implementation.md` instead of
-rewriting it (gates read only the last round). Its prompt carries the run timeline - phase,
+rewriting it (checks read only the last round). Its prompt carries the run timeline - phase,
 model, status and reason in order - from this attempt's `pipeline_phases`: `nightqueue run check`
 records the `reason` of every relaunch, and `nightqueue run report` (Phase 9)
 writes one row per phase `state.json` recorded, with its reason. When no run was recorded for the attempt, the timeline

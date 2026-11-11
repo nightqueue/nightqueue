@@ -1,6 +1,0 @@
-OK
-VERDICT: APPROVED
-OPEN: omitted — src/retry.mjs:40 also writes the state
-OPEN: divergences — `src/status.mjs:22` is not in the plan
-OPEN: unconfirmed decisions — archived jobs visibility
-recorded: phase_done qa APPROVED

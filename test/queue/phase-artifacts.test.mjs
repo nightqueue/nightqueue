@@ -1,27 +1,13 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { parseExploreArtifact } from "../../src/cli/explore-artifact.mjs";
-import { PHASE_ARTIFACTS, QA_ANALYST_STAGE, QA_STAGES, QA_TRIAGE_STAGE } from "../../plugin/skills/resolve/pipeline/artifacts.mjs";
+import { MANIFEST, PHASE_ARTIFACTS, QA_ANALYST_STAGE, QA_STAGES, QA_TRIAGE_STAGE } from "../../plugin/skills/resolve/pipeline/artifacts.mjs";
 import { lastRound, lastRoundWithSource, nextRound } from "../../src/queue/rounds.mjs";
 import { phaseNamesOf } from "../../src/queue/pipeline-package.mjs";
 
-const EXPLORE_HEADINGS = ["## File map", "## Access map", "## Third-party libraries"];
-
-test("the explore gate requires the headings the index-save parser reads", () => {
-  assert.deepEqual(PHASE_ARTIFACTS.get("02").sections, EXPLORE_HEADINGS);
-  const artifact = `${EXPLORE_HEADINGS[0]}\n- /a.mjs — a\n\n${EXPLORE_HEADINGS[1]}\n- **No entry point:** text · grep\n\n${EXPLORE_HEADINGS[2]}\n- None\n`;
-  assert.equal(parseExploreArtifact(artifact).files.length, 1);
-});
-
-test("the plan, implementation, QA and verification gates require the mandatory sections of their ## Deliver blocks", () => {
-  const sections = (phase) => PHASE_ARTIFACTS.get(phase).sections;
-  assert.deepEqual(sections("03"), ["## Implementation plan", "## Assumptions", "## Pre-mortem", "## Identified risks"]);
-  assert.deepEqual(sections("04"), ["## Modified files"]);
-  assert.deepEqual(QA_ANALYST_STAGE.sections, ["## Proven breaks", "## Break hypotheses", "## Test recipe", "## Validated risks", "## Invalidated assumptions", "## Generated PoCs", "## Verdict"]);
-  for (const heading of sections("05")) assert.ok(QA_ANALYST_STAGE.sections.includes(heading), `stage A must require ${heading}, which check 05 reads`);
-  assert.deepEqual(sections("05"), ["## Proven breaks", "## Validated risks", "## Invalidated assumptions", "## Generated PoCs", "## Verdict"]);
-  assert.deepEqual(sections("06"), ["## Checks run", "## Verification"]);
-  assert.deepEqual(sections("07"), ["## Runtime verdict"]);
+test("no artifact gates on its sections: every manifest phase lists none, and only the implementation derives a file list", () => {
+  for (const phase of MANIFEST.phases) assert.deepEqual(phase.sections, [], String(phase.id));
+  const deriving = [...PHASE_ARTIFACTS].filter(([, artifact]) => artifact.derivesFileList).map(([check]) => check);
+  assert.deepEqual(deriving, ["04"]);
 });
 
 test("the phases are whole numbers: the check ids run 00 to 07, and the analyst stage is no key of its own", () => {
@@ -43,22 +29,22 @@ test("each artifact names the canonical phase it completes, and only the brief a
   for (const phase of Object.values(phases).filter(Boolean)) assert.ok(phaseNamesOf(null).includes(phase), phase);
 });
 
-test("the triage, QA, verification and runtime artifacts declare where their verdict is read and the values it takes", () => {
-  const verdicts = [...PHASE_ARTIFACTS].filter(([, artifact]) => artifact.verdict).map(([check, artifact]) => [check, artifact.verdict.label]);
+test("the triage, QA, verification and runtime artifacts take the manifest's verdict words, never a word the check answers by itself", () => {
+  const verdicts = [...PHASE_ARTIFACTS].filter(([, artifact]) => artifact.verdicts.length > 0).map(([check, artifact]) => [check, artifact.verdicts]);
   assert.deepEqual(verdicts, [
-    ["01", "## Verdict: <PROCEED|NO-CHANGE-NEEDED|NOT-REPRODUCIBLE>"],
-    ["05", "## Verdict: <APPROVED|NEEDS FIX|NEEDS DISCUSSION> as the first line"],
-    ["06", "## Verification: <PASSED|PASSED-STATIC|FAILED>"],
-    ["07", "## Runtime verdict: <CONFIRMED|NOT-MET|SYMPTOM-PERSISTS|NEEDS-DEVICE|UNAVAILABLE> as the first line"],
+    ["01", ["PROCEED", "NO-CHANGE-NEEDED", "NOT-REPRODUCIBLE"]],
+    ["05", ["APPROVED", "NEEDS FIX", "NEEDS DISCUSSION"]],
+    ["06", ["PASSED", "PASSED-STATIC", "FAILED"]],
+    ["07", ["CONFIRMED", "NOT-MET", "SYMPTOM-PERSISTS", "NEEDS-DEVICE", "UNAVAILABLE"]],
   ]);
-  assert.equal(QA_ANALYST_STAGE.verdict.label, "## Verdict: <APPROVED|NEEDS FIX|NEEDS DISCUSSION> as the first line");
+  assert.deepEqual(QA_ANALYST_STAGE.verdicts, ["APPROVED", "NEEDS FIX", "NEEDS DISCUSSION"]);
 });
 
-test("the QA triage stage is a round of the QA's artifact that completes no phase, and it has no verdict", () => {
+test("the QA triage stage is a round of the QA's artifact that completes no phase, and its verdict is the QA mode", () => {
   assert.deepEqual(Object.keys(QA_STAGES), ["analyst", "triage"]);
   assert.equal(QA_TRIAGE_STAGE.file, PHASE_ARTIFACTS.get("05").file);
-  assert.deepEqual([QA_TRIAGE_STAGE.phase, QA_TRIAGE_STAGE.rounds, QA_TRIAGE_STAGE.verdict], [null, true, undefined]);
-  assert.deepEqual(QA_TRIAGE_STAGE.sections, ["## Diff classification", "## New risk", "## QA mode"]);
+  assert.deepEqual([QA_TRIAGE_STAGE.phase, QA_TRIAGE_STAGE.rounds], [null, true]);
+  assert.deepEqual(QA_TRIAGE_STAGE.verdicts, ["skip", "lite", "full"]);
 });
 
 test("`lastRoundWithSource` is the last round of that source, wherever it sits, or null", () => {

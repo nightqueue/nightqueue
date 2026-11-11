@@ -8,7 +8,6 @@ import { OPERATOR_AGENT, OPERATOR_MODE_AGENT, operatorAgentPath, operatorArgs, o
 import { OPERATOR_CLI_COMMANDS, PIPELINE_AGENTS } from "../src/queue/operator-scope.mjs";
 import { pluginDir, resolveClaudeBin } from "../src/host/claude-launch.mjs";
 import { JOB_SCOPED_ENV_KEYS } from "../src/host/session-profile.mjs";
-import { phasePrompts } from "../test-support/skill-size.mjs";
 
 const AGENTS_DIR = join(pluginDir(), "agents");
 const OPERATOR = readFileSync(operatorAgentPath(), "utf8");
@@ -249,10 +248,10 @@ test("PIPELINE_AGENTS is the plugin's agents but the operator, every agent name 
   for (const gone of ["triage.md", "qa.md"]) assert.equal(existsSync(join(AGENTS_DIR, gone)), false, `${gone} still exists`);
 });
 
-test("the triager's request opens its verdict with `Evidence level: <1-4>`, and the 0-4 scale is gone", () => {
-  const lines = phasePrompts().blocks.triager;
+test("the triager's report opens its verdict with `Evidence level: <1-4>`, and the 0-4 scale is gone", () => {
+  const lines = TRIAGER.split("\n");
   const verdict = lines.findIndex((line) => line.startsWith("## Verdict:"));
-  assert.notEqual(verdict, -1, "the triager's block has no `## Verdict:` template");
+  assert.notEqual(verdict, -1, "the triager's report has no `## Verdict:` template");
   const firstLine = lines.slice(verdict + 1).find((line) => line.trim() !== "");
   assert.equal(firstLine, "Evidence level: <1-4>");
   assert.equal(TRIAGER.includes("0-4"), false);

@@ -1,1 +1,1 @@
-NEXT: launch runtime note=MISSING: ## Runtime verdict
+NEXT: launch runtime note=MISSING: verdict (one of: CONFIRMED, NOT-MET, SYMPTOM-PERSISTS, NEEDS-DEVICE, UNAVAILABLE)

@@ -1,1 +1,1 @@
-MISSING: ## QA mode: <skip|lite|full> — <one sentence> as the first line
+MISSING: verdict (one of: skip, lite, full)

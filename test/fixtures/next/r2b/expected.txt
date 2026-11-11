@@ -1,1 +1,1 @@
-NEXT: publish --draft remaining=GATE: runtime-not-met — queue retry J-1
+NEXT: publish --draft remaining=NOT-MET: see the last round of 07-runtime.md

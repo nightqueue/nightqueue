@@ -1,4 +1,0 @@
-OK
-VERDICT: PASSED
-OPEN: pre-existing-failure — environment: no database · attempt: placeholders
-recorded: phase_done verification PASSED

@@ -1,1 +1,0 @@
-{"type":"feature/refactor","check":"05","loops":{"architect":1,"invalidated":["[P1] a view joins it (src/views.mjs:12)"]},"prints":"INVALIDATED: "}

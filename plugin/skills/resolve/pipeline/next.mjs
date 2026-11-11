@@ -1,28 +1,27 @@
 import { MANIFEST, PHASE_ARTIFACTS } from "./artifacts.mjs";
-import { beforeQa, CONFIRM_LINE, flatLine, planStageNumbers, sectionItems } from "./contract.mjs";
+import { CONFIRM_LINE, fixRoute, flatLine, planStageNumbers, planStageQa, qaWindow, sectionItems } from "./contract.mjs";
 import { nextDefect } from "../../../../src/queue/pipeline-answer.mjs";
 import { capped, terminationReason } from "./effects.mjs";
 
-// What `run check` tells the orchestrator to do next, from the check's answer and the loops the run has been through.
+// What `run check` tells the orchestrator to do next: each stage of the plan is a front (coder → verifier → its QA), then the whole change is verified, run and published.
 
 const MAX_FIX = MANIFEST.constants.maxFixIterations;
-const MAX_ARCHITECT_ROUNDS = 2;
 const FAILURES_MAX = 300;
 const CONFIRM_QUESTION_PREFIX = `${CONFIRM_LINE} — `;
-const STAGE_VERDICT_RE = /^VERDICT: .* \(stage (\d+)\)$/;
-const STAGE_BLOCK_RE = /^###\s+Stage\s+(\d+)\b/gm;
 const DIAGNOSIS_INCOMPLETE = "the diagnosis is incomplete; look for the underestimated path (order of gates, preceding branch, race, data source)";
-const DECISIONS_TAKEN_NOTE = "record it in ## Decisions taken";
+const PLAN_REVISED = "the plan was revised after a fix: design; implement the revision";
 const NO_VERDICT = "verification produced no verdict";
 const NO_NEW_ROUND = "wrote no new round after the last lane, so its failures stay open";
+const WHOLE = "whole";
 const TRIAGE_PHASE = PHASE_ARTIFACTS.get("01").phase;
 const ARCHITECTURE_PHASE = PHASE_ARTIFACTS.get("03").phase;
-const IMPLEMENTATION_PHASE = PHASE_ARTIFACTS.get("04").phase;
+const IMPLEMENTATION_PHASE =PHASE_ARTIFACTS.get("04").phase;
 const QA_PHASE = PHASE_ARTIFACTS.get("05").phase;
 const VERIFICATION_PHASE = PHASE_ARTIFACTS.get("06").phase;
 const RUNTIME_PHASE = PHASE_ARTIFACTS.get("07").phase;
 const RUNTIME_FIX_VERDICTS = new Set(["NOT-MET", "SYMPTOM-PERSISTS"]);
-const DURABLE_LOOPS = ["fix", "architect", "retriage", "stage", "fixPending", "invalidated", "pendingQaRow", "counted"];
+const FAILURE_HEADINGS = { "05": "## Proven breaks", "06": "## Failures", "07": "## Failures" };
+const DURABLE_LOOPS = ["fix", "retriage", "stage", "fixPending", "final", "qaDone", "verified", "redesign", "counted", "unanswered"];
 const DECIDING_LAUNCH_RE = /^launch (?:coder-fix|architect|triager)\b/;
 const ISO_AT_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/;
 
@@ -39,6 +38,17 @@ function countOf(value) {
 // A held action when it is one the closed grammar accepts, else null.
 function actionOf(value) {
   return typeof value === "string" && nextDefect(value, MANIFEST) === null ? value : null;
+}
+
+// Whether a value is a plain object.
+function isObject(value) {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+// A held PASSED mark, `{scope, impl}`, or null for any other shape.
+function verifiedOf(held) {
+  if (!isObject(held) || typeof held.scope !== "string" || typeof held.impl !== "string") return null;
+  return { scope: held.scope, impl: held.impl };
 }
 
 // Whether a recorded phase entry is one the next lane owes a fix to, given the fix count when it landed.
@@ -63,19 +73,19 @@ function fixAfterLane(replay) {
 // The replay after one recorded phase entry.
 function replayEntry(replay, entry) {
   if (entry.phase === IMPLEMENTATION_PHASE) return { ...replay, fix: fixAfterLane(replay) };
-  if (entry.phase === ARCHITECTURE_PHASE) return replay.previous === QA_PHASE ? { ...replay, architect: replay.architect + 1 } : replay;
+  if (entry.phase === ARCHITECTURE_PHASE) return replay;
   const triggered = withTrigger(replay, entry);
   if (entry.phase === RUNTIME_PHASE) return { ...triggered, runtimeSeen: true };
   if (entry.phase === TRIAGE_PHASE && replay.runtimeSeen) return { ...triggered, retriage: 1 };
   return triggered;
 }
 
-// The fix, architect and re-triage counts and the fix owed, replayed from the phases every attempt recorded.
+// The fix and re-triage counts and the fix owed, replayed from the phases every attempt recorded.
 function phaseLoops(phases) {
   const entries = Array.isArray(phases) ? phases.filter((entry) => entry !== null && typeof entry === "object") : [];
-  const start = { fix: 0, architect: 0, retriage: 0, fixPending: false, trigger: null, previous: null, runtimeSeen: false };
-  const replay = entries.reduce((held, entry) => ({ ...replayEntry(held, entry), previous: entry.phase }), start);
-  return { fix: replay.fix, architect: replay.architect, retriage: replay.retriage, fixPending: replay.fixPending };
+  const start = { fix: 0, retriage: 0, fixPending: false, trigger: null, runtimeSeen: false };
+  const replay = entries.reduce(replayEntry, start);
+  return { fix: replay.fix, retriage: replay.retriage, fixPending: replay.fixPending };
 }
 
 // The loop facts a decision record keeps, picked in a fixed order so two snapshots compare as text.
@@ -87,17 +97,6 @@ function durableOf(loops) {
 function decisionsOf(state) {
   const entries = Array.isArray(state?.decisions) ? state.decisions : [];
   return entries.filter((entry) => isObject(entry) && isObject(entry.loops));
-}
-
-// Whether a value is a plain object.
-function isObject(value) {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
-// Every assumption any decision recorded as invalidated, once each.
-function replayedInvalidated(decisions) {
-  const items = decisions.flatMap((entry) => (Array.isArray(entry.loops.invalidated) ? entry.loops.invalidated : []));
-  return [...new Set(items.filter((item) => typeof item === "string"))];
 }
 
 // The time of a runtime stamp in the ISO form the runtime writes, or null for any other value.
@@ -123,10 +122,9 @@ function isLatestCheck(state, decision) {
 
 // The loops another attempt left, from the last decision record, else replayed from the recorded phases of a run with none.
 function replayedLoops(state) {
-  const decisions = decisionsOf(state);
-  const last = decisions.at(-1);
+  const last = decisionsOf(state).at(-1);
   if (last === undefined) return phaseLoops(state?.phases);
-  return { ...durableOf(last.loops), invalidated: replayedInvalidated(decisions), lastNext: isLatestCheck(state, last) ? last.next : null };
+  return { ...durableOf(last.loops), lastNext: isLatestCheck(state, last) ? last.next : null };
 }
 
 // The loops of this attempt from its cache, else the ones replayed from the run's records when the cache holds none or another attempt's.
@@ -137,16 +135,18 @@ function loopsOf(state) {
   const loops = usable ? held : replayedLoops(state);
   return {
     attempt,
-    missing: loops.missing !== null && typeof loops.missing === "object" ? loops.missing : {},
+    missing: isObject(loops.missing) ? loops.missing : {},
     fix: countOf(loops.fix),
-    architect: countOf(loops.architect),
     retriage: countOf(loops.retriage),
     stage: isCount(loops.stage) ? loops.stage : null,
+    final: loops.final === true,
+    qaDone: loops.qaDone === true,
+    verified: verifiedOf(loops.verified),
+    redesign: loops.redesign === true,
     lastNext: actionOf(loops.lastNext),
     fixPending: loops.fixPending === true,
-    invalidated: Array.isArray(loops.invalidated) ? loops.invalidated : [],
-    pendingQaRow: actionOf(loops.pendingQaRow),
     counted: countedOf(loops.counted),
+    unanswered: typeof loops.unanswered === "string" && loops.unanswered !== "" ? loops.unanswered : null,
   };
 }
 
@@ -166,27 +166,38 @@ function publishDraft(remaining) {
   return `publish --draft remaining=${flatLine(remaining)}`;
 }
 
+// The stage of the front the run is in, the plan's first one when the held loops name none, null in the whole-change part or on a plan with no stages.
+function frontStage(ctx) {
+  return ctx.loops.final ? null : (ctx.loops.stage ?? ctx.fronts[0]);
+}
+
+// What the current verifier checks: `stage:<n>` in a staged front, else the whole change.
+function scopeOf(ctx) {
+  const stage = frontStage(ctx);
+  return stage === null ? WHOLE : `stage:${stage}`;
+}
+
+// Whether the last PASSED covers a scope on the implementation as it is now.
+function isVerified(verified, scope, impl) {
+  return verified !== null && verified.scope === scope && verified.impl === impl;
+}
+
+// Whether a front is attacked by the QA: only `QA: none` skips it, read from its stage, or from the plan's first QA line with no stage.
+function attacks(ctx, stage) {
+  const word = stage === null ? [...ctx.qa.values()][0] : ctx.qa.get(stage);
+  return word !== "none";
+}
+
 // The stages of the plan after a stage, none when the stage is unknown or the plan has no stages.
 function stagesNotRun(ctx, stage) {
-  if (stage === null || ctx.stages.length < 2) return [];
-  return ctx.stages.filter((number) => number > stage);
+  if (stage === null) return [];
+  return ctx.fronts.filter((number) => number !== null && number > stage);
 }
 
 // A `publish --draft` action that, on a stage row, also names the stages of the plan it leaves unrun.
 function draftOnStage(ctx, stage, remaining) {
   const notRun = stagesNotRun(ctx, stage);
   return publishDraft(notRun.length === 0 ? remaining : `${remaining}; stages not run: ${notRun.join(", ")}`);
-}
-
-// The stage a verification round states on its `VERDICT: … (stage N)` line, or null when it states none.
-function statedStage(ctx) {
-  const stated = ctx.result.lines.map((line) => STAGE_VERDICT_RE.exec(line)?.[1]).find(Boolean);
-  return stated === undefined ? null : Number(stated);
-}
-
-// The stage an unchanged row is in: the lane the loops hold, else the one its round states.
-function rowStage(ctx) {
-  return ctx.loops.stage ?? statedStage(ctx);
 }
 
 // The lines of the answer that start with a prefix.
@@ -199,9 +210,9 @@ function isMissing(ctx) {
   return ctx.result.first.startsWith("MISSING");
 }
 
-// The `MISSING:`, `REPAIRED:` and `GATE:` lines of the answer as one note.
+// The `MISSING:` and `REPAIRED:` lines of the answer as one note.
 function problemNote(ctx) {
-  const lines = [...linesWith(ctx, "MISSING"), ...(ctx.repaired ? [ctx.repaired] : []), ...linesWith(ctx, "GATE: ")];
+  const lines = [...linesWith(ctx, "MISSING"), ...(ctx.repaired ? [ctx.repaired] : [])];
   return flatLine(lines.join(" · "));
 }
 
@@ -215,27 +226,47 @@ function counted(action, set = {}, unchanged = 0) {
   return { action, set, counted: true, unchanged };
 }
 
-// The items of a section as one bounded line, or the fallback when it has none.
-function itemsLine(text, heading, fallback) {
-  const items = sectionItems(text, heading, { fold: true });
-  return capped(flatLine(items.length > 0 ? items.join("; ") : fallback), FAILURES_MAX);
+// The failures a negative round names, as one bounded line.
+function failuresOf(ctx) {
+  const file = PHASE_ARTIFACTS.get(ctx.key).file;
+  const items = sectionItems(ctx.result.evaluated, FAILURE_HEADINGS[ctx.key], { fold: true });
+  return capped(flatLine(items.length > 0 ? items.join("; ") : `${ctx.result.verdict}: see the last round of ${file}`), FAILURES_MAX);
 }
 
-// The failures a verification round names.
-function verificationFailures(ctx) {
-  return itemsLine(ctx.result.evaluated, "## Failures", "the verification still fails");
+// The text a negative report's `fix:` mark is read from: every QA round of this front, or the last round of the check.
+function routeText(ctx) {
+  return ctx.key === "05" ? qaWindow(ctx.raw) : ctx.result.evaluated;
 }
 
-// The fix loop: another `coder-fix` while iterations are left, `publish --draft` at the limit.
-function fixLoop(ctx, failures) {
-  if (ctx.loops.fix >= MAX_FIX) return counted(publishDraft(failures));
+// The front after this one: the plan's next stage, else the whole-change verification, skipped when its PASSED still holds.
+function nextFront(ctx, { set = {}, note = null } = {}) {
+  const current = frontStage(ctx);
+  const following = current === null ? undefined : ctx.fronts.find((number) => number !== null && number > current);
+  if (following !== undefined) return counted(launch("coder", { stage: following, note }), { ...set, stage: following, fix: 0, qaDone: false });
+  const verified = set.verified ?? ctx.loops.verified;
+  const whole = { ...set, final: true, fix: ctx.loops.final ? ctx.loops.fix : 0 };
+  return counted(launch(isVerified(verified, WHOLE, ctx.implDigest) ? "runtime" : "verifier", { note }), whole);
+}
+
+// The fix of a negative round: the architect on `fix: design`, the coder otherwise; at the limit a stage stays open and the next front starts, and the whole change publishes a draft.
+function fixRow(ctx, set = {}) {
+  const failures = failuresOf(ctx);
+  const stage = frontStage(ctx);
+  if (ctx.loops.fix >= MAX_FIX) {
+    if (stage === null) return counted(publishDraft(failures), set);
+    return nextFront(ctx, { set, note: `stage ${stage} left open: ${failures}` });
+  }
   const fix = ctx.loops.fix + 1;
-  return counted(launch("coder-fix", { note: `iteration ${fix}: ${failures}` }), { fix });
+  if (fixRoute(routeText(ctx)) === "design") return counted(launch("architect", { note: `fix: design — ${failures}` }), { ...set, fix, redesign: true });
+  return counted(launch("coder-fix", { stage, note: `iteration ${fix}: ${failures}` }), { ...set, fix });
 }
 
-// What comes after the last implementation lane: the QA, or straight to the verifier on a re-triage, which goes back to Phase 6.
-function afterImplementation(loops, note = null) {
-  return launch(loops.retriage >= 1 ? "verifier" : "qa-triage", { note });
+// What follows a PASSED of the current scope: the front's QA when owed, else the next front; in the whole-change part, the runtime.
+function afterPassed(ctx, set = {}) {
+  if (ctx.loops.final) return counted(launch("runtime"), set);
+  const stage = frontStage(ctx);
+  if (!ctx.loops.qaDone && attacks(ctx, stage)) return counted(launch("qa-triage", { stage }), set);
+  return nextFront(ctx, { set });
 }
 
 // The brief: the triage is what writes it.
@@ -247,7 +278,7 @@ function briefNext() {
 function triageNext(ctx) {
   const { loops, result } = ctx;
   const retriaging = loops.retriage >= 1;
-  if (isMissing(ctx) || linesWith(ctx, "GATE: ").length > 0) {
+  if (isMissing(ctx)) {
     const note = problemNote(ctx);
     if (!ctx.still) return missed(launch("triager", { note }));
     return missed(retriaging ? publishDraft(`re-triage: ${note}`) : `terminate ${note}`);
@@ -263,13 +294,13 @@ function exploreNext(ctx) {
   return missed(ctx.still ? launch("architect") : launch("explore", { note: problemNote(ctx) }));
 }
 
-// The first coder lane of the plan the check read.
-function firstCoderLane(ctx) {
-  const [first] = ctx.stages.length >= 2 ? ctx.stages : [null];
-  return { action: launch("coder", { stage: first }), set: { stage: first } };
+// The first front of the plan the check read, every front fact starting over.
+function firstFront(ctx) {
+  const [first] = ctx.fronts;
+  return { action: launch("coder", { stage: first }), set: { stage: first, fix: 0, qaDone: false, final: false, verified: null, redesign: false, unanswered: null } };
 }
 
-// The plan: one relaunch of a missing part, the one pause, then the QA row it was holding or the first coder lane.
+// The plan: one relaunch of a missing part, the one pause, the coder of a revised plan, the re-triage's coder, or the first front.
 function planNext(ctx) {
   if (isMissing(ctx)) {
     const note = problemNote(ctx);
@@ -278,56 +309,51 @@ function planNext(ctx) {
   }
   const [question] = linesWith(ctx, CONFIRM_QUESTION_PREFIX);
   if (question !== undefined) return { action: `gate ${flatLine(question.slice(CONFIRM_QUESTION_PREFIX.length))}` };
-  if (ctx.loops.pendingQaRow !== null) return counted(ctx.loops.pendingQaRow, { pendingQaRow: null });
-  return firstCoderLane(ctx);
+  if (ctx.loops.redesign) return counted(launch("coder", { stage: frontStage(ctx), note: PLAN_REVISED }), { redesign: false });
+  if (ctx.loops.retriage >= 1) return counted(launch("coder"), { final: true, fix: 0 });
+  return firstFront(ctx);
 }
 
-// The lane a staged run is in before its QA: the one recorded, else the highest stage the artifact reports, else the first of the plan.
-function activeLane(ctx) {
-  if (ctx.loops.stage !== null) return ctx.loops.stage;
-  if (ctx.stages.length < 2 || !beforeQa(ctx.state)) return null;
-  const reported = [...String(ctx.result.evaluated).matchAll(STAGE_BLOCK_RE)].map((match) => Number(match[1]));
-  return reported.length > 0 ? Math.max(...reported) : ctx.stages[0];
-}
-
-// The implementation: nothing changed stops the run, a lane or a fix goes to the verifier, the last lane to the QA.
+// The implementation: nothing changed stops the run, else the verifier of the current scope, unless its PASSED already covers this implementation and no fix lane ran since.
 function implementationNext(ctx) {
   if (isMissing(ctx)) return { action: `terminate ${flatLine(ctx.result.first)}` };
+  if (!ctx.loops.fixPending && isVerified(ctx.loops.verified, scopeOf(ctx), ctx.implDigest)) {
+    const { action, set } = afterPassed(ctx);
+    return { action, set };
+  }
   const note = ctx.result.first === "GENERATED" ? `the file list is in ${MANIFEST.fileListFallback}` : null;
-  const stage = activeLane(ctx);
-  if (stage !== null) return { action: launch("verifier", { stage, note }), set: { stage } };
-  return { action: ctx.loops.fixPending ? launch("verifier", { note }) : afterImplementation(ctx.loops, note) };
+  return { action: launch("verifier", { stage: frontStage(ctx), note }) };
 }
 
-// The QA triage: its mode decides; a mode that stays unreadable falls to `lite`.
+// The QA triage of the front: its mode decides; a mode that stays unreadable falls to `lite`, and `skip` ends the front's QA.
 function qaTriageNext(ctx) {
-  if (isMissing(ctx)) return missed(ctx.still ? launch("qa-lite") : launch("qa-triage", { note: problemNote(ctx) }));
+  const stage = frontStage(ctx);
+  if (isMissing(ctx)) return missed(ctx.still ? launch("qa-lite", { stage }) : launch("qa-triage", { stage, note: problemNote(ctx) }));
   const mode = ctx.result.qaMode?.mode;
-  if (mode === "skip") return { action: launch("verifier") };
-  return { action: launch(mode === "full" ? "qa-analyst" : "qa-lite") };
+  if (mode === "skip") return nextFront(ctx, { set: { qaDone: true } });
+  return { action: launch(mode === "full" ? "qa-analyst" : "qa-lite", { stage }) };
 }
 
-// The QA analyst: its provers, or straight to the consolidation with no hypothesis.
+// The next front after a QA that stayed unreadable: the unanswered QA is named on the launch and kept for the publish.
+function afterUnansweredQa(ctx) {
+  const stage = frontStage(ctx);
+  const what = `the QA of ${stage === null ? "the whole change" : `stage ${stage}`} never answered (${PHASE_ARTIFACTS.get("05").file})`;
+  const unanswered = ctx.loops.unanswered === null ? what : `${ctx.loops.unanswered}; ${what}`;
+  return { ...nextFront(ctx, { set: { qaDone: true, unanswered }, note: what }), missed: true };
+}
+
+// The publish of the change: a draft naming every QA that never answered, else the plain publish.
+function publishAction(ctx) {
+  return ctx.loops.unanswered === null ? "publish" : publishDraft(ctx.loops.unanswered);
+}
+
+// The QA analyst: its provers, or straight to the consolidation with no hypothesis; a round that stays unreadable ends the front's QA.
 function qaAnalystNext(ctx) {
-  if (isMissing(ctx)) return missed(ctx.still ? launch("verifier") : launch("qa-analyst", { note: problemNote(ctx) }));
+  if (isMissing(ctx)) {
+    if (ctx.still) return afterUnansweredQa(ctx);
+    return missed(launch("qa-analyst", { stage: frontStage(ctx), note: problemNote(ctx) }));
+  }
   return { action: linesWith(ctx, "QA-STAGE: provers").length > 0 ? launch("qa-prover") : "check 05" };
-}
-
-// The row of the QA's verdict.
-function qaVerdictRow(ctx) {
-  if (ctx.result.verdict !== "NEEDS FIX") return counted(launch("verifier"));
-  const breaks = itemsLine(ctx.result.evaluated, "## Proven breaks", "see ## Proven breaks");
-  return counted(launch("coder-fix", { note: `iteration 1: ${breaks}` }), { fix: 1 });
-}
-
-// The invalidated assumptions: the architect revises the plan once per assumption, then records it and the verdict row waits for that.
-function invalidatedRow(ctx, lines) {
-  const items = lines.map((line) => line.slice("INVALIDATED: ".length));
-  const { architect, invalidated } = ctx.loops;
-  const set = { architect: architect + 1, invalidated: [...new Set([...invalidated, ...items])] };
-  if (architect < MAX_ARCHITECT_ROUNDS && !items.some((item) => invalidated.includes(item))) return counted(launch("architect", { note: lines.join(" · ") }), set);
-  const row = qaVerdictRow(ctx);
-  return counted(launch("architect", { note: DECISIONS_TAKEN_NOTE }), { ...set, ...row.set, pendingQaRow: row.action });
 }
 
 // Whether this run's QA is the one-lane kind, whose relaunch is the same lane.
@@ -335,37 +361,22 @@ function isLiteQa(ctx) {
   return ctx.state?.qaMode?.mode === "lite" || (ctx.loops.lastNext ?? "").startsWith("launch qa-lite");
 }
 
-// The QA: one relaunch of a missing round, the invalidated assumptions, then its verdict.
+// The QA of the front: one relaunch of a missing round, then its verdict: NEEDS FIX takes the fix row, anything else the next front.
 function qaNext(ctx) {
   if (isMissing(ctx)) {
-    if (ctx.still) return missed(launch("verifier"));
-    return missed(launch(isLiteQa(ctx) ? "qa-lite" : "qa-analyst", { note: problemNote(ctx) }));
+    if (ctx.still) return afterUnansweredQa(ctx);
+    return missed(launch(isLiteQa(ctx) ? "qa-lite" : "qa-analyst", { stage: frontStage(ctx), note: problemNote(ctx) }));
   }
-  const invalidated = linesWith(ctx, "INVALIDATED: ");
-  return invalidated.length > 0 ? invalidatedRow(ctx, invalidated) : qaVerdictRow(ctx);
+  if (ctx.result.verdict === "NEEDS FIX") return fixRow(ctx, { qaDone: true });
+  return nextFront(ctx, { set: { qaDone: true } });
 }
 
-// The lane after a stage: the plan's next one, else what comes after the implementation.
-function nextLane(ctx, stage) {
-  const following = ctx.stages.find((number) => number > stage);
-  if (following === undefined) return counted(afterImplementation(ctx.loops), { stage: null, fix: 0 });
-  return counted(launch("coder", { stage: following }), { stage: following, fix: 0 });
-}
-
-// A round of one stage: a failure takes its fix loop, and at the limit it stays an open item and the next lane starts.
-function stageVerificationNext(ctx, stage) {
-  if (ctx.result.verdict !== "FAILED" || ctx.loops.fix >= MAX_FIX) return nextLane(ctx, stage);
-  return fixLoop(ctx, verificationFailures(ctx));
-}
-
-// The verification: one relaunch of a missing round, a stage's own row, the runtime lane, or the fix loop.
+// The verification of the current scope: one relaunch of a missing round, the row after a PASSED, or the fix row.
 function verificationNext(ctx) {
-  if (isMissing(ctx)) {
-    return missed(ctx.still ? draftOnStage(ctx, ctx.loops.stage, NO_VERDICT) : launch("verifier", { stage: ctx.loops.stage, note: problemNote(ctx) }));
-  }
-  const stated = statedStage(ctx);
-  if (stated !== null) return stageVerificationNext(ctx, stated);
-  return ctx.result.verdict === "FAILED" ? fixLoop(ctx, verificationFailures(ctx)) : { action: launch("runtime") };
+  const stage = frontStage(ctx);
+  if (isMissing(ctx)) return missed(ctx.still ? draftOnStage(ctx, stage, NO_VERDICT) : launch("verifier", { stage, note: problemNote(ctx) }));
+  if (ctx.result.verdict === "FAILED") return fixRow(ctx);
+  return afterPassed(ctx, { verified: { scope: scopeOf(ctx), impl: ctx.implDigest } });
 }
 
 // A symptom that persists with the plan applied: one re-triage, then a draft.
@@ -374,20 +385,12 @@ function retriageRow(ctx) {
   return counted(launch("triager", { note: DIAGNOSIS_INCOMPLETE }), { retriage: 1 });
 }
 
-// What makes a runtime answer go back to the coder or to the triage, or null when it goes to neither.
-function runtimeLoopBack(ctx) {
-  const { verdict } = ctx.result;
-  const persists = verdict === "SYMPTOM-PERSISTS";
-  if (persists && linesWith(ctx, "DIFF-APPLIES: yes").length > 0 && linesWith(ctx, "GATE: runtime-not-met").length === 0) return retriageRow(ctx);
-  if (persists || verdict === "NOT-MET" || linesWith(ctx, "GATE: runtime-not-met").length > 0) return fixLoop(ctx, problemNote(ctx) || `runtime verdict ${verdict}`);
-  return null;
-}
-
-// The runtime lane: a gate before a verdict; a lane that made no attempt is relaunched once, and every limit still publishes.
+// The runtime lane: one relaunch of a missing round, the re-triage of a persisting symptom, the fix row of a NOT-MET, else publish.
 function runtimeNext(ctx) {
-  const noAttempt = linesWith(ctx, "GATE: runtime-not-met").length === 0 && linesWith(ctx, "GATE: runtime-no-attempt").length > 0;
-  if (isMissing(ctx) || noAttempt) return missed(ctx.still ? "publish" : launch("runtime", { note: problemNote(ctx) }));
-  return runtimeLoopBack(ctx) ?? { action: "publish" };
+  if (isMissing(ctx)) return missed(ctx.still ? publishAction(ctx) : launch("runtime", { note: problemNote(ctx) }));
+  if (ctx.result.verdict === "SYMPTOM-PERSISTS") return retriageRow(ctx);
+  if (ctx.result.verdict === "NOT-MET") return fixRow(ctx);
+  return { action: publishAction(ctx) };
 }
 
 const ROWS = {
@@ -405,21 +408,17 @@ const ROWS = {
 
 const UNCHANGED_RELAUNCHES = {
   "03": (_ctx, note) => launch("architect", { note }),
-  "05": (ctx, note) => launch(isLiteQa(ctx) ? "qa-lite" : "qa-analyst", { note }),
-  "06": (ctx, note) => launch("verifier", { stage: rowStage(ctx), note }),
+  "05": (ctx, note) => launch(isLiteQa(ctx) ? "qa-lite" : "qa-analyst", { stage: frontStage(ctx), note }),
+  "06": (ctx, note) => launch("verifier", { stage: frontStage(ctx), note }),
   "07": (_ctx, note) => launch("runtime", { note }),
 };
 
-// What an unchanged relaunch keeps owed: the QA row the plan answered, which the revised plan answers again.
-function heldOnRelaunch(ctx) {
-  return ctx.key === "03" ? { pendingQaRow: ctx.loops.counted.next } : {};
-}
-
-// What a counted row answers on a text unchanged since another check ran: its own lane once, then a draft.
+// What a counted row answers on a text unchanged since another check ran: the row after a PASSED that still holds, else its own lane once, then a draft.
 function unchangedStep(ctx, unchanged) {
+  if (ctx.key === "06" && isVerified(ctx.loops.verified, scopeOf(ctx), ctx.implDigest)) return afterPassed(ctx);
   const relaunch = UNCHANGED_RELAUNCHES[ctx.key];
-  if (unchanged === 0 && relaunch !== undefined) return counted(relaunch(ctx, `${PHASE_ARTIFACTS.get(ctx.key).file} unchanged since the last check`), heldOnRelaunch(ctx), 1);
-  return counted(draftOnStage(ctx, rowStage(ctx), `check ${ctx.key} ${NO_NEW_ROUND}`), {}, 2);
+  if (unchanged === 0 && relaunch !== undefined) return counted(relaunch(ctx, `${PHASE_ARTIFACTS.get(ctx.key).file} unchanged since the last check`), {}, 1);
+  return counted(draftOnStage(ctx, frontStage(ctx), `check ${ctx.key} ${NO_NEW_ROUND}`), {}, 2);
 }
 
 // The loops after a step: this check's miss counted or dropped, the fix a `coder-fix` leaves owed, the step's own changes and what a re-run must repeat.
@@ -445,14 +444,22 @@ function decisionOf(ctx, step, settled) {
   return { check: ctx.key, digest: ctx.digest, next: step.action, loops: after };
 }
 
+// The fronts of a plan: each of its stages when it has two or more, else one front with no stage.
+function frontsOf(plan) {
+  const stages = planStageNumbers(plan);
+  return stages.length >= 2 ? stages : [null];
+}
+
 // The `NEXT:` action of a check's answer, the loops it leaves and the decision it records; a re-run of a counted row on the same text repeats its action, burns no iteration and records nothing, and the same text after another check ran relaunches its lane once, then ends in a draft.
-export function nextOf({ result, repaired, state, memo, plan }) {
+export function nextOf({ result, repaired, state, memo, plan, implDigest = "", raw = "" }) {
   const loops = loopsOf(state);
   const { key, digest } = memo;
   const sameText = loops.counted?.key === key && loops.counted?.digest === digest;
   const unchanged = sameText ? countOf(loops.counted.unchanged) : 0;
   if (sameText && unchanged === 0 && loops.lastNext === loops.counted.next) return { action: loops.counted.next, loops, decision: null };
-  const ctx = { result, repaired, state, loops, key, digest, still: countOf(loops.missing[key]) >= 1, stages: planStageNumbers(plan) };
+  const fronts = frontsOf(plan);
+  const qa = planStageQa(plan);
+  const ctx = { result, repaired, state, loops, key, digest, implDigest, raw, still: countOf(loops.missing[key]) >= 1, fronts, qa };
   const step = sameText ? unchangedStep(ctx, unchanged) : ROWS[key](ctx);
   const settled = settledLoops(ctx, step);
   return { action: step.action, loops: settled, decision: decisionOf(ctx, step, settled) };

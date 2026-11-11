@@ -1,1 +1,1 @@
-{"type":"feature/refactor","check":"06","prints":"OPEN: pre-existing-failure"}
+{"type":"feature/refactor","check":"06","loopsSeed":{"final":true}}

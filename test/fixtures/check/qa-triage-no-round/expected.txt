@@ -1,1 +1,1 @@
-MISSING: ## Diff classification, ## New risk, ## QA mode
+MISSING: 05-qa.md (not written)

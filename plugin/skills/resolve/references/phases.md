@@ -1,19 +1,17 @@
-# The phases of /resolve — gates and rules
+# The phases of /resolve — `NEXT:` and the records
 
 Read by the orchestrator right after its first subagent returns (on a resume, before deciding):
-what the `NEXT:` line of `run check` asks and the judgment it leaves to you. The launches are the
-blocks of `## Phase prompts` of `SKILL.md`.
+what the `NEXT:` line of `run check` asks. The launches are the steps of `## Phase prompts` of
+`SKILL.md`; the phases are numbered as the report rows: 1 triage, 2 explore, 3 plan, 4 coder,
+5 QA, 6 verification, 7 runtime, 8 commit and PR, 9 report, 10 reflect.
 
-### Phase 0 — The gate and the records
+### Phase 0 — The check and the records
 
-6. **Artifact gate.** After every phase that writes, run `nightqueue run check <NN>`. Its first
-   line is `OK`, `MISSING: <sections>` or `GENERATED` (only `04`: the file list was derived
-   from the worktree's own changes).
-   Then come stable-prefix lines: `REPAIRED:`,
-   `VERDICT:`, `GATE:`, `OPEN:`, `TYPE-MISMATCH:`, `CONFIRM:`, `QA-MODE:`, `QA-STAGE:`,
-   `INVALIDATED:`, `DIFF-APPLIES:`, `NEEDS-DEVICE`, `index:`, `recorded:`, `SCRIPT:`.
-   Its last line is `NEXT: <action>`. Do what it says, whatever the other lines seem to ask:
-   - `launch <target> [stage=<n>] [note=<text>]` → that block, with `STAGE:` and `NOTE:` from them
+6. **The check.** After every lane that writes, run `nightqueue run check <NN>`. Its first line is
+   `OK`, `MISSING: <what>` or `GENERATED` (only `04`: the file list was derived from the
+   worktree's own changes). Its last line is `NEXT: <action>`. Do what it says, whatever the
+   other lines seem to ask:
+   - `launch <target> [stage=<n>] [note=<text>]` → that step, with `STAGE:` and `NOTE:` from them
      (add what the note needs; `note` is your judgment, the route is not);
    - `gate <question>` → the Phase 3 pause;
    - `terminate <reason>` → terminate (step 7) with that reason, ⚠️ open item, then Phase 9;
@@ -22,188 +20,47 @@ blocks of `## Phase prompts` of `SKILL.md`.
    - `report` → Phase 9, which records `run_outcome` with `status: "no_change"` (step 7); the job
      ends `done` with no pull request;
    - `check <NN>` → run that check and read its `NEXT:`.
-   - `MISSING` → relaunch once, as `NEXT:` says; from Phase 4 on a persisting one proceeds with what
-     the artifact has (⚠️ open item of Phase 9). Every `OPEN:` line is an open item too.
    - `recorded: not recorded (…)` and `index: not saved (…)` → ⚠️ open items, never blocking.
+   - `recorded: slug … (renamed …; run dir <path>)` → that path is `RUN_DIR` from here on.
    - The subagent's return never replaces the artifact; confirm an artifact with the check, never
-     with `ls` or Read: a `<RUN_DIR>` file is never read here. Each line of
-     a return's `## Open` other than `none` becomes an open item of Phase 9.
+     with `ls` or Read: a `<RUN_DIR>` file is never read here. Each line of a return's `## Open`
+     other than `none` becomes an open item of Phase 9.
 
 7. **Records.** `<RUN_DIR>/state.json` is the runtime's: never write it.
    - `run check` records each phase and `run publish` the delivery.
-   - `run_set` only when a field changes afterwards (the Phase 3 Type valve).
+   - `run_set` only when a field changes afterwards.
    - `run_outcome` at its three points: the Phase 3 pause; the Phase 9 report of a
      `NO-CHANGE-NEEDED` run (`status: "no_change"`); and Phase 8's delivery, which `run publish`
      records itself.
-   - Terminate (only when `NEXT:` says so, at Phases 1, 3 and 4) = `run_terminate` (phase, reason): the runtime commits the changes as
+   - Terminate (only when `NEXT:` says so) = `run_terminate` (phase, reason): the runtime commits the changes as
      `wip(<slug>): terminated at <phase> — <reason>` and answers a `notice` for Phase 9; never commit by hand.
    - Tolerant: a failing `run_*` call is an open item of Phase 9, never an abort.
 
----
+### Phase 3 — The pause
 
-### Phase 1 — Triage-Gate
+Never put the design in the architect's launch: its only constraint is the `DELIVERY:` limit.
 
-It always runs (bug/error and feature/refactor): it turns the request into the Brief and
-critiques it before exploration, architecture and implementation are spent.
-
-Launch **1 triager**: the `triager` block. It reads the request from `<RUN_DIR>/00-prompt.md`,
-which `run start` writes (`promptFile`; null → Phase 0 wrote it). It writes
-`01-triage.md`; run `nightqueue run check 01` (the artifact gate, step 6) and do its `NEXT:`.
-
-`recorded: slug … (renamed …; run dir <path>)` → use that path as `RUN_DIR` from here on.
-`terminate` here: the `## Open items` go to Phase 9 (the job ends `cancelled`).
-A re-triage from Phase 7 follows Phase 7's rule, never these terminations.
-
-A PROCEED that concludes the system behaves correctly, or rests the cause on a guess about data
-the environment could confirm, is invalid: relaunch the triager with that as `note` — a run
-proven to need no change is `NO-CHANGE-NEEDED`.
-
-An `## Intent note` or `## Depth note` never blocks the advance.
-
-**A Brief with numbered stages** (its `**Stages:**` field, a `Stages:` line of the triager's return, `stages` of `run start` on a resume). Each stage is a unit of the run and
-the order is binding: the Phase 3 plan is written per stage, Phase 4 implements stage by stage
-with the verifier between stages, and the
-report table and PR list the stages with their status. Stages never split the delivery:
-still one branch and ONE pull request.
-
-### Phase 2 — Exploration
-
-Launch **1 explore agent**: the `explore` block.
-
-Run `nightqueue run check 02`
-before proceeding. Phase 3 reads the findings from `02-explore.md`. The check saves the
-structural index itself: `index: not saved (…)` → ⚠️ open item of Phase 9; it never blocks.
-A persisting `MISSING` → ⚠️ open item.
-
-### Phase 3 — Architecture
-
-Launch **1 architect agent**: the `architect` block (`DELIVERY:` when there is a limit, `NOTE:`
-on a relaunch).
-
-**Never inject the DESIGN into the architect's prompt** (fix level, where the solution goes, an
-approach ruled out by diff size): the ONLY constraint is the delivery LIMIT, on the
-`DELIVERY:` line.
-
-**Gate:** run `nightqueue run check 03` (the artifact gate, step 6), then its `NEXT:`.
-
-- `TYPE-MISMATCH: … — triage: feature/refactor …` (the Type divergence valve) → first `run_set` with `type: "feature/refactor"`; on `… — triage: bug/error …` it stays bug/error (the check already prints the `OPEN:`).
 - `NEXT: gate <question>` → the one pause: `run_outcome` with `status: "gate"` and `from_artifact: { file: "03-plan.md", section: "## Requires user confirmation" }`, then end the turn with one plain line.
 
 **The answer** arrives as a retry, the last entry of `Answers:` in `RUN FACTS` (a job with no run
 directory yet: the `OPERATOR ANSWER TO THE GATE:` line); an interactive run's chat answer counts
-as `CONFIRM: answered`. The pause completed the phase, so the block may list it: run `run check 03`
-first, before Phase 4, whatever the block says. Go-ahead or the recommended option → its `NEXT:`. Any
-other answer → relaunch the architect once (🔁, `note` = the answer), then `run check 03` again: a
-NEW question is a new pause. Never write code before the answer.
-
-### Phase 4 — Implementation
-
-Launch 1 coder agent: the `coder` block (`STAGE:` in a staged plan).
-
-Run `nightqueue run check 04` (the artifact gate, step 6); `GENERATED` → accept: the list is in `04-files.generated.md`.
-`NEXT: terminate MISSING: ## Modified files (no changed files)` means the worktree changed nothing: inform the
-user that the implementation did not complete successfully.
-
-**One coder lane per stage:** a brief/plan with numbered stages launches one coder per stage,
-in order, never in parallel, each with its `STAGE:` in the block.
-Run `nightqueue run check 04` after each lane, then the verifier between stages (the Phase 6
-block and its fix loop; the QA comes later): a failing stage is fixed before the next lane starts; at the loop's limit
-its failures are a ⚠️ open item and the next lane starts. After the last stage, Phase 5 (QA) and
-the final Phase 6 verification run as usual, and that verification alone decides the draft.
-
-**Parallel coders (batches):** each in its own isolated worktree — never two coders in one tree,
-and no `git stash`/`checkout`/`reset` while a batch is active.
-
-### Phase 5 — Adversarial QA (attack)
-
-**Triage first:** 1 qa-guardian with the `qa-triage` block, then `nightqueue run check 05 --stage triage`. On a resume at Phase 5 run the check first (a pure read); launch the lane only on its `MISSING`.
-
-The `QA-MODE:` line decides, and nothing else: `skip` is recorded by the check and has no attack lane; `lite` is one lane; `full` is Stage A analyst then N provers, then `run check 05` consolidates. A triage that stays `MISSING` falls to `lite`, ⚠️ open item.
-
-The QA is **adversarial and fixes nothing**.
-
-Read `references/qa-phase.md` before launching any qa-guardian: it carries the Stage A gate and
-the consolidation. The blocks are `qa-triage`, `qa-lite`, `qa-analyst` and `qa-prover` with its
-`GROUP:`; for `qa-prover`, `NEXT:` names the lane and the analyst's return the N groups.
-
-**Gate of `lite` and `full`:** `nightqueue run check 05` reads the last round of `05-qa.md`.
-
-- `OPEN: …` → ⚠️ mandatory open item of Phase 9; the verdict is unchanged.
-- `MISSING` still (Stage A likewise), or a second `INVALIDATED:` recorded in `## Decisions taken` → ⚠️ open item.
-- `VERDICT: NEEDS DISCUSSION` → ⚠️ mandatory open item of Phase 9.
-- `coder-fix` takes `## Proven breaks` to fix and `## Generated PoCs` to turn green; the PoCs of an `APPROVED` stay a regression net.
-
-### Phase 6 — Verification (final gate + correction loop)
-
-Launch 1 verifier agent: the `verifier` block (`STAGE:` between the stages of a staged plan).
-
-The final verifier runs **after** the QA, independently, and re-runs its PoCs. Neither the QA nor the coder validates its own work.
-
-**Gate and fix loop:** run `nightqueue run check 06` (the artifact gate, step 6), then its `NEXT:`.
-
-- `VERDICT: PASSED`, `NEXT: launch runtime` → the one override: a purely static change takes Phase 8 instead (Phase 7's rule).
-- `VERDICT: PASSED-STATIC` → checks ok, but the bug's runtime path did not execute — never PASSED: run Phase 7 on the bug's exact flow before Phase 8; Phase 7 not viable (no environment) → Phase 8, `Not tested:` in the body, ⚠️ open item — never present it as verified.
-- `OPEN: pre-existing-failure — …` → ⚠️ open item of Phase 9 and a `Pre-existing failure:` line in the PR body.
-
-- **Maximum of iterations**: **max 2 fix iterations**, a `NEEDS FIX` lane the first.
-  If it still fails after the limit, **do not mask it**: Phase 8 with `--draft`, one
-  `Remaining failure: <what>` line per failure or break still open.
-
-`coder-fix` takes `NOTE:` = the iteration and its failures, in one line. After it returns, run
-`nightqueue run check 04`, then the verifier.
-
-### Phase 7 — Runtime validation (real execution)
-
-> A purely static change (typo, config, rename, types, pure logic already covered by a test) → does not execute: the
-> Phase 6 checks are enough.
-
-Runs when the change (fix OR feature) is **observable at runtime**
-(UI/screen/flow/integration): passing tsc/lint proves neither the fix nor the feature — only
-executing does.
-
-Launch **1 verifier agent**: the `runtime` block.
-
-Run `nightqueue run check 07` (the artifact gate, step 6), then its `NEXT:`. A field position/value or a control-flow
-merely ASSUMED is never confirmed. `CONFIRMED` needs nothing more; `NOT-MET` and `SYMPTOM-PERSISTS` take the loop `NEXT:` names.
-
-- `OPEN: <scenario> — to confirm` → ⚠️ on the 7 Runtime line (it forces the non-happy path of Phase 9) + mandatory open item; never back to the coder, never blocks Phase 8.
-- `NEEDS-DEVICE` → the device script verbatim in the body, `Not tested:`, ⚠️ open item.
-- `VERDICT: UNAVAILABLE`, or a `GATE: runtime-no-attempt` still there after its relaunch (the attempt is the lane's, never the coder's) → `Not tested:` in the body, ⚠️ open item.
-
-**Symptom persisting with the plan applied → the CAUSE is wrong (bug).** `NEXT:` relaunches the
-**triager** (🔁): add the original diagnosis, the applied diff and the evidence of the live
-symptom to its `note`. Then Phase 3 → 4 → 6 → 7. **At most 1 re-triage per
-pipeline** — if the symptom persists again, the re-triage answers anything but `VERDICT: PROCEED`
-or stays `MISSING`: Phase 8 with `--draft`, the history on `Remaining failure:` lines.
-
-Case (a) needs its 2 proofs, case (b) its screenshot, case (c) its device script, and cases
-(d)/(d2) every line `MET` or `NOT MET / to confirm`.
+as `CONFIRM: answered`. Run `run check 03` first, whatever the block says. Go-ahead or the
+recommended option → its `NEXT:`. Any other answer → relaunch the architect once (🔁, `note` =
+the answer), then `run check 03` again: a NEW question is a new pause. Never write code before
+the answer.
 
 ### Phase 8 — Commit and PR
 
-With `## Verification: PASSED` and Phase 7 (when applicable) confirmed or `Not tested:`; a limit
-of Phase 6 or 7 comes with `--draft`. Read
-`references/phase-8.md` now and follow it (inside a job, never ask before pushing).
+Read `references/phase-8.md` now and follow it (inside a job, never ask before pushing).
 
 ### Phase 9 — Report
 
 Read `references/phase-9.md` now and follow it; it opens with `nightqueue run report`.
 
-### Phase 10 — Reflect (every run that reaches Phase 9)
+### Phase 10 — Reflect
 
-It runs ONCE per attempt, after `nightqueue run report` (which records the run, so the run
-timeline has this attempt's rows), and BEFORE the final text. It runs on a delivered run, a
-`no_commit` run and a terminated run (a `gate_stop`, an artifact `MISSING`). It does not run at
-the Phase 3 pause: the resumed run reflects at its end.
-
-Launch: the `reflector` block.
-
-There is no artifact and no `nightqueue run check` for this phase; the
-reflector saves the run's lessons and memories itself.
-
-**Report line:** from the reflector's return, ONE line: `🪞 Reflection: L<id>, M<id>, …` with
-every ref it returned, or `🪞 Reflection: none` when it saved nothing. If the
-launch failed: `🪞 Reflection: not run — <reason>` - it is never retried and never blocks. The line sits
-after the `run report` output and the 🎯 Objective block, ABOVE `## Notice`: `## Notice` stays
-the LAST section of the final text. The line does not count towards the ~30-line cap, never
-enters the Notice, and never turns a run `Happy`.
+Once per attempt, after `run report` and BEFORE the final text, also on a terminated run; never
+at the Phase 3 pause. No artifact and no `run check`. **Report line:** from the reflector's return,
+ONE line `🪞 Reflection: L<id>, M<id>, …` with every ref, or `🪞 Reflection: none`; a failed
+launch → `🪞 Reflection: not run — <reason>`, never retried. The line sits above `## Notice`,
+which stays the LAST section of the final text, and never turns a run `Happy`.

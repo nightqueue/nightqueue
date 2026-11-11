@@ -1,1 +1,1 @@
-NEXT: launch coder stage=2
+NEXT: launch qa-triage stage=1

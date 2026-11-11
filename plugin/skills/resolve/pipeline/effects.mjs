@@ -9,7 +9,7 @@ import { derivedType, firstItem } from "./contract.mjs";
 // the termination and the slug of 01; the QA mode of the triage stage; the phase record of a completed check and the check memo.
 
 // The triage verdicts that close the run on purpose.
-const TERMINAL_VERDICT_LABELS = ["NO-CHANGE-NEEDED", "NOT-REPRODUCIBLE", "NEEDS-CLARIFICATION", "PROPOSE-ALTERNATIVE"];
+const TERMINAL_VERDICT_LABELS = ["NO-CHANGE-NEEDED", "NOT-REPRODUCIBLE"];
 const TERMINATION_MAX = 200;
 const BRIEF_FILE = PHASE_ARTIFACTS.get("00").file;
 const TRIAGE_PHASE = PHASE_ARTIFACTS.get("01").phase;
@@ -43,10 +43,10 @@ function typeEffects(result, state) {
   return [{ kind: "recordFields", fields: { type }, line: recorded === null ? `recorded: type ${type}` : `recorded: type ${type} (was ${recorded})` }];
 }
 
-// The triage's `## Brief` copied into `00-brief.md`, the Brief every later phase reads.
+// The triage's `## Brief` copied into `00-brief.md`, the Brief every later phase reads; with no such section the whole triage stands for it.
 function briefEffects(result) {
   const section = briefSection(result.evaluated);
-  if (section === null) return [{ kind: "say", line: "recorded: not recorded (the triage has no ## Brief)" }];
+  if (section === null) return [{ kind: "writeRunFile", name: BRIEF_FILE, text: `${result.evaluated.trim()}\n`, line: `recorded: brief ${BRIEF_FILE} (whole triage: no ## Brief)` }];
   return [{ kind: "writeRunFile", name: BRIEF_FILE, text: `${section.trim()}\n`, line: `recorded: brief ${BRIEF_FILE}` }];
 }
 

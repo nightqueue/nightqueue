@@ -1,1 +1,1 @@
-NEXT: launch qa-triage
+NEXT: launch verifier

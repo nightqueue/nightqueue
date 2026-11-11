@@ -1,1 +1,1 @@
-NEXT: launch verifier note=MISSING: ## Verification
+NEXT: launch verifier note=MISSING: verdict (one of: PASSED, PASSED-STATIC, FAILED)

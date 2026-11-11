@@ -1,0 +1,3 @@
+OK
+QA-MODE: lite — stated by the QA triage
+recorded: qa_mode lite

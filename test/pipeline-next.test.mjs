@@ -19,15 +19,15 @@ const SLUG = "next-row";
 // Every row of the table `NEXT:` answers, frozen: a row with no fixture and a fixture with no row both fail.
 const ROWS = Object.freeze([
   "b1",
-  "t1", "t1-gate", "t2", "t3", "t4", "t5", "t6", "t7", "t8", "t8-still",
+  "t1", "t2", "t3", "t4", "t5", "t6", "t7", "t8", "t8-still",
   "e1", "e2", "e3",
-  "p1", "p2", "p3", "p4", "p5", "p6", "p7a", "p7b", "p8", "p8-staged", "p9",
-  "c1", "c1-resumed", "c2", "c3", "c3-staged", "c4", "c5", "c5-staged", "c6", "c7-resumed",
+  "p1", "p2", "p3", "p7a", "p7b", "p8", "p8-staged",
+  "c1", "c2", "c3", "c3-staged", "c4", "c5", "c5-staged", "c6", "c7-resumed",
   "q1", "q2", "q3", "q4a", "q4b",
   "a1", "a2", "a3", "a4",
-  "q5a", "q5a-lite", "q5b", "q6a", "q6b", "q6b-rounds", "q6c", "q7", "q8", "q9", "q10-resumed",
+  "q5a", "q5a-lite", "q5b", "q6c", "q7", "q8", "q9",
   "v1", "v2", "v3", "v3b", "v3c", "v3d", "v4", "v4b", "v5", "v6a", "v6b", "v7a", "v7b", "v7c-staged", "v8-resumed", "v9-resumed", "v10-retried",
-  "r1", "r2", "r2-verdict", "r2b", "r3", "r4", "r4b", "r5a", "r5b", "r6", "r7", "r8", "r9a", "r9b",
+  "r1", "r2", "r2-verdict", "r2b", "r3", "r4", "r4b", "r5b", "r6", "r7", "r8", "r9a", "r9b",
 ]);
 
 // One fixture: its spec, the run files it seeds and the `NEXT:` line it expects.
@@ -171,7 +171,7 @@ test("a new round written by the unchanged relaunch is read on its own verdict, 
   const seeded = seedRow(t, "v7a-new-round", row);
   await runCheck(seeded.env, "06");
   writeFileSync(join(seeded.dir, "06-verification.md"), `${row.texts["06-verification.md"]}\n## Round 2\n\n## Checks run\n- test: PASSED\n\n## Verification: PASSED\n`);
-  assert.equal((await runCheck(seeded.env, "06")).out.at(-1), "NEXT: launch runtime");
+  assert.equal((await runCheck(seeded.env, "06")).out.at(-1), "NEXT: launch qa-triage");
 });
 
 test("a relaunch that wrote nothing reaches the still-missing row, with no digest dedupe", async (t) => {
@@ -193,7 +193,7 @@ test("a check that passes drops its miss, so a later miss of that check is a fir
   assert.match((await runCheck(seeded.env, "02")).out.at(-1), /^NEXT: launch explore note=MISSING: /);
 });
 
-test("the coder-fix owed survives a re-run of check 04, and the verification clears it", async (t) => {
+test("the coder-fix owed survives a re-run of check 04, and once verified an unchanged implementation skips the verifier", async (t) => {
   const seeded = seedRow(t, "c3-twice", readRow("c3"));
   assert.equal((await runCheck(seeded.env, "04")).out.at(-1), "NEXT: launch verifier");
   assert.equal((await runCheck(seeded.env, "04")).out.at(-1), "NEXT: launch verifier");
@@ -256,16 +256,8 @@ const REPLAYS = [
     row: "c3",
     check: "04",
     phases: ["triage:PROCEED", "triage:PROCEED", "explore", "architecture"],
-    next: "NEXT: launch qa-triage",
+    next: "NEXT: launch verifier",
     loops: { retriage: 0, fixPending: false },
-  },
-  {
-    title: "only an architecture right after a QA counts as an architect round",
-    row: "c3",
-    check: "04",
-    phases: ["triage:PROCEED", "explore", "architecture", "architecture", "implementation", "qa:APPROVED", "architecture"],
-    next: "NEXT: launch qa-triage",
-    loops: { architect: 1 },
   },
 ];
 
@@ -279,6 +271,8 @@ for (const replay of REPLAYS) {
 }
 
 const IMPLEMENTATION = readRow("c3").texts["04-implementation.md"];
+const QA_TRIAGE_ROUND = "## Round 1\nsource: qa-triage\n\n## Diff classification\n- copy/docs: README.md\n\n## New risk\nnone\n\n## QA mode\nlite — only documentation text changed.\n";
+const QA_LITE_ROUND = "## Round 2\n\n## Proven breaks\nNone\n\n## Validated risks\n- R1 UPHELD by test/a.test.mjs\n\n## Invalidated assumptions\nNone\n\n## Generated PoCs\nNone\n\n## Verdict\nAPPROVED\n";
 
 const RESUMES = [
   {
@@ -287,9 +281,13 @@ const RESUMES = [
     then: [{ check: "04", file: ["04-implementation.md", IMPLEMENTATION], next: "NEXT: launch verifier" }],
   },
   {
-    title: "a plan's owed QA row survives the retry and is what the revised plan answers",
-    row: "q6b",
-    then: [{ check: "03", file: ["03-plan.md", readRow("p8").texts["03-plan.md"]], next: "NEXT: launch verifier" }],
+    title: "a stage's QA owed when the attempt ended is run on the retry, and its APPROVED starts the next stage",
+    row: "v3",
+    then: [
+      { check: "05", args: ["--stage", "triage"], file: ["05-qa.md", QA_TRIAGE_ROUND], next: "NEXT: launch qa-lite stage=1" },
+      { check: "05", file: ["05-qa.md", `${QA_TRIAGE_ROUND}\n${QA_LITE_ROUND}`], next: "NEXT: launch coder stage=2" },
+    ],
+    loops: { stage: 2, fix: 0, qaDone: false },
   },
   {
     title: "a re-triage launched before the attempt ended still sends the coder lane straight to the verifier",
@@ -298,7 +296,7 @@ const RESUMES = [
   },
   {
     title: "a stage lane that started before the attempt ended keeps its stage and its reset fix count",
-    row: "v3",
+    row: "v3d",
     then: [{ check: "04", file: ["04-implementation.md", IMPLEMENTATION], next: "NEXT: launch verifier stage=2" }],
     loops: { stage: 2, fix: 0 },
   },
@@ -317,7 +315,7 @@ const RESUMES = [
 async function runSteps(seeded, steps) {
   for (const step of steps) {
     if (step.file) writeFileSync(join(seeded.dir, step.file[0]), step.file[1]);
-    assert.equal((await runCheck(seeded.env, step.check)).out.at(-1), step.next, `check ${step.check}`);
+    assert.equal((await runCheck(seeded.env, step.check, step.args ?? [])).out.at(-1), step.next, `check ${step.check}`);
   }
 }
 
@@ -404,6 +402,9 @@ const HOSTILE_HELD = [
   { title: "a negative stage", row: "c3", check: "04", patch: { pipelineLoops: { attempt: 2, stage: -1, fixPending: true } }, next: "NEXT: launch verifier" },
   { title: "a fractional stage", row: "c3", check: "04", patch: { pipelineLoops: { attempt: 2, stage: 2.5, fixPending: true } }, next: "NEXT: launch verifier" },
   { title: "a stage past the safe integers", row: "c3", check: "04", patch: { pipelineLoops: { attempt: 2, stage: 1e21, fixPending: true } }, next: "NEXT: launch verifier" },
+  { title: "loops cached in the 0.7.0 shape", row: "p8", check: "03", patch: { pipelineLoops: { attempt: 2, architect: 2, pendingQaRow: "launch verifier", invalidated: ["[P1] x"] } }, next: "NEXT: launch coder" },
+  { title: "a decision of the 0.7.0 shape", row: "q8", check: "05", patch: { decisions: [{ check: "05", digest: "x", next: "launch architect", at: "2020-01-01T00:00:00.000Z", loops: { architect: 2, pendingQaRow: "launch verifier", invalidated: ["[P1] x"] } }] }, next: "NEXT: launch coder-fix note=iteration 1: H1 the filter drops a row (test/h1.test.mjs)" },
+  { title: "a PASSED mark of a hostile shape", row: "c3", check: "04", patch: { pipelineLoops: { attempt: 2, verified: { scope: 1, impl: null } } }, next: "NEXT: launch verifier" },
 ];
 
 for (const hostile of HOSTILE_HELD) {

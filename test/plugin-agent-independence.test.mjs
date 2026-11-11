@@ -3,7 +3,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { deliverOf, phasePrompts } from "../test-support/skill-size.mjs";
+import { phasePrompts } from "../test-support/skill-size.mjs";
 
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
 // The agents a run launches: their whole text holds only who they are and how they think; the run contract lives in their blocks.
@@ -81,13 +81,16 @@ test("each pipeline-independent agent caps its evidence at 2 under a request tha
   }
 });
 
-// The triager frames the raw request itself, its block delivers the Brief and the critique, and no text offers a verdict that waits for an answer.
-test("the triager frames the request, its block delivers the Brief and the request critique, and no verdict waits for an answer", () => {
+// The triager frames the raw request itself, its method writes the Brief and the critique, its launch asks for the Brief, and no text offers a verdict that waits for an answer.
+test("the triager frames the request, writes the Brief and the request critique, and no verdict waits for an answer", () => {
   const agent = readFileSync(join(ROOT, "plugin/agents/triager.md"), "utf8");
   const block = phasePrompts().blocks.triager;
-  assert.ok(agent.split("\n").includes("## Framing the request"), "the triager agent has no ## Framing the request section");
-  assert.deepEqual(deliverOf(block).headings.slice(0, 3), ["## Brief", "## Request critique", "## Verdict"], "the triager block does not deliver the Brief, the critique and the verdict first");
-  assert.ok(block.includes("## Verdict: PROCEED | NO-CHANGE-NEEDED | NOT-REPRODUCIBLE"), "the triager block does not carry the three verdicts");
+  const lines = agent.split("\n");
+  assert.ok(lines.includes("## Framing the request"), "the triager agent has no ## Framing the request section");
+  const order = ["## Brief", "## Request critique", "## Verdict: PROCEED | NO-CHANGE-NEEDED | NOT-REPRODUCIBLE"].map((heading) => lines.indexOf(heading));
+  assert.ok(order.every((at, index) => at >= 0 && (index === 0 || at > order[index - 1])), "the triager does not write the Brief, the critique and the verdict first");
+  assert.ok(block.includes("VERDICT: PROCEED | NO-CHANGE-NEEDED | NOT-REPRODUCIBLE"), "the triager launch does not carry the three verdicts");
+  assert.ok(block.join("\n").includes("with a `## Brief`"), "the triager launch does not ask for the Brief");
   for (const word of ["NEEDS-CLARIFICATION", "PROPOSE-ALTERNATIVE"]) {
     assert.equal(agent.includes(word) || block.join("\n").includes(word), false, `the triager still offers ${word}`);
   }
