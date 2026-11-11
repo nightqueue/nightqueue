@@ -1061,6 +1061,18 @@ test("the plan template asks one filled question, records decisions, and no arch
   for (const part of ["changes observable behavior, data or scope", "the request does not", "costly to undo"]) assert.ok(agent.replace(/\s+/g, " ").includes(part), `the agent lost the rule part ${part}`);
 });
 
+test("check 03 takes a plan split into fronts, each a stage with its QA line, under an existing stage reason", () => {
+  const fronts = "**Stage reason:** green intermediate — the guard builds on the move\n\n### Stage 1 — move\nQA: none — pure move\n\n### Stage 2 — guard\nQA: attack — security boundary";
+  assert.deepEqual(planAnswer(fronts).lines, ["OK"]);
+});
+
+test("the architect method splits fronts by risk, never accepts a shared-state risk, reads reuse, and stays within its size", () => {
+  const agent = readFileSync(join(PLUGIN, "agents", "architect.md"), "utf8");
+  assert.ok(Buffer.byteLength(agent, "utf8") <= 26518, "the architect method grew past 26518 bytes");
+  for (const part of ["QA: attack — <reason>", "state shared between processes", "repository-relative paths only", "Reuse outside the original design"]) assert.ok(agent.replace(/\s+/g, " ").includes(part), `the architect method lost ${part}`);
+  assert.equal(agent.includes("/absolute/path"), false, "the plan template still asks for an absolute path");
+});
+
 test("`run_set` refuses the digest of the paused question", async (t) => {
   const seeded = seedRun(t, "digest-run-set", readFixture("confirm"));
   const refused = recordRunFields({ projectId: seeded.projectId, slug: SLUG, fields: { gateQuestionDigest: "forged" }, env: seeded.env });
