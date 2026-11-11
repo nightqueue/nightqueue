@@ -795,7 +795,7 @@
     {
       "file": "architect.md",
       "sentence": "- /absolute/path/file.ts — [what changes, per function]",
-      "phrase": "- /absolute/path/file.ts — [what changes, per function]",
+      "phrase": "[what changes, per function]",
       "agents": [
         "architect"
       ]
@@ -835,7 +835,7 @@
     {
       "file": "architect.md",
       "sentence": "**Stages:** one, the default: write no stage. More only when the Brief numbers them, or with one line `**Stage reason:** <independent parts | green intermediate | over 25 files> — <why>`, each stage then under `### Stage <n> — <title>`. `run check 03` prints `OPEN: stages-unjustified` otherwise; it never gates.",
-      "phrase": "**Stages:** one, the default: write no stage. More only when the Brief numbers them, or with one line `**Stage reason:** <independent parts | green intermediate | over 25 files> — <why>`, each stage then under `### Stage <n> — <title>`.",
+      "phrase": "`**Stage reason:** <independent parts | green intermediate | over 25 files> — <why>`",
       "agents": [
         "architect"
       ]
@@ -1179,7 +1179,7 @@
     {
       "file": "architect.md",
       "sentence": "- [PM1] <likely cause of the plan's failure> — mitigation: <adjustment already made in the plan | \"accepted because <reason>\">",
-      "phrase": "- [PM1] <likely cause of the plan's failure> — mitigation: <adjustment already made in the plan | \"accepted because <reason>\">",
+      "phrase": "- [PM1] <likely cause of the plan's failure> — mitigation: <adjustment already made in the plan | \"accepted because <reason>\"",
       "agents": [
         "architect"
       ]

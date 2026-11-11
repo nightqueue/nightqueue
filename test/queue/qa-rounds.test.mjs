@@ -210,6 +210,17 @@ test("the aggregate counts proof: a proven break anywhere, else the provers' ver
   assert.equal(verdictOf(unreadable), "NEEDS DISCUSSION\nunreadable verdict in round 2\nno prover line for H1");
 });
 
+const GROUPED_DESIGN_BREAK = [
+  "| # | File | Line | Break | Front | Severity | Proof | Fix | Vectors |",
+  "|---|------|------|-------|-------|----------|-------|-----|---------|",
+  "| 1 | src/hooks/chat-guard.mjs | 40 | a deny list over shell text does not converge | Security | 🔴 | reading: the COMPUTED_TEXT regex | fix: design | bash -lc 'rm x' · a.mjs:1; sh < s.sh · a.mjs:2; env rm x · a.mjs:3; rm ./* · a.mjs:4; cat s \\| sh · a.mjs:5 |",
+].join("\n");
+
+test("a grouped design break is one break item and consolidates to NEEDS FIX", () => {
+  assert.equal(breakItems(GROUPED_DESIGN_BREAK).length, 1);
+  assert.equal(verdictOf(withProvers(analystRound({ breaks: GROUPED_DESIGN_BREAK }), [["g1", "APPROVED"]])), "NEEDS FIX");
+});
+
 test("the consolidation keeps prover content byte for byte and never merges a commented-out section", () => {
   const inline = appendRoundText(ANALYST, 2, "source: prover · group: a-1\n\n## Proven breaks\n| 1 | payload `<!--x-->` breaks |\n\n## Verdict\nNEEDS FIX");
   assert.ok(consolidationOf(inline).body.includes("| 1 | payload `<!--x-->` breaks |"));

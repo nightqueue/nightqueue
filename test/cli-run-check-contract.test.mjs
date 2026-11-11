@@ -123,6 +123,28 @@ test("the QA text asks the three open lines, audits no count and never reports t
   assert.ok(agent.includes("You never ask the operator"));
 });
 
+// The table rows of the `## Proven breaks` section of the QA agent's own report template.
+function provenBreaksTemplate(agent) {
+  const template = agent.split("````\n")[1] ?? "";
+  const section = template.split("## Proven breaks\n")[1]?.split("\n## Break hypotheses")[0];
+  assert.ok(section, "the QA report template has no ## Proven breaks section");
+  return section.split("\n").filter((line) => line.startsWith("|")).join("\n");
+}
+
+test("the QA method groups breaks by root mechanism and tags the fix, and its break template passes check 05", () => {
+  const agent = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "plugin", "agents", "qa-guardian.md"), "utf8");
+  const rules = ["`fix: code`", "`fix: design`", "**One break per root mechanism.**", "**A mechanism that does not converge.**", "**Re-attack after a fix.**", "**Contract vs illustrative.**", "| Proof | Fix | Vectors |"];
+  for (const rule of rules) assert.ok(agent.includes(rule), `the qa-guardian does not say ${rule}`);
+  assert.ok(Buffer.byteLength(agent) <= 32350, `the qa-guardian is ${Buffer.byteLength(agent)} bytes`);
+  const table = provenBreaksTemplate(agent);
+  assert.match(table, /fix: design/);
+  const { texts } = readFixture("qa-lite-round");
+  const qa = texts["05-qa.md"].replace("## Proven breaks\nNone", () => `## Proven breaks\n${table}`).replace("## Verdict\nAPPROVED", "## Verdict\nNEEDS FIX");
+  const { lines } = evaluateCheck({ check: "05", texts: { ...texts, "05-qa.md": qa }, state: { type: "bug/error" } });
+  assert.equal(lines.some((line) => line.startsWith("GATE: ") || line.startsWith("MISSING")), false, lines.join("\n"));
+  assert.ok(lines.includes("VERDICT: NEEDS FIX"), lines.join("\n"));
+});
+
 // ---- Stage 2: the effects a check chains after its contract lines.
 
 // The state.json of a seeded run.
@@ -628,6 +650,19 @@ test("the plan template asks one filled question, records decisions, and no arch
   for (const part of ["**Question:**", "**Options:**", "**On go ahead:**", "## Decisions taken"]) assert.ok(agent.includes(part), `the plan template lost ${part}`);
   for (const gone of ["source=", "When to stop and ask", "requires `## Requires user confirmation`", "stop and ask", "is a gate", "→ gate"]) assert.equal(agent.includes(gone), false, `the architect still says ${gone}`);
   for (const part of ["changes observable behavior, data or scope", "the request does not", "costly to undo"]) assert.ok(agent.replace(/\s+/g, " ").includes(part), `the agent lost the rule part ${part}`);
+});
+
+test("check 03 takes a plan split into fronts, each a stage with its QA line, under an existing stage reason", () => {
+  const fronts = "**Stage reason:** green intermediate — the guard builds on the move\n\n### Stage 1 — move\nQA: none — pure move\n\n### Stage 2 — guard\nQA: attack — security boundary";
+  const plan = `## Implementation plan\n${fronts}\n`;
+  assert.deepEqual(evaluateCheck({ check: "03", texts: { "03-plan.md": plan }, state: { type: "feature/refactor" } }).lines, ["OK"]);
+});
+
+test("the architect method splits fronts by risk, never accepts a shared-state risk, reads reuse, and stays within its size", () => {
+  const agent = readFileSync(join(PLUGIN, "agents", "architect.md"), "utf8");
+  assert.ok(Buffer.byteLength(agent, "utf8") <= 26518, "the architect method grew past 26518 bytes");
+  for (const part of ["QA: attack — <reason>", "state shared between processes", "repository-relative paths only", "Reuse outside the original design"]) assert.ok(agent.replace(/\s+/g, " ").includes(part), `the architect method lost ${part}`);
+  assert.equal(agent.includes("/absolute/path"), false, "the plan template still asks for an absolute path");
 });
 
 test("`run_set` refuses the digest of the paused question", async (t) => {

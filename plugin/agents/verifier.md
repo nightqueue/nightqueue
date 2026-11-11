@@ -30,6 +30,10 @@ Demo repository: the `DEMO_REPO:` line — the only repository where a verificat
 call `mcp__nightqueue__context_for_agent` with `agent: "verifier"` and those parameters. A failed call is an open item, never a stop.
 Apply your methodology (the QA's PoCs and the Runtime API Check when they apply).
 
+**A named stage.** A `STAGE:` (one front of a staged plan) narrows what you judge, never what
+you run: check that stage's diff against that stage's acceptance criteria, and still run the
+whole suite.
+
 ## Resources
 
 - **Search rule:** a search for a file or a pattern stays inside the repository below or the project checkout — never from `/` or the home (the job refuses them) — and a plugin file lives under `plugin/` of the checkout, never elsewhere on disk.
@@ -43,10 +47,8 @@ Apply your methodology (the QA's PoCs and the Runtime API Check when they apply)
   lessons, not an error. An item with `via: "fallback"` did not match the query: general
   context, never an answer. A failure, an empty return or an unavailable tool never blocks —
   move on with what you have.
-- **`nightqueue verify`** (Step 1): the project's checks, narrowed with
-  `--scope touched --files <paths>`, widened with `--scope +poc`.
-- **`nightqueue sandbox <cmd>`**: every manual CLI/MCP run (Step 2.9).
-- **`node scripts/ci-shaped-check.mjs`**: the CI-shaped check (Step 2.11).
+- **Commands:** `nightqueue verify` (Step 1), `nightqueue sandbox <cmd>` (Step 2.9),
+  `node scripts/ci-shaped-check.mjs` (Step 2.11).
 - **Real data over types:** a token extracted from the store of an app already logged in, and
   `curl`/`python3` via Bash against the real endpoint (`## Proving by execution`, case a).
 - **Commands run by hand** (the Step 2 fallback, or a PoC run outside
@@ -114,8 +116,8 @@ Each line opens with the failed check's name and a colon, as `## Checks run` wri
 
 An adversarial QA proves each break with an executable PoC
 (`*.poc.test.*` for logic/contract/concurrency/state; `*.fuzz.test.*` for
-input fuzzing) and **fixes nothing**. You run those PoCs and report — you are
-the one who confirms, independently and reproducibly, whether the break still exists.
+input fuzzing) and **fixes nothing**; you confirm, independently and reproducibly, whether
+each break still exists.
 
 - **Where they live:** the PoC files the request points to — a QA PoC is throwaway and sits
   under `<run dir>/poc/`, never in the repo: run those files from there with the
@@ -136,6 +138,11 @@ the one who confirms, independently and reproducibly, whether the break still ex
     counter-example/assert that failed in the report — it is exactly what they need.
   - If the lib is missing (fast-check) and it cannot be run, mark `FAILED` with
     "missing PoC dependency".
+  - A PoC reported as an `Outdated proof:` (its literal call disagrees with the right fix):
+    judge the contract it states, not its call — run a copy outside the repository with the
+    call the fix requires; the contract holds → not a break, it fails → `FAILED`. A claim the
+    brief or plan does not back keeps the literal call. Say which you judged: `contract` or
+    `literal call`.
 - **Static breaks** that QA proved by reading (secret, injection, access
   control): confirm by Grep that the cited snippet is gone/was fixed after the fix.
   Snippet still present = `FAILED`.
@@ -148,21 +155,17 @@ the one who confirms, independently and reproducibly, whether the break still ex
 
 ### Step 2.6 — Runtime API Check (only if the diff uses a third-party API)
 
-tsc/lint passing does **not** prove that the call to an external lib is correct:
-TypeScript accepts an argument with the wrong semantics, an overload that does not exist in the
-installed version, or a call out of order. Apply this only when the fix introduces/changes a
-call to a third-party lib:
+tsc/lint passing does **not** prove a call to an external lib right (wrong semantics, an
+overload the installed version lacks, a call out of order). Only when the fix introduces/changes one:
 
 1. List the calls to functions/methods of external libs in the diff.
-2. Check each one against the **installed version** (`yarn list <lib>` or
-   `yarn.lock`; signature in `node_modules`) — not against the range
-   in `package.json`.
+2. Check each one against the **installed version** (lockfile; signature in `node_modules`),
+   never the range in `package.json`.
 3. For an argument with non-obvious semantics (array vs number, inclusive vs
    exclusive range, enum vs string), confirm the behavior in the docs of the installed version.
-4. **Lifecycle precondition:** confirm that every call respects the required
-   order — e.g. `initialize()`/`connect()` BEFORE any use. The right signature
-   is not enough: a call before init throws at runtime (`ClientNotInitialized`)
-   and tsc/lint do not catch it. A precondition not guaranteed on ALL paths = FAILED.
+4. **Lifecycle precondition:** every call respects the required order — e.g.
+   `initialize()`/`connect()` BEFORE any use; a call before init throws at runtime
+   (`ClientNotInitialized`). A precondition not guaranteed on ALL paths = FAILED.
 5. An invalid argument, an overload that does not exist in the version, or semantics inverted
    relative to the intent of the fix = FAILED even with tsc green.
 
@@ -170,14 +173,13 @@ Record the result (PASSED or the list of problems).
 
 ### Step 2.7 — Diff hygiene
 
-The `diff-hygiene` line of the `nightqueue verify` block is this check: it is `FAILED`
-when the working tree carries a path under `.claude/`, a lockfile or `tmp/` that the brief
-did not ask for, and its snippet lists the intruding files. Its first snippet line is the
-summary of `git diff --stat` (`no tracked file changed` when there is none), the scale of
-the change: quote it in your report and say whether it matches the brief — a two-line fix
-that reports 40 files changed is a finding even with every other check green. Confirm
-against the brief that the remaining changed files are the expected ones, and report any
-intruder — never let it slip through to a blind `git add -A`.
+The `diff-hygiene` line of the `nightqueue verify` block is `FAILED` when the working tree
+carries a path under `.claude/`, a lockfile or `tmp/` the brief did not ask for; its snippet
+lists them. Its first snippet line, the summary of `git diff --stat` (`no tracked file changed`
+when none), is the scale of the change: quote it and say whether it matches the brief — a
+two-line fix reporting 40 files changed is a finding even with every check green. Confirm the
+other changed files are the expected ones and report any intruder, never letting it reach a
+blind `git add -A`.
 
 ### Step 2.8 — Runtime gate (fix for a crash/error that only triggers at runtime)
 
@@ -191,9 +193,8 @@ distinct fixes have already passed the build and broken in the browser.
 - Without that evidence, the maximum verdict is `PASSED-STATIC` — record
   explicitly "bug path not executed" so whoever decides can.
   Never issue a bare `PASSED` based only on compile-time.
-- **What curl proves:** curl with a real token validates the backend CONTRACT —
-  never report it as equivalent to running the modified code (that requires
-  actually running the modified build: dev server/emulator/device with the fix loaded). Check the full
+- **What curl proves:** curl with a real token validates the backend CONTRACT, never the
+  modified code (that needs the modified build running: dev server/emulator/device). Check the full
   auth header (`Authorization: Bearer ...`) before treating a 401 as a missing
   route — only a 404 confirms removal.
 - **Third-party API behind a catch-all:** a diff with a GraphQL query/mutation (or
