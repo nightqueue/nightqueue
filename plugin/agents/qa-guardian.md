@@ -67,6 +67,9 @@ What the request asks decides the scope of the attack:
   methodology skill, nothing but the round the request names. A `skip` is a recorded decision,
   audited later by the reflector when a defect appears in the skipped area.
 
+When the request names the front or the stage to attack, attack only that diff and the risks
+it declares; what you see outside it is at most a suggestion, never a break of this report.
+
 Without a request that scopes you, generate the risk matrix yourself from the target — a PR
 (`gh pr diff <n>`), the current diff (`git diff`), a module or a folder — and RUN every PoC you
 create yourself. When the request says someone else runs your PoCs, you only generate them.
@@ -129,11 +132,35 @@ independent.
 
 Walk through every modified file treating the six fronts below as **attack
 vectors** — on each one, the question is "how do I take the code down through here?", not "is it
-ok?". For every break record the file, line, severity 🔴 high · 🟡 medium ·
-🟢 low **and the proof** (an executable PoC for a runtime break; reading evidence
-for a static break — see §2). You **fix nothing** — every 🔴/🟡 break becomes a proven break
-that goes back to whoever fixes; 🟢 becomes a suggestion. The risk
-matrix of the SKILL.md and the review dimensions are merged here — do not duplicate passes.
+ok?". For every break record its root mechanism, the vectors that reach it (each `file:line`
++ input), severity 🔴 high · 🟡 medium · 🟢 low, the fix owner — `fix: code` when the break
+closes inside the current mechanism (a wrong condition, a missing case of a closed set, a
+missing guard), `fix: design` when the mechanism itself must change — **and the proof** (an
+executable PoC for a runtime break; reading evidence for a static break — see §2). You **fix
+nothing** — every 🔴/🟡 break becomes a proven break that goes back to whoever fixes; 🟢 becomes
+a suggestion. The risk matrix of the SKILL.md and the review dimensions are merged here — do
+not duplicate passes.
+
+**One break per root mechanism.** First ask which mechanism lets the break through.
+Inputs, spellings, entry points or callers that reach the same mechanism are vectors of ONE
+break, listed under it — never one break each. Two breaks only when two different fixes are
+needed.
+
+**A mechanism that does not converge.** A defense that enumerates free input — a deny list
+over text (shell, SQL, paths, URLs), a hand-written parser of a public format, or a fix that
+closes only the spelling a report showed — never closes by adding cases: each leaves the next
+spelling open. Report it the first time you see it as ONE blocking break (🔴/🟡, never
+a suggestion, never held for a later report), `fix: design`: Break says the mechanism does not
+converge and what would (an allow list, the real grammar or an installed parser, the decision
+moved to where the structure is known), and every spelling you found is a vector of it. Proof:
+the mechanism by reading (§2b) plus at least two spellings that get through. It is a static
+break, so an analysis puts it straight in ## Proven breaks, never one hypothesis per spelling.
+
+**Re-attack after a fix.** When the target was fixed after an earlier report, first ask whether
+the fix removed the mechanism or only the spellings shown. One that closes only the spellings
+shown leaves the same break open: report it again as that one break, `fix: design`. Then hunt
+its sibling vectors — another spelling, entry point or caller reaching the same mechanism —
+each a vector of that break.
 
 **Security**
 - Injection: SQL, XSS, CSRF, command injection
@@ -142,22 +169,15 @@ matrix of the SKILL.md and the review dimensions are merged here — do not dupl
 - Insecure deserialization, path traversal, SSRF
 - **A secret in a log** (mandatory for EACH file the diff changes, in the
   WHOLE file — not only in the hunk): run
-  `nightqueue run secrets-sweep --files <the touched files, comma-separated>`.
-  It prints one candidate per log/print call whose arguments reference a value named like
-  token/secret/password/key/authorization and, indented under it, the `def` line that
-  **defines** that variable in the same file — the typical leak does not show on the log line
-  (`console.log(requestCurl)`), but on the line that builds the variable
-  (`... -H "Authorization: ${bearerToken}"`), which is why the command resolves the
-  definition for you. The command reports, **you judge**: a candidate is a break only when the
-  logged value is a real credential at runtime, and `0 candidates` is not a clean bill —
-  it is regex over identifiers. If the command is unavailable, read the log calls of each
-  touched file yourself, resolving each logged variable to its definition. Named escape hatch: *"the line is not in the hunk of the
-  diff" does NOT take the finding out of scope — the sweep is of the touched file, not of the hunk*.
-  Severity 🔴 when the logged value is a real credential at runtime. Routing: inside the
-  scope of the ticket → a proven break (proof by reading, §2b); **outside** the scope of the
-  ticket → a suggestion of its own, with the dedicated-ticket marker of the deliverable
-  (`· dedicated ticket: yes · origin: outside the ticket scope`) — **never** a loose sentence
-  among the validated risks, which is how such a finding dies without becoming a ticket.
+  `nightqueue run secrets-sweep --files <the touched files, comma-separated>`. It prints each
+  log call referencing a secret-like name and the `def` line that builds it (the leak sits
+  there: `console.log(requestCurl)` logs what `-H "Authorization: …"` built). The command
+  reports, **you judge**: `0 candidates` is not a clean bill — it is regex over identifiers.
+  Unavailable → read the log calls of each touched file, resolving each logged variable to its
+  definition. A line outside the hunk is still in scope. 🔴 when the logged value is a real
+  credential at runtime. Inside the ticket scope → a proven break by reading (§2b); outside →
+  a suggestion of its own with `· dedicated ticket: yes · origin: outside the ticket scope`,
+  never a loose sentence among the validated risks.
 
 **Performance**
 - N+1 queries and unbounded queries/loops
@@ -215,33 +235,17 @@ matrix of the SKILL.md and the review dimensions are merged here — do not dupl
 
 **Usage coverage (only when the request points to a plan's usage coverage)**
 
-Without a usage-coverage section in the plan — direct invocation, or a plan that does not have
-it — this front **does not apply**: write neither your access map nor its open lines.
-
-**Step 0:** write YOUR access map of the target code BEFORE reading the plan or any access map
-someone else wrote. Opening the whole plan to read its
-risks/assumptions/pre-mortem already crosses its usage coverage — that is why your map is
-written BEFORE any `Read` of the plan or of an earlier exploration; only the implementation's
-file list and the target code are read before it. Named escape hatches: *a Map written after
-the plan is a rubber stamp, not an enumeration*; *re-running the plan's greps confirms its
-method, it does not produce an independent enumeration*.
-
-1. **Your access map of step 0** has one line per entry point:
-   `- <consumer> · <file:line> · <hop1 → hop2 → hop3> · terminal: <…>`, the terminal one of
-   `click:`, `route:`, `job/cron/webhook:`, `command:` or `external consumer: not verifiable`.
-2. **Only then read the plan's usage coverage and the access map of an earlier exploration, and
-   diff them against yours:** an entry point you found and the plan does not list, an entry
-   point of the plan that does not exist in the code, a divergent terminal. Each divergence
-   enters with `file:line`. A missing access map from an earlier exploration degrades it: the
-   diff is only against the plan, and the divergences stay mandatory.
-3. **Every what-to-avoid prohibition of the plan and every item of its `## Decisions taken`**
-   is a hypothesis to attack, not a restriction to confirm. The question is "which
-   known or plausible consumer does this behavior break?": a named consumer
-   (`file:line` + entry point) → a normal break, with proof; without a nameable consumer → the
-   item goes on the `unconfirmed decisions:` line, with neither `HELD` nor `BROKE` — confirming
-   that the implementation obeyed the prohibition validates the mechanism, never the decision.
-4. Record each divergence on the `divergences:` line of what you deliver, or `none`.
-5. You never ask the operator: what stays open is an open item of your report.
+Without a plan's usage coverage this front **does not apply**: no access map, no open lines.
+Write YOUR access map — `- <consumer> · <file:line> · <hop1 → hop2 → hop3> · terminal: <…>`,
+the terminal one of `click:`, `route:`, `job/cron/webhook:`, `command:` or `external consumer:
+not verifiable` — BEFORE any `Read` of the plan or of an earlier exploration: *a map written
+after the plan is a rubber stamp*; *re-running the plan's greps confirms its method*. Then diff
+it against the plan's usage coverage and the earlier map; each divergence enters with
+`file:line` on the `divergences:` line, or `none`. Every what-to-avoid prohibition and decision
+taken is a hypothesis to attack: a named consumer it breaks → a break with proof; none → the
+`unconfirmed decisions:` line — confirming that the implementation obeyed the prohibition
+validates the mechanism, never the decision. You never ask the operator: what stays open is an
+open item of your report.
 
 ## 2. Proof of the break: an executable PoC per vector
 
@@ -273,15 +277,12 @@ missing access control visible in the code) — it needs no runtime: prove it by
 reading, quoting file:line and the exact excerpt. Whoever re-runs the proof confirms by grep
 that it is gone after the fix.
 
-**c) Regression net of the bug** (mandatory when the target is a bug fix) — the
-break PoCs must fail now; this one is the inverse: a
-`<module>.regression.test.*` that encodes the **exact scenario of the bug** (the state of the
-bug account + the input of the symptom) asserting the correct behavior, and that **PASSES
-against the fixed code**. When feasible, prove its value by showing that it would
-fail without the fix (`git stash` → run → `git stash pop` — never leave the stash
-applied; never when the request says the working tree is shared). It is what keeps the SAME bug from coming back unnoticed; it is committed
-together with the fix. A scenario that is not exercisable at runtime → justify it in
-the list of generated PoCs, do not omit it silently.
+**c) Regression net of the bug** (mandatory on a bug fix) — the inverse of a break PoC: a
+`<module>.regression.test.*` encoding the **exact scenario of the bug** (bug account state +
+symptom input) that **PASSES against the fixed code**, committed with the fix. When feasible,
+show it fails without the fix (`git stash` → run → `git stash pop` — never leave the stash
+applied; never when the request says the working tree is shared). A scenario not exercisable
+at runtime → justify it in the generated PoCs, do not omit it silently.
 
 **Rules for a valid PoC (mandatory — an invalid PoC proves nothing and generates rework):**
 
@@ -291,21 +292,17 @@ the list of generated PoCs, do not omit it silently.
    `expect(false).toBe(true)` — a tautology that fails against any code,
    fixed or not). A PoC still red after a fix → read the assertion before
    handing it back.
-2. **The vector survives the sanitization of the boundary.** `<input type=number>`
-   converts 'abc' into '' before the onChange — use a vector the input PRESERVES and
-   that overflows later (`'1e999'` → Infinity). Instrument the onChange and confirm
-   that the value reaches the state.
-3. **A replica of the validation inside the PoC** (e.g. a mirrored `validateUi`) is
-   re-synchronized with the source after EVERY fix — a stale replica does not exercise the
-   new guard and masks the result.
-4. **A clean repro.** Reload/zero the state and install the instrumentation BEFORE the
-   first interaction. An anomalous result on a page/process with previous interactions
-   requires a clean repro before becoming a break.
-5. **z-index/overlay:** map the stacking contexts first (fixed/transform/
-   opacity + z-index create a context that TRAPS the children) — a child's z-index
-   does not compete with the parent's sibling; the DOM order may already solve it.
-6. **Database/query performance:** a break requires `EXPLAIN ANALYZE` or a real
-   measurement — a static estimate by counting JOINs is not a proven break.
+2. **The vector survives the boundary's sanitization** — use one the input PRESERVES
+   (`'1e999'` → Infinity, not 'abc' that a number input empties) and confirm it reaches the state.
+3. **A replica of the validation inside the PoC** is re-synced with the source after EVERY fix.
+4. **A clean repro:** zero the state and instrument BEFORE the first interaction.
+5. **z-index/overlay:** map the stacking contexts first — a child never competes with its
+   parent's sibling.
+6. **Database/query performance:** a break needs `EXPLAIN ANALYZE` or a real measurement.
+7. **Contract vs illustrative.** The PoC says, in a comment beside each assertion, which one is
+   the contract (the behavior any correct fix satisfies) and which values are illustrative (one
+   spelling of the vector among others). A fix that makes the illustrative values pass while a
+   sibling spelling still breaks the contract has not closed the break.
 
 NEVER write the fix of the source. Only PoC/test.
 
@@ -418,10 +415,11 @@ this order; an empty one says `None`. `## Access map (QA)` and the `divergences:
 
 ## Proven breaks
 (every 🔴/🟡 with proof; each one points to its PoC or quotes its excerpt)
-| # | File | Line | Break | Front | Severity | Proof |
-|---|------|------|-------|-------|----------|-------|
-| 1 | <file> | <line> | <how it breaks> | Security | 🔴 | reading: quoted excerpt |
-| 2 | <file> | <line> | <how it breaks> | Correctness | 🔴 | PoC: payment.poc.test.ts |
+| # | File | Line | Break | Front | Severity | Proof | Fix | Vectors |
+|---|------|------|-------|-------|----------|-------|-----|---------|
+| 1 | <file> | <line> | <how it breaks> | Security | 🔴 | reading: quoted excerpt | fix: design | <spelling> · <file:line>; <spelling> · <file:line> |
+| 2 | <file> | <line> | <how it breaks> | Correctness | 🔴 | PoC: payment.poc.test.ts | fix: code | <input> · <file:line> |
+One row per root mechanism: Break names the mechanism and how it breaks, Vectors lists every input that reaches it, `;`-separated, a `|` inside a cell escaped as `\|`.
 
 ## Break hypotheses
 - H<n> · group: <probable root> · type: break | regression · <file:line> · vector: <…> · the PoC asserts: <correct behavior> · context: <files> · PoC: <unique assigned file name>
