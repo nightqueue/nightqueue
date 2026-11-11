@@ -20,8 +20,9 @@ the change, and the files touched as absolute paths, one per line) and turn miss
 an objective question. When the request forbids writing or running, the evidence level is capped at 2 and the verdict says so.
 
 - **With a plan,** execute it faithfully — a deviation from the plan is reported, not
-  improvised. When the request names a stage, implement only that stage, after reading what
-  the earlier stages did when the request points to it.
+  improvised. A plan with stages (fronts) is done one front per request: implement, test and
+  report it, and touch nothing of a later stage. When the request names a stage, implement only that stage, after reading what
+  the earlier stages did when the request points to it; naming none, take the first open one.
 - **Without a plan,** write your approach in 2-4 lines first (target files, what changes,
   definition of done) and follow it. An ambiguous request with 2+ interpretations → ask before
   editing, never choose silently. A task that grows beyond the request → stop and report, do
@@ -38,7 +39,17 @@ Apply the plan following the project's standards (CLAUDE.md). The simplest possi
 **Fixing reported failures.** When the request hands you failed checks and proven breaks to fix,
 the failures and the open breaks are the findings to fix: fix exactly those, without introducing a regression and keeping the project's standards. Make the PoCs pass by fixing the cause — never by altering or deleting the PoC.
 Run the PoCs of the breaks you were handed, under `timeout`, and return only when they pass or
-your record of the fix states why one cannot.
+your record of the fix states why one cannot (an outdated proof, a design break).
+
+- **Fix the mechanism** the break names, never the one input or timing that showed it (a race
+  is closed by an order or an atomic step, never by moving its window). Before finishing, grep
+  the code you changed for sibling vectors of that mechanism: fix them, or report them open.
+- **A proof file is evidence, never a specification:** add no behaviour whose only purpose is
+  a proof file passing unedited (a default hiding a missing argument, a flag switching on
+  another mode). When its literal call disagrees with the right fix, fix it right and report
+  `Outdated proof: <file> — <its call> · <the contract it proves> · <why the fix rejects the call>`.
+- **A design break** (`fix: design`, or a list of spellings no list can close) gets no
+  further spelling patch: report it open, with the mechanism that causes it, for whoever designs.
 
 ## Resources
 
@@ -63,15 +74,6 @@ your record of the fix states why one cannot.
 - Never re-read a file already read in this task unless you edited it since.
 - Read each input file the request names once, at the start.
 
----
-
-## Core Principle
-
-Always prioritize the simplest and most robust solution possible. The code must be
-easy to understand, maintain and evolve.
-
----
-
 ## Mandatory Code Rules
 
 ### 1. Simplicity First
@@ -83,7 +85,6 @@ easy to understand, maintain and evolve.
 ### 2. Small and Focused Functions
 
 - Every function must have a single responsibility.
-- Avoid long functions.
 - When a function grows, split it into smaller functions.
 
 ### 3. Componentization (High Priority Rule)
@@ -93,8 +94,6 @@ easy to understand, maintain and evolve.
 - Prefer small, clear and reusable components.
 - Reduce duplication through composition, not repetition.
 - Do not put excessive business logic inside UI components.
-
-Componentization must improve: simplicity, readability, maintainability and reuse.
 
 ### 4. Avoid Too Many Arguments
 
@@ -116,23 +115,10 @@ Componentization must improve: simplicity, readability, maintainability and reus
 
 ### 7. Rules for Changes and Refactors
 
-- Any change must result in at least one of the following:
-  - Reduced complexity
-  - Improved readability
-  - Increased robustness
-- Never make existing code more complex without a clear reason.
-
----
+- A change reduces complexity, improves readability or increases robustness; never make
+  existing code more complex without a clear reason.
 
 ## UI Rules
-
-### Mandatory Componentization
-
-All UI elements must be componentized. Components must be:
-
-- Small and with a single responsibility
-- Reusable whenever possible
-- Free of excessive business logic
 
 ### Loading States (Skeletons)
 
@@ -142,8 +128,6 @@ structure of the final content. The skeleton must:
 - Match the layout, spacing and approximate shapes of the final elements
 - Mimic the structure that will appear once the data is loaded
 - Never use only a generic spinner when the content structure is known
-
----
 
 ## Comment Rules
 
@@ -161,18 +145,6 @@ function fetchUserById(id) {
 }
 ```
 
-Incorrect:
-```
-function fetchUserById(id) {
-  // Makes the call to the API
-  const response = await api.get(`/users/${id}`);
-  // Returns the data
-  return response.data;
-}
-```
-
----
-
 ## Final Validation Checklist
 
 Before finishing any change, validate:
@@ -182,18 +154,16 @@ Before finishing any change, validate:
       delivery that "compiles" is not a delivery)
 - [ ] Is this the simplest solution possible?
 - [ ] Could the UI be simpler using a component?
-- [ ] Will this be easy to understand and maintain in the future?
+- [ ] Does each fix remove its mechanism, with no line there only for a proof file?
 - [ ] Are the errors being handled correctly?
 - [ ] Do the loading states have proper skeletons?
 - [ ] Do the comments follow the standard (at most 1 line above the function)?
 
 If any answer is "no", review the code.
 
----
-
 ## Operational Editing Rules
 
-Derived from real errors that required rework — always apply:
+Always apply:
 
 - **Read before Edit.** When indentation is sensitive, copy the `old_string` from
   the output of Read — never from grep or visual memory. Use 2-3 lines of context
@@ -238,30 +208,23 @@ Derived from real errors that required rework — always apply:
   assertions — a green test testing a dead function masks the real change.
 - **Dependency changes.** A change that adds or bumps a dependency regenerates the lockfile with the manager's own install (`npm install`) and delivers `package.json` and the lockfile together.
 
----
-
 ## Migration of React effects and state
 
-When converting a reactive `useEffect` into explicit handlers, lazy-init or mount-only
-(rewrite playbooks), apply ALL the rules below — each one came from a
-real production regression:
+Converting a reactive `useEffect` into explicit handlers, lazy-init or mount-only applies ALL
+of these (each one a real production regression):
 
-- **A fetch in a `useEffect` with the render guarded by `isLoading`** → initialize
-  `useState(true)`, never `false`: SSR renders the initial HTML without running the
-  effect, and `false` flashes the empty state on every hard refresh/deep-link.
-- **Removing a reactive effect with deps `[x, y, z]`** → checklist of ALL the
-  setters of x/y/z — including the ones passed as a prop to a third-party component
-  (e.g. `<Pagination setPagination={...}>`) — migrating `setIsLoading(true)`
-  to EACH one, not only the most obvious handler.
-- **Lazy-init (`useState(() => derive(prop))`) or remount by `key`** only works
-  for data already available at mount; a prop populated by an async fetch in the parent →
-  keep the effect reactive to the prop.
-- **A mount-only effect (`[]`) in a component whose data depends on a route/entity
-  id** → confirm that the parent forces a remount via `key` on that transition;
-  otherwise, keep the id dep (client-side navigation reuses the instance).
-- **An in-flight request guard via `useRef`** → `try/finally` guaranteeing the reset
-  even on rejection; never replace a `let` reset per render with a ref
-  without a finally — a rejection locks the guard forever.
+- **A fetch in a `useEffect` with the render guarded by `isLoading`** → `useState(true)`,
+  never `false`: SSR renders without the effect, and `false` flashes the empty state on
+  every hard refresh/deep-link.
+- **Removing a reactive effect with deps `[x, y, z]`** → migrate `setIsLoading(true)` to
+  EVERY setter of x/y/z, including one passed as a prop to a third-party component
+  (e.g. `<Pagination setPagination={...}>`).
+- **Lazy-init (`useState(() => derive(prop))`) or remount by `key`** works only for data
+  available at mount; a prop filled by an async fetch in the parent keeps the effect reactive.
+- **A mount-only effect (`[]`) whose data depends on a route/entity id** → the parent must
+  remount it via `key` on that transition; otherwise keep the id dep.
+- **An in-flight request guard via `useRef`** → reset it in `try/finally`: a rejection
+  without a finally locks the guard forever.
 
 ## Textual pattern refactoring
 
